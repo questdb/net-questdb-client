@@ -8,23 +8,20 @@ namespace QuestDB
     public class LineTcpSender : IDisposable
     {
         private static readonly long EpochTicks = new DateTime(1970, 1, 1).Ticks;
-        private readonly TcpClient _client;
-        private readonly bool _closeClient;
+        private readonly Socket _clientSocket;
         private readonly byte[] _sendBuffer;
         private int _position;
         private bool _hasMetric;
         private bool _quoted;
         private bool _noFields = true;
-
-        public LineTcpSender(TcpClient client, int bufferSize = 4096)
+        
+        public LineTcpSender(String address, int port, int bufferSize = 4096)
         {
-            _client = client;
+            _clientSocket = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
+            _clientSocket.NoDelay = true;
+            _clientSocket.Blocking = true;
+            _clientSocket.Connect(address, port);
             _sendBuffer = new byte[bufferSize];
-        }
-
-        public LineTcpSender(String address, int port, int bufferSize = 4096) : this(new TcpClient(address, port), bufferSize)
-        {
-            _closeClient = true;
         }
 
         public LineTcpSender Metric(ReadOnlySpan<char> name)
@@ -141,9 +138,9 @@ namespace QuestDB
                 Flush();
             }
 
-            Span<byte> bytes = _sendBuffer;
+            Span<byte> bytes = _sendBuffer.AsSpan(_position);
             Span<char> chars = stackalloc char[1] {c};
-            _position += Encoding.UTF8.GetBytes(chars, bytes.Slice(_position, 4));
+            _position += Encoding.UTF8.GetBytes(chars, bytes);
         }
 
         private void PutSpecial(char c)
@@ -202,7 +199,8 @@ namespace QuestDB
 
         public void Flush()
         {
-            _position -= _client.Client.Send(_sendBuffer, 0, _position, SocketFlags.None);
+            int sent = _clientSocket.Send(_sendBuffer, 0, _position, SocketFlags.None);
+            _position -= sent;
         }
 
         public void Dispose()
@@ -220,10 +218,7 @@ namespace QuestDB
             }
             finally
             {
-                if (_closeClient)
-                {
-                    _client.Dispose();
-                }
+                _clientSocket.Dispose();
             }
         }
 
@@ -237,7 +232,7 @@ namespace QuestDB
         public void At(DateTime timestamp)
         {
             long epoch = timestamp.Ticks - EpochTicks;
-            Put(' ').Put(epoch).Put("00").AtNow();
+            Put(' ').Put(epoch).Put('0').Put('0').AtNow();
         }
     }
 }

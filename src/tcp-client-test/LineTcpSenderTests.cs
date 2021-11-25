@@ -1,4 +1,5 @@
 using System;
+using System.IO;
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
@@ -40,8 +41,8 @@ namespace tcp_client_test
             srv.AcceptAsync();
             
             using var ls = new LineTcpSender(IPAddress.Loopback.ToString(), _port, 25);
-            var lineCount = 50;
-            var expected = "metric\\ name,t\\ a\\ g=v\\ alu\\,\\ e number=10i,db\\ l=123.12,string=\" -=\\\"\",привед=\"медвед\" 1000000000\n";
+            var lineCount = 500;
+            var expected = "metric\\ name,t\\ a\\ g=v\\ alu\\,\\ e number=10i,db\\ l=123.12,string=\" -=\\\"\",при\\ вед=\"медвед\" 1000000000\n";
             var totalExpectedSb = new StringBuilder();
             for (int i = 0; i < lineCount; i++)
             {
@@ -50,7 +51,7 @@ namespace tcp_client_test
                     .Field("number", 10)
                     .Field("db l", 123.12)
                     .Field("string", " -=\"")
-                    .Field("привед", "медвед")
+                    .Field("при вед", "медвед")
                     .At(new DateTime(1970, 01, 01, 0, 0, 1));
                 totalExpectedSb.Append(expected);
             }
@@ -78,6 +79,31 @@ namespace tcp_client_test
             var expected = "neg\\\\name number1=-9223372036854775807i,number2=9223372036854775807i,number3=-1.7976931348623157E+308,number4=1.7976931348623157E+308\n";
             WaitAssert(srv, expected);
         }
+        
+        [Test]
+        public void SendMillionToFile()
+        {
+            using var srv = CreateTcpListener(_port);
+            srv.AcceptAsync();
+
+            var  nowMillisecond = DateTime.Now.Millisecond;
+            var metric = "metric_name" + nowMillisecond;
+
+            using var ls = new LineTcpSender(IPAddress.Loopback.ToString(), _port, 2048);
+            for(int i = 0; i < 1E6; i++)
+            {
+                ls.Metric(metric)
+                    .Tag("nopoint", "tag" + i%100 )
+                    .Field("counter", i * 1111.1)
+                    .Field("int", i)
+                    .Field("привед", "мед вед")
+                    .At(new DateTime(2021, 1, 1, (i/360/1000) % 60, (i/60/1000) % 60, (i / 1000) % 60, i % 1000));
+            }
+            ls.Flush();
+            
+            File.WriteAllText($"out-{nowMillisecond}.txt", srv.GetTextReceived()); 
+        }
+
 
         private static void WaitAssert(DummyIlpServer srv, string expected)
         {
@@ -177,8 +203,8 @@ namespace tcp_client_test
             private readonly TcpListener _server;
             private readonly byte[] _buffer = new byte[2048];
             private readonly CancellationTokenSource _cancellationTokenSource = new();
-            private readonly StringBuilder _request = new();
-            private volatile int _totalReceived = 0; 
+            private volatile int _totalReceived;
+            private readonly MemoryStream _received = new();
 
             public DummyIlpServer(int port)
             {
@@ -211,9 +237,8 @@ namespace tcp_client_test
                     int received = await connection.ReceiveAsync(_buffer, SocketFlags.None, _cancellationTokenSource.Token);
                     if (received > 0)
                     {
-                        var value = Encoding.UTF8.GetString(_buffer, 0, received);
-                        _request.Append(value);
-                        _totalReceived += value.Length;
+                        _received.Write(_buffer, 0, received);
+                        _totalReceived += received;
                     }
                 } 
             }
@@ -228,7 +253,7 @@ namespace tcp_client_test
 
             public string GetTextReceived()
             {
-                return _request.ToString();
+                return Encoding.UTF8.GetString(_received.GetBuffer(), 0, (int)_received.Length);
             }
         }
     }

@@ -1,3 +1,27 @@
+/*******************************************************************************
+ *     ___                  _   ____  ____
+ *    / _ \ _   _  ___  ___| |_|  _ \| __ )
+ *   | | | | | | |/ _ \/ __| __| | | |  _ \
+ *   | |_| | |_| |  __/\__ \ |_| |_| | |_) |
+ *    \__\_\\__,_|\___||___/\__|____/|____/
+ *
+ *  Copyright (c) 2014-2019 Appsicle
+ *  Copyright (c) 2019-2022 QuestDB
+ *
+ *  Licensed under the Apache License, Version 2.0 (the "License");
+ *  you may not use this file except in compliance with the License.
+ *  You may obtain a copy of the License at
+ *
+ *  http://www.apache.org/licenses/LICENSE-2.0
+ *
+ *  Unless required by applicable law or agreed to in writing, software
+ *  distributed under the License is distributed on an "AS IS" BASIS,
+ *  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ *  See the License for the specific language governing permissions and
+ *  limitations under the License.
+ *
+ ******************************************************************************/
+
 using System;
 using System.IO;
 using System.Net;
@@ -22,10 +46,10 @@ namespace tcp_client_test
             srv.AcceptAsync();
             
             using var ls = new LineTcpSender(IPAddress.Loopback.ToString(), _port);
-            ls.Metric("metric name")
-                .Tag("t a g", "v alu, e")
-                .Field("number", 10)
-                .Field("string", " -=\"")
+            ls.Table("metric name")
+                .Symbol("t a g", "v alu, e")
+                .Column("number", 10)
+                .Column("string", " -=\"")
                 .At(new DateTime(1970, 01, 01, 0, 0, 1));
             ls.Flush();
 
@@ -46,12 +70,12 @@ namespace tcp_client_test
             var totalExpectedSb = new StringBuilder();
             for (int i = 0; i < lineCount; i++)
             {
-                ls.Metric("metric name")
-                    .Tag("t a g", "v alu, e")
-                    .Field("number", 10)
-                    .Field("db l", 123.12)
-                    .Field("string", " -=\"")
-                    .Field("при вед", "медвед")
+                ls.Table("metric name")
+                    .Symbol("t a g", "v alu, e")
+                    .Column("number", 10)
+                    .Column("db l", 123.12)
+                    .Column("string", " -=\"")
+                    .Column("при вед", "медвед")
                     .At(new DateTime(1970, 01, 01, 0, 0, 1));
                 totalExpectedSb.Append(expected);
             }
@@ -68,11 +92,11 @@ namespace tcp_client_test
             srv.AcceptAsync();
             
             using var ls = new LineTcpSender(IPAddress.Loopback.ToString(), _port);
-            ls.Metric("neg\\name")
-                .Field("number1", long.MinValue + 1)
-                .Field("number2", long.MaxValue)
-                .Field("number3", double.MinValue)
-                .Field("number4", double.MaxValue)
+            ls.Table("neg\\name")
+                .Column("number1", long.MinValue + 1)
+                .Column("number2", long.MaxValue)
+                .Column("number3", double.MinValue)
+                .Column("number4", double.MaxValue)
                 .AtNow();
             ls.Flush();
 
@@ -92,11 +116,11 @@ namespace tcp_client_test
             using var ls = new LineTcpSender(IPAddress.Loopback.ToString(), _port, 2048);
             for(int i = 0; i < 1E6; i++)
             {
-                ls.Metric(metric)
-                    .Tag("nopoint", "tag" + i%100 )
-                    .Field("counter", i * 1111.1)
-                    .Field("int", i)
-                    .Field("привед", "мед вед")
+                ls.Table(metric)
+                    .Symbol("nopoint", "tag" + i%100 )
+                    .Column("counter", i * 1111.1)
+                    .Column("int", i)
+                    .Column("привед", "мед вед")
                     .At(new DateTime(2021, 1, 1, (i/360/1000) % 60, (i/60/1000) % 60, (i / 1000) % 60, i % 1000));
             }
             ls.Flush();
@@ -123,8 +147,8 @@ namespace tcp_client_test
             
             using var ls = new LineTcpSender(IPAddress.Loopback.ToString(), _port);
             Assert.Throws<ArgumentOutOfRangeException>(
-                () => ls.Metric("name")
-                    .Field("number1", long.MinValue)
+                () => ls.Table("name")
+                    .Column("number1", long.MinValue)
                     .AtNow()
             );
         }
@@ -136,8 +160,8 @@ namespace tcp_client_test
             srv.AcceptAsync();
             
             using var ls = new LineTcpSender(IPAddress.Loopback.ToString(), _port);
-            ls.Metric("neg\\name")
-                .Field("привед", " мед\rве\n д")
+            ls.Table("neg\\name")
+                .Column("привед", " мед\rве\n д")
                 .AtNow();
             ls.Flush();
             
@@ -153,9 +177,9 @@ namespace tcp_client_test
             
             using var ls = new LineTcpSender(IPAddress.Loopback.ToString(), _port);
             Assert.Throws<InvalidOperationException>(
-                () => ls.Metric("name")
-                    .Field("number1", 123)
-                    .Tag("nand", "asdfa")
+                () => ls.Table("name")
+                    .Column("number1", 123)
+                    .Symbol("nand", "asdfa")
                     .AtNow()
             );
         }
@@ -168,9 +192,9 @@ namespace tcp_client_test
             
             using var ls = new LineTcpSender(IPAddress.Loopback.ToString(), _port);
             Assert.Throws<InvalidOperationException>(
-                () => ls.Metric("name")
-                    .Field("number1", 123)
-                    .Metric("nand")
+                () => ls.Table("name")
+                    .Column("number1", 123)
+                    .Table("nand")
                     .AtNow()
             );
         }
@@ -183,12 +207,12 @@ namespace tcp_client_test
             
             using var ls = new LineTcpSender(IPAddress.Loopback.ToString(), _port);
             Assert.Throws<InvalidOperationException>(
-                () => ls.Field("number1", 123)
+                () => ls.Column("number1", 123)
                     .AtNow()
             );
             
             Assert.Throws<InvalidOperationException>(
-                () => ls.Tag("number1", "1234")
+                () => ls.Symbol("number1", "1234")
                     .AtNow()
             );
         }

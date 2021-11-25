@@ -1,4 +1,28 @@
-﻿using System;
+﻿/*******************************************************************************
+ *     ___                  _   ____  ____
+ *    / _ \ _   _  ___  ___| |_|  _ \| __ )
+ *   | | | | | | |/ _ \/ __| __| | | |  _ \
+ *   | |_| | |_| |  __/\__ \ |_| |_| | |_) |
+ *    \__\_\\__,_|\___||___/\__|____/|____/
+ *
+ *  Copyright (c) 2014-2019 Appsicle
+ *  Copyright (c) 2019-2022 QuestDB
+ *
+ *  Licensed under the Apache License, Version 2.0 (the "License");
+ *  you may not use this file except in compliance with the License.
+ *  You may obtain a copy of the License at
+ *
+ *  http://www.apache.org/licenses/LICENSE-2.0
+ *
+ *  Unless required by applicable law or agreed to in writing, software
+ *  distributed under the License is distributed on an "AS IS" BASIS,
+ *  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ *  See the License for the specific language governing permissions and
+ *  limitations under the License.
+ *
+ ******************************************************************************/
+
+using System;
 using System.Globalization;
 using System.Net.Sockets;
 using System.Text;
@@ -24,7 +48,7 @@ namespace QuestDB
             _sendBuffer = new byte[bufferSize];
         }
 
-        public LineTcpSender Metric(ReadOnlySpan<char> name)
+        public LineTcpSender Table(ReadOnlySpan<char> name)
         {
             if (_hasMetric)
             {
@@ -37,7 +61,7 @@ namespace QuestDB
             return this;
         }
         
-        public LineTcpSender Tag(ReadOnlySpan<char> tag, ReadOnlySpan<char> value) {
+        public LineTcpSender Symbol(ReadOnlySpan<char> tag, ReadOnlySpan<char> value) {
             if (_hasMetric && _noFields) {
                 Put(',').EncodeUtf8(tag).Put('=').EncodeUtf8(value);
                 return this;
@@ -45,7 +69,7 @@ namespace QuestDB
             throw new InvalidOperationException("metric expected");
         }
         
-        private LineTcpSender Field(ReadOnlySpan<char> name) {
+        private LineTcpSender Column(ReadOnlySpan<char> name) {
             if (_hasMetric) {
                 if (_noFields) {
                     Put(' ');
@@ -59,9 +83,9 @@ namespace QuestDB
             throw new InvalidOperationException("metric expected");
         }
         
-        public LineTcpSender Field(ReadOnlySpan<char> name, ReadOnlySpan<char> value)
+        public LineTcpSender Column(ReadOnlySpan<char> name, ReadOnlySpan<char> value)
         {
-            Field(name).Put('\"');
+            Column(name).Put('\"');
             _quoted = true;
             EncodeUtf8(value);
             _quoted = false;
@@ -69,13 +93,13 @@ namespace QuestDB
             return this;
         }
         
-        public LineTcpSender Field(ReadOnlySpan<char> name, long value) {
-            Field(name).Put(value).Put('i');
+        public LineTcpSender Column(ReadOnlySpan<char> name, long value) {
+            Column(name).Put(value).Put('i');
             return this;
         }
         
-        public LineTcpSender Field(ReadOnlySpan<char> name, double value) {
-            Field(name).Put(value.ToString(CultureInfo.InvariantCulture));
+        public LineTcpSender Column(ReadOnlySpan<char> name, double value) {
+            Column(name).Put(value.ToString(CultureInfo.InvariantCulture));
             return this;
         }
 
@@ -233,6 +257,11 @@ namespace QuestDB
         {
             long epoch = timestamp.Ticks - EpochTicks;
             Put(' ').Put(epoch).Put('0').Put('0').AtNow();
+        }
+
+        public void At(long epochNano)
+        {
+            Put(' ').Put(epochNano).AtNow();
         }
     }
 }

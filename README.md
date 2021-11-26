@@ -15,7 +15,7 @@ ls.Table("metric_name")
 ls.Flush();
 ```
 
-- Muliline send
+- Multi-line send
 
 ```c#
 using var ls = new LineTcpSender(IPAddress.Loopback.ToString(), 9009);

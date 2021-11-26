@@ -21,7 +21,7 @@ ls.Flush();
 using var ls = new LineTcpSender(IPAddress.Loopback.ToString(), 9009);
 for(int i = 0; i < 1E6; i++) 
 {
-    ls.Metric("metric_name")
+    ls.Table("metric_name")
         .Colum("counter", i)
         .AtNow();
 }

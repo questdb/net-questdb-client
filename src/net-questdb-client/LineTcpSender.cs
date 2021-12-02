@@ -48,10 +48,19 @@ namespace QuestDB
             _sendBuffer = new byte[bufferSize];
         }
 
-        public LineTcpSender Table(ReadOnlySpan<char> name)
+        /// <summary>
+        /// Name of table
+        /// </summary>
+        /// <param name="name">Table name.</param>
+        /// <param name="ignoreMetricsCheck">If table are already added then it will not be added again. Default behavior is to check.</param>
+        /// <returns>This</returns>
+        /// <exception cref="InvalidOperationException">If ignoreMetricsCheck = false and metrics are alredy there then exception are thrown.</exception>
+        public LineTcpSender Table(ReadOnlySpan<char> name, bool ignoreMetricsCheck = false)
         {
             if (_hasMetric)
             {
+                if (ignoreMetricsCheck)
+                    return this;
                 throw new InvalidOperationException("duplicate metric");
             }
 
@@ -60,7 +69,7 @@ namespace QuestDB
             EncodeUtf8(name);
             return this;
         }
-        
+
         public LineTcpSender Symbol(ReadOnlySpan<char> tag, ReadOnlySpan<char> value) {
             if (_hasMetric && _noFields) {
                 Put(',').EncodeUtf8(tag).Put('=').EncodeUtf8(value);

@@ -44,7 +44,7 @@ namespace tcp_client_test
         {
             using var srv = CreateTcpListener(_port);
             srv.AcceptAsync();
-            
+
             using var ls = new LineTcpSender(IPAddress.Loopback.ToString(), _port);
             ls.Table("metric name")
                 .Symbol("t a g", "v alu, e")
@@ -57,13 +57,13 @@ namespace tcp_client_test
             var expected = "metric\\ name,t\\ a\\ g=v\\ alu\\,\\ e number=10i,string=\" -=\\\"\" 1000000000\n";
             WaitAssert(srv, expected);
         }
-        
+
         [Test]
         public void SendLineExceedsBuffer()
         {
             using var srv = CreateTcpListener(_port);
             srv.AcceptAsync();
-            
+
             using var ls = new LineTcpSender(IPAddress.Loopback.ToString(), _port, 25);
             var lineCount = 500;
             var expected = "metric\\ name,t\\ a\\ g=v\\ alu\\,\\ e number=10i,db\\ l=123.12,string=\" -=\\\"\",при\\ вед=\"медвед\" 1000000000\n";
@@ -80,17 +80,17 @@ namespace tcp_client_test
                 totalExpectedSb.Append(expected);
             }
             ls.Dispose();
-            
+
             string totalExpected = totalExpectedSb.ToString();
             WaitAssert(srv, totalExpected);
         }
-        
+
         [Test]
         public void SendNegativeLongAndDouble()
         {
             using var srv = CreateTcpListener(_port);
             srv.AcceptAsync();
-            
+
             using var ls = new LineTcpSender(IPAddress.Loopback.ToString(), _port);
             ls.Table("neg\\name")
                 .Column("number1", long.MinValue + 1)
@@ -103,29 +103,29 @@ namespace tcp_client_test
             var expected = "neg\\\\name number1=-9223372036854775807i,number2=9223372036854775807i,number3=-1.7976931348623157E+308,number4=1.7976931348623157E+308\n";
             WaitAssert(srv, expected);
         }
-        
+
         [Test]
         public void SendMillionToFile()
         {
             using var srv = CreateTcpListener(_port);
             srv.AcceptAsync();
 
-            var  nowMillisecond = DateTime.Now.Millisecond;
+            var nowMillisecond = DateTime.Now.Millisecond;
             var metric = "metric_name" + nowMillisecond;
 
             using var ls = new LineTcpSender(IPAddress.Loopback.ToString(), _port, 2048);
-            for(int i = 0; i < 1E6; i++)
+            for (int i = 0; i < 1E6; i++)
             {
                 ls.Table(metric)
-                    .Symbol("nopoint", "tag" + i%100 )
+                    .Symbol("nopoint", "tag" + i % 100)
                     .Column("counter", i * 1111.1)
                     .Column("int", i)
                     .Column("привед", "мед вед")
-                    .At(new DateTime(2021, 1, 1, (i/360/1000) % 60, (i/60/1000) % 60, (i / 1000) % 60, i % 1000));
+                    .At(new DateTime(2021, 1, 1, (i / 360 / 1000) % 60, (i / 60 / 1000) % 60, (i / 1000) % 60, i % 1000));
             }
             ls.Flush();
-            
-            File.WriteAllText($"out-{nowMillisecond}.txt", srv.GetTextReceived()); 
+
+            File.WriteAllText($"out-{nowMillisecond}.txt", srv.GetTextReceived());
         }
 
 
@@ -144,7 +144,7 @@ namespace tcp_client_test
         {
             using var srv = CreateTcpListener(_port);
             srv.AcceptAsync();
-            
+
             using var ls = new LineTcpSender(IPAddress.Loopback.ToString(), _port);
             Assert.Throws<ArgumentOutOfRangeException>(
                 () => ls.Table("name")
@@ -152,29 +152,29 @@ namespace tcp_client_test
                     .AtNow()
             );
         }
-        
+
         [Test]
         public void SendSpecialStrings()
         {
             using var srv = CreateTcpListener(_port);
             srv.AcceptAsync();
-            
+
             using var ls = new LineTcpSender(IPAddress.Loopback.ToString(), _port);
             ls.Table("neg\\name")
                 .Column("привед", " мед\rве\n д")
                 .AtNow();
             ls.Flush();
-            
+
             var expected = "neg\\\\name привед=\" мед\\\rве\\\n д\"\n";
             WaitAssert(srv, expected);
         }
-        
+
         [Test]
         public void SendTagAfterField()
         {
             using var srv = CreateTcpListener(_port);
             srv.AcceptAsync();
-            
+
             using var ls = new LineTcpSender(IPAddress.Loopback.ToString(), _port);
             Assert.Throws<InvalidOperationException>(
                 () => ls.Table("name")
@@ -183,13 +183,13 @@ namespace tcp_client_test
                     .AtNow()
             );
         }
-        
+
         [Test]
         public void SendMetricOnce()
         {
             using var srv = CreateTcpListener(_port);
             srv.AcceptAsync();
-            
+
             using var ls = new LineTcpSender(IPAddress.Loopback.ToString(), _port);
             Assert.Throws<InvalidOperationException>(
                 () => ls.Table("name")
@@ -198,24 +198,54 @@ namespace tcp_client_test
                     .AtNow()
             );
         }
-        
+
         [Test]
         public void StartFromMetric()
         {
             using var srv = CreateTcpListener(_port);
             srv.AcceptAsync();
-            
+
             using var ls = new LineTcpSender(IPAddress.Loopback.ToString(), _port);
             Assert.Throws<InvalidOperationException>(
                 () => ls.Column("number1", 123)
                     .AtNow()
             );
-            
+
             Assert.Throws<InvalidOperationException>(
                 () => ls.Symbol("number1", "1234")
                     .AtNow()
             );
         }
+
+        [Test]
+        public void TestMetrics()
+        {
+            using var srv = CreateTcpListener(_port);
+            srv.AcceptAsync();
+
+            using var ls = new LineTcpSender(IPAddress.Loopback.ToString(), _port, 25);
+
+            ls.Table("metric name", ignoreMetricsCheck: false)
+                    .Column("number", 10);
+            // Test that exception are thrown
+            Assert.Throws<InvalidOperationException>(
+                () =>
+            ls.Table("metric name", ignoreMetricsCheck: false)
+                    .Column("number1", 10)
+                    .At(new DateTime(1970, 01, 01, 0, 0, 1)));
+            ls.Dispose();
+            // Test that exception are not thrown
+            using var ls1 = new LineTcpSender(IPAddress.Loopback.ToString(), _port, 25);
+
+            ls1.Table("metric name", ignoreMetricsCheck: true)
+                    .Column("number", 10);
+            ls1.Table("metric name", ignoreMetricsCheck: true)
+                    .Column("number1", 10)
+                    .At(new DateTime(1970, 01, 01, 0, 0, 1));
+
+            ls1.Dispose();
+        }
+
 
         private DummyIlpServer CreateTcpListener(int port)
         {
@@ -244,7 +274,7 @@ namespace tcp_client_test
             private async Task AcceptConnections()
             {
                 try
-                {            
+                {
                     using var connection = await _server.AcceptSocketAsync();
                     await SaveData(connection);
                 }
@@ -256,7 +286,7 @@ namespace tcp_client_test
 
             private async Task SaveData(Socket connection)
             {
-                while(!_cancellationTokenSource.IsCancellationRequested && connection.Connected)
+                while (!_cancellationTokenSource.IsCancellationRequested && connection.Connected)
                 {
                     int received = await connection.ReceiveAsync(_buffer, SocketFlags.None, _cancellationTokenSource.Token);
                     if (received > 0)
@@ -264,7 +294,7 @@ namespace tcp_client_test
                         _received.Write(_buffer, 0, received);
                         _totalReceived += received;
                     }
-                } 
+                }
             }
 
             public int TotalReceived => _totalReceived;

@@ -22,246 +22,222 @@
  *
  ******************************************************************************/
 
-using System;
 using System.Globalization;
 using System.Net.Sockets;
 using System.Text;
 
-namespace QuestDB
+namespace QuestDB;
+
+public class LineTcpSender : IDisposable
 {
-    public class LineTcpSender : IDisposable
+    private static readonly long EpochTicks = new DateTime(1970, 1, 1).Ticks;
+    private readonly Socket _clientSocket;
+    private readonly byte[] _sendBuffer;
+    private bool _hasMetric;
+    private bool _noFields = true;
+    private int _position;
+    private bool _quoted;
+
+    public LineTcpSender(string address, int port, int bufferSize = 4096)
     {
-        private static readonly long EpochTicks = new DateTime(1970, 1, 1).Ticks;
-        private readonly Socket _clientSocket;
-        private readonly byte[] _sendBuffer;
-        private int _position;
-        private bool _hasMetric;
-        private bool _quoted;
-        private bool _noFields = true;
-        
-        public LineTcpSender(String address, int port, int bufferSize = 4096)
-        {
-            _clientSocket = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
-            _clientSocket.NoDelay = true;
-            _clientSocket.Blocking = true;
-            _clientSocket.Connect(address, port);
-            _sendBuffer = new byte[bufferSize];
-        }
+        _clientSocket = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
+        _clientSocket.NoDelay = true;
+        _clientSocket.Blocking = true;
+        _clientSocket.Connect(address, port);
+        _sendBuffer = new byte[bufferSize];
+    }
 
-        public LineTcpSender Table(ReadOnlySpan<char> name)
+    public void Dispose()
+    {
+        try
         {
-            if (_hasMetric)
-            {
-                throw new InvalidOperationException("duplicate metric");
-            }
-
-            _quoted = false;
-            _hasMetric = true;
-            EncodeUtf8(name);
-            return this;
+            if (_position > 0) Flush();
         }
-        
-        public LineTcpSender Symbol(ReadOnlySpan<char> tag, ReadOnlySpan<char> value) {
-            if (_hasMetric && _noFields) {
-                Put(',').EncodeUtf8(tag).Put('=').EncodeUtf8(value);
-                return this;
-            }
-            throw new InvalidOperationException("metric expected");
-        }
-        
-        private LineTcpSender Column(ReadOnlySpan<char> name) {
-            if (_hasMetric) {
-                if (_noFields) {
-                    Put(' ');
-                    _noFields = false;
-                } else {
-                    Put(',');
-                }
-
-                return EncodeUtf8(name).Put('=');
-            }
-            throw new InvalidOperationException("metric expected");
-        }
-        
-        public LineTcpSender Column(ReadOnlySpan<char> name, ReadOnlySpan<char> value)
+        catch (Exception ex)
         {
-            Column(name).Put('\"');
-            _quoted = true;
-            EncodeUtf8(value);
-            _quoted = false;
-            Put('\"');
-            return this;
+            Console.Error.WriteLine("Error on disposing LineTcpClient: {0}", ex);
         }
-        
-        public LineTcpSender Column(ReadOnlySpan<char> name, long value) {
-            Column(name).Put(value).Put('i');
-            return this;
+        finally
+        {
+            _clientSocket.Dispose();
         }
-        
-        public LineTcpSender Column(ReadOnlySpan<char> name, double value) {
-            Column(name).Put(value.ToString(CultureInfo.InvariantCulture));
+    }
+
+    public LineTcpSender Table(ReadOnlySpan<char> name)
+    {
+        if (_hasMetric) throw new InvalidOperationException("duplicate metric");
+
+        _quoted = false;
+        _hasMetric = true;
+        EncodeUtf8(name);
+        return this;
+    }
+
+    public LineTcpSender Symbol(ReadOnlySpan<char> tag, ReadOnlySpan<char> value)
+    {
+        if (_hasMetric && _noFields)
+        {
+            Put(',').EncodeUtf8(tag).Put('=').EncodeUtf8(value);
             return this;
         }
 
-        private LineTcpSender Put(long value)
-        {
-            if (value == long.MinValue)
-            {
-                // Special case, long.MinValue cannot be handled by QuestDB
-                throw new ArgumentOutOfRangeException();
-            }
-            
-            Span<byte> num = stackalloc byte[20];
-            int pos = num.Length;
-            long remaining = Math.Abs(value);
-            do
-            {
-                long digit = remaining % 10;
-                num[--pos] = (byte) ('0' + digit);
-                remaining /= 10;
-            } while (remaining != 0);
-            
-            if (value < 0)
-            {
-                num[--pos] = (byte) '-';
-            }
-            
-            int len = num.Length - pos;
-            if (_position + len >= _sendBuffer.Length)
-            {
-                Flush();
-            }
-            num.Slice(pos, len).CopyTo(_sendBuffer.AsSpan(_position));
-            _position += len;
+        throw new InvalidOperationException("metric expected");
+    }
 
-            return this;
+    private LineTcpSender Column(ReadOnlySpan<char> name)
+    {
+        if (_hasMetric)
+        {
+            if (_noFields)
+            {
+                Put(' ');
+                _noFields = false;
+            }
+            else
+            {
+                Put(',');
+            }
+
+            return EncodeUtf8(name).Put('=');
         }
 
-        private LineTcpSender EncodeUtf8(ReadOnlySpan<char> name)
-        {
-            for (int i = 0; i < name.Length; i++)
-            {
-                var c = name[i];
-                if (c < 128)
-                {
-                    PutSpecial(c);
-                }
-                else
-                {
-                    PutUtf8(c);
-                }
-            }
+        throw new InvalidOperationException("metric expected");
+    }
 
-            return this;
+    public LineTcpSender Column(ReadOnlySpan<char> name, ReadOnlySpan<char> value)
+    {
+        Column(name).Put('\"');
+        _quoted = true;
+        EncodeUtf8(value);
+        _quoted = false;
+        Put('\"');
+        return this;
+    }
+
+    public LineTcpSender Column(ReadOnlySpan<char> name, long value)
+    {
+        Column(name).Put(value).Put('i');
+        return this;
+    }
+
+    public LineTcpSender Column(ReadOnlySpan<char> name, double value)
+    {
+        Column(name).Put(value.ToString(CultureInfo.InvariantCulture));
+        return this;
+    }
+
+    private LineTcpSender Put(long value)
+    {
+        if (value == long.MinValue)
+            // Special case, long.MinValue cannot be handled by QuestDB
+            throw new ArgumentOutOfRangeException();
+
+        Span<byte> num = stackalloc byte[20];
+        var pos = num.Length;
+        var remaining = Math.Abs(value);
+        do
+        {
+            var digit = remaining % 10;
+            num[--pos] = (byte)('0' + digit);
+            remaining /= 10;
+        } while (remaining != 0);
+
+        if (value < 0) num[--pos] = (byte)'-';
+
+        var len = num.Length - pos;
+        if (_position + len >= _sendBuffer.Length) Flush();
+        num.Slice(pos, len).CopyTo(_sendBuffer.AsSpan(_position));
+        _position += len;
+
+        return this;
+    }
+
+    private LineTcpSender EncodeUtf8(ReadOnlySpan<char> name)
+    {
+        for (var i = 0; i < name.Length; i++)
+        {
+            var c = name[i];
+            if (c < 128)
+                PutSpecial(c);
+            else
+                PutUtf8(c);
         }
 
-        private void PutUtf8(char c)
+        return this;
+    }
+
+    private void PutUtf8(char c)
+    {
+        if (_position + 4 >= _sendBuffer.Length) Flush();
+
+        var bytes = _sendBuffer.AsSpan(_position);
+        Span<char> chars = stackalloc char[1] { c };
+        _position += Encoding.UTF8.GetBytes(chars, bytes);
+    }
+
+    private void PutSpecial(char c)
+    {
+        switch (c)
         {
-            if (_position + 4 >= _sendBuffer.Length)
-            {
-                Flush();
-            }
-
-            Span<byte> bytes = _sendBuffer.AsSpan(_position);
-            Span<char> chars = stackalloc char[1] {c};
-            _position += Encoding.UTF8.GetBytes(chars, bytes);
-        }
-
-        private void PutSpecial(char c)
-        {
-            switch (c)
-            {
-                case ' ':
-                case ',':
-                case '=':
-                    if (!_quoted)
-                    {
-                        Put('\\');
-                    }
-                    goto default;
-                default:
-                    Put(c);
-                    break;
-                case '\n':
-                case '\r':
-                    Put('\\').Put(c);
-                    break;
-                case '"':
-                    if (_quoted)
-                    {
-                        Put('\\');
-                    }
-
-                    Put(c);
-                    break;
-                case '\\':
-                    Put('\\').Put('\\');
-                    break;
-            }
-        }
-
-        private LineTcpSender Put(ReadOnlySpan<char> chars)
-        {
-            foreach (var c in chars)
-            {
+            case ' ':
+            case ',':
+            case '=':
+                if (!_quoted) Put('\\');
+                goto default;
+            default:
                 Put(c);
-            }
+                break;
+            case '\n':
+            case '\r':
+                Put('\\').Put(c);
+                break;
+            case '"':
+                if (_quoted) Put('\\');
 
-            return this;
+                Put(c);
+                break;
+            case '\\':
+                Put('\\').Put('\\');
+                break;
         }
-        
-        private LineTcpSender Put(char c)
-        {
-            if (_position + 1 >= _sendBuffer.Length)
-            {
-                Flush();
-            }
+    }
 
-            _sendBuffer[_position++] = (byte) c;
-            return this;
-        }
+    private LineTcpSender Put(ReadOnlySpan<char> chars)
+    {
+        foreach (var c in chars) Put(c);
 
-        public void Flush()
-        {
-            int sent = _clientSocket.Send(_sendBuffer, 0, _position, SocketFlags.None);
-            _position -= sent;
-        }
+        return this;
+    }
 
-        public void Dispose()
-        {
-            try
-            {
-                if (_position > 0)
-                {
-                    Flush();
-                }
-            }
-            catch (Exception ex)
-            {
-                Console.Error.WriteLine("Error on disposing LineTcpClient: {0}", ex);
-            }
-            finally
-            {
-                _clientSocket.Dispose();
-            }
-        }
+    private LineTcpSender Put(char c)
+    {
+        if (_position + 1 >= _sendBuffer.Length) Flush();
 
-        public void AtNow()
-        {
-            Put('\n');
-            _hasMetric = false;
-            _noFields = true;
-        }
+        _sendBuffer[_position++] = (byte)c;
+        return this;
+    }
 
-        public void At(DateTime timestamp)
-        {
-            long epoch = timestamp.Ticks - EpochTicks;
-            Put(' ').Put(epoch).Put('0').Put('0').AtNow();
-        }
+    public void Flush()
+    {
+        var sent = _clientSocket.Send(_sendBuffer, 0, _position, SocketFlags.None);
+        _position -= sent;
+    }
 
-        public void At(long epochNano)
-        {
-            Put(' ').Put(epochNano).AtNow();
-        }
+    public void AtNow()
+    {
+        Put('\n');
+        _hasMetric = false;
+        _noFields = true;
+    }
+
+    public void At(DateTime timestamp)
+    {
+        var epoch = timestamp.Ticks - EpochTicks;
+        Put(' ').Put(epoch).Put('0').Put('0').AtNow();
+    }
+
+    public void At(long epochNano)
+    {
+        Put(' ').Put(epochNano).AtNow();
     }
 }

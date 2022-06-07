@@ -30,10 +30,6 @@ using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using NUnit.Framework;
-using Org.BouncyCastle.Asn1.Sec;
-using Org.BouncyCastle.Crypto.Parameters;
-using Org.BouncyCastle.Math;
-using Org.BouncyCastle.Security;
 using QuestDB;
 
 namespace tcp_client_test;
@@ -44,41 +40,12 @@ public class LineTcpSenderTests
     private readonly int _port = 29472;
 
     [Test]
-    public async Task SendLine()
+    public void SendLine()
     {
         using var srv = CreateTcpListener(_port);
         srv.AcceptAsync();
 
-        using var ls = await CreateAndConnect();
-        
-        ls.Table("metric name")
-            .Symbol("t a g", "v alu, e")
-            .Column("number", 10)
-            .Column("string", " -=\"")
-            .At(new DateTime(1970, 01, 01, 0, 0, 1));
-        ls.Flush();
-
-
-        var expected = "metric\\ name,t\\ a\\ g=v\\ alu\\,\\ e number=10i,string=\" -=\\\"\" 1000000000\n";
-        WaitAssert(srv, expected);
-    }
-
-    private async Task<LineTcpSender> CreateAndConnect(int bufferSize = 4096)
-    {
-        return await LineTcpSender.Connect(IPAddress.Loopback.ToString(), _port, bufferSize);
-    }
-
-    [Test]
-    public async Task Auth()
-    {
-        using var srv = CreateTcpListener(_port);
-        srv.WithAuth("testUser1", "Vs4e-cOLsVCntsMrZiAGAZtrkPXO00uoRLuA3d7gEcI=",
-            "ANhR2AZSs4ar9urE5AZrJqu469X0r7gZ1BBEdcrAuL_6");
-        srv.AcceptAsync();
-
-        using var ls = await CreateAndConnect();
-        await ls.Authenticate("testUser1", "NgdiOWDoQNUP18WOnb1xkkEG5TzPYMda5SiUOvT1K0U=", CancellationToken.None);
-
+        using var ls = new LineTcpSender(IPAddress.Loopback.ToString(), _port);
         ls.Table("metric name")
             .Symbol("t a g", "v alu, e")
             .Column("number", 10)
@@ -92,60 +59,12 @@ public class LineTcpSenderTests
     }
 
     [Test]
-    public void TestECDsaSecP224k1Sha256()
-    {
-        var privateKey = Convert.FromBase64String("NgdiOWDoQNUP18WOnb1xkkEG5TzPYMda5SiUOvT1K0U=");
-        var p = SecNamedCurves.GetByName("secp256r1");
-        // X9ECParameters p = NistNamedCurves.GetByName("P-256");
-        var parameters = new ECDomainParameters(p.Curve, p.G, p.N, p.H);
-        var priKey = new ECPrivateKeyParameters(
-            "ECDSA",
-            new BigInteger(privateKey), // d
-            parameters);
-
-        var m = new byte[512];
-        for (var i = 0; i < m.Length; i++) m[i] = (byte)i;
-
-        var ecdsa = SignerUtilities.GetSigner("SHA-256withECDSA");
-        ecdsa.Init(true, priKey);
-        ecdsa.BlockUpdate(m, 0, m.Length);
-        var signature = ecdsa.GenerateSignature();
-
-        var pubKey1 = FromBase64String("Vs4e-cOLsVCntsMrZiAGAZtrkPXO00uoRLuA3d7gEcI=");
-        var pubKey2 = FromBase64String("ANhR2AZSs4ar9urE5AZrJqu469X0r7gZ1BBEdcrAuL_6");
-
-        // Verify the signature
-        var pubKey = new ECPublicKeyParameters(
-            parameters.Curve.CreatePoint(new BigInteger(pubKey1), new BigInteger(pubKey2)),
-            parameters);
-
-        ecdsa.Init(false, pubKey);
-        ecdsa.BlockUpdate(m, 0, m.Length);
-        Assert.That(ecdsa.VerifySignature(signature));
-    }
-
-    private static byte[] FromBase64String(string encodedPrivateKey)
-    {
-        var replace = encodedPrivateKey
-            .Replace('-', '+')
-            .Replace('_', '/');
-        return Convert.FromBase64String(Pad(replace));
-    }
-
-    private static string Pad(string text)
-    {
-        var padding = 3 - (text.Length + 3) % 4;
-        if (padding == 0) return text;
-        return text + new string('=', padding);
-    }
-
-    [Test]
-    public async Task SendLineExceedsBuffer()
+    public void SendLineExceedsBuffer()
     {
         using var srv = CreateTcpListener(_port);
         srv.AcceptAsync();
 
-        using var ls = await CreateAndConnect();
+        using var ls = new LineTcpSender(IPAddress.Loopback.ToString(), _port, 25);
         var lineCount = 500;
         var expected =
             "metric\\ name,t\\ a\\ g=v\\ alu\\,\\ e number=10i,db\\ l=123.12,string=\" -=\\\"\",при\\ вед=\"медвед\" 1000000000\n";
@@ -169,12 +88,12 @@ public class LineTcpSenderTests
     }
 
     [Test]
-    public async Task SendNegativeLongAndDouble()
+    public void SendNegativeLongAndDouble()
     {
         using var srv = CreateTcpListener(_port);
         srv.AcceptAsync();
 
-        using var ls = await CreateAndConnect();
+        using var ls = new LineTcpSender(IPAddress.Loopback.ToString(), _port);
         ls.Table("neg\\name")
             .Column("number1", long.MinValue + 1)
             .Column("number2", long.MaxValue)
@@ -189,7 +108,7 @@ public class LineTcpSenderTests
     }
 
     [Test]
-    public async Task SendMillionToFile()
+    public void SendMillionToFile()
     {
         using var srv = CreateTcpListener(_port);
         srv.AcceptAsync();
@@ -197,7 +116,7 @@ public class LineTcpSenderTests
         var nowMillisecond = DateTime.Now.Millisecond;
         var metric = "metric_name" + nowMillisecond;
 
-        using var ls = await CreateAndConnect(2048);
+        using var ls = new LineTcpSender(IPAddress.Loopback.ToString(), _port, 2048);
         for (var i = 0; i < 1E6; i++)
             ls.Table(metric)
                 .Symbol("nopoint", "tag" + i % 100)
@@ -219,12 +138,12 @@ public class LineTcpSenderTests
     }
 
     [Test]
-    public async Task SendNegativeLongMin()
+    public void SendNegativeLongMin()
     {
         using var srv = CreateTcpListener(_port);
         srv.AcceptAsync();
 
-        using var ls = await CreateAndConnect();
+        using var ls = new LineTcpSender(IPAddress.Loopback.ToString(), _port);
         Assert.Throws<ArgumentOutOfRangeException>(
             () => ls.Table("name")
                 .Column("number1", long.MinValue)
@@ -233,12 +152,12 @@ public class LineTcpSenderTests
     }
 
     [Test]
-    public async Task SendSpecialStrings()
+    public void SendSpecialStrings()
     {
         using var srv = CreateTcpListener(_port);
         srv.AcceptAsync();
 
-        using var ls = await CreateAndConnect();
+        using var ls = new LineTcpSender(IPAddress.Loopback.ToString(), _port);
         ls.Table("neg\\name")
             .Column("привед", " мед\rве\n д")
             .AtNow();
@@ -249,12 +168,12 @@ public class LineTcpSenderTests
     }
 
     [Test]
-    public async Task SendTagAfterField()
+    public void SendTagAfterField()
     {
         using var srv = CreateTcpListener(_port);
         srv.AcceptAsync();
 
-        using var ls = await CreateAndConnect();
+        using var ls = new LineTcpSender(IPAddress.Loopback.ToString(), _port);
         Assert.Throws<InvalidOperationException>(
             () => ls.Table("name")
                 .Column("number1", 123)
@@ -264,12 +183,12 @@ public class LineTcpSenderTests
     }
 
     [Test]
-    public async Task SendMetricOnce()
+    public void SendMetricOnce()
     {
         using var srv = CreateTcpListener(_port);
         srv.AcceptAsync();
 
-        using var ls = await CreateAndConnect();
+        using var ls = new LineTcpSender(IPAddress.Loopback.ToString(), _port);
         Assert.Throws<InvalidOperationException>(
             () => ls.Table("name")
                 .Column("number1", 123)
@@ -279,12 +198,12 @@ public class LineTcpSenderTests
     }
 
     [Test]
-    public async Task StartFromMetric()
+    public void StartFromMetric()
     {
         using var srv = CreateTcpListener(_port);
         srv.AcceptAsync();
 
-        using var ls = await CreateAndConnect();
+        using var ls = new LineTcpSender(IPAddress.Loopback.ToString(), _port);
         Assert.Throws<InvalidOperationException>(
             () => ls.Column("number1", 123)
                 .AtNow()
@@ -357,11 +276,6 @@ public class LineTcpSenderTests
         public string GetTextReceived()
         {
             return Encoding.UTF8.GetString(_received.GetBuffer(), 0, (int)_received.Length);
-        }
-
-        public void WithAuth(string keyId, string publicKeyX, string publicKeyY)
-        {
-            throw new NotImplementedException();
         }
     }
 }

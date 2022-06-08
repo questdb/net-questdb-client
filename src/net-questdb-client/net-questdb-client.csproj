@@ -1,7 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
     <PropertyGroup>
-        <RootNamespace>net_questdb_client</RootNamespace>
+        <RootNamespace>QuestDB</RootNamespace>
         <ImplicitUsings>enable</ImplicitUsings>
         <Nullable>enable</Nullable>
         <LangVersion>10</LangVersion>
@@ -18,7 +18,7 @@
     </PropertyGroup>
 
     <ItemGroup>
-        <PackageReference Include="BouncyCastle.NetCore" Version="1.9.0"/>
+        <PackageReference Include="BouncyCastle.NetCore" Version="1.9.0" />
     </ItemGroup>
 
 </Project>

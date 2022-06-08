@@ -50,7 +50,7 @@ public class LineTcpSenderTests
         srv.AcceptAsync();
 
         using var ls = await CreateAndConnect();
-        
+
         ls.Table("metric name")
             .Symbol("t a g", "v alu, e")
             .Column("number", 10)
@@ -63,13 +63,14 @@ public class LineTcpSenderTests
         WaitAssert(srv, expected);
     }
 
-    private async Task<LineTcpSender> CreateAndConnect(int bufferSize = 4096)
+    private async Task<LineTcpSender> CreateAndConnect(int bufferSize = 4096,
+        BufferOverflowHandling bufferOverflowHandling = BufferOverflowHandling.SendImmediately)
     {
-        return await LineTcpSender.Connect(IPAddress.Loopback.ToString(), _port, bufferSize);
+        return await LineTcpSender.Connect(IPAddress.Loopback.ToString(), _port, bufferSize, bufferOverflowHandling);
     }
 
     [Test]
-    public async Task Auth()
+    public async Task Authenticate()
     {
         using var srv = CreateTcpListener(_port);
         srv.WithAuth("testUser1", "Vs4e-cOLsVCntsMrZiAGAZtrkPXO00uoRLuA3d7gEcI=",
@@ -145,14 +146,58 @@ public class LineTcpSenderTests
         using var srv = CreateTcpListener(_port);
         srv.AcceptAsync();
 
-        using var ls = await CreateAndConnect();
+        using var ls = await CreateAndConnect(2048);
         var lineCount = 500;
         var expected =
-            "metric\\ name,t\\ a\\ g=v\\ alu\\,\\ e number=10i,db\\ l=123.12,string=\" -=\\\"\",при\\ вед=\"медвед\" 1000000000\n";
+            "table\\ name,t\\ a\\ g=v\\ alu\\,\\ e number=10i,db\\ l=123.12,string=\" -=\\\"\",при\\ вед=\"медвед\" 1000000000\n";
         var totalExpectedSb = new StringBuilder();
         for (var i = 0; i < lineCount; i++)
         {
-            ls.Table("metric name")
+            ls.Table("table name")
+                .Symbol("t a g", "v alu, e")
+                .Column("number", 10)
+                .Column("db l", 123.12)
+                .Column("string", " -=\"")
+                .Column("при вед", "медвед")
+                .At(new DateTime(1970, 01, 01, 0, 0, 1));
+            totalExpectedSb.Append(expected);
+        }
+
+        await ls.FlushAsync();
+        ls.Dispose();
+
+        var totalExpected = totalExpectedSb.ToString();
+        WaitAssert(srv, totalExpected);
+    }
+
+    [Test]
+    public async Task SendLineReusesBuffers()
+    {
+        using var srv = CreateTcpListener(_port);
+        srv.AcceptAsync();
+
+        using var ls = await CreateAndConnect(2048, BufferOverflowHandling.SendOnFlush);
+        var lineCount = 500;
+        var expected =
+            "table\\ name,t\\ a\\ g=v\\ alu\\,\\ e number=10i,db\\ l=123.12,string=\" -=\\\"\",при\\ вед=\"медвед\" 1000000000\n";
+        var totalExpectedSb = new StringBuilder();
+        for (var i = 0; i < lineCount; i++)
+        {
+            ls.Table("table name")
+                .Symbol("t a g", "v alu, e")
+                .Column("number", 10)
+                .Column("db l", 123.12)
+                .Column("string", " -=\"")
+                .Column("при вед", "медвед")
+                .At(new DateTime(1970, 01, 01, 0, 0, 1));
+            totalExpectedSb.Append(expected);
+        }
+
+        await ls.FlushAsync();
+
+        for (var i = 0; i < lineCount; i++)
+        {
+            ls.Table("table name")
                 .Symbol("t a g", "v alu, e")
                 .Column("number", 10)
                 .Column("db l", 123.12)
@@ -189,6 +234,30 @@ public class LineTcpSenderTests
     }
 
     [Test]
+    public async Task InvalidNames()
+    {
+        using var srv = CreateTcpListener(_port);
+        srv.AcceptAsync();
+
+        using var ls = await CreateAndConnect();
+        string? nullString = null;
+
+        Assert.Throws<ArgumentException>(() => ls.Table(nullString));
+        Assert.Throws<InvalidOperationException>(() => ls.Column("abc", 123));
+        Assert.Throws<InvalidOperationException>(() => ls.Symbol("abc", "123"));
+
+        ls.Table("abcd");
+        Assert.Throws<InvalidOperationException>(() => ls.Table("abc"));
+        Assert.Throws<ArgumentException>(() => ls.Column(nullString, 123));
+        Assert.Throws<ArgumentException>(() => ls.Symbol(nullString, "sdf"));
+
+        ls.Symbol("asdf", "sdfad");
+        ls.Column("asdf", 123);
+
+        Assert.Throws<InvalidOperationException>(() => ls.Symbol("asdf", "asdf"));
+    }
+
+    [Test]
     public async Task SendMillionToFile()
     {
         using var srv = CreateTcpListener(_port);
@@ -205,16 +274,51 @@ public class LineTcpSenderTests
                 .Column("int", i)
                 .Column("привед", "мед вед")
                 .At(new DateTime(2021, 1, 1, i / 360 / 1000 % 60, i / 60 / 1000 % 60, i / 1000 % 60, i % 1000));
-        ls.Flush();
+
+        await ls.FlushAsync();
 
         File.WriteAllText($"out-{nowMillisecond}.txt", srv.GetTextReceived());
     }
 
+    [Test]
+    public async Task CannotConnect()
+    {
+        try
+        {
+            using var ls = await CreateAndConnect(2048);
+            Assert.Fail();
+        }
+        catch (SocketException ex)
+        {
+            Assert.That(ex.Message, Is.EqualTo("Connection refused"));
+        }
+    }
+
+    [Test]
+    public async Task BufferTooSmallForAuth()
+    {
+        using var srv = CreateTcpListener(_port);
+        srv.WithAuth("testUser1", "Vs4e-cOLsVCntsMrZiAGAZtrkPXO00uoRLuA3d7gEcI=",
+            "ANhR2AZSs4ar9urE5AZrJqu469X0r7gZ1BBEdcrAuL_6");
+        srv.AcceptAsync();
+
+        using var ls = await CreateAndConnect(512);
+
+        try
+        {
+            await ls.Authenticate("testUser1", "NgdiOWDoQNUP18WOnb1xkkEG5TzPYMda5SiUOvT1K0U=", CancellationToken.None);
+            Assert.Fail();
+        }
+        catch (IOException ex)
+        {
+            Assert.That(ex.Message, Is.EqualTo("Buffer is too small to receive the message"));
+        }
+    }
 
     private static void WaitAssert(DummyIlpServer srv, string expected)
     {
-        for (var i = 0; i < 500 && srv.TotalReceived < expected.Length; i++) Thread.Sleep(10);
-
+        var expectedLen = Encoding.UTF8.GetBytes(expected).Length;
+        for (var i = 0; i < 500 && srv.TotalReceived < expectedLen; i++) Thread.Sleep(10);
         Assert.AreEqual(expected, srv.GetTextReceived());
     }
 
@@ -307,6 +411,9 @@ public class LineTcpSenderTests
         private readonly CancellationTokenSource _cancellationTokenSource = new();
         private readonly MemoryStream _received = new();
         private readonly TcpListener _server;
+        private string? _keyId;
+        private string? _publicKeyX;
+        private string? _publicKeyY;
         private volatile int _totalReceived;
 
         public DummyIlpServer(int port)
@@ -333,12 +440,73 @@ public class LineTcpSenderTests
             try
             {
                 using var connection = await _server.AcceptSocketAsync();
+                if (_keyId != null) await RunServerAuth(connection);
                 await SaveData(connection);
             }
             catch (SocketException ex)
             {
                 Console.WriteLine($"Error {ex.ErrorCode}: Server socket error.");
             }
+        }
+
+        private async Task RunServerAuth(Socket connection)
+        {
+            var receivedLen = await ReceiveUntilEol(connection);
+
+            var requestedKeyId = Encoding.UTF8.GetString(_buffer, 0, receivedLen);
+            if (requestedKeyId != _keyId)
+            {
+                connection.Close();
+                return;
+            }
+
+            var challenge = new byte[512];
+            GenerateRandomBytes(challenge, 512);
+            await connection.SendAsync(challenge, SocketFlags.None, _cancellationTokenSource.Token);
+            _buffer[0] = (byte)'\n';
+            await connection.SendAsync(_buffer.AsMemory(0, 1), SocketFlags.None, _cancellationTokenSource.Token);
+
+            receivedLen = await ReceiveUntilEol(connection);
+            var signature = Convert.FromBase64String(Encoding.ASCII.GetString(_buffer.AsSpan(0, receivedLen)));
+            if (_publicKeyX == null || _publicKeyY == null)
+            {
+                throw new InvalidOperationException("public key not set");
+            }
+            var pubKey1 = FromBase64String(_publicKeyX);
+            var pubKey2 = FromBase64String(_publicKeyY);
+
+            var p = SecNamedCurves.GetByName("secp256r1");
+            var parameters = new ECDomainParameters(p.Curve, p.G, p.N, p.H);
+
+            // Verify the signature
+            var pubKey = new ECPublicKeyParameters(
+                parameters.Curve.CreatePoint(new BigInteger(pubKey1), new BigInteger(pubKey2)),
+                parameters);
+
+            var ecdsa = SignerUtilities.GetSigner("SHA-256withECDSA");
+            ecdsa.Init(false, pubKey);
+            ecdsa.BlockUpdate(challenge, 0, challenge.Length);
+            if (!ecdsa.VerifySignature(signature)) connection.Close();
+        }
+
+        private async Task<int> ReceiveUntilEol(Socket connection)
+        {
+            var totalReceived = 0;
+            while (true)
+            {
+                var received = await connection.ReceiveAsync(_buffer.AsMemory(totalReceived), SocketFlags.None,
+                    _cancellationTokenSource.Token);
+                totalReceived += received;
+                if (_buffer[totalReceived - 1] == '\n' || totalReceived >= _buffer.Length) break;
+            }
+
+            return totalReceived - 1;
+        }
+
+        private void GenerateRandomBytes(byte[] buffer, int length)
+        {
+            var rnd = new Random(DateTime.Now.Millisecond);
+            rnd.NextBytes(buffer.AsSpan(length));
         }
 
         private async Task SaveData(Socket connection)
@@ -361,7 +529,9 @@ public class LineTcpSenderTests
 
         public void WithAuth(string keyId, string publicKeyX, string publicKeyY)
         {
-            throw new NotImplementedException();
+            _keyId = keyId;
+            _publicKeyX = publicKeyX;
+            _publicKeyY = publicKeyY;
         }
     }
 }

@@ -25,6 +25,7 @@
 using System.Buffers.Text;
 using System.Globalization;
 using System.Net.Sockets;
+using System.Runtime.CompilerServices;
 using System.Text;
 using Org.BouncyCastle.Asn1.Sec;
 using Org.BouncyCastle.Crypto.Parameters;
@@ -36,44 +37,26 @@ namespace QuestDB;
 public class LineTcpSender : IDisposable
 {
     private static readonly long EpochTicks = new DateTime(1970, 1, 1).Ticks;
+    private readonly BufferOverflowHandling _bufferOverflowHandling;
+    private readonly List<(byte[] Buffer, int Length)> _buffers = new();
     private readonly Socket _clientSocket;
+    private readonly bool _ownSocket;
+    private int _currentBufferIndex;
+    private bool _hasTable;
     private NetworkStream _networkStream = null!;
-    private readonly byte[] _sendBuffer;
-    private bool _hasMetric;
     private bool _noFields = true;
     private int _position;
     private bool _quoted;
-    private readonly bool _ownSocket;
+    private byte[] _sendBuffer;
 
-    private LineTcpSender(Socket clientSocket, bool ownSocket, int bufferSize)
+    private LineTcpSender(Socket clientSocket, bool ownSocket, int bufferSize,
+        BufferOverflowHandling bufferOverflowHandling)
     {
         _clientSocket = clientSocket;
         _ownSocket = ownSocket;
+        _bufferOverflowHandling = bufferOverflowHandling;
         _sendBuffer = new byte[bufferSize];
-    }
-
-    public static async Task<LineTcpSender> Connect(string address, int port, int bufferSize = 4096)
-    {
-        var socket = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
-        try
-        {
-            await socket.ConnectAsync(address, port);
-            LineTcpSender lineTcpSender = new LineTcpSender(socket, true, bufferSize);
-            lineTcpSender._networkStream = new NetworkStream(socket);
-            return lineTcpSender;
-        }
-        catch (Exception)
-        {
-            socket.Dispose();
-            throw;
-        }
-    }
-
-    public static LineTcpSender FromConnectedSocket(Socket socket, int bufferSize = 4096)
-    {
-        LineTcpSender lineTcpSender = new LineTcpSender(socket, false, bufferSize);
-        lineTcpSender._networkStream = new NetworkStream(socket);
-        return lineTcpSender;
+        _buffers.Add((_sendBuffer, 0));
     }
 
     public void Dispose()
@@ -91,6 +74,32 @@ public class LineTcpSender : IDisposable
             _networkStream.Dispose();
             if (_ownSocket) _clientSocket.Dispose();
         }
+    }
+
+    public static async Task<LineTcpSender> Connect(string address, int port,
+        int bufferSize = 4096, BufferOverflowHandling bufferOverflowHandling = BufferOverflowHandling.SendImmediately)
+    {
+        var socket = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
+        try
+        {
+            await socket.ConnectAsync(address, port);
+            var lineTcpSender = new LineTcpSender(socket, true, bufferSize, bufferOverflowHandling);
+            lineTcpSender._networkStream = new NetworkStream(socket);
+            return lineTcpSender;
+        }
+        catch (Exception)
+        {
+            socket.Dispose();
+            throw;
+        }
+    }
+
+    public static LineTcpSender FromConnectedSocket(Socket socket, int bufferSize = 4096,
+        BufferOverflowHandling bufferOverflowHandling = BufferOverflowHandling.SendImmediately)
+    {
+        var lineTcpSender = new LineTcpSender(socket, false, bufferSize, bufferOverflowHandling);
+        lineTcpSender._networkStream = new NetworkStream(socket);
+        return lineTcpSender;
     }
 
     public async Task Authenticate(string keyId, string encodedPrivateKey, CancellationToken cancellationToken)
@@ -121,12 +130,6 @@ public class LineTcpSender : IDisposable
         _position = 0;
     }
 
-    public async Task FlushAsync(CancellationToken cancellationToken)
-    {
-        await _networkStream.WriteAsync(_sendBuffer, 0, _position, cancellationToken);
-        _position = 0;
-    }
-
     private static byte[] FromBase64String(string encodedPrivateKey)
     {
         var urlUnsafe = encodedPrivateKey.Replace('-', '+').Replace('_', '/');
@@ -146,33 +149,43 @@ public class LineTcpSender : IDisposable
             if (_sendBuffer[totalReceived - 1] == endChar) return totalReceived - 1;
         }
 
-        throw new InvalidOperationException("Buffer is too small receive the message");
+        throw new IOException("Buffer is too small to receive the message");
     }
 
     public LineTcpSender Table(ReadOnlySpan<char> name)
     {
-        if (_hasMetric) throw new InvalidOperationException("duplicate metric");
+        if (IsEmpty(name)) throw new ArgumentException(nameof(name) + " cannot be empty");
+        if (_hasTable) throw new InvalidOperationException("table already specified");
 
         _quoted = false;
-        _hasMetric = true;
+        _hasTable = true;
         EncodeUtf8(name);
         return this;
     }
 
-    public LineTcpSender Symbol(ReadOnlySpan<char> tag, ReadOnlySpan<char> value)
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static bool IsEmpty(ReadOnlySpan<char> name)
     {
-        if (_hasMetric && _noFields)
+        return name.Length == 0;
+    }
+
+    public LineTcpSender Symbol(ReadOnlySpan<char> symbolName, ReadOnlySpan<char> value)
+    {
+        if (IsEmpty(symbolName)) throw new ArgumentException(nameof(symbolName) + " cannot be empty");
+        if (_hasTable && _noFields)
         {
-            Put(',').EncodeUtf8(tag).Put('=').EncodeUtf8(value);
+            Put(',').EncodeUtf8(symbolName).Put('=').EncodeUtf8(value);
             return this;
         }
 
-        throw new InvalidOperationException("metric expected");
+        if (!_hasTable) throw new InvalidOperationException("table expected");
+        throw new InvalidOperationException("cannot write Symbols after Fields");
     }
 
     private LineTcpSender Column(ReadOnlySpan<char> name)
     {
-        if (_hasMetric)
+        if (IsEmpty(name)) throw new ArgumentException(nameof(name) + " cannot be empty");
+        if (_hasTable)
         {
             if (_noFields)
             {
@@ -187,7 +200,7 @@ public class LineTcpSender : IDisposable
             return EncodeUtf8(name).Put('=');
         }
 
-        throw new InvalidOperationException("metric expected");
+        throw new InvalidOperationException("table expected");
     }
 
     public LineTcpSender Column(ReadOnlySpan<char> name, ReadOnlySpan<char> value)
@@ -231,7 +244,7 @@ public class LineTcpSender : IDisposable
         if (value < 0) num[--pos] = (byte)'-';
 
         var len = num.Length - pos;
-        if (_position + len >= _sendBuffer.Length) Flush();
+        if (_position + len >= _sendBuffer.Length) NextBuffer();
         num.Slice(pos, len).CopyTo(_sendBuffer.AsSpan(_position));
         _position += len;
 
@@ -254,7 +267,7 @@ public class LineTcpSender : IDisposable
 
     private void PutUtf8(char c)
     {
-        if (_position + 4 >= _sendBuffer.Length) Flush();
+        if (_position + 4 >= _sendBuffer.Length) NextBuffer();
 
         var bytes = _sendBuffer.AsSpan(_position);
         Span<char> chars = stackalloc char[1] { c };
@@ -288,32 +301,81 @@ public class LineTcpSender : IDisposable
         }
     }
 
-    private LineTcpSender Put(ReadOnlySpan<char> chars)
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private void Put(ReadOnlySpan<char> chars)
     {
         foreach (var c in chars) Put(c);
-
-        return this;
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private LineTcpSender Put(char c)
     {
-        if (_position + 1 >= _sendBuffer.Length) Flush();
+        if (_position + 1 >= _sendBuffer.Length) NextBuffer();
 
         _sendBuffer[_position++] = (byte)c;
         return this;
     }
 
+    private void NextBuffer()
+    {
+        if (_bufferOverflowHandling == BufferOverflowHandling.SendImmediately)
+        {
+            Flush();
+            return;
+        }
+
+        _buffers[_currentBufferIndex] = (_sendBuffer, _position);
+        _currentBufferIndex++;
+
+        if (_buffers.Count <= _currentBufferIndex)
+        {
+            _sendBuffer = new byte[_sendBuffer.Length];
+            _buffers.Add((_sendBuffer, 0));
+        }
+        else
+        {
+            _sendBuffer = _buffers[_currentBufferIndex].Buffer;
+        }
+
+        _position = 0;
+    }
+
     public void Flush()
     {
         _clientSocket.Blocking = true;
-        _networkStream.Write(_sendBuffer, 0, _position);
+        for (var i = 0; i <= _currentBufferIndex; i++)
+        {
+            var length = i == _currentBufferIndex ? _position : _buffers[i].Length;
+            if (length > 0) _networkStream.Write(_buffers[i].Buffer, 0, length);
+        }
+
+        _currentBufferIndex = 0;
+        _sendBuffer = _buffers[_currentBufferIndex].Buffer;
+        _position = 0;
+    }
+
+    public Task FlushAsync()
+    {
+        return FlushAsync(CancellationToken.None);
+    }
+
+    public async Task FlushAsync(CancellationToken cancellationToken)
+    {
+        for (var i = 0; i <= _currentBufferIndex; i++)
+        {
+            var length = i == _currentBufferIndex ? _position : _buffers[i].Length;
+            if (length > 0) await _networkStream.WriteAsync(_buffers[i].Buffer, 0, length, cancellationToken);
+        }
+
+        _currentBufferIndex = 0;
+        _sendBuffer = _buffers[0].Buffer;
         _position = 0;
     }
 
     public void AtNow()
     {
         Put('\n');
-        _hasMetric = false;
+        _hasTable = false;
         _noFields = true;
     }
 

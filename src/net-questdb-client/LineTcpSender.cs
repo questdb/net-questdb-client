@@ -24,6 +24,7 @@
 
 using System.Buffers.Text;
 using System.Globalization;
+using System.Net.Security;
 using System.Net.Sockets;
 using System.Runtime.CompilerServices;
 using System.Text;
@@ -36,27 +37,29 @@ namespace QuestDB;
 
 public class LineTcpSender : IDisposable
 {
+    private static readonly RemoteCertificateValidationCallback AllowAllCertCallback = (_, _, _, _) => true;
     private static readonly long EpochTicks = new DateTime(1970, 1, 1).Ticks;
     private readonly BufferOverflowHandling _bufferOverflowHandling;
     private readonly List<(byte[] Buffer, int Length)> _buffers = new();
-    private readonly Socket _clientSocket;
-    private readonly bool _ownSocket;
+    public static int DefaultQuestDbFsFileNameLimit = 255;
+    private readonly Stream _networkStream;
+    private Socket? _underlyingSocket;
+    private bool _authenticated;
     private int _currentBufferIndex;
     private bool _hasTable;
-    private NetworkStream _networkStream = null!;
     private bool _noFields = true;
     private int _position;
     private bool _quoted;
     private byte[] _sendBuffer;
 
-    private LineTcpSender(Socket clientSocket, bool ownSocket, int bufferSize,
+    private LineTcpSender(Stream networkStream, int bufferSize,
         BufferOverflowHandling bufferOverflowHandling)
     {
-        _clientSocket = clientSocket;
-        _ownSocket = ownSocket;
+        _networkStream = networkStream;
         _bufferOverflowHandling = bufferOverflowHandling;
         _sendBuffer = new byte[bufferSize];
         _buffers.Add((_sendBuffer, 0));
+        QuestDbFsFileNameLimit = DefaultQuestDbFsFileNameLimit;
     }
 
     public void Dispose()
@@ -72,38 +75,83 @@ public class LineTcpSender : IDisposable
         finally
         {
             _networkStream.Dispose();
-            if (_ownSocket) _clientSocket.Dispose();
         }
     }
 
-    public static async Task<LineTcpSender> Connect(string address, int port,
-        int bufferSize = 4096, BufferOverflowHandling bufferOverflowHandling = BufferOverflowHandling.SendImmediately)
+    public static async ValueTask<LineTcpSender> Connect(
+        string host,
+        int port,
+        int bufferSize = 4096,
+        BufferOverflowHandling bufferOverflowHandling = BufferOverflowHandling.SendImmediately,
+        TlsMode tlsMode = TlsMode.Enable)
     {
         var socket = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
         try
         {
-            await socket.ConnectAsync(address, port);
-            var lineTcpSender = new LineTcpSender(socket, true, bufferSize, bufferOverflowHandling);
-            lineTcpSender._networkStream = new NetworkStream(socket);
-            return lineTcpSender;
+            await socket.ConnectAsync(host, port);
+            return await Connect(host, socket, true, bufferSize, bufferOverflowHandling, tlsMode);
         }
-        catch (Exception)
+        catch
         {
             socket.Dispose();
             throw;
         }
     }
 
-    public static LineTcpSender FromConnectedSocket(Socket socket, int bufferSize = 4096,
-        BufferOverflowHandling bufferOverflowHandling = BufferOverflowHandling.SendImmediately)
+    public static async ValueTask<LineTcpSender> Connect(
+        string host,
+        Socket socket,
+        bool ownSocket = true,
+        int bufferSize = 4096,
+        BufferOverflowHandling bufferOverflowHandling = BufferOverflowHandling.SendImmediately,
+        TlsMode tlsMode = TlsMode.Enable,
+        CancellationToken cancellationToken = default)
     {
-        var lineTcpSender = new LineTcpSender(socket, false, bufferSize, bufferOverflowHandling);
-        lineTcpSender._networkStream = new NetworkStream(socket);
-        return lineTcpSender;
+        NetworkStream? networkStream = null;
+        SslStream? sslStream = null;
+        try
+        {
+            networkStream = new NetworkStream(socket, ownSocket);
+            Stream dataStream = networkStream;
+
+            if (tlsMode != TlsMode.Enable)
+            {
+                sslStream = new SslStream(networkStream, false);
+                var options = new SslClientAuthenticationOptions
+                {
+                    TargetHost = host,
+                    RemoteCertificateValidationCallback =
+                        tlsMode == TlsMode.AllowAnyServerCertificate ? AllowAllCertCallback : null
+                };
+                await sslStream.AuthenticateAsClientAsync(options, cancellationToken);
+                dataStream = sslStream;
+            }
+
+            var lineSender = FromStream(dataStream, bufferSize, bufferOverflowHandling);
+            lineSender._underlyingSocket = socket;
+            return lineSender;
+        }
+        catch (Exception)
+        {
+            sslStream?.Dispose();
+            networkStream?.Dispose();
+            throw;
+        }
     }
 
-    public async Task Authenticate(string keyId, string encodedPrivateKey, CancellationToken cancellationToken)
+    public static LineTcpSender FromStream(Stream networkStream,
+        int bufferSize = 4096,
+        BufferOverflowHandling bufferOverflowHandling = BufferOverflowHandling.SendImmediately)
     {
+        return new LineTcpSender(networkStream, bufferSize, bufferOverflowHandling);
+    }
+
+    public async ValueTask Authenticate(string keyId, string encodedPrivateKey,
+        CancellationToken cancellationToken = default)
+    {
+        if (_authenticated) throw new InvalidOperationException("Already authenticated");
+
+        _authenticated = true;
         EncodeUtf8(keyId);
         _sendBuffer[_position++] = (byte)'\n';
         await FlushAsync(cancellationToken);
@@ -115,7 +163,7 @@ public class LineTcpSender : IDisposable
         var parameters = new ECDomainParameters(p.Curve, p.G, p.N, p.H);
         var priKey = new ECPrivateKeyParameters(
             "ECDSA",
-            new BigInteger(privateKey), // d
+            new BigInteger(1, privateKey), // d
             parameters);
 
         var ecdsa = SignerUtilities.GetSigner("SHA-256withECDSA");
@@ -138,27 +186,43 @@ public class LineTcpSender : IDisposable
         return Convert.FromBase64String(urlUnsafe);
     }
 
-    private async Task<int> ReceiveUntil(char endChar, CancellationToken cancellationToken)
+    private async ValueTask<int> ReceiveUntil(char endChar, CancellationToken cancellationToken)
     {
         var totalReceived = 0;
         while (totalReceived < _sendBuffer.Length)
         {
             var received = await _networkStream.ReadAsync(_sendBuffer, totalReceived,
                 _sendBuffer.Length - totalReceived, cancellationToken);
-            totalReceived += received;
-            if (_sendBuffer[totalReceived - 1] == endChar) return totalReceived - 1;
+            if (received > 0)
+            {
+                totalReceived += received;
+                if (_sendBuffer[totalReceived - 1] == endChar) return totalReceived - 1;
+            }
+            else
+            {
+                // Disconnected
+                throw new IOException("Authentication failed or server disconnected");
+            }
         }
 
         throw new IOException("Buffer is too small to receive the message");
     }
 
+    public bool IsConnected => _underlyingSocket?.Connected ?? false;
+
     public LineTcpSender Table(ReadOnlySpan<char> name)
     {
-        if (IsEmpty(name)) throw new ArgumentException(nameof(name) + " cannot be empty");
         if (_hasTable) throw new InvalidOperationException("table already specified");
 
+        if (!IsValidTableName(name))
+        {
+            if (IsEmpty(name)) throw new ArgumentException(nameof(name) + " cannot be empty");
+            throw new ArgumentException(nameof(name) + " contains invalid characters");
+        }
+        
         _quoted = false;
         _hasTable = true;
+        
         EncodeUtf8(name);
         return this;
     }
@@ -171,7 +235,12 @@ public class LineTcpSender : IDisposable
 
     public LineTcpSender Symbol(ReadOnlySpan<char> symbolName, ReadOnlySpan<char> value)
     {
-        if (IsEmpty(symbolName)) throw new ArgumentException(nameof(symbolName) + " cannot be empty");
+        if (!IsValidColumnName(symbolName))
+        {
+            if (IsEmpty(symbolName)) throw new ArgumentException(nameof(symbolName) + " cannot be empty");
+            throw new ArgumentException(nameof(symbolName) + " contains invalid characters");
+        }
+
         if (_hasTable && _noFields)
         {
             Put(',').EncodeUtf8(symbolName).Put('=').EncodeUtf8(value);
@@ -182,9 +251,14 @@ public class LineTcpSender : IDisposable
         throw new InvalidOperationException("cannot write Symbols after Fields");
     }
 
-    private LineTcpSender Column(ReadOnlySpan<char> name)
+    private LineTcpSender Column(ReadOnlySpan<char> columnName)
     {
-        if (IsEmpty(name)) throw new ArgumentException(nameof(name) + " cannot be empty");
+        if (!IsValidColumnName(columnName))
+        {
+            if (IsEmpty(columnName)) throw new ArgumentException(nameof(columnName) + " cannot be empty");
+            throw new ArgumentException(nameof(columnName) + " contains invalid characters");
+        }
+        
         if (_hasTable)
         {
             if (_noFields)
@@ -197,7 +271,7 @@ public class LineTcpSender : IDisposable
                 Put(',');
             }
 
-            return EncodeUtf8(name).Put('=');
+            return EncodeUtf8(columnName).Put('=');
         }
 
         throw new InvalidOperationException("table expected");
@@ -264,6 +338,118 @@ public class LineTcpSender : IDisposable
 
         return this;
     }
+    
+    private bool IsValidTableName(ReadOnlySpan<char> tableName)
+    {
+        int l = tableName.Length;
+        if (l > QuestDbFsFileNameLimit)
+        {
+            return false;
+        }
+        for (int i = 0; i < l; i++)
+        {
+            char c = tableName[i];
+            switch (c)
+            {
+                case '.':
+                    if (i == 0 || i == l - 1 || tableName[i - 1] == '.')
+                    {
+                        // Single dot in the middle is allowed only
+                        // Starting from . hides directory in Linux
+                        // Ending . can be trimmed by some Windows versions / file systems
+                        // Double, triple dot look suspicious
+                        // Single dot allowed as compatibility,
+                        // when someone uploads 'file_name.csv' the file name used as the table name
+                        return false;
+                    }
+                    break;
+                case '?':
+                case ',':
+                case '\'':
+                case '\"':
+                case '\\':
+                case '/':
+                case ':':
+                case ')':
+                case '(':
+                case '+':
+                case '*':
+                case '%':
+                case '~':
+                case '\u0000':
+                case '\u0001':
+                case '\u0002':
+                case '\u0003':
+                case '\u0004':
+                case '\u0005':
+                case '\u0006':
+                case '\u0007':
+                case '\u0008':
+                case '\u0009': // Control characters, except \n.
+                case '\u000B': // New line allowed for compatibility, there are tests to make sure it works
+                case '\u000c':
+                case '\r':
+                case '\u000e':
+                case '\u000f':
+                case '\u007f':
+                case (char)0xfeff: // UTF-8 BOM (Byte Order Mark) can appear at the beginning of a character stream
+                    return false;
+            }
+        }
+
+        return l > 0;
+    }
+
+    private bool IsValidColumnName(ReadOnlySpan<char> tableName)
+    {
+        int l = tableName.Length;
+        if (l > QuestDbFsFileNameLimit)
+        {
+            return false;
+        }
+        for (int i = 0; i < l; i++)
+        {
+            char c = tableName[i];
+            switch (c) {
+                case '?':
+                case '.':
+                case ',':
+                case '\'':
+                case '\"':
+                case '\\':
+                case '/':
+                case ':':
+                case ')':
+                case '(':
+                case '+':
+                case '-':
+                case '*':
+                case '%':
+                case '~':
+                case '\u0000':
+                case '\u0001':
+                case '\u0002':
+                case '\u0003':
+                case '\u0004':
+                case '\u0005':
+                case '\u0006':
+                case '\u0007':
+                case '\u0008':
+                case '\u0009': // Control characters, except \n
+                case '\u000B':
+                case '\u000c':
+                case '\r':
+                case '\u000e':
+                case '\u000f':
+                case '\u007f':
+                case (char)0xfeff: // UTF-8 BOM (Byte Order Mark) can appear at the beginning of a character stream
+                    return false;
+            }
+        }
+        return l > 0;
+    }
+
+    public int QuestDbFsFileNameLimit { get; set; }
 
     private void PutUtf8(char c)
     {
@@ -342,7 +528,6 @@ public class LineTcpSender : IDisposable
 
     public void Flush()
     {
-        _clientSocket.Blocking = true;
         for (var i = 0; i <= _currentBufferIndex; i++)
         {
             var length = i == _currentBufferIndex ? _position : _buffers[i].Length;

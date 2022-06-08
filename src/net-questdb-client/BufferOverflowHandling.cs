@@ -21,6 +21,7 @@
  *  limitations under the License.
  *
  ******************************************************************************/
+
 namespace QuestDB;
 
 public enum BufferOverflowHandling

@@ -27,5 +27,5 @@ namespace QuestDB;
 public enum BufferOverflowHandling
 {
     SendImmediately,
-    SendOnFlush
+    Extend
 }

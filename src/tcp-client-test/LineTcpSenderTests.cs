@@ -353,6 +353,31 @@ public class LineTcpSenderTests
             "neg\\ name number1=-9223372036854775807i,number2=9223372036854775807i,number3=-1.7976931348623157E+308,number4=1.7976931348623157E+308\n";
         WaitAssert(srv, expected);
     }
+    
+    [Test]
+    public async Task DoubleSerializationTest()
+    {
+        using var srv = CreateTcpListener(_port);
+        srv.AcceptAsync();
+
+        using var ls = await LineTcpSender.ConnectAsync(IPAddress.Loopback.ToString(),  _port, tlsMode: TlsMode.Disable);
+
+        ls.Table("doubles")
+            .Column("d0", 0.0)
+            .Column("dm0", -0.0)
+            .Column("d1", 1.0)
+            .Column("dE100", 1E100)
+            .Column("d0000001", 0.000001)
+            .Column("dNaN", Double.NaN)
+            .Column("dInf", Double.PositiveInfinity)
+            .Column("dNInf", Double.NegativeInfinity)
+            .AtNow();
+        ls.Send();
+
+        var expected =
+            "doubles d0=0,dm0=-0,d1=1,dE100=1E+100,d0000001=1E-06,dNaN=NaN,dInf=Infinity,dNInf=-Infinity\n";
+        WaitAssert(srv, expected);
+    }
 
     [Test]
     public async Task SendTimestampColumn()

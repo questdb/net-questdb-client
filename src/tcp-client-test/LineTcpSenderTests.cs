@@ -324,7 +324,7 @@ public class LineTcpSenderTests
             }
             catch (IOException ex)
             {
-                Assert.That(ex.Message, Is.EqualTo("Unable to write data to the transport connection: Broken pipe."));   
+                Assert.That(ex.Message.StartsWith("Unable to write data to the transport connection:"), Is.True);   
             }
             if (i == 1)
             {

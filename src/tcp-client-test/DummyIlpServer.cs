@@ -174,6 +174,10 @@ public class DummyIlpServer : IDisposable
                 _received.Write(_buffer, 0, received);
                 _totalReceived += received;
             }
+            else
+            {
+                return;
+            }
         }
     }
 

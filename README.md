@@ -18,7 +18,7 @@ await ls.SendAsync();
 - Multi-line send
 
 ```c#
-using var ls = new LineTcpSender("localhost", 9009, tlsMode: TlsMode.Disable);
+using var ls = await LineTcpSender.ConnectAsync("localhost", 9009, tlsMode: TlsMode.Disable);
 for(int i = 0; i < 1E6; i++) 
 {
     ls.Table("metric_name")
@@ -30,7 +30,7 @@ ls.Send();
 
 - Authenticated
 ```c#
- using var ls = new LineTcpSender("localhost", 9009);
+ using var ls = await LineTcpSender.ConnectAsync("localhost", 9009);
  await ls.Authenticate("admin", "NgdiOWDoQNUP18WOnb1xkkEG5TzPYMda5SiUOvT1K0U=");
  ls.Table("metric_name")
     .Column("counter", i)
@@ -40,7 +40,7 @@ await ls.SendAsync();
 
 - Fixed IO Buffer size
 ```c#
- using var ls = new LineTcpSender("localhost", 9009, bufferOverflowHandling: BufferOverflowHandling.SendImmediately);
+ using var ls = await LineTcpSender.ConnectAsync("localhost", 9009, bufferOverflowHandling: BufferOverflowHandling.SendImmediately);
  await ls.Authenticate("admin", "NgdiOWDoQNUP18WOnb1xkkEG5TzPYMda5SiUOvT1K0U=");
  ls.Table("metric_name")
     .Column("counter", i)

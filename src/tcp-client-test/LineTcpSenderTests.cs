@@ -666,7 +666,7 @@ public class LineTcpSenderTests
         using var srv = CreateTcpListener(_port);
         srv.AcceptAsync();
 
-        using var ls = await LineTcpSender.ConnectAsync(IPAddress.Loopback.ToString(),  _port, tlsMode: TlsMode.Disable);
+        using var ls = await LineTcpSender.ConnectAsync("127.0.0.1",  _port, tlsMode: TlsMode.Disable);
         ls.Table("neg name")
             .Column("привед", " мед\rве\n д")
             .AtNow();
@@ -697,7 +697,7 @@ public class LineTcpSenderTests
         using var srv = CreateTcpListener(_port);
         srv.AcceptAsync();
 
-        using var ls = await LineTcpSender.ConnectAsync(IPAddress.Loopback .ToString(), _port, tlsMode: TlsMode.Disable);
+        using var ls = await LineTcpSender.ConnectAsync(IPAddress.Loopback.ToString(), _port, tlsMode: TlsMode.Disable);
         Assert.Throws<InvalidOperationException>(
             () => ls.Table("name")
                 .Column("number1", 123)
@@ -712,7 +712,7 @@ public class LineTcpSenderTests
         using var srv = CreateTcpListener(_port);
         srv.AcceptAsync();
 
-        using var ls = await LineTcpSender.ConnectAsync(IPAddress.Loopback .ToString(), _port, tlsMode: TlsMode.Disable);
+        using var ls = await LineTcpSender.ConnectAsync(IPAddress.Loopback.ToString(), _port, tlsMode: TlsMode.Disable);
         Assert.Throws<InvalidOperationException>(
             () => ls.Column("number1", 123)
                 .AtNow()

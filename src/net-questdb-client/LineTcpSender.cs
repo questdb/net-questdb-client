@@ -48,6 +48,7 @@ public class LineTcpSender : IDisposable
     private int _currentBufferIndex;
     private bool _hasTable;
     private bool _noFields = true;
+    private bool _noSymbols = true;
     private int _position;
     private bool _quoted;
     private byte[] _sendBuffer;
@@ -274,6 +275,7 @@ public class LineTcpSender : IDisposable
             }
             
             Put(',').EncodeUtf8(symbolName).Put('=').EncodeUtf8(value);
+            _noSymbols = false;
             return this;
         }
 
@@ -310,6 +312,18 @@ public class LineTcpSender : IDisposable
     }
 
     /// <summary>
+    /// Set value of BOOLEAN column
+    /// </summary>
+    /// <param name="name">Column name</param>
+    /// <param name="value">Column value</param>
+    /// <returns>Itself</returns>
+    public LineTcpSender Column(ReadOnlySpan<char> name, bool value)
+    {
+        Column(name).Put(value ? 't' : 'f');
+        return this;
+    }
+    
+    /// <summary>
     /// Set value of DOUBLE column
     /// </summary>
     /// <param name="name">Column name</param>
@@ -339,9 +353,12 @@ public class LineTcpSender : IDisposable
     /// </summary>
     public void AtNow()
     {
-        Put('\n');
-        _hasTable = false;
-        _noFields = true;
+        if (!_hasTable || (_noFields && _noSymbols))
+        {
+            throw new InvalidOperationException("No symbols or column specified.");
+        }
+
+        FinishLine();
     }
 
     /// <summary>
@@ -351,7 +368,8 @@ public class LineTcpSender : IDisposable
     public void At(DateTime timestamp)
     {
         var epoch = timestamp.Ticks - EpochTicks;
-        Put(' ').Put(epoch).Put('0').Put('0').AtNow();
+        Put(' ').Put(epoch).Put('0').Put('0');
+        FinishLine();
     }
 
     /// <summary>
@@ -360,7 +378,8 @@ public class LineTcpSender : IDisposable
     /// <param name="epochNano">Nanoseconds since Unix epoch</param>
     public void At(long epochNano)
     {
-        Put(' ').Put(epochNano).AtNow();
+        Put(' ').Put(epochNano);
+        FinishLine();
     }
     
     /// <summary>
@@ -459,6 +478,15 @@ public class LineTcpSender : IDisposable
         return name.Length == 0;
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private void FinishLine()
+    {
+        Put('\n');
+        _hasTable = false;
+        _noFields = true;
+        _noSymbols = true;
+    }
+    
     private LineTcpSender Column(ReadOnlySpan<char> columnName)
     {
         if (_hasTable)
@@ -570,6 +598,7 @@ public class LineTcpSender : IDisposable
                 case '\u000B': // New line allowed for compatibility, there are tests to make sure it works
                 case '\u000c':
                 case '\r':
+                case '\n':
                 case '\u000e':
                 case '\u000f':
                 case '\u007f':
@@ -618,6 +647,7 @@ public class LineTcpSender : IDisposable
                 case '\u000B':
                 case '\u000c':
                 case '\r':
+                case '\n':
                 case '\u000e':
                 case '\u000f':
                 case '\u007f':

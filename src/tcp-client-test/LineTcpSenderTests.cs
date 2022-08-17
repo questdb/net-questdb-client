@@ -132,7 +132,7 @@ public class LineTcpSenderTests
         }
         catch (IOException ex)
         {
-            Assert.That(ex.Message, Is.EqualTo("Unable to write data to the transport connection: Broken pipe."));
+            StringAssert.StartsWith("Unable to write data to the transport connection: ", ex.Message, "Bad exception message");
         }
     }
 
@@ -614,7 +614,7 @@ public class LineTcpSenderTests
         }
         catch (SocketException ex)
         {
-            Assert.That(ex.Message, Is.EqualTo("Connection refused"));
+            StringAssert.IsMatch(".*(Connection refused|No connection could be made).*", ex.Message);
         }
     }
 

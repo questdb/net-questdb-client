@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>netstandard2.1</TargetFramework>
+    <RootNamespace>QuestDBDemo</RootNamespace>
+    <Nullable>enable</Nullable>
+    <LangVersion>10</LangVersion>
+    <GeneratePackageOnBuild>false</GeneratePackageOnBuild>
+    <Title>QuestDB client - Example with Authentication and TLS</Title>
+    <Description>Authentication and TLS example using the QuestDB ILP protocol client</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\net-questdb-client\net-questdb-client.csproj" />
+  </ItemGroup>
+
+</Project>

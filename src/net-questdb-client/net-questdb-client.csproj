@@ -8,7 +8,7 @@
         <GeneratePackageOnBuild>true</GeneratePackageOnBuild>
         <Title>QuestDB client</Title>
         <Description>Simple QuestDB ILP protocol client</Description>
-        <Copyright>QuesetDB</Copyright>
+        <Copyright>QuestDB</Copyright>
         <PackageProjectUrl>https://questdb.io</PackageProjectUrl>
         <PackageLicenseUrl>Apache 2.0</PackageLicenseUrl>
         <RepositoryUrl>https://github.com/questdb/net-questdb-client</RepositoryUrl>

@@ -1,6 +1,5 @@
 .vs/
-src/.vs/
-src/Backup/
+Backup/
 src/tcp-client-test/bin/
 src/tcp-client-test/obj/
 src/example-auth-tls/bin/

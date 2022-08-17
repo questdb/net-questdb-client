@@ -11,7 +11,7 @@
     [.NET client library](https://github.com/questdb/net-questdb-client)
   auth:
     kid: admin
-    d: 5UjEMuA0Pj5pjK8a-fa24dyIf-Es5mYny3oE_Wmus48
+    d: NgdiOWDoQNUP18WOnb1xkkEG5TzPYMda5SiUOvT1K0U=
   addr:
     host: localhost
     port: 9009

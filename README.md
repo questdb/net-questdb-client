@@ -82,3 +82,10 @@ await ls.SendAsync();
 
 * [Basic](src/example-basic/Program.cs)
 * [Auth + TLS](src/example-auth-tls/Program.cs)
+
+
+### Using this library in your code
+
+Use NuGet to add a depency on this library.
+
+See: [https://www.nuget.org/packages/net-questdb-client/](https://www.nuget.org/packages/net-questdb-client/)

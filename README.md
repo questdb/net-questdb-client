@@ -77,3 +77,8 @@ await ls.SendAsync();
 | `TrimExcessBuffers()`                                                | Trims empty buffers used to grow IO Buffer. Only useful when `bufferOverflowHandling` set to `Extend`          |
 | int `WriteTimeout`                                                   | Value, in milliseconds, that determines how long the underlying stream will attempt to write before timing out |
 | `IsConnected`                                                        | Indicates if the connection to QuestDB open                                                                    |
+
+### Examples
+
+* [Basic](src/example-basic/Program.cs)
+* [Auth + TLS](src/example-auth-tls/Program.cs)

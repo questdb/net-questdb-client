@@ -1,0 +1,40 @@
+
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 16
+VisualStudioVersion = 16.0.30114.105
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "net-questdb-client", "src\net-questdb-client\net-questdb-client.csproj", "{456B1860-0102-48D7-861A-5F9963F3887B}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "tcp-client-test", "src\tcp-client-test\tcp-client-test.csproj", "{22F903D9-4367-46A2-A25A-F4A6BF9105C6}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "example-basic", "src\example-basic\example-basic.csproj", "{121EAA4D-3A73-468C-8CAB-A2A4BEF848CF}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "example-auth-tls", "src\example-auth-tls\example-auth-tls.csproj", "{FBB8181C-6BAB-46C2-A47A-D3566A3997FE}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{456B1860-0102-48D7-861A-5F9963F3887B}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{456B1860-0102-48D7-861A-5F9963F3887B}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{456B1860-0102-48D7-861A-5F9963F3887B}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{456B1860-0102-48D7-861A-5F9963F3887B}.Release|Any CPU.Build.0 = Release|Any CPU
+		{22F903D9-4367-46A2-A25A-F4A6BF9105C6}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{22F903D9-4367-46A2-A25A-F4A6BF9105C6}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{22F903D9-4367-46A2-A25A-F4A6BF9105C6}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{22F903D9-4367-46A2-A25A-F4A6BF9105C6}.Release|Any CPU.Build.0 = Release|Any CPU
+		{121EAA4D-3A73-468C-8CAB-A2A4BEF848CF}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{121EAA4D-3A73-468C-8CAB-A2A4BEF848CF}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{121EAA4D-3A73-468C-8CAB-A2A4BEF848CF}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{121EAA4D-3A73-468C-8CAB-A2A4BEF848CF}.Release|Any CPU.Build.0 = Release|Any CPU
+		{FBB8181C-6BAB-46C2-A47A-D3566A3997FE}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{FBB8181C-6BAB-46C2-A47A-D3566A3997FE}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{FBB8181C-6BAB-46C2-A47A-D3566A3997FE}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{FBB8181C-6BAB-46C2-A47A-D3566A3997FE}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+EndGlobal

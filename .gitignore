@@ -1,0 +1,12 @@
+.vs/
+src/.vs/
+src/Backup/
+src/tcp-client-test/bin/
+src/tcp-client-test/obj/
+src/example-auth-tls/bin/
+src/example-auth-tls/obj/
+src/example-basic/bin/
+src/example-basic/obj/
+src/net-questdb-client/bin/
+src/net-questdb-client/obj/
+UpgradeLog.htm

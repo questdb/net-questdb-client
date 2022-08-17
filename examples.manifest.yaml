@@ -1,0 +1,17 @@
+- name: ilp
+  lang: csharp
+  path: src/example-basic/Program.cs
+  header: |-
+    [.NET client library](https://github.com/questdb/net-questdb-client)
+
+- name: ilp-auth-tls
+  lang: csharp
+  path: src/example-auth-tls/Program.cs
+  header: |-
+    [.NET client library](https://github.com/questdb/net-questdb-client)
+  auth:
+    kid: admin
+    d: 5UjEMuA0Pj5pjK8a-fa24dyIf-Es5mYny3oE_Wmus48
+  addr:
+    host: localhost
+    port: 9009

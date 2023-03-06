@@ -15,7 +15,7 @@
         <PackageTags>QuestDB, ILP</PackageTags>
         <Company>QuestDB Limited</Company>
         <TargetFramework>netstandard2.1</TargetFramework>
-        <PackageVersion>1.1.1</PackageVersion>
+        <PackageVersion>1.1.2</PackageVersion>
     </PropertyGroup>
 
     <ItemGroup>

@@ -29,7 +29,7 @@ namespace QuestDBDemo
                 .Symbol("pair", "GBPJPY")
                 .Column("traded_price", 135.97)
                 .Column("qty", 400)
-                .AtNow();
+                .At(DateTime.UtcNow);
             await sender.SendAsync();
         }
     }

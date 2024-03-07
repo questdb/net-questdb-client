@@ -10,6 +10,25 @@
 
 > A .NET client for high performance time-series writes into [QuestDB](https://www.elastic.co/products/app-search).
 
+## Contents
+
+- [Getting started](#getting-started)
+- [Usage](#usage)
+- [Construction parameters](#construction-parameters)
+- [Properties and methods](#properties-and-methods)
+- [Examples](#examples-)
+- [FAQ](#faq-)
+- [Contribute](#contribute-)
+- [License](#license-)
+
+---
+
+## Getting started
+
+Use NuGet to add a depency on this library.
+
+See: [https://www.nuget.org/packages/net-questdb-client/](https://www.nuget.org/packages/net-questdb-client/)
+
 ## Usage
 
 ### Basic usage
@@ -90,12 +109,6 @@ await ls.SendAsync();
 
 * [Basic](src/example-basic/Program.cs)
 * [Auth + TLS](src/example-auth-tls/Program.cs)
-
-## Using this library in your code
-
-Use NuGet to add a depency on this library.
-
-See: [https://www.nuget.org/packages/net-questdb-client/](https://www.nuget.org/packages/net-questdb-client/)
 
 ## FAQ 🔮
 

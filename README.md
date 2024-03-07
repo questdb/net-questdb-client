@@ -16,7 +16,7 @@
 - [Usage](#usage)
 - [Construction parameters](#construction-parameters)
 - [Properties and methods](#properties-and-methods)
-- [Examples](#examples-)
+- [Examples](#examples)
 - [FAQ](#faq-)
 - [Contribute](#contribute-)
 - [License](#license-)

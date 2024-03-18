@@ -1,11 +1,14 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
     <PropertyGroup>
-        <TargetFramework>net6.0</TargetFramework>
         <RootNamespace>tcp_client_test</RootNamespace>
         <Nullable>enable</Nullable>
 
         <IsPackable>false</IsPackable>
+
+        <TargetFramework>net6.0</TargetFramework>
+
+        <OutputType>Library</OutputType>
     </PropertyGroup>
 
     <ItemGroup>
@@ -34,3 +37,5 @@
     </ItemGroup>
 
 </Project>
+
+

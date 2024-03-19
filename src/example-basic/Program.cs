@@ -1,8 +1,8 @@
-﻿using QuestDB;
-using System;
+﻿using System;
 using System.Data.Common;
 using System.Data.SqlClient;
 using System.Threading.Tasks;
+using QuestDB.Ingress;
 
 namespace QuestDBDemo
 {

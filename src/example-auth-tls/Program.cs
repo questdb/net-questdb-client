@@ -1,6 +1,6 @@
-﻿using QuestDB;
-using System;
+﻿using System;
 using System.Threading.Tasks;
+using QuestDB.Ingress;
 
 namespace QuestDBDemo
 {

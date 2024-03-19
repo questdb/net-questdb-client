@@ -6,7 +6,7 @@ using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using NUnit.Framework;
-using QuestDB;
+using QuestDB.Ingress;
 
 namespace tcp_client_test;
 

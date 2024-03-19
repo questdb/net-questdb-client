@@ -18,7 +18,7 @@
     </ItemGroup>
 
     <ItemGroup>
-      <ProjectReference Include="..\src\net-questdb-client\net-questdb-client.csproj" />
+      <ProjectReference Include="..\net-questdb-client\net-questdb-client.csproj" />
     </ItemGroup>
 
 </Project>

@@ -9,3 +9,5 @@ src/example-basic/obj/
 src/net-questdb-client/bin/
 src/net-questdb-client/obj/
 UpgradeLog.htm
+src/net-questdb-client-tests/bin
+src/net-questdb-client-tests/obj

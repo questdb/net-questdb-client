@@ -22,7 +22,7 @@
  *
  ******************************************************************************/
 
-namespace QuestDB;
+namespace QuestDB.Ingress;
 
 public enum BufferOverflowHandling
 {

@@ -33,7 +33,7 @@ using Org.BouncyCastle.Crypto.Parameters;
 using Org.BouncyCastle.Math;
 using Org.BouncyCastle.Security;
 
-namespace QuestDB;
+namespace QuestDB.Ingress;
 
 public class LineTcpSender : IDisposable
 {

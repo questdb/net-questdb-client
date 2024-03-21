@@ -2,6 +2,7 @@ using System.Collections;
 using System.Globalization;
 using System.Net.Sockets;
 using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices.ComTypes;
 using System.Text;
 
 namespace QuestDB.Ingress;
@@ -9,7 +10,7 @@ namespace QuestDB.Ingress;
 public class ChunkedBuffer : IEnumerable<byte>
 {
     private static readonly long EpochTicks = new DateTime(1970, 1, 1).Ticks;
-    private readonly List<(byte[] Buffer, int Length)> _buffers = new();
+    public readonly List<(byte[] Buffer, int Length)> _buffers = new();
     public static int DefaultQuestDbFsFileNameLimit = 127;
     private int _currentBufferIndex;
     private bool _hasTable;
@@ -21,7 +22,7 @@ public class ChunkedBuffer : IEnumerable<byte>
 
     public int RowCount { get; set; } = 0;
 
-    private ChunkedBuffer(int bufferSize)
+    public ChunkedBuffer(int bufferSize)
     {
         _sendBuffer = new byte[bufferSize];
         _buffers.Add((_sendBuffer, 0));

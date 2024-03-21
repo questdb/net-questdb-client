@@ -35,6 +35,7 @@ using Org.BouncyCastle.Security;
 
 namespace QuestDB.Ingress;
 
+[Obsolete("This has been superseded by the LineSender class.")]
 public class LineTcpSender : IDisposable
 {
     private static readonly RemoteCertificateValidationCallback AllowAllCertCallback = (_, _, _, _) => true;
@@ -108,7 +109,7 @@ public class LineTcpSender : IDisposable
         TlsMode tlsMode = TlsMode.Enable,
         CancellationToken cancellationToken = default)
     {
-        var socket = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
+        var socket = new Socket(AddressFamily.InterNetwork, SocketType.Stream, System.Net.Sockets.ProtocolType.Tcp);
         try
         {
             await socket.ConnectAsync(host, port);

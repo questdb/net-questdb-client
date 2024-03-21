@@ -13,6 +13,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "example-auth-tls", "src\exa
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "net-questdb-client-tests", "src\net-questdb-client-tests\net-questdb-client-tests.csproj", "{7F3564FE-78CC-487A-BA1C-019D2BE07B02}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "net-questdb-client-benchmarks", "src\net-questdb-client-benchmarks\net-questdb-client-benchmarks.csproj", "{6C336385-5451-4AEF-9C8D-BA252BF0A1DE}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -42,5 +44,9 @@ Global
 		{7F3564FE-78CC-487A-BA1C-019D2BE07B02}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{7F3564FE-78CC-487A-BA1C-019D2BE07B02}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{7F3564FE-78CC-487A-BA1C-019D2BE07B02}.Release|Any CPU.Build.0 = Release|Any CPU
+		{6C336385-5451-4AEF-9C8D-BA252BF0A1DE}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{6C336385-5451-4AEF-9C8D-BA252BF0A1DE}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{6C336385-5451-4AEF-9C8D-BA252BF0A1DE}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{6C336385-5451-4AEF-9C8D-BA252BF0A1DE}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 EndGlobal

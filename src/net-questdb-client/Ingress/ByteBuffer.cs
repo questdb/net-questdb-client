@@ -7,7 +7,7 @@ using System.Text;
 
 namespace QuestDB.Ingress;
 
-public class ChunkedBuffer : IEnumerable<byte>
+public class ByteBuffer : IEnumerable<byte>
 {
     private static readonly long EpochTicks = new DateTime(1970, 1, 1).Ticks;
     public readonly List<(byte[] Buffer, int Length)> _buffers = new();
@@ -22,7 +22,7 @@ public class ChunkedBuffer : IEnumerable<byte>
 
     public int RowCount { get; set; } = 0;
 
-    public ChunkedBuffer(int bufferSize)
+    public ByteBuffer(int bufferSize)
     {
         _sendBuffer = new byte[bufferSize];
         _buffers.Add((_sendBuffer, 0));
@@ -41,7 +41,7 @@ public class ChunkedBuffer : IEnumerable<byte>
     /// <returns>Itself</returns>
     /// <exception cref="InvalidOperationException">If table name already set</exception>
     /// <exception cref="ArgumentException">If table name empty or contains unsupported characters</exception>
-    public ChunkedBuffer Table(ReadOnlySpan<char> name)
+    public ByteBuffer Table(ReadOnlySpan<char> name)
     {
         GuardTableAlreadySet();
         GuardInvalidTableName(name);
@@ -61,7 +61,7 @@ public class ChunkedBuffer : IEnumerable<byte>
     /// <returns>Itself</returns>
     /// <exception cref="ArgumentException">Symbol column name is invalid</exception>
     /// <exception cref="InvalidOperationException">If table name not written or Column values are written</exception>
-    public ChunkedBuffer Symbol(ReadOnlySpan<char> symbolName, ReadOnlySpan<char> value)
+    public ByteBuffer Symbol(ReadOnlySpan<char> symbolName, ReadOnlySpan<char> value)
     {
         if (!_hasTable)
         {
@@ -86,7 +86,7 @@ public class ChunkedBuffer : IEnumerable<byte>
     /// <param name="name">Column name</param>
     /// <param name="value">Column value</param>
     /// <returns>Itself</returns>
-    public ChunkedBuffer Column(ReadOnlySpan<char> name, ReadOnlySpan<char> value)
+    public ByteBuffer Column(ReadOnlySpan<char> name, ReadOnlySpan<char> value)
     {
         Column(name).Put('\"');
         _quoted = true;
@@ -102,7 +102,7 @@ public class ChunkedBuffer : IEnumerable<byte>
     /// <param name="name">Column name</param>
     /// <param name="value">Column value</param>
     /// <returns>Itself</returns>
-    public ChunkedBuffer Column(ReadOnlySpan<char> name, long value)
+    public ByteBuffer Column(ReadOnlySpan<char> name, long value)
     {
         Column(name).Put(value).Put('i');
         return this;
@@ -114,7 +114,7 @@ public class ChunkedBuffer : IEnumerable<byte>
     /// <param name="name">Column name</param>
     /// <param name="value">Column value</param>
     /// <returns>Itself</returns>
-    public ChunkedBuffer Column(ReadOnlySpan<char> name, bool value)
+    public ByteBuffer Column(ReadOnlySpan<char> name, bool value)
     {
         Column(name).Put(value ? 't' : 'f');
         return this;
@@ -126,7 +126,7 @@ public class ChunkedBuffer : IEnumerable<byte>
     /// <param name="name">Column name</param>
     /// <param name="value">Column value</param>
     /// <returns>Itself</returns>
-    public ChunkedBuffer Column(ReadOnlySpan<char> name, double value)
+    public ByteBuffer Column(ReadOnlySpan<char> name, double value)
     {
         Column(name).Put(value.ToString(CultureInfo.InvariantCulture));
         return this;
@@ -138,7 +138,7 @@ public class ChunkedBuffer : IEnumerable<byte>
     /// <param name="name">Column name</param>
     /// <param name="timestamp">Column value</param>
     /// <returns>Itself</returns>
-    public ChunkedBuffer Column(ReadOnlySpan<char> name, DateTime timestamp)
+    public ByteBuffer Column(ReadOnlySpan<char> name, DateTime timestamp)
     {
         var epoch = timestamp.Ticks - EpochTicks;
         Column(name).Put(epoch / 10).Put('t');
@@ -151,7 +151,7 @@ public class ChunkedBuffer : IEnumerable<byte>
     /// <param name="name">Column name</param>
     /// <param name="timestamp">Column value</param>
     /// <returns>Itself</returns>
-    public ChunkedBuffer Column(ReadOnlySpan<char> name, DateTimeOffset timestamp)
+    public ByteBuffer Column(ReadOnlySpan<char> name, DateTimeOffset timestamp)
     {
         Column(name, timestamp.UtcDateTime);
         return this;
@@ -249,7 +249,7 @@ public class ChunkedBuffer : IEnumerable<byte>
         _noSymbols = true;
     }
 
-    private ChunkedBuffer Column(ReadOnlySpan<char> columnName)
+    private ByteBuffer Column(ReadOnlySpan<char> columnName)
     {
         GuardTableNotSet();
         
@@ -268,7 +268,7 @@ public class ChunkedBuffer : IEnumerable<byte>
         return EncodeUtf8(columnName).Put('=');
     }
 
-    private ChunkedBuffer Put(long value)
+    private ByteBuffer Put(long value)
     {
         if (value == long.MinValue)
             // Special case, long.MinValue cannot be handled by QuestDB
@@ -294,7 +294,7 @@ public class ChunkedBuffer : IEnumerable<byte>
         return this;
     }
 
-    private ChunkedBuffer EncodeUtf8(ReadOnlySpan<char> name)
+    private ByteBuffer EncodeUtf8(ReadOnlySpan<char> name)
     {
         for (var i = 0; i < name.Length; i++)
         {
@@ -351,7 +351,7 @@ public class ChunkedBuffer : IEnumerable<byte>
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private ChunkedBuffer Put(char c)
+    private ByteBuffer Put(char c)
     {
         if (_position + 2 > _sendBuffer.Length) NextBuffer();
 
@@ -417,7 +417,7 @@ public class ChunkedBuffer : IEnumerable<byte>
         if (str.IsEmpty)
         {
             throw new IngressError(ErrorCode.InvalidName,
-                $"Table names must have a non-zero length.");
+                "Table names must have a non-zero length.");
         }
 
         var prev = '\0';

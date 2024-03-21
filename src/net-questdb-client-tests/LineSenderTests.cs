@@ -59,7 +59,7 @@ public class LineSenderTests
         await sender.SendAsync();
         Assert.That(
                 await sender.Request.Content.ReadAsStringAsync(),
-                Is.EqualTo("metrics,tagvalue number=10,string=\"abcabc\" 1000000000")
+                Is.EqualTo("metrics,tagvalue number=10,string=\"abcabc\" 1000000000\n")
             );
     }
 

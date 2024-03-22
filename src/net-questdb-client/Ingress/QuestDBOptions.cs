@@ -62,15 +62,17 @@ public class QuestDBOptions
 
             RuleFor(x => x._auto_flush_rows)
                 .Must(x => int.TryParse(x, out _))
-                .WithMessage("`auto_flush_rows` must be convertible to a long.");
+                .When(x => x._auto_flush_rows is not null)
+                .WithMessage("`auto_flush_rows` must be convertible to an int.");
             
-            // RuleFor(x => x._auto_flush_bytes)
-            //     .Must(x => long.TryParse(x, out _))
-            //     .WithMessage("`auto_flush_bytes` must be convertible to a long.");
+            RuleFor(x => x._auto_flush_bytes)
+                .Must(x => int.TryParse(x, out _))
+                .When(x => x._auto_flush_bytes is not null)
+                .WithMessage("`auto_flush_bytes` must be convertible to an int.");
             
             RuleFor(x => x._auto_flush_interval)
-                .Must(x => TimeSpan.TryParse(x, out _))
-                .WithMessage("`auto_flush_interval` must be convertible to a TimeSpan.");
+                .Must(x => int.TryParse(x, out _))
+                .WithMessage("`auto_flush_interval` must be convertible to an int.");
             
             RuleFor(x => x._bind_interface)
                 .Must(x => int.TryParse(x.Split(':')[1], out _))
@@ -79,15 +81,15 @@ public class QuestDBOptions
             
             RuleFor(x => x._request_min_throughput)
                 .Must(x => int.TryParse(x, out _))
-                .WithMessage("`request_min_throughput` must be convertible to a long.");
+                .WithMessage("`request_min_throughput` must be convertible to an int.");
             
             RuleFor(x => x._request_timeout)
-                .Must(x => TimeSpan.TryParse(x, out _))
-                .WithMessage("`request_timeout` must be convertible to a TimeSpan.");
+                .Must(x => int.TryParse(x, out _))
+                .WithMessage("`request_timeout` must be convertible to an int.");
             
             RuleFor(x => x._retry_timeout)
-                .Must(x => TimeSpan.TryParse(x, out _))
-                .WithMessage("`retry_timeout` must be convertible to a TimeSpan.");
+                .Must(x => int.TryParse(x, out _))
+                .WithMessage("`retry_timeout` must be convertible to an int.");
 
             RuleFor(x => x._auto_flush_bytes)
                 .Must(x => x is null)
@@ -138,8 +140,16 @@ public class QuestDBOptions
         // set defaults
         _auth_timeout ??= "15000";
         _auto_flush ??= "on";
-        _auto_flush_rows ??= ((_protocol == ProtocolType.http.ToString() || _protocol == ProtocolType.https.ToString()) ? "75000" : "600");
-        _auto_flush_bytes = null;
+        if (_auto_flush_bytes is null)
+        {
+            _auto_flush_rows ??= ((_protocol == ProtocolType.http.ToString() || _protocol == ProtocolType.https.ToString()) ? "75000" : "600");
+        }
+
+        if (_auto_flush_rows is null)
+        {
+            _auto_flush_bytes ??= (1024*100).ToString();
+        }
+
         _auto_flush_interval ??= "1000";
         _request_min_throughput ??= "102400";
         _request_timeout ??= "10000";
@@ -189,8 +199,9 @@ public class QuestDBOptions
         
         auth_timeout = TimeSpan.FromMilliseconds(int.Parse(_auth_timeout!));
         auto_flush =  Enum.Parse<AutoFlushType>(_auto_flush, ignoreCase: false);
-        auto_flush_rows = int.Parse(_auto_flush_rows);
+        auto_flush_rows = int.Parse(_auto_flush_rows ?? int.MaxValue.ToString());
         auto_flush_interval = TimeSpan.FromMilliseconds(int.Parse(_auto_flush_interval));
+        auto_flush_bytes = int.Parse(_auto_flush_bytes ?? int.MaxValue.ToString());
         request_min_throughput = int.Parse(_request_min_throughput);
         request_timeout = TimeSpan.FromMilliseconds(int.Parse(_request_timeout));
         retry_timeout = TimeSpan.FromMilliseconds(int.Parse(_retry_timeout));
@@ -256,6 +267,7 @@ public class QuestDBOptions
     [JsonIgnore]
     public string Host { get; set; } 
     
+    [JsonIgnore]
     public bool OwnSocket { get; init; }
 
     public string? token_x => _token_x;

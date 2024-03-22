@@ -106,8 +106,7 @@ public class LineSender : IDisposable
                 }
 
             }
-            catch
-            {
+            catch {
                 socket.Dispose();
                 networkStream?.Dispose();
                 sslStream?.Dispose();
@@ -280,8 +279,21 @@ public class LineSender : IDisposable
     {
         if (_options.auto_flush == AutoFlushType.on)
         {
-            if (RowCount >= _options.auto_flush_rows
-                || (_intervalTimer.Elapsed >= _options.auto_flush_interval))
+            if (RowCount >= _options.auto_flush_rows)
+        {
+                Flush();
+                return;
+            }
+            
+            if (_intervalTimer.Elapsed >= _options.auto_flush_interval)
+            {
+                Flush();
+                return;
+            }
+
+            var bytes = _options.IsHttp() ? _charBuffer._buffer.Length * 2 : _byteBuffer.Length;
+
+            if (_options.auto_flush_bytes <= bytes)
             {
                 Flush();
             }
@@ -292,9 +304,12 @@ public class LineSender : IDisposable
     {
         var (_, response) = await SendAsync();
 
-        if (!response.IsSuccessStatusCode)
+        if (_options.IsHttp())
         {
-            throw new IngressError(ErrorCode.ServerFlushError, response.ReasonPhrase);
+            if (!response!.IsSuccessStatusCode)
+            {
+                throw new IngressError(ErrorCode.ServerFlushError, response.ReasonPhrase);
+            }
         }
     }
 
@@ -440,6 +455,23 @@ public class LineSender : IDisposable
         if (_options.IsTcp())
         {
             _byteBuffer.TrimExcessBuffers();
+        }
+    }
+    
+    /// <summary>
+    /// Cancel current unsent line. Works only in Extend buffer overflow mode.
+    /// </summary>
+    /// <exception cref="InvalidOperationException"></exception>
+    public void CancelLine()
+    {
+        if (_options.IsHttp())
+        {
+            _charBuffer.CancelLine();
+        }
+
+        if (_options.IsTcp())
+        {
+            _byteBuffer.CancelLine();
         }
     }
 }

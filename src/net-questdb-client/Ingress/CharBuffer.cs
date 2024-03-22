@@ -7,7 +7,7 @@ namespace QuestDB.Ingress;
 
 public class CharBuffer
 {
-    private StringBuilder _buffer;
+    public StringBuilder _buffer;
     
     
     // general
@@ -22,6 +22,8 @@ public class CharBuffer
 
     public long RowCount { get; set; } = 0;
     private bool _quoted = true;
+
+    public int StartOfLine { get; set; } = 0;
     
     public CharBuffer()
     {
@@ -40,6 +42,8 @@ public class CharBuffer
         _quoted = false;
         _hasTable = true;
 
+        StartOfLine = _buffer.Length;
+        
         _buffer.Append(name);
         return this;
     }
@@ -178,6 +182,7 @@ public class CharBuffer
     {
         Put('\n');
         RowCount++;
+        StartOfLine = _buffer.Length;
         _hasTable = false;
         _noFields = true;
         _noSymbols = true;
@@ -324,6 +329,18 @@ public class CharBuffer
 
     public void Truncate()
     {
+        Clear();
         _buffer = new StringBuilder();
+    }
+    
+    
+    /// <summary>
+    /// Cancel current unsent line. Works only in Extend buffer overflow mode.
+    /// </summary>
+    /// <exception cref="InvalidOperationException"></exception>
+    public void CancelLine()
+    {
+        _buffer.Remove(StartOfLine, _buffer.Length - StartOfLine);
+        StartOfLine = _buffer.Length;
     }
 }

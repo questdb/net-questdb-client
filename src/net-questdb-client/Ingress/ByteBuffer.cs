@@ -276,8 +276,10 @@ public class ByteBuffer : IEnumerable<byte>
     private ByteBuffer Put(long value)
     {
         if (value == long.MinValue)
-            // Special case, long.MinValue cannot be handled by QuestDB
-            throw new ArgumentOutOfRangeException();
+        {
+            throw new IngressError(ErrorCode.InvalidApiCall, "Special case, long.MinValue cannot be handled by QuestDB",
+                new ArgumentOutOfRangeException());
+        }
 
         Span<byte> num = stackalloc byte[20];
         var pos = num.Length;
@@ -386,7 +388,7 @@ public class ByteBuffer : IEnumerable<byte>
     {
         foreach (var (buffer, length) in Buffers)
         {
-            foreach (var b in buffer)
+            foreach (var b in buffer[0..length])
             {
                 yield return b;
             }
@@ -528,6 +530,38 @@ public class ByteBuffer : IEnumerable<byte>
                     throw new IngressError(ErrorCode.InvalidName,
                         $"Bad string {str}. Column names can't contain a UTF-8 BOM character, was was found at byte position {i}.");
             }
+        }
+    }
+    
+    
+    /// <summary>
+    /// Cancel current unsent line. Works only in Extend buffer overflow mode.
+    /// </summary>
+    /// <exception cref="InvalidOperationException"></exception>
+    public void CancelLine()
+    {
+        if (BufferOverflowHandling.Extend == BufferOverflowHandling.SendImmediately)
+        {
+            throw new InvalidOperationException("Cannot cancel line in BufferOverflowHandling.SendImmediately mode");
+        }
+
+        CurrentBufferIndex = LineStartBufferIndex;
+        Position = LineStartBufferPosition;
+    }
+
+
+    public int Length
+    {
+        get
+        {
+            var count = 0;
+            for (var i = 0; i <= CurrentBufferIndex; i++)
+            {
+                var length = i == CurrentBufferIndex ? Position : Buffers[i].Length;
+                 count += length;
+            }
+
+            return count;
         }
     }
 }

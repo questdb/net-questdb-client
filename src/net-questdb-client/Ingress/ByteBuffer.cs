@@ -10,22 +10,24 @@ namespace QuestDB.Ingress;
 public class ByteBuffer : IEnumerable<byte>
 {
     private static readonly long EpochTicks = new DateTime(1970, 1, 1).Ticks;
-    public readonly List<(byte[] Buffer, int Length)> _buffers = new();
+    public readonly List<(byte[] Buffer, int Length)> Buffers = new();
     public static int DefaultQuestDbFsFileNameLimit = 127;
-    private int _currentBufferIndex;
-    private bool _hasTable;
-    private bool _noFields = true;
-    private bool _noSymbols = true;
-    private int _position;
-    private bool _quoted;
-    private byte[] _sendBuffer;
+    public int CurrentBufferIndex;
+    public bool HasTable;
+    public bool NoFields = true;
+    public bool NoSymbols = true;
+    public int Position;
+    public bool Quoted;
+    public byte[] SendBuffer;
+    public int LineStartBufferIndex;
+    public int LineStartBufferPosition;
 
     public int RowCount { get; set; } = 0;
 
     public ByteBuffer(int bufferSize)
     {
-        _sendBuffer = new byte[bufferSize];
-        _buffers.Add((_sendBuffer, 0));
+        SendBuffer = new byte[bufferSize];
+        Buffers.Add((SendBuffer, 0));
         QuestDbFsFileNameLimit = DefaultQuestDbFsFileNameLimit;
     }
 
@@ -46,8 +48,11 @@ public class ByteBuffer : IEnumerable<byte>
         GuardTableAlreadySet();
         GuardInvalidTableName(name);
 
-        _quoted = false;
-        _hasTable = true;
+        Quoted = false;
+        HasTable = true;
+
+        LineStartBufferIndex = CurrentBufferIndex;
+        LineStartBufferPosition = Position;
         
         EncodeUtf8(name);
         return this;
@@ -63,20 +68,20 @@ public class ByteBuffer : IEnumerable<byte>
     /// <exception cref="InvalidOperationException">If table name not written or Column values are written</exception>
     public ByteBuffer Symbol(ReadOnlySpan<char> symbolName, ReadOnlySpan<char> value)
     {
-        if (!_hasTable)
+        if (!HasTable)
         {
             throw new IngressError(ErrorCode.InvalidApiCall, "Table must be specified first.");
         }
 
-        if (!_noFields)
+        if (!NoFields)
         {
             throw new IngressError(ErrorCode.InvalidApiCall, "Cannot write symbols after fields.");
         }
 
-        GuardInvalidColumnName(value);
+        GuardInvalidColumnName(symbolName);
         
         Put(',').EncodeUtf8(symbolName).Put('=').EncodeUtf8(value);
-        _noSymbols = false;
+        NoSymbols = false;
         return this;
     }
 
@@ -89,9 +94,9 @@ public class ByteBuffer : IEnumerable<byte>
     public ByteBuffer Column(ReadOnlySpan<char> name, ReadOnlySpan<char> value)
     {
         Column(name).Put('\"');
-        _quoted = true;
+        Quoted = true;
         EncodeUtf8(value);
-        _quoted = false;
+        Quoted = false;
         Put('\"');
         return this;
     }
@@ -164,7 +169,7 @@ public class ByteBuffer : IEnumerable<byte>
     {
         GuardTableNotSet();
 
-        if (_noFields && _noSymbols)
+        if (NoFields && NoSymbols)
         {
             throw new IngressError(ErrorCode.InvalidApiCall, "Did not specify any symbols or columns.");
         }
@@ -207,9 +212,9 @@ public class ByteBuffer : IEnumerable<byte>
     /// </summary>
     public void Clear()
     {
-        _currentBufferIndex = 0;
-        _sendBuffer = _buffers[_currentBufferIndex].Buffer;
-        _position = 0;
+        CurrentBufferIndex = 0;
+        SendBuffer = Buffers[CurrentBufferIndex].Buffer;
+        Position = 0;
         RowCount = 0;
     }
     
@@ -218,14 +223,14 @@ public class ByteBuffer : IEnumerable<byte>
     /// </summary>
     public void TrimExcessBuffers()
     {
-        int removeCount = _buffers.Count - _currentBufferIndex - 1;
+        int removeCount = Buffers.Count - CurrentBufferIndex - 1;
         if (removeCount > 0)
         {
-            _buffers.RemoveRange(_currentBufferIndex + 1, removeCount);
+            Buffers.RemoveRange(CurrentBufferIndex + 1, removeCount);
         }
     }
 
-    private static byte[] FromBase64String(string encodedPrivateKey)
+    public static byte[] FromBase64String(string encodedPrivateKey)
     {
         var urlUnsafe = encodedPrivateKey.Replace('-', '+').Replace('_', '/');
         var padding = 3 - (urlUnsafe.Length + 3) % 4;
@@ -244,9 +249,9 @@ public class ByteBuffer : IEnumerable<byte>
     {
         Put('\n');
         RowCount++;
-        _hasTable = false;
-        _noFields = true;
-        _noSymbols = true;
+        HasTable = false;
+        NoFields = true;
+        NoSymbols = true;
     }
 
     private ByteBuffer Column(ReadOnlySpan<char> columnName)
@@ -255,10 +260,10 @@ public class ByteBuffer : IEnumerable<byte>
         
         GuardInvalidColumnName(columnName);
         
-        if (_noFields)
+        if (NoFields)
         {
             Put(' ');
-            _noFields = false;
+            NoFields = false;
         }
         else
         {
@@ -287,14 +292,14 @@ public class ByteBuffer : IEnumerable<byte>
         if (value < 0) num[--pos] = (byte)'-';
 
         var len = num.Length - pos;
-        if (_position + len >= _sendBuffer.Length) NextBuffer();
-        num.Slice(pos, len).CopyTo(_sendBuffer.AsSpan(_position));
-        _position += len;
+        if (Position + len >= SendBuffer.Length) NextBuffer();
+        num.Slice(pos, len).CopyTo(SendBuffer.AsSpan(Position));
+        Position += len;
 
         return this;
     }
 
-    private ByteBuffer EncodeUtf8(ReadOnlySpan<char> name)
+    public ByteBuffer EncodeUtf8(ReadOnlySpan<char> name)
     {
         for (var i = 0; i < name.Length; i++)
         {
@@ -310,11 +315,11 @@ public class ByteBuffer : IEnumerable<byte>
     
     private void PutUtf8(char c)
     {
-        if (_position + 4 >= _sendBuffer.Length) NextBuffer();
+        if (Position + 4 >= SendBuffer.Length) NextBuffer();
 
-        var bytes = _sendBuffer.AsSpan(_position);
+        var bytes = SendBuffer.AsSpan(Position);
         Span<char> chars = stackalloc char[1] { c };
-        _position += Encoding.UTF8.GetBytes(chars, bytes);
+        Position += Encoding.UTF8.GetBytes(chars, bytes);
     }
 
     private void PutSpecial(char c)
@@ -324,7 +329,7 @@ public class ByteBuffer : IEnumerable<byte>
             case ' ':
             case ',':
             case '=':
-                if (!_quoted) Put('\\');
+                if (!Quoted) Put('\\');
                 goto default;
             default:
                 Put(c);
@@ -334,7 +339,7 @@ public class ByteBuffer : IEnumerable<byte>
                 Put('\\').Put(c);
                 break;
             case '"':
-                if (_quoted) Put('\\');
+                if (Quoted) Put('\\');
 
                 Put(c);
                 break;
@@ -353,33 +358,33 @@ public class ByteBuffer : IEnumerable<byte>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private ByteBuffer Put(char c)
     {
-        if (_position + 2 > _sendBuffer.Length) NextBuffer();
+        if (Position + 2 > SendBuffer.Length) NextBuffer();
 
-        _sendBuffer[_position++] = (byte)c;
+        SendBuffer[Position++] = (byte)c;
         return this;
     }
 
     private void NextBuffer()
     {
-        _buffers[_currentBufferIndex] = (_sendBuffer, _position);
-        _currentBufferIndex++;
+        Buffers[CurrentBufferIndex] = (SendBuffer, Position);
+        CurrentBufferIndex++;
 
-        if (_buffers.Count <= _currentBufferIndex)
+        if (Buffers.Count <= CurrentBufferIndex)
         {
-            _sendBuffer = new byte[_sendBuffer.Length];
-            _buffers.Add((_sendBuffer, 0));
+            SendBuffer = new byte[SendBuffer.Length];
+            Buffers.Add((SendBuffer, 0));
         }
         else
         {
-            _sendBuffer = _buffers[_currentBufferIndex].Buffer;
+            SendBuffer = Buffers[CurrentBufferIndex].Buffer;
         }
 
-        _position = 0;
+        Position = 0;
     }
 
     public IEnumerator<byte> GetEnumerator()
     {
-        foreach (var (buffer, length) in _buffers)
+        foreach (var (buffer, length) in Buffers)
         {
             foreach (var b in buffer)
             {
@@ -396,7 +401,7 @@ public class ByteBuffer : IEnumerable<byte>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void GuardTableAlreadySet()
     {
-        if (_hasTable)
+        if (HasTable)
         {
             throw new IngressError(ErrorCode.InvalidApiCall, "Table has already been specified.");
         }
@@ -405,7 +410,7 @@ public class ByteBuffer : IEnumerable<byte>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void GuardTableNotSet()
     {
-        if (!_hasTable)
+        if (!HasTable)
         {
             throw new IngressError(ErrorCode.InvalidApiCall, "Table must be specified first.");
         }

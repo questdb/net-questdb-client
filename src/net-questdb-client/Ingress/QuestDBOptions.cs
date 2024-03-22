@@ -35,6 +35,7 @@ public class QuestDBOptions
     private string? _tls_roots;
     private string? _tls_ca;
     private string? _tls_roots_password;
+    private string? _own_socket;
     
     /// <summary>
     /// General validator for the configuration.
@@ -96,6 +97,11 @@ public class QuestDBOptions
             RuleFor(x => x._tls_verify)
                 .IsEnumName(typeof(TlsVerifyType), caseSensitive: true)
                 .WithMessage("`tls_verify_type` is case sensitive.");
+
+            RuleFor(x => x._own_socket)
+                .Must(x => x == "true" || x == "false")
+                .When(x => x._own_socket is not null)
+                .WithMessage("`own_socket` must be `true` or `false`");
         }
     }
     
@@ -142,6 +148,7 @@ public class QuestDBOptions
         _max_buf_size ??= "104857600";
         _max_name_len ??= "127";
         _tls_verify ??= "on";
+        _own_socket ??= "true";
 
         // tls_roots tba
         
@@ -192,6 +199,7 @@ public class QuestDBOptions
         max_name_len = int.Parse(_max_name_len);
         tls_verify = Enum.Parse<TlsVerifyType>(_tls_verify, ignoreCase: false);
         BufferOverflowHandling ??= Ingress.BufferOverflowHandling.Extend;
+        OwnSocket = bool.Parse(_own_socket);
     }
     
     // usable properties
@@ -215,30 +223,30 @@ public class QuestDBOptions
     
     public bool IsTcp() => !IsHttp();
     
-    public string? username { get; set; }
-    [JsonIgnore] public string? password { get; set; }
+    public string? username { get; init; }
+    [JsonIgnore] public string? password { get; init; }
     public string? token { get; set; }
-    [JsonIgnore] public AuthenticationHeaderValue? BasicAuth { get; set; }
-    [JsonIgnore] public AuthenticationHeaderValue? TokenAuth { get; set; }
-    [JsonIgnore] public ProtocolType protocol { get; set; }
-    public string addr { get; set; }
-    public TimeSpan auth_timeout { get; set; }
-    public AutoFlushType auto_flush { get; set; }
-    public int auto_flush_rows { get; set; }
-    public int auto_flush_bytes { get; set; }
-    public TimeSpan auto_flush_interval { get; set; }
+    [JsonIgnore] public AuthenticationHeaderValue? BasicAuth { get; init; }
+    [JsonIgnore] public AuthenticationHeaderValue? TokenAuth { get; init; }
+    [JsonIgnore] public ProtocolType protocol { get; init; }
+    public string addr { get; init; }
+    public TimeSpan auth_timeout { get; init; }
+    public AutoFlushType auto_flush { get; init; }
+    public int auto_flush_rows { get; init; }
+    public int auto_flush_bytes { get; init; }
+    public TimeSpan auto_flush_interval { get; init; }
     //public string BindInterface => throw IngressError.ConfigSettingIsNull("bind_interface");
-    public int request_min_throughput { get; set; }
-    public TimeSpan request_timeout { get; set; }
-    public TimeSpan retry_timeout { get; set; }
-    public int init_buf_size { get; set; }
-    public int max_buf_size { get; set; }
-    public int max_name_len { get; set; }
-    public TlsVerifyType tls_verify { get; set; }
-    public string tls_roots { get; set; }
-    public string tls_ca { get; set; }
-    [JsonIgnore] public string tls_roots_password { get; set; }
-    [JsonIgnore] public BufferOverflowHandling? BufferOverflowHandling { get; set; }
+    public int request_min_throughput { get; init; }
+    public TimeSpan request_timeout { get; init; }
+    public TimeSpan retry_timeout { get; init; }
+    public int init_buf_size { get; init; }
+    public int max_buf_size { get; init; }
+    public int max_name_len { get; init; }
+    public TlsVerifyType tls_verify { get; init; }
+    public string tls_roots { get; init; }
+    public string tls_ca { get; init; }
+    [JsonIgnore] public string tls_roots_password { get; init; }
+    [JsonIgnore] public BufferOverflowHandling? BufferOverflowHandling { get; init; }
     
     [JsonIgnore]
     public int max_buf_size_chars => max_buf_size / 2;
@@ -247,6 +255,12 @@ public class QuestDBOptions
     
     [JsonIgnore]
     public string Host { get; set; } 
+    
+    public bool OwnSocket { get; init; }
+
+    public string? token_x => _token_x;
+
+    public string? token_y => _token_y;
     
     
     public override string ToString()

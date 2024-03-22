@@ -5,13 +5,13 @@ public class IngressError : Exception
     public ErrorCode Code { get; }
     
     public IngressError(ErrorCode code, string? message) 
-        : base(message)
+        : base($"{code.ToString()} : {message}")
     {
         this.Code = code;
     }
     
     public IngressError(ErrorCode code, string? message, Exception inner) 
-        : base(message, inner)
+        : base($"{code.ToString()} : {message}", inner)
     {
         this.Code = code;
     }

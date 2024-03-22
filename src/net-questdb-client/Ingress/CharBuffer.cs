@@ -321,4 +321,9 @@ public class CharBuffer
     {
         return _buffer.ToString();
     }
+
+    public void Truncate()
+    {
+        _buffer = new StringBuilder();
+    }
 }

@@ -13,7 +13,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyCompanyAttribute("net-questdb-client-tests")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Debug")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+9b962d5ccb4c84402a434a3a236445dc0d38dc80")]
 [assembly: System.Reflection.AssemblyProductAttribute("net-questdb-client-tests")]
 [assembly: System.Reflection.AssemblyTitleAttribute("net-questdb-client-tests")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]

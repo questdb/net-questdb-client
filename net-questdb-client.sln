@@ -15,6 +15,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "net-questdb-client-tests", 
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "net-questdb-client-benchmarks", "src\net-questdb-client-benchmarks\net-questdb-client-benchmarks.csproj", "{6C336385-5451-4AEF-9C8D-BA252BF0A1DE}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "dummy-http-server", "src\dummy-http-server\dummy-http-server.csproj", "{348E00C0-0ED0-4932-A0CE-EC80379E843A}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -48,5 +50,9 @@ Global
 		{6C336385-5451-4AEF-9C8D-BA252BF0A1DE}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{6C336385-5451-4AEF-9C8D-BA252BF0A1DE}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{6C336385-5451-4AEF-9C8D-BA252BF0A1DE}.Release|Any CPU.Build.0 = Release|Any CPU
+		{348E00C0-0ED0-4932-A0CE-EC80379E843A}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{348E00C0-0ED0-4932-A0CE-EC80379E843A}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{348E00C0-0ED0-4932-A0CE-EC80379E843A}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{348E00C0-0ED0-4932-A0CE-EC80379E843A}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 EndGlobal

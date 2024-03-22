@@ -113,7 +113,6 @@ public class LineSender : IDisposable
                 throw;
             }
         }
-        
     }
     
     public LineSender(QuestDBOptions options)

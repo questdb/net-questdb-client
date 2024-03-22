@@ -18,7 +18,14 @@
     </ItemGroup>
 
     <ItemGroup>
-      <ProjectReference Include="..\net-questdb-client\net-questdb-client.csproj" />
+        <ProjectReference Include="..\net-questdb-client\net-questdb-client.csproj"/>
+    </ItemGroup>
+
+    <ItemGroup>
+        <None Include="..\questdb-client-test\ilp-client-interop-test.json">
+            <Link>ilp-client-interop-test.json</Link>
+            <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+        </None>
     </ItemGroup>
 
 </Project>

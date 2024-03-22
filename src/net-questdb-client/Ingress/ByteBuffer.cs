@@ -1,8 +1,6 @@
 using System.Collections;
 using System.Globalization;
-using System.Net.Sockets;
 using System.Runtime.CompilerServices;
-using System.Runtime.InteropServices.ComTypes;
 using System.Text;
 
 namespace QuestDB.Ingress;
@@ -10,19 +8,17 @@ namespace QuestDB.Ingress;
 public class ByteBuffer : IEnumerable<byte>
 {
     private static readonly long EpochTicks = new DateTime(1970, 1, 1).Ticks;
-    public readonly List<(byte[] Buffer, int Length)> Buffers = new();
     public static int DefaultQuestDbFsFileNameLimit = 127;
+    public readonly List<(byte[] Buffer, int Length)> Buffers = new();
     public int CurrentBufferIndex;
     public bool HasTable;
+    public int LineStartBufferIndex;
+    public int LineStartBufferPosition;
     public bool NoFields = true;
     public bool NoSymbols = true;
     public int Position;
     public bool Quoted;
     public byte[] SendBuffer;
-    public int LineStartBufferIndex;
-    public int LineStartBufferPosition;
-
-    public int RowCount { get; set; } = 0;
 
     public ByteBuffer(int bufferSize)
     {
@@ -31,13 +27,43 @@ public class ByteBuffer : IEnumerable<byte>
         QuestDbFsFileNameLimit = DefaultQuestDbFsFileNameLimit;
     }
 
+    public int RowCount { get; set; }
+
     /// <summary>
-    /// Maximum allowed column / table name. Usually set to 127 but can be overwritten in QuestDB server to higher value
+    ///     Maximum allowed column / table name. Usually set to 127 but can be overwritten in QuestDB server to higher value
     /// </summary>
     public int QuestDbFsFileNameLimit { get; set; }
 
+
+    public int Length
+    {
+        get
+        {
+            var count = 0;
+            for (var i = 0; i <= CurrentBufferIndex; i++)
+            {
+                var length = i == CurrentBufferIndex ? Position : Buffers[i].Length;
+                count += length;
+            }
+
+            return count;
+        }
+    }
+
+    public IEnumerator<byte> GetEnumerator()
+    {
+        foreach (var (buffer, length) in Buffers)
+        foreach (var b in buffer[..length])
+            yield return b;
+    }
+
+    IEnumerator IEnumerable.GetEnumerator()
+    {
+        return GetEnumerator();
+    }
+
     /// <summary>
-    /// Set table name for the Line. Table name can be different from line to line.
+    ///     Set table name for the Line. Table name can be different from line to line.
     /// </summary>
     /// <param name="name">Table name</param>
     /// <returns>Itself</returns>
@@ -46,20 +72,20 @@ public class ByteBuffer : IEnumerable<byte>
     public ByteBuffer Table(ReadOnlySpan<char> name)
     {
         GuardTableAlreadySet();
-        GuardInvalidTableName(name);
+        Utilities.GuardInvalidTableName(name);
 
         Quoted = false;
         HasTable = true;
 
         LineStartBufferIndex = CurrentBufferIndex;
         LineStartBufferPosition = Position;
-        
+
         EncodeUtf8(name);
         return this;
     }
 
     /// <summary>
-    /// Set value for a Symbol column. Symbols must be written before other columns
+    ///     Set value for a Symbol column. Symbols must be written before other columns
     /// </summary>
     /// <param name="symbolName">Symbol column name</param>
     /// <param name="value">Symbol value</param>
@@ -68,25 +94,19 @@ public class ByteBuffer : IEnumerable<byte>
     /// <exception cref="InvalidOperationException">If table name not written or Column values are written</exception>
     public ByteBuffer Symbol(ReadOnlySpan<char> symbolName, ReadOnlySpan<char> value)
     {
-        if (!HasTable)
-        {
-            throw new IngressError(ErrorCode.InvalidApiCall, "Table must be specified first.");
-        }
+        if (!HasTable) throw new IngressError(ErrorCode.InvalidApiCall, "Table must be specified first.");
 
-        if (!NoFields)
-        {
-            throw new IngressError(ErrorCode.InvalidApiCall, "Cannot write symbols after fields.");
-        }
+        if (!NoFields) throw new IngressError(ErrorCode.InvalidApiCall, "Cannot write symbols after fields.");
 
-        GuardInvalidColumnName(symbolName);
-        
+        Utilities.GuardInvalidColumnName(symbolName);
+
         Put(',').EncodeUtf8(symbolName).Put('=').EncodeUtf8(value);
         NoSymbols = false;
         return this;
     }
 
     /// <summary>
-    /// Set value of String column.
+    ///     Set value of String column.
     /// </summary>
     /// <param name="name">Column name</param>
     /// <param name="value">Column value</param>
@@ -102,7 +122,7 @@ public class ByteBuffer : IEnumerable<byte>
     }
 
     /// <summary>
-    /// Set value of LONG column
+    ///     Set value of LONG column
     /// </summary>
     /// <param name="name">Column name</param>
     /// <param name="value">Column value</param>
@@ -114,7 +134,7 @@ public class ByteBuffer : IEnumerable<byte>
     }
 
     /// <summary>
-    /// Set value of BOOLEAN column
+    ///     Set value of BOOLEAN column
     /// </summary>
     /// <param name="name">Column name</param>
     /// <param name="value">Column value</param>
@@ -126,7 +146,7 @@ public class ByteBuffer : IEnumerable<byte>
     }
 
     /// <summary>
-    /// Set value of DOUBLE column
+    ///     Set value of DOUBLE column
     /// </summary>
     /// <param name="name">Column name</param>
     /// <param name="value">Column value</param>
@@ -138,7 +158,7 @@ public class ByteBuffer : IEnumerable<byte>
     }
 
     /// <summary>
-    /// Set value of TIMESTAMP column
+    ///     Set value of TIMESTAMP column
     /// </summary>
     /// <param name="name">Column name</param>
     /// <param name="timestamp">Column value</param>
@@ -151,7 +171,7 @@ public class ByteBuffer : IEnumerable<byte>
     }
 
     /// <summary>
-    /// Set value of TIMESTAMP column
+    ///     Set value of TIMESTAMP column
     /// </summary>
     /// <param name="name">Column name</param>
     /// <param name="timestamp">Column value</param>
@@ -163,22 +183,21 @@ public class ByteBuffer : IEnumerable<byte>
     }
 
     /// <summary>
-    /// Finishes the line without specifying Designated Timestamp. QuestDB will set the timestamp at the time of writing to the table.
+    ///     Finishes the line without specifying Designated Timestamp. QuestDB will set the timestamp at the time of writing to
+    ///     the table.
     /// </summary>
     public void AtNow()
     {
         GuardTableNotSet();
 
         if (NoFields && NoSymbols)
-        {
             throw new IngressError(ErrorCode.InvalidApiCall, "Did not specify any symbols or columns.");
-        }
 
         FinishLine();
     }
 
     /// <summary>
-    /// Finishes the line setting timestamp.
+    ///     Finishes the line setting timestamp.
     /// </summary>
     /// <param name="timestamp">Timestamp of the line</param>
     public void At(DateTime timestamp)
@@ -189,7 +208,7 @@ public class ByteBuffer : IEnumerable<byte>
     }
 
     /// <summary>
-    /// Finishes the line setting timestamp.
+    ///     Finishes the line setting timestamp.
     /// </summary>
     /// <param name="timestamp">Timestamp of the line</param>
     public void At(DateTimeOffset timestamp)
@@ -198,7 +217,7 @@ public class ByteBuffer : IEnumerable<byte>
     }
 
     /// <summary>
-    /// Finishes the line setting timestamp.
+    ///     Finishes the line setting timestamp.
     /// </summary>
     /// <param name="epochNano">Nanoseconds since Unix epoch</param>
     public void At(long epochNano)
@@ -208,7 +227,7 @@ public class ByteBuffer : IEnumerable<byte>
     }
 
     /// <summary>
-    /// Clears the buffer.
+    ///     Clears the buffer.
     /// </summary>
     public void Clear()
     {
@@ -217,17 +236,14 @@ public class ByteBuffer : IEnumerable<byte>
         Position = 0;
         RowCount = 0;
     }
-    
+
     /// <summary>
-    /// Frees unnecessary buffers. 
+    ///     Frees unnecessary buffers.
     /// </summary>
     public void TrimExcessBuffers()
     {
-        int removeCount = Buffers.Count - CurrentBufferIndex - 1;
-        if (removeCount > 0)
-        {
-            Buffers.RemoveRange(CurrentBufferIndex + 1, removeCount);
-        }
+        var removeCount = Buffers.Count - CurrentBufferIndex - 1;
+        if (removeCount > 0) Buffers.RemoveRange(CurrentBufferIndex + 1, removeCount);
     }
 
     public static byte[] FromBase64String(string encodedPrivateKey)
@@ -257,9 +273,9 @@ public class ByteBuffer : IEnumerable<byte>
     private ByteBuffer Column(ReadOnlySpan<char> columnName)
     {
         GuardTableNotSet();
-        
-        GuardInvalidColumnName(columnName);
-        
+
+        Utilities.GuardInvalidColumnName(columnName);
+
         if (NoFields)
         {
             Put(' ');
@@ -276,10 +292,8 @@ public class ByteBuffer : IEnumerable<byte>
     private ByteBuffer Put(long value)
     {
         if (value == long.MinValue)
-        {
             throw new IngressError(ErrorCode.InvalidApiCall, "Special case, long.MinValue cannot be handled by QuestDB",
                 new ArgumentOutOfRangeException());
-        }
 
         Span<byte> num = stackalloc byte[20];
         var pos = num.Length;
@@ -314,7 +328,7 @@ public class ByteBuffer : IEnumerable<byte>
 
         return this;
     }
-    
+
     private void PutUtf8(char c)
     {
         if (Position + 4 >= SendBuffer.Length) NextBuffer();
@@ -384,184 +398,28 @@ public class ByteBuffer : IEnumerable<byte>
         Position = 0;
     }
 
-    public IEnumerator<byte> GetEnumerator()
-    {
-        foreach (var (buffer, length) in Buffers)
-        {
-            foreach (var b in buffer[0..length])
-            {
-                yield return b;
-            }
-        }
-    }
-
-    IEnumerator IEnumerable.GetEnumerator()
-    {
-        return GetEnumerator();
-    }
-    
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void GuardTableAlreadySet()
     {
-        if (HasTable)
-        {
-            throw new IngressError(ErrorCode.InvalidApiCall, "Table has already been specified.");
-        }
+        if (HasTable) throw new IngressError(ErrorCode.InvalidApiCall, "Table has already been specified.");
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void GuardTableNotSet()
     {
-        if (!HasTable)
-        {
-            throw new IngressError(ErrorCode.InvalidApiCall, "Table must be specified first.");
-        }
-        
+        if (!HasTable) throw new IngressError(ErrorCode.InvalidApiCall, "Table must be specified first.");
     }
-    
-     private static void GuardInvalidTableName(ReadOnlySpan<char> str)
-    {
-        if (str.IsEmpty)
-        {
-            throw new IngressError(ErrorCode.InvalidName,
-                "Table names must have a non-zero length.");
-        }
 
-        var prev = '\0';
-        for (int i = 0; i < str.Length; i++)
-        {
-            var c = str[i];
-            switch (c)
-            {
-                case '.':
-                    if (i == 0 || i == str.Length || prev == '.')
-                    {
-                        throw new IngressError(ErrorCode.InvalidName,
-                            $"Bad string {str}. Found invalid dot `.` at position {i}.");
-                    }
-
-                    break;
-                case '?':
-                case ',':
-                case '\'':
-                case '\"':
-                case '\\':
-                case '/':
-                case ':':
-                case ')':
-                case '(':
-                case '+':
-                case '*':
-                case '%':
-                case '~':
-                case '\r':
-                case '\n':
-                case '\0':
-                case '\x0001':
-                case '\x0002':
-                case '\x0003':
-                case '\x0004':
-                case '\x0005':
-                case '\x0006':
-                case '\x0007':
-                case '\x0008':
-                case '\x000b':
-                case '\x000c':
-                case '\x000e':
-                case '\x000f':
-                case '\x007f':
-                    throw new IngressError(ErrorCode.InvalidName,
-                        $"Bad string {str}. Table names can't contain a {c} character, which was found at byte position {i}");
-                case '\xfeff':
-                    throw new IngressError(ErrorCode.InvalidName,
-                        $"Bad string {str}. Table names can't contain a UTF-8 BOM character, was was found at byte position {i}.");
-            }
-
-            prev = c;
-        }
-    }
-    
-    private static void GuardInvalidColumnName(ReadOnlySpan<char> str)
-    {
-        if (str.IsEmpty)
-        {
-            throw new IngressError(ErrorCode.InvalidName,
-                $"Column names must have a non-zero length.");
-        }
-
-        for (int i = 0; i < str.Length; i++)
-        {
-            var c = str[i];
-            switch (c)
-            {
-                case '.':
-                case '?':
-                case ',':
-                case '\'':
-                case '\"':
-                case '\\':
-                case '/':
-                case ':':
-                case ')':
-                case '(':
-                case '+':
-                case '*':
-                case '%':
-                case '~':
-                case '\r':
-                case '\n':
-                case '\0':
-                case '\x0001':
-                case '\x0002':
-                case '\x0003':
-                case '\x0004':
-                case '\x0005':
-                case '\x0006':
-                case '\x0007':
-                case '\x0008':
-                case '\x000b':
-                case '\x000c':
-                case '\x000e':
-                case '\x000f':
-                case '\x007f':
-                    throw new IngressError(ErrorCode.InvalidName,
-                        $"Bad string {str}. Column names can't contain a {c} character, which was found at byte position {i}");
-                case '\xfeff':
-                    throw new IngressError(ErrorCode.InvalidName,
-                        $"Bad string {str}. Column names can't contain a UTF-8 BOM character, was was found at byte position {i}.");
-            }
-        }
-    }
-    
-    
     /// <summary>
-    /// Cancel current unsent line. Works only in Extend buffer overflow mode.
+    ///     Cancel current unsent line. Works only in Extend buffer overflow mode.
     /// </summary>
     /// <exception cref="InvalidOperationException"></exception>
     public void CancelLine()
     {
         if (BufferOverflowHandling.Extend == BufferOverflowHandling.SendImmediately)
-        {
             throw new InvalidOperationException("Cannot cancel line in BufferOverflowHandling.SendImmediately mode");
-        }
 
         CurrentBufferIndex = LineStartBufferIndex;
         Position = LineStartBufferPosition;
-    }
-
-
-    public int Length
-    {
-        get
-        {
-            var count = 0;
-            for (var i = 0; i <= CurrentBufferIndex; i++)
-            {
-                var length = i == CurrentBufferIndex ? Position : Buffers[i].Length;
-                 count += length;
-            }
-
-            return count;
-        }
     }
 }

@@ -54,7 +54,7 @@ public class JsonSpecTestRunner
                 }
 
             sender.AtNow();
-            sender.Send();
+            await sender.SendAsync();
         }
         catch (Exception? ex)
         {
@@ -121,7 +121,7 @@ public class JsonSpecTestRunner
                 }
 
             sender.AtNow();
-            var (request, response) = sender.Send();
+            var (request, response) = await sender.SendAsync();
 
             if (!response.IsSuccessStatusCode)
             {

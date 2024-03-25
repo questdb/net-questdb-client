@@ -1,5 +1,6 @@
 using System.Buffers.Text;
 using System.Diagnostics;
+using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Security;
 using System.Net.Sockets;
@@ -19,7 +20,7 @@ public class LineSender : IDisposable
     private ByteBuffer _byteBuffer;
     private Stopwatch _intervalTimer;
     private static HttpClient? _client;
-    private readonly string IlpEndpoint = "/write";
+    private const string IlpEndpoint = "/write";
     public static int DefaultQuestDbFsFileNameLimit = 127;
 
     
@@ -50,7 +51,7 @@ public class LineSender : IDisposable
             _client = new HttpClient();
             var uri = new UriBuilder(options.protocol.ToString(), options.Host, options.Port);
             _client.BaseAddress = uri.Uri;
-            _client.Timeout = options.request_timeout; // revisit calc
+            _client.Timeout = Timeout.InfiniteTimeSpan;
             
             if (options.username != null && options.password != null)
             {
@@ -183,53 +184,34 @@ public class LineSender : IDisposable
     public LineSender At(DateTime value)
     {
         _byteBuffer.At(value);
-        HandleAutoFlush();
+        HandleAutoFlush().Wait();
         return this;
     }
     
     public LineSender At(DateTimeOffset timestamp)
     {
         _byteBuffer.At(timestamp);
-        HandleAutoFlush();
+        HandleAutoFlush().Wait();
         return this;
     }
 
 
     public LineSender AtNow()
     {
-        // if (Options.IsHttp())
-        // {
-        //     _charBuffer.AtNow();
-        // }
-        // else
-        // {
-            _byteBuffer.AtNow();
-        // }
-        HandleAutoFlush();
+        _byteBuffer.AtNow();
+        HandleAutoFlush().Wait();
         return this; 
     }
     
-    private void HandleAutoFlush()
+    private async Task HandleAutoFlush()
     {
         if (Options.auto_flush == AutoFlushType.on)
         {
-            if (RowCount >= Options.auto_flush_rows)
-        {
-                Flush();
-                return;
-            }
-            
-            if (_intervalTimer.Elapsed >= Options.auto_flush_interval)
+            if (RowCount >= Options.auto_flush_rows
+                || _intervalTimer.Elapsed >= Options.auto_flush_interval 
+                || Options.auto_flush_bytes <= _byteBuffer.Length)
             {
-                Flush();
-                return;
-            }
-
-            var bytes = _byteBuffer.Length;
-
-            if (Options.auto_flush_bytes <= bytes)
-            {
-                Flush();
+                await FlushAsync();
             }
         }
     }
@@ -243,52 +225,95 @@ public class LineSender : IDisposable
     {
         if (Options.IsHttp())
         {
-            var request = new HttpRequestMessage(HttpMethod.Post, IlpEndpoint);
-            request.Content = _byteBuffer;
-            request.Content.Headers.ContentType = new MediaTypeHeaderValue("text/plain") { CharSet = "utf-8"};
-            
-            var response = await _client.SendAsync(request);
-            if (!response!.IsSuccessStatusCode)
+            var (request, ct) = GenerateRequest();
+            try
             {
-                throw new IngressError(ErrorCode.ServerFlushError, response.ReasonPhrase);
+                return await FinishOrRetryAsync(
+                    await _client.SendAsync(
+                        request, ct.Token),
+                    ct
+                );
             }
-            
-            _byteBuffer.Clear();
-            return (request, response);
+            catch (Exception ex)
+            {
+                throw new IngressError(ErrorCode.ServerFlushError, ex.Message, ex);
+            }
         }
 
         if (Options.IsTcp())
         {
-            for (var i = 0; i <= _byteBuffer.CurrentBufferIndex; i++)
-            {
-                var length = i == _byteBuffer.CurrentBufferIndex ? _byteBuffer.Position : _byteBuffer.Buffers[i].Length;
-
-                try
-                {
-                    if (length > 0)
-                        await _dataStream.WriteAsync(_byteBuffer.Buffers[i].Buffer, 0, length, cancellationToken);
-                }
-                catch (IOException iox)
-                {
-                    throw new IngressError(ErrorCode.SocketError, "Could not write data to server.", iox);
-                }
-            }
+            await _byteBuffer.WriteToStreamAsync(_dataStream);
             _byteBuffer.Clear();
             return (null, null);
         }
 
         throw new NotImplementedException();
     }
-    
-    public (HttpRequestMessage?, HttpResponseMessage?) Send()
-    {
-        return SendAsync().Result;
-    }
 
-    
-    public void Flush()
+    private bool IsRetriableError(HttpStatusCode code)
     {
-        FlushAsync().Wait();
+        switch (code)
+        {
+            case HttpStatusCode.InternalServerError:
+            case HttpStatusCode.ServiceUnavailable:
+            case HttpStatusCode.GatewayTimeout:
+            case HttpStatusCode.InsufficientStorage:
+            case (HttpStatusCode)509: // Bandwidth Limit Exceeded
+            case (HttpStatusCode)523: // Origin Is Unreachable
+            case (HttpStatusCode)524: // A Timeout Occurred
+            case (HttpStatusCode)529: // Site is overloaded
+            case (HttpStatusCode)599: // Network Timeout Error
+                    return true;
+            default:
+                return false;
+        }
+    }
+    
+    public async Task<(HttpRequestMessage?, HttpResponseMessage?)> FinishOrRetryAsync(HttpResponseMessage response, CancellationTokenSource cts = default)
+    {
+        if (response.IsSuccessStatusCode)
+        {
+            cts.Cancel();
+            _byteBuffer.Clear();
+            return (response.RequestMessage, response);
+        }
+
+        if (!(IsRetriableError(response.StatusCode) && Options.retry_timeout > TimeSpan.Zero))
+        {
+            throw new IngressError(ErrorCode.ServerFlushError, response.ReasonPhrase);
+        }
+        
+        
+        var timer = new Stopwatch();
+        timer.Start();
+
+        var retryInterval = TimeSpan.FromMilliseconds(10);
+        HttpResponseMessage lastResponse = response;
+
+        while (timer.Elapsed < Options.retry_timeout)
+        {
+            var jitter = TimeSpan.FromMilliseconds(Random.Shared.Next(0, 10) - 5);
+            await Task.Delay(retryInterval + jitter);
+
+            var (nextRequest, nextToken) = GenerateRequest();
+            cts = nextToken;
+            lastResponse = await _client.SendAsync(nextRequest, nextToken.Token);
+            if (!lastResponse!.IsSuccessStatusCode)
+            {
+                if (IsRetriableError(lastResponse.StatusCode) && Options.retry_timeout > TimeSpan.Zero)
+                {
+                    cts.Cancel();
+                    continue;
+                }
+                
+                throw new IngressError(ErrorCode.ServerFlushError, lastResponse.ReasonPhrase);
+            }
+
+            _byteBuffer.Clear();
+            return (lastResponse.RequestMessage, lastResponse);
+        }
+        
+        throw new IngressError(ErrorCode.ServerFlushError, lastResponse.ReasonPhrase);
     }
     
     /// <summary>
@@ -431,5 +456,17 @@ public class LineSender : IDisposable
     {
         get { return _byteBuffer.QuestDbFsFileNameLimit; }
         set { _byteBuffer.QuestDbFsFileNameLimit = value;  }
+    }
+
+    public (HttpRequestMessage, CancellationTokenSource) GenerateRequest()
+    {
+        var request = new HttpRequestMessage(HttpMethod.Post, IlpEndpoint) { Content = _byteBuffer };
+        request.Content.Headers.ContentType = new MediaTypeHeaderValue("text/plain") { CharSet = "utf-8"};
+
+        var cts = new CancellationTokenSource();
+        cts.CancelAfter(Options.request_timeout
+                        + TimeSpan.FromSeconds((double)_byteBuffer.Length / (double)Options.request_min_throughput));
+        
+        return (request, cts);
     }
 }

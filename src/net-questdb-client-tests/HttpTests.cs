@@ -258,7 +258,7 @@ public class HttpTests
 
             if (i > 1)
             {
-                Assert.That(() => sender.Send(), Throws.TypeOf<AggregateException>().With.Message.Contains("Connection refused"));
+                Assert.That(async () => await sender.SendAsync(), Throws.TypeOf<IngressError>().With.Message.Contains("Connection refused"));
             }
             
             if (i == 1) srv.Dispose();
@@ -279,7 +279,7 @@ public class HttpTests
             .Column("number3", double.MinValue)
             .Column("number4", double.MaxValue)
             .AtNow();
-        ls.Send();
+        await ls.SendAsync();
 
         var expected =
             "neg\\ name number1=-9223372036854775807i,number2=9223372036854775807i,number3=-1.7976931348623157E+308,number4=1.7976931348623157E+308\n";
@@ -305,7 +305,7 @@ public class HttpTests
             .Column("dInf", double.PositiveInfinity)
             .Column("dNInf", double.NegativeInfinity)
             .AtNow();
-        ls.Send();
+        await ls.SendAsync();
 
         var expected =
             "doubles d0=0,dm0=-0,d1=1,dE100=1E+100,d0000001=1E-06,dNaN=NaN,dInf=Infinity,dNInf=-Infinity\n";
@@ -324,7 +324,7 @@ public class HttpTests
             .Column("ts", ts)
             .At(ts);
 
-        ls.Send();
+        await ls.SendAsync();
 
         var expected =
             "name ts=1645660800000000t 1645660800000000000\n";
@@ -526,7 +526,7 @@ public class HttpTests
 
         using var sender =
             new LineSender(
-                $"http::addr={Host}:{Port};init_buf_size={64 * 1024};auto_flush=on;auto_flush_bytes={64 * 1024};");
+                $"http::addr={Host}:{Port};init_buf_size={64 * 1024};auto_flush=on;auto_flush_bytes={64 * 1024};request_timeout=30000;");
 
         for (var i = 0; i < 1E6; i++)
             sender.Table(metric)
@@ -543,8 +543,8 @@ public class HttpTests
     public async Task CannotConnect()
     {
         Assert.That(
-            () => new LineSender($"http::addr={Host}:{Port};").Table("foo").Symbol("a", "b").AtNow().Send(),
-            Throws.TypeOf<AggregateException>().With.Message.Contains("Connection refused")
+            async () => await new LineSender($"http::addr={Host}:{Port};").Table("foo").Symbol("a", "b").AtNow().SendAsync(),
+            Throws.TypeOf<IngressError>().With.Message.Contains("Connection refused")
         );
     }
     
@@ -577,7 +577,7 @@ public class HttpTests
         sender.Table("neg name")
             .Column("привед", " мед\rве\n д")
             .AtNow();
-        sender.Send();
+        await sender.SendAsync();
 
         var expected = "neg\\ name привед=\" мед\\\rве\\\n д\"\n";
         Assert.That(srv.GetReceiveBuffer().ToString, Is.EqualTo(expected));

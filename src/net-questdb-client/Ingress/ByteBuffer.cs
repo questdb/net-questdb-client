@@ -443,6 +443,12 @@ public class ByteBuffer : HttpContent, IEnumerable<byte>
             }
         }
     }
+    
+    
+    public async Task WriteToStreamAsync(Stream stream)
+    {
+        await SerializeToStreamAsync(stream, null);
+    }
 
     protected override void SerializeToStream(Stream stream, TransportContext? context, CancellationToken ct)
     {

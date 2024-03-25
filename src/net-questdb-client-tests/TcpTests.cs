@@ -27,7 +27,7 @@ public class TcpTests
             .Column("number", 10)
             .Column("string", " -=\"")
             .At(new DateTime(1970, 01, 01, 0, 0, 1));
-        ls.Send();
+        await ls.SendAsync();
 
 
         var expected = "metric\\ name,t\\ a\\ g=v\\ alu\\,\\ e number=10i,string=\" -=\\\"\" 1000000000\n";
@@ -52,7 +52,7 @@ public class TcpTests
             .Column("number", 10)
             .Column("string", " -=\"")
             .At(new DateTime(1970, 01, 01, 0, 0, 1));
-        ls.Send();
+        await ls.SendAsync();
 
         var expected = "metric\\ name,t\\ a\\ g=v\\ alu\\,\\ e number=10i,string=\" -=\\\"\" 1000000000\n";
         WaitAssert(srv, expected);
@@ -83,7 +83,7 @@ public class TcpTests
         srv.AcceptAsync();
 
         Assert.That(
-            () =>
+            async () =>
             {
                 using var sender = new LineSender(
                     $"tcp::addr={_host}:{_port};username=testUser1;token=ZOvHHNQBGvZuiCLt7CmWt0tTlsnjm9F3O3C749wGT_M=;");
@@ -95,13 +95,13 @@ public class TcpTests
                         .Column("number", 10)
                         .Column("string", " -=\"")
                         .At(new DateTime(1970, 01, 01, 0, 0, 1));
-                    sender.Send();
+                    await sender.SendAsync();
                     Thread.Sleep(10);
                 }
 
                 Assert.Fail();
             },
-            Throws.TypeOf<AggregateException>().With.InnerException.TypeOf<IngressError>().With.Message
+            Throws.TypeOf<IngressError>().With.Message
                 .Contains("Could not write data to server.")
         );
     }
@@ -282,11 +282,11 @@ public class TcpTests
             totalExpectedSb.Append(expected);
             try
             {
-                sender.Send();
+                await sender.SendAsync();
             }
-            catch (AggregateException ex)
+            catch (IngressError ex)
             {
-                Assert.That(ex.InnerException.Message.Contains("Could not write data"), Is.True);
+                Assert.That(ex.Message.Contains("Could not write data"), Is.True);
             }
 
             if (i == 1) srv.Dispose();
@@ -307,7 +307,7 @@ public class TcpTests
             .Column("number3", double.MinValue)
             .Column("number4", double.MaxValue)
             .AtNow();
-        ls.Send();
+        await ls.SendAsync();
 
         var expected =
             "neg\\ name number1=-9223372036854775807i,number2=9223372036854775807i,number3=-1.7976931348623157E+308,number4=1.7976931348623157E+308\n";
@@ -332,7 +332,7 @@ public class TcpTests
             .Column("dInf", double.PositiveInfinity)
             .Column("dNInf", double.NegativeInfinity)
             .AtNow();
-        ls.Send();
+        await ls.SendAsync();
 
         var expected =
             "doubles d0=0,dm0=-0,d1=1,dE100=1E+100,d0000001=1E-06,dNaN=NaN,dInf=Infinity,dNInf=-Infinity\n";
@@ -352,7 +352,7 @@ public class TcpTests
             .Column("ts", ts)
             .At(ts);
 
-        ls.Send();
+        await ls.SendAsync();
 
         var expected =
             "name ts=1645660800000000t 1645660800000000000\n";
@@ -649,7 +649,7 @@ public class TcpTests
         sender.Table("neg name")
             .Column("привед", " мед\rве\n д")
             .AtNow();
-        sender.Send();
+        await sender.SendAsync();
 
         var expected = "neg\\ name привед=\" мед\\\rве\\\n д\"\n";
         WaitAssert(srv, expected);

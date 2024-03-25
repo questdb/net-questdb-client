@@ -21,10 +21,4 @@ public class TestSender : LineSender
         (Request, Response) = await base.SendAsync();
         return this;
     }
-
-    public async Task<bool> CheckRequestContent(string message)
-    {
-        return (await Request.Content.ReadAsStringAsync()) == message;
-    }
-    
 }

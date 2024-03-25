@@ -1,5 +1,6 @@
 using System.Text;
 using FastEndpoints;
+using Microsoft.AspNetCore.Http.Metadata;
 
 namespace dummy_http_server;
 
@@ -17,6 +18,7 @@ public class IlpEndpoint : Endpoint<Request>
     {
         Post("write", "api/v2/write");
         AllowAnonymous();
+        Description(b => b.Accepts<Request>());
     }
 
     public override async Task HandleAsync(Request req, CancellationToken ct)
@@ -24,7 +26,7 @@ public class IlpEndpoint : Endpoint<Request>
         try
         {
             ReceiveBuffer.Append(req.Content);
-            LogMessages.Add("Received: " + req);
+            LogMessages.Add("Received: " + req.Content);
             await SendNoContentAsync(ct);
         }
         catch (Exception ex)

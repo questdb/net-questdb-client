@@ -21,7 +21,6 @@ public class LineSender : IDisposable
     // general
     private QuestDBOptions _options;
     private ByteBuffer _byteBuffer;
-    private CharBuffer _charBuffer;
     private Stopwatch _intervalTimer;
     private static HttpClient? _client;
     private readonly string IlpEndpoint = "/write";
@@ -47,10 +46,10 @@ public class LineSender : IDisposable
         // _buffer = new ChunkedBuffer(options.InitBufSize);
         _options = options;
         _intervalTimer = new Stopwatch();
+        _byteBuffer = new ByteBuffer(_options.init_buf_size);
         
         if (options.IsHttp())
         {
-            _charBuffer = new CharBuffer();
             _client = new HttpClient();
             var uri = new UriBuilder(options.protocol.ToString(), options.Host, options.Port);
             _client.BaseAddress = uri.Uri;
@@ -66,8 +65,6 @@ public class LineSender : IDisposable
             }
         }
         
-        _byteBuffer = new ByteBuffer(_options.init_buf_size);
-
         if (options.IsTcp())
         {
            
@@ -291,7 +288,7 @@ public class LineSender : IDisposable
                 return;
             }
 
-            var bytes = _options.IsHttp() ? _charBuffer._buffer.Length * 2 : _byteBuffer.Length;
+            var bytes = _byteBuffer.Length;
 
             if (_options.auto_flush_bytes <= bytes)
             {
@@ -303,14 +300,6 @@ public class LineSender : IDisposable
     public async Task FlushAsync()
     {
         var (_, response) = await SendAsync();
-
-        if (_options.IsHttp())
-        {
-            if (!response!.IsSuccessStatusCode)
-            {
-                throw new IngressError(ErrorCode.ServerFlushError, response.ReasonPhrase);
-            }
-        }
     }
 
     public async Task<(HttpRequestMessage?, HttpResponseMessage?)> SendAsync(CancellationToken cancellationToken = default)
@@ -320,8 +309,16 @@ public class LineSender : IDisposable
             var request = new HttpRequestMessage(HttpMethod.Post, IlpEndpoint);
             //request.Content = new StringContent(_charBuffer.ToString());
             request.Content = _byteBuffer;
+            request.Content.Headers.ContentType = MediaTypeHeaderValue.Parse("text/plain");
+            request.Content.Headers.ContentEncoding.Add("zstd");
+            
             var response = await _client.SendAsync(request);
-            _charBuffer.Clear();
+            if (!response!.IsSuccessStatusCode)
+            {
+                throw new IngressError(ErrorCode.ServerFlushError, response.ReasonPhrase);
+            }
+            
+            _byteBuffer.Clear();
             return (request, response);
         }
 
@@ -460,15 +457,7 @@ public class LineSender : IDisposable
     /// </summary>
     public void Truncate()
     {
-        if (_options.IsHttp())
-        {
-            _charBuffer.Truncate();
-        }
-
-        if (_options.IsTcp())
-        {
-            _byteBuffer.TrimExcessBuffers();
-        }
+        _byteBuffer.TrimExcessBuffers();
     }
     
     /// <summary>
@@ -477,14 +466,6 @@ public class LineSender : IDisposable
     /// <exception cref="InvalidOperationException"></exception>
     public void CancelLine()
     {
-        if (_options.IsHttp())
-        {
-            _charBuffer.CancelLine();
-        }
-
-        if (_options.IsTcp())
-        {
-            _byteBuffer.CancelLine();
-        }
+        _byteBuffer.CancelLine();
     }
 }

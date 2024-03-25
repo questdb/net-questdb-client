@@ -65,7 +65,8 @@ public class HttpTests
 
         await sender.SendAsync();
         Assert.That(
-            await sender.Request.Content.ReadAsStringAsync(),
+            
+            server.GetReceiveBuffer().ToString(),
             Is.EqualTo("metrics,tag=value number=10i,string=\"abc\" 1000000000\n")
         );
     }

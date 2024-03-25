@@ -3,10 +3,12 @@ using System.Globalization;
 using System.Net;
 using System.Runtime.CompilerServices;
 using System.Text;
+using Microsoft.VisualBasic;
+using Strings = Org.BouncyCastle.Utilities.Strings;
 
 namespace QuestDB.Ingress;
 
-public class ByteBuffer : System.Net.Http.HttpContent, IEnumerable<byte>
+public class ByteBuffer : HttpContent, IEnumerable<byte>
 {
     private static readonly long EpochTicks = new DateTime(1970, 1, 1).Ticks;
     public static int DefaultQuestDbFsFileNameLimit = 127;
@@ -442,14 +444,34 @@ public class ByteBuffer : System.Net.Http.HttpContent, IEnumerable<byte>
         }
     }
 
+    protected override void SerializeToStream(Stream stream, TransportContext? context, CancellationToken ct)
+    {
+        SerializeToStreamAsync(stream, context, ct).Wait(ct);
+    }
+
     protected override bool TryComputeLength(out long length)
     {
-        length = 0;
-        foreach (var _ in this)
-        {
-            length++;
-        }
-
+        length = Length;
         return true;
+    }
+
+    protected override async Task<Stream> CreateContentReadStreamAsync()
+    {
+        var stream = new MemoryStream();
+        await SerializeToStreamAsync(stream, null, default);
+        return stream;
+    }
+    
+
+    public override string ToString()
+    {
+        return Strings.FromUtf8ByteArray(this.ToArray());
+    }
+
+    public byte[] ToArray()
+    {
+        var stream = new MemoryStream();
+        SerializeToStream(stream, null, CancellationToken.None);
+        return stream.ToArray();
     }
 }

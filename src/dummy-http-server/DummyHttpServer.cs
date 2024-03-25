@@ -26,6 +26,7 @@ public class DummyHttpServer : IDisposable
 
     public void Dispose()
     {
+        IlpEndpoint.ReceiveBuffer.Clear();
         app.StopAsync().Wait();
     }
 

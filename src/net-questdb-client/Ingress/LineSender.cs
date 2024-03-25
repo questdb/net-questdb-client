@@ -8,6 +8,7 @@ using System.Web;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
+using Microsoft.Extensions.Primitives;
 using Org.BouncyCastle.Asn1.Sec;
 using Org.BouncyCastle.Crypto.Engines;
 using Org.BouncyCastle.Crypto.Parameters;
@@ -467,5 +468,28 @@ public class LineSender : IDisposable
     public void CancelLine()
     {
         _byteBuffer.CancelLine();
+    }
+    
+    public static async ValueTask<LineSender> ConnectAsync(
+        string host,
+        int port,
+        int bufferSize = 4096,
+        BufferOverflowHandling bufferOverflowHandling = BufferOverflowHandling.Extend,
+        TlsMode tlsMode = TlsMode.Enable,
+        CancellationToken cancellationToken = default,
+        ProtocolType protocol = ProtocolType.https)
+    {
+        var confString = new StringBuilder();
+        confString.Append(protocol.ToString());
+        confString.Append("::");
+        confString.Append($"addr={host}:{port};");
+        confString.Append($"init_buf_size={bufferSize}");
+
+        if (bufferOverflowHandling == BufferOverflowHandling.SendImmediately)
+        {
+            confString.Append($"auto_flush_bytes={bufferSize};");
+        }
+        
+        return new LineSender(confString.ToString());
     }
 }

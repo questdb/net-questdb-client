@@ -462,7 +462,6 @@ public class ByteBuffer : HttpContent, IEnumerable<byte>
         return stream;
     }
     
-
     public override string ToString()
     {
         return Strings.FromUtf8ByteArray(this.ToArray());

@@ -26,8 +26,15 @@ public class DummyHttpServer : IDisposable
 
     public void Dispose()
     {
-        IlpEndpoint.ReceiveBuffer.Clear();
+        Clear();
         app.StopAsync().Wait();
+    }
+
+    public void Clear()
+    {
+        IlpEndpoint.ReceiveBuffer.Clear();
+        IlpEndpoint.LastError = null;
+        IlpEndpoint.LogMessages.Clear();
     }
 
     public async Task StartAsync(int port = 29743)

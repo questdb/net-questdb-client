@@ -247,7 +247,7 @@ public class LineTcpSenderTests
     }
     
     [Test]
-    public async Task SendLineTrimssBuffers()
+    public async Task SendLineTrimsBuffers()
     {
         using var srv = CreateTcpListener(_port);
         srv.AcceptAsync();
@@ -723,6 +723,50 @@ public class LineTcpSenderTests
                 .AtNow()
         );
     }
+    
+    [Test]
+    public async Task CheckIsConnected()
+    {
+        using var srv = CreateTcpListener(_port);
+        srv.AcceptAsync();
+
+        using var ls = await LineTcpSender.ConnectAsync(IPAddress.Loopback.ToString(), _port, tlsMode: TlsMode.Disable);
+        Assert.True(ls.IsConnected);
+    }
+    
+    [Test]
+    public async Task CheckWriteTimeout()
+    {
+        using var srv = CreateTcpListener(_port);
+        srv.AcceptAsync();
+
+        using var ls = await LineTcpSender.ConnectAsync(IPAddress.Loopback.ToString(), _port, tlsMode: TlsMode.Disable);
+        Assert.AreEqual(ls.WriteTimeout, -1);
+        ls.WriteTimeout = 1000;
+        
+        Assert.AreEqual(ls.WriteTimeout, 1000);
+    }
+    
+    [Test]
+    public async Task AtWithLongEpochNano()
+    {
+        using var srv = CreateTcpListener(_port);
+        srv.AcceptAsync();
+
+        using var ls = await LineTcpSender.ConnectAsync("localhost",  _port, tlsMode: TlsMode.Disable);
+
+        DateTime ts = new DateTime(2022, 2, 24);
+        ls.Table("name")
+            .Column("ts", ts)
+            .At((ts.Ticks - DateTime.UnixEpoch.Ticks)*100);
+        
+        ls.Send();
+
+        var expected =
+            "name ts=1645660800000000t 1645660800000000000\n";
+        WaitAssert(srv, expected);
+    }
+
 
     private DummyIlpServer CreateTcpListener(int port, bool tls = false)
     {

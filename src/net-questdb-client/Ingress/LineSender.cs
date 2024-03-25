@@ -65,10 +65,12 @@ public class LineSender : IDisposable
                 _client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", options.token);
             }
         }
+        
+        _byteBuffer = new ByteBuffer(_options.init_buf_size);
 
         if (options.IsTcp())
         {
-            _byteBuffer = new ByteBuffer(_options.init_buf_size);
+           
             var socket = new Socket(AddressFamily.InterNetwork, SocketType.Stream, System.Net.Sockets.ProtocolType.Tcp);
             NetworkStream? networkStream = null;
             SslStream? sslStream = null;
@@ -127,133 +129,133 @@ public class LineSender : IDisposable
     
     public LineSender Table(ReadOnlySpan<char> name)
     {
-        if (_options.IsHttp())
-        {
-            _charBuffer.Table(name);
-        }
-        else
-        {
+        // if (_options.IsHttp())
+        // {
+        //     _charBuffer.Table(name);
+        // }
+        // else
+        // {
             _byteBuffer.Table(name);
-        }
+        // }
         return this;
     }
 
     public LineSender Symbol(ReadOnlySpan<char> symbolName, ReadOnlySpan<char> value)
     {
-        if (_options.IsHttp())
-        {
-            _charBuffer.Symbol(symbolName, value);
-        }
-        else
-        {
+        // if (_options.IsHttp())
+        // {
+        //     _charBuffer.Symbol(symbolName, value);
+        // }
+        // else
+        // {
             _byteBuffer.Symbol(symbolName, value);
-        }
+        // }
         return this;
     }
 
     public LineSender Column(ReadOnlySpan<char> name, ReadOnlySpan<char> value)
     {
-        if (_options.IsHttp())
-        {
-            _charBuffer.Column(name, value);
-        }
-        else
-        {
+        // if (_options.IsHttp())
+        // {
+        //     _charBuffer.Column(name, value);
+        // }
+        // else
+        // {
             _byteBuffer.Column(name, value);
-        }
+        // }
         return this;
     }
 
     public LineSender Column(ReadOnlySpan<char> name, long value)
     {
-        if (_options.IsHttp())
-        {
-            _charBuffer.Column(name, value);
-        }
-        else
-        {
+        // if (_options.IsHttp())
+        // {
+        //     _charBuffer.Column(name, value);
+        // }
+        // else
+        // {
             _byteBuffer.Column(name, value);
-        }
+        // }
         return this;
 
     }
     
     public LineSender Column(ReadOnlySpan<char> name, bool value)
     {
-        if (_options.IsHttp())
-        {
-            _charBuffer.Column(name, value);
-        }
-        else
-        {
+        // if (_options.IsHttp())
+        // {
+        //     _charBuffer.Column(name, value);
+        // }
+        // else
+        // {
             _byteBuffer.Column(name, value);
-        };
+        // };
         return this;
     }
     
     public LineSender Column(ReadOnlySpan<char> name, double value)
     {
-        if (_options.IsHttp())
-        {
-            _charBuffer.Column(name, value);
-        }
-        else
-        {
+        // if (_options.IsHttp())
+        // {
+        //     _charBuffer.Column(name, value);
+        // }
+        // else
+        // {
             _byteBuffer.Column(name, value);
-        }
+        // }
         return this;
     }
     
     public LineSender Column(ReadOnlySpan<char> name, DateTime value)
     {
-        if (_options.IsHttp())
-        {
-            _charBuffer.Column(name, value);
-        }
-        else
-        {
+        // if (_options.IsHttp())
+        // {
+        //     _charBuffer.Column(name, value);
+        // }
+        // else
+        // {
             _byteBuffer.Column(name, value);
-        }
+        // }
         return this;
     }
     
     public LineSender Column(ReadOnlySpan<char> name, DateTimeOffset value)
     {
-        if (_options.IsHttp())
-        {
-            _charBuffer.Column(name, value.UtcDateTime);
-        }
-        else
-        {
+        // if (_options.IsHttp())
+        // {
+        //     _charBuffer.Column(name, value.UtcDateTime);
+        // }
+        // else
+        // {
             _byteBuffer.Column(name, value.UtcDateTime);
-        }
+        // }
         return this;
     }
 
     public LineSender At(DateTime value)
     {
-        if (_options.IsHttp())
-        {
-            _charBuffer.At(value);
-        }
-        else
-        {
+        // if (_options.IsHttp())
+        // {
+        //     _charBuffer.At(value);
+        // }
+        // else
+        // {
             _byteBuffer.At(value);
-        }
+        // }
         HandleAutoFlush();
         return this;
     }
     
     public LineSender At(DateTimeOffset timestamp)
     {
-        if (_options.IsHttp())
-        {
-            _charBuffer.At(timestamp);
-        }
-        else
-        {
+        // if (_options.IsHttp())
+        // {
+        //     _charBuffer.At(timestamp);
+        // }
+        // else
+        // {
             _byteBuffer.At(timestamp);
-        }
+        // }
         HandleAutoFlush();
         return this;
     }
@@ -261,14 +263,14 @@ public class LineSender : IDisposable
 
     public LineSender AtNow()
     {
-        if (_options.IsHttp())
-        {
-            _charBuffer.AtNow();
-        }
-        else
-        {
+        // if (_options.IsHttp())
+        // {
+        //     _charBuffer.AtNow();
+        // }
+        // else
+        // {
             _byteBuffer.AtNow();
-        }
+        // }
         HandleAutoFlush();
         return this; 
     }
@@ -316,7 +318,8 @@ public class LineSender : IDisposable
         if (_options.IsHttp())
         {
             var request = new HttpRequestMessage(HttpMethod.Post, IlpEndpoint);
-            request.Content = new StringContent(_charBuffer.ToString());
+            //request.Content = new StringContent(_charBuffer.ToString());
+            request.Content = _byteBuffer;
             var response = await _client.SendAsync(request);
             _charBuffer.Clear();
             return (request, response);
@@ -436,8 +439,20 @@ public class LineSender : IDisposable
 
     public void Dispose()
     {
-        _underlyingSocket.Dispose();
-        _dataStream.Dispose();
+        if (_underlyingSocket != null)
+        {
+            _underlyingSocket.Dispose();
+        }
+
+        if (_dataStream != null)
+        {
+            _dataStream.Dispose();
+        }
+    }
+
+    public async Task DisposeAsync()
+    {
+        Dispose();
     }
 
     /// <summary>

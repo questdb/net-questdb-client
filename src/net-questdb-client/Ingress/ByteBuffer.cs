@@ -1,11 +1,12 @@
 using System.Collections;
 using System.Globalization;
+using System.Net;
 using System.Runtime.CompilerServices;
 using System.Text;
 
 namespace QuestDB.Ingress;
 
-public class ByteBuffer : IEnumerable<byte>
+public class ByteBuffer : System.Net.Http.HttpContent, IEnumerable<byte>
 {
     private static readonly long EpochTicks = new DateTime(1970, 1, 1).Ticks;
     public static int DefaultQuestDbFsFileNameLimit = 127;
@@ -421,5 +422,34 @@ public class ByteBuffer : IEnumerable<byte>
 
         CurrentBufferIndex = LineStartBufferIndex;
         Position = LineStartBufferPosition;
+    }
+
+    protected override async Task SerializeToStreamAsync(Stream stream, TransportContext? context)
+    {
+        for (var i = 0; i <= CurrentBufferIndex; i++)
+        {
+            var length = i == CurrentBufferIndex ? Position : Buffers[i].Length;
+
+            try
+            {
+                if (length > 0)
+                    await stream.WriteAsync(Buffers[i].Buffer, 0, length);
+            }
+            catch (IOException iox)
+            {
+                throw new IngressError(ErrorCode.SocketError, "Could not write data to server.", iox);
+            }
+        }
+    }
+
+    protected override bool TryComputeLength(out long length)
+    {
+        length = 0;
+        foreach (var _ in this)
+        {
+            length++;
+        }
+
+        return true;
     }
 }

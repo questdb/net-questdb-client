@@ -3,14 +3,15 @@ using FastEndpoints;
 
 namespace dummy_http_server;
 
-public record Request
-{
-    [FromBody] public string Content { get; init; }
+public record Request : IPlainTextRequest {
+    public string Content { get; set; }
 }
 
 public class IlpEndpoint : Endpoint<Request>
 {
-    public static StringBuilder ReceiveBuffer = new();
+    public static readonly StringBuilder ReceiveBuffer = new();
+    public static readonly List<string> LogMessages = new();
+    public static Exception LastError = new ();
 
     public override void Configure()
     {
@@ -20,8 +21,16 @@ public class IlpEndpoint : Endpoint<Request>
 
     public override async Task HandleAsync(Request req, CancellationToken ct)
     {
-        ReceiveBuffer.Append(req.Content);
-        Logger.LogInformation("Received: " + req.Content);
-        await SendNoContentAsync(ct);
+        try
+        {
+            ReceiveBuffer.Append(req.Content);
+            LogMessages.Add("Received: " + req);
+            await SendNoContentAsync(ct);
+        }
+        catch (Exception ex)
+        {
+            LastError = ex;
+        }
+        
     }
 }

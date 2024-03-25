@@ -43,7 +43,6 @@ public class CharBuffer
         _hasTable = true;
 
         StartOfLine = _buffer.Length;
-
         _buffer.Append(name);
         return this;
     }
@@ -57,8 +56,9 @@ public class CharBuffer
         Utilities.GuardInvalidColumnName(symbolName);
 
         Put(',');
-        _buffer.Append(symbolName);
-        _buffer.Append(value);
+        Put(symbolName);
+        Put('=');
+        Put(value);
         return this;
     }
 
@@ -90,7 +90,6 @@ public class CharBuffer
         Put('\"');
         _quoted = true;
         Put(value);
-        _buffer.Append(value);
         _quoted = false;
         Put('\"');
         return this;
@@ -102,8 +101,7 @@ public class CharBuffer
             // Special case, long.MinValue cannot be handled by QuestDB
             throw new ArgumentOutOfRangeException();
 
-        Column(name);
-        _buffer.Append(value);
+        Column(name).Put(value).Put('i');
         return this;
     }
 
@@ -116,6 +114,12 @@ public class CharBuffer
     private CharBuffer Put(char c)
     {
         _buffer.Append(c);
+        return this;
+    }
+
+    private CharBuffer Put(long l)
+    {
+        _buffer.Append(l);
         return this;
     }
 
@@ -158,16 +162,21 @@ public class CharBuffer
 
         return this;
     }
-
+    
     public CharBuffer At(DateTimeOffset timestamp)
     {
         return At(timestamp.UtcDateTime);
     }
-
-
+    
     public CharBuffer AtNow()
     {
-        return At(DateTime.UtcNow);
+        GuardTableNotSet();
+
+        if (_noFields && _noSymbols)
+            throw new IngressError(ErrorCode.InvalidApiCall, "Did not specify any symbols or columns.");
+
+        FinishLine();
+        return this;
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]

@@ -6,13 +6,13 @@ namespace net_questdb_client_tests;
 
 public class HttpTests
 {
-    public int Port = 29472;
+    public int Port = 29473;
 
     [Test]
     public async Task BasicSend()
     {
         using var server = new DummyHttpServer();
-        await server.Start();
+        await server.StartAsync(Port);
         var sender = new TestSender($"http::addr=localhost:{Port};");
         var ts = DateTime.UtcNow;
         sender.Table("name")
@@ -20,7 +20,7 @@ public class HttpTests
             .At(ts);
         var response = await sender.SendAsync();
         Console.WriteLine(server.GetReceiveBuffer().ToString());
-        await server.Stop();
+        await server.StopAsync();
     }
 
     [Test]
@@ -55,7 +55,7 @@ public class HttpTests
     public async Task SendLine()
     {
         using var server = new DummyHttpServer();
-        await server.Start();
+        await server.StartAsync(Port);
         var sender = new TestSender($"http::addr=localhost:{Port};");
         sender.Table("metrics")
             .Symbol("tag", "value")
@@ -66,7 +66,7 @@ public class HttpTests
         await sender.SendAsync();
         Assert.That(
             await sender.Request.Content.ReadAsStringAsync(),
-            Is.EqualTo("metrics,tagvalue number=10,string=\"abcabc\" 1000000000\n")
+            Is.EqualTo("metrics,tag=value number=10i,string=\"abc\" 1000000000\n")
         );
     }
 
@@ -74,7 +74,7 @@ public class HttpTests
     public async Task BasicAuthEncoding()
     {
         using var server = new DummyHttpServer();
-        await server.Start();
+        await server.StartAsync(Port);
         var sender = new TestSender($"http::addr=localhost:{Port};username=foo;password=bah;");
         sender.Table("metrics")
             .Symbol("tag", "value")
@@ -95,7 +95,7 @@ public class HttpTests
     public async Task TokenAuthEncoding()
     {
         using var server = new DummyHttpServer();
-        await server.Start();
+        await server.StartAsync(Port);
         var sender = new TestSender($"http::addr=localhost:{Port};token=abc;");
         sender.Table("metrics")
             .Symbol("tag", "value")
@@ -111,4 +111,6 @@ public class HttpTests
             Is.EqualTo("abc")
         );
     }
+    
+    
 }

@@ -1,8 +1,4 @@
+using dummy_http_server;
 using FastEndpoints;
 
-var bld = WebApplication.CreateBuilder();
-bld.Services.AddFastEndpoints();
-
-var app = bld.Build();
-app.UseFastEndpoints();
-app.Run("http://localhost:29472");
+await new DummyHttpServer().StartAsync();

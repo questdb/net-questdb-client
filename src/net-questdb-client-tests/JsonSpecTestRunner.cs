@@ -1,6 +1,7 @@
 using System.Net;
 using System.Text;
 using System.Text.Json;
+using dummy_http_server;
 using NUnit.Framework;
 using QuestDB.Ingress;
 
@@ -9,17 +10,18 @@ namespace net_questdb_client_tests;
 [TestFixture]
 public class JsonSpecTestRunner
 {
-    private const int Port = 29472;
+    private const int TcpPort = 29472;
+    private const int HttpPort = 29473;
     private static readonly TestCase[]? TestCases = ReadTestCases();
 
     [TestCaseSource(nameof(TestCases))]
-    public async Task Run(TestCase testCase)
+    public async Task RunTcp(TestCase testCase)
     {
-        using var srv = CreateTcpListener(Port);
+        using var srv = CreateTcpListener(TcpPort);
         srv.AcceptAsync();
 
         using var sender = new LineSender(
-            $"tcp::addr={IPAddress.Loopback}:{Port};");
+            $"tcp::addr={IPAddress.Loopback}:{TcpPort};");
 
         Exception? exception = null;
 
@@ -75,6 +77,84 @@ public class JsonSpecTestRunner
         {
             Assert.Fail("Unsupported test case result status: " + testCase.result.status);
         }
+    }
+    
+      [TestCaseSource(nameof(TestCases))]
+    public async Task RunHttp(TestCase testCase)
+    {
+        using var server = new DummyHttpServer();
+        await server.StartAsync(HttpPort);
+        
+        Assert.That(await server.Healthcheck());
+        
+        using var sender = new LineSender(
+            $"http::addr={IPAddress.Loopback}:{HttpPort};");
+
+        Exception? exception = null;
+
+        try
+        {
+            sender.Table(testCase.table);
+            foreach (var symbol in testCase.symbols) sender.Symbol(symbol.name, symbol.value);
+
+            foreach (var column in testCase.columns)
+                switch (column.type)
+                {
+                    case "STRING":
+                        sender.Column(column.name, ((JsonElement)column.value).GetString());
+                        break;
+
+                    case "DOUBLE":
+                        sender.Column(column.name, ((JsonElement)column.value).GetDouble());
+                        break;
+
+                    case "BOOLEAN":
+                        sender.Column(column.name, ((JsonElement)column.value).GetBoolean());
+                        break;
+
+                    case "LONG":
+                        sender.Column(column.name, (long)((JsonElement)column.value).GetDouble());
+                        break;
+
+                    default:
+                        throw new NotSupportedException("Column type not supported: " + column.type);
+                }
+
+            sender.AtNow();
+            var (request, response) = sender.Send();
+
+            if (!response.IsSuccessStatusCode)
+            {
+                TestContext.Write(server.GetLastError());
+                throw new IngressError(ErrorCode.ServerFlushError, response.ReasonPhrase);
+            }
+        }
+        catch (Exception? ex)
+        {
+            if (testCase.result.status == "SUCCESS") throw;
+            exception = ex;
+        }
+
+        sender.Dispose();
+
+        if (testCase.result.status == "SUCCESS")
+        {
+            Assert.That(
+                    server.GetReceiveBuffer().ToString(),
+                    Is.EqualTo(testCase.result.line + "\n")
+                );
+        }
+        else if (testCase.result.status == "ERROR")
+        {
+            Assert.NotNull(exception, "Exception should be thrown");
+            if (exception is NotSupportedException) throw exception;
+        }
+        else
+        {
+            Assert.Fail("Unsupported test case result status: " + testCase.result.status);
+        }
+
+        await server.StopAsync();
     }
 
     private static void WaitAssert(DummyIlpServer srv, string expected)

@@ -7,13 +7,18 @@ public class DummyHttpServer : IDisposable
 {
     public WebApplication app;
     public CancellationToken ct;
+    private int _port = 29743;
 
     public DummyHttpServer()
     {
         var bld = WebApplication.CreateBuilder();
         bld.Services.AddFastEndpoints();
-
+        bld.Services.AddHealthChecks();
+        
         app = bld.Build();
+
+        app.MapHealthChecks("/ping");
+        
         app.UseFastEndpoints();
     }
 
@@ -24,12 +29,13 @@ public class DummyHttpServer : IDisposable
         app.StopAsync().Wait();
     }
 
-    public async Task Start()
+    public async Task StartAsync(int port = 29743)
     {
-        appTask = app.RunAsync("http://localhost:29472");
+        _port = port;
+        appTask = app.RunAsync($"http://localhost:{port}");
     }
 
-    public async Task Stop()
+    public async Task StopAsync()
     {
         await app.StopAsync();
     }
@@ -38,5 +44,16 @@ public class DummyHttpServer : IDisposable
     public StringBuilder GetReceiveBuffer()
     {
         return IlpEndpoint.ReceiveBuffer;
+    }
+
+    public Exception GetLastError()
+    {
+        return IlpEndpoint.LastError;
+    }
+
+    public async Task<bool> Healthcheck()
+    {
+        var response = await new HttpClient().GetAsync($"http://localhost:{_port}/ping");
+        return response.IsSuccessStatusCode;
     }
 }

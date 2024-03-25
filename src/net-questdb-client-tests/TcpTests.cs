@@ -6,6 +6,7 @@ using Org.BouncyCastle.Crypto.Parameters;
 using Org.BouncyCastle.Math;
 using Org.BouncyCastle.Security;
 using QuestDB.Ingress;
+using ProtocolType = System.Net.Sockets.ProtocolType;
 
 namespace net_questdb_client_tests;
 
@@ -104,8 +105,7 @@ public class TcpTests
                 .Contains("Could not write data to server.")
         );
     }
-
-    //
+    
     [Test]
     public void EcdsaSignatureLoop()
     {
@@ -211,8 +211,7 @@ public class TcpTests
         var totalExpected = totalExpectedSb.ToString();
         WaitAssert(srv, totalExpected);
     }
-
-
+    
     [Test]
     public async Task SendLineTrimsBuffers()
     {
@@ -257,8 +256,7 @@ public class TcpTests
         var totalExpected = totalExpectedSb.ToString();
         WaitAssert(srv, totalExpected);
     }
-
-
+    
     [Test]
     public async Task ServerDisconnects()
     {
@@ -456,46 +454,45 @@ public class TcpTests
         Assert.Throws<IngressError>(() => sender.Table("."));
         Assert.Throws<IngressError>(() => sender.Table(".."));
         Assert.Throws<IngressError>(() => sender.Table(""));
-//        Assert.Throws<IngressError>(() => sender.Table("asdf\tsdf"));
+        Assert.Throws<IngressError>(() => sender.Table("asdf\tsdf"));
         Assert.Throws<IngressError>(() => sender.Table("asdf\rsdf"));
-        //    Assert.Throws<IngressError>(() => sender.Table("asdfsdf."));
+        Assert.Throws<IngressError>(() => sender.Table("asdfsdf."));
 
-        // sender.QuestDbFsFileNameLimit = 4;
-        // Assert.Throws<ArgumentException>(() => ls.Table("asffdfasdf"));
-        //
-        // sender.QuestDbFsFileNameLimit = LineTcpSender.DefaultQuestDbFsFileNameLimit;
-        // sender.Table("abcd.csv");
-        //
-        // Assert.Throws<ArgumentException>(() => ls.Column("abc\\slash", 13));
-        // Assert.Throws<ArgumentException>(() => ls.Column("abc/slash", 12));
-        // Assert.Throws<ArgumentException>(() => ls.Column(".", 12));
-        // Assert.Throws<ArgumentException>(() => ls.Column("..", 12));
-        // Assert.Throws<ArgumentException>(() => ls.Column("", 12));
-        // Assert.Throws<ArgumentException>(() => ls.Column("asdf\tsdf", 12));
-        // Assert.Throws<ArgumentException>(() => ls.Column("asdf\rsdf", 12));
-        // Assert.Throws<ArgumentException>(() => ls.Column("asdfsdf.", 12));
-        // Assert.Throws<ArgumentException>(() => ls.Column("a+b", 12));
-        // Assert.Throws<ArgumentException>(() => ls.Column("b-c", 12));
-        // Assert.Throws<ArgumentException>(() => ls.Column("b.c", 12));
-        // Assert.Throws<ArgumentException>(() => ls.Column("b%c", 12));
-        // Assert.Throws<ArgumentException>(() => ls.Column("b~c", 12));
-        // Assert.Throws<ArgumentException>(() => ls.Column("b?c", 12));
-        // Assert.Throws<ArgumentException>(() => ls.Symbol("b:c", "12"));
-        // Assert.Throws<ArgumentException>(() => ls.Symbol("b)c", "12"));
-        //
-        // ls.QuestDbFsFileNameLimit = 4;
-        // Assert.Throws<ArgumentException>(() => ls.Symbol("b    c", "12"));
-        // ls.QuestDbFsFileNameLimit = LineTcpSender.DefaultQuestDbFsFileNameLimit;
-        //
-        // ls.Symbol("b    c", "12");
-        // ls.At(new DateTime(1970, 1, 1));
-        // await ls.SendAsync();
-        //
-        // var expected = "abcd.csv,b\\ \\ \\ \\ c=12 000\n";
-        // WaitAssert(srv, expected);
+        sender.QuestDbFsFileNameLimit = 4;
+        Assert.Throws<IngressError>(() => sender.Table("asffdfasdf"));
+        
+        sender.QuestDbFsFileNameLimit = LineSender.DefaultQuestDbFsFileNameLimit;
+        sender.Table("abcd.csv");
+        
+        Assert.Throws<IngressError>(() => sender.Column("abc\\slash", 13));
+        Assert.Throws<IngressError>(() => sender.Column("abc/slash", 12));
+        Assert.Throws<IngressError>(() => sender.Column(".", 12));
+        Assert.Throws<IngressError>(() => sender.Column("..", 12));
+        Assert.Throws<IngressError>(() => sender.Column("", 12));
+        Assert.Throws<IngressError>(() => sender.Column("asdf\tsdf", 12));
+        Assert.Throws<IngressError>(() => sender.Column("asdf\rsdf", 12));
+        Assert.Throws<IngressError>(() => sender.Column("asdfsdf.", 12));
+        Assert.Throws<IngressError>(() => sender.Column("a+b", 12));
+        Assert.Throws<IngressError>(() => sender.Column("b-c", 12));
+        Assert.Throws<IngressError>(() => sender.Column("b.c", 12));
+        Assert.Throws<IngressError>(() => sender.Column("b%c", 12));
+        Assert.Throws<IngressError>(() => sender.Column("b~c", 12));
+        Assert.Throws<IngressError>(() => sender.Column("b?c", 12));
+        Assert.Throws<IngressError>(() => sender.Symbol("b:c", "12"));
+        Assert.Throws<IngressError>(() => sender.Symbol("b)c", "12"));
+        
+        sender.QuestDbFsFileNameLimit = 4;
+        Assert.Throws<IngressError>(() => sender.Symbol("b    c", "12"));
+        sender.QuestDbFsFileNameLimit = LineSender.DefaultQuestDbFsFileNameLimit;
+        
+        sender.Symbol("b    c", "12");
+        sender.At(new DateTime(1970, 1, 1));
+        await sender.SendAsync();
+        
+        var expected = "abcd.csv,b\\ \\ \\ \\ c=12 000\n";
+        WaitAssert(srv, expected);
     }
-
-    //
+    
     [Test]
     public async Task InvalidTableName()
     {
@@ -657,8 +654,7 @@ public class TcpTests
         var expected = "neg\\ name привед=\" мед\\\rве\\\n д\"\n";
         WaitAssert(srv, expected);
     }
-
-    //
+    
     [Test]
     public async Task SendTagAfterField()
     {
@@ -713,11 +709,20 @@ public class TcpTests
         );
     }
 
+    [Test]
+    public async Task ConnectAsyncFunction()
+    {
+        using var srv = CreateTcpListener(_port);
+        srv.AcceptAsync();
+        Assert.AreEqual((await LineSender.ConnectAsync("localhost", _port, protocol: QuestDB.Ingress.ProtocolType.tcp)).Options.ToString(), 
+            new LineSender($"tcp::addr=localhost:{_port};init_buf_size=4096;").Options.ToString());
+    }
+
     private static void WaitAssert(DummyIlpServer srv, string expected)
     {
         var expectedLen = Encoding.UTF8.GetBytes(expected).Length;
         for (var i = 0; i < 500 && srv.TotalReceived < expectedLen; i++) Thread.Sleep(10);
-        Assert.AreEqual(expected, srv.GetTextReceived());
+        Assert.That(srv.GetTextReceived(), Is.EqualTo(expected));
     }
 
     private DummyIlpServer CreateTcpListener(int port, bool tls = false)

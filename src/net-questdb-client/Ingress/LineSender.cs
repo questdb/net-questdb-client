@@ -4,13 +4,8 @@ using System.Net.Http.Headers;
 using System.Net.Security;
 using System.Net.Sockets;
 using System.Text;
-using System.Web;
 using Microsoft.Extensions.Configuration;
-using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Options;
-using Microsoft.Extensions.Primitives;
 using Org.BouncyCastle.Asn1.Sec;
-using Org.BouncyCastle.Crypto.Engines;
 using Org.BouncyCastle.Crypto.Parameters;
 using Org.BouncyCastle.Math;
 using Org.BouncyCastle.Security;
@@ -20,11 +15,12 @@ namespace QuestDB.Ingress;
 public class LineSender : IDisposable
 {
     // general
-    private QuestDBOptions _options;
+    public QuestDBOptions Options;
     private ByteBuffer _byteBuffer;
     private Stopwatch _intervalTimer;
     private static HttpClient? _client;
     private readonly string IlpEndpoint = "/write";
+    public static int DefaultQuestDbFsFileNameLimit = 127;
 
     
     public long RowCount { get; set; } = 0;
@@ -38,16 +34,16 @@ public class LineSender : IDisposable
 
     public LineSender(IConfiguration config) 
     {
-        _options = config.GetSection("QuestDBOptions").Get<QuestDBOptions>();
-        Hydrate(_options);
+        Options = config.GetSection("QuestDBOptions").Get<QuestDBOptions>();
+        Hydrate(Options);
     }
 
     public void Hydrate(QuestDBOptions options)
     { 
         // _buffer = new ChunkedBuffer(options.InitBufSize);
-        _options = options;
+        Options = options;
         _intervalTimer = new Stopwatch();
-        _byteBuffer = new ByteBuffer(_options.init_buf_size);
+        _byteBuffer = new ByteBuffer(Options.init_buf_size);
         
         if (options.IsHttp())
         {
@@ -74,18 +70,18 @@ public class LineSender : IDisposable
             SslStream? sslStream = null;
             try
             {
-                socket.ConnectAsync(_options.Host, _options.Port).Wait();
-                networkStream = new NetworkStream(socket, _options.OwnSocket);
+                socket.ConnectAsync(Options.Host, Options.Port).Wait();
+                networkStream = new NetworkStream(socket, Options.OwnSocket);
                 Stream dataStream = networkStream;
 
-                if (_options.protocol == ProtocolType.tcps)
+                if (Options.protocol == ProtocolType.tcps)
                 {
                     sslStream = new SslStream(networkStream, false);
                     var sslOptions = new SslClientAuthenticationOptions
                     {
-                        TargetHost = _options.Host,
+                        TargetHost = Options.Host,
                         RemoteCertificateValidationCallback =
-                            _options.tls_verify == TlsVerifyType.unsafe_off ? AllowAllCertCallback : null
+                            Options.tls_verify == TlsVerifyType.unsafe_off ? AllowAllCertCallback : null
                     };
                     sslStream.AuthenticateAsClient(sslOptions);
                     if (!sslStream.IsEncrypted)
@@ -99,7 +95,7 @@ public class LineSender : IDisposable
                 _underlyingSocket = socket;
                 _dataStream = dataStream;
 
-                if (_options.token is not null)
+                if (Options.token is not null)
                 {
                     AuthenticateAsync().AsTask().Wait();
                 }
@@ -124,136 +120,76 @@ public class LineSender : IDisposable
     {
 
     }
+
+    private void GuardFsFileNameLimit(ReadOnlySpan<char> name)
+    {
+        if (Encoding.UTF8.GetBytes(name.ToString()).Length > QuestDbFsFileNameLimit)
+        {
+            throw new IngressError(ErrorCode.InvalidApiCall,
+                $"Name is too long, must be under {QuestDbFsFileNameLimit} bytes.");
+        }
+    }
     
     public LineSender Table(ReadOnlySpan<char> name)
     {
-        // if (_options.IsHttp())
-        // {
-        //     _charBuffer.Table(name);
-        // }
-        // else
-        // {
-            _byteBuffer.Table(name);
-        // }
+        GuardFsFileNameLimit(name);
+        _byteBuffer.Table(name);
         return this;
     }
 
     public LineSender Symbol(ReadOnlySpan<char> symbolName, ReadOnlySpan<char> value)
     {
-        // if (_options.IsHttp())
-        // {
-        //     _charBuffer.Symbol(symbolName, value);
-        // }
-        // else
-        // {
-            _byteBuffer.Symbol(symbolName, value);
-        // }
+        GuardFsFileNameLimit(symbolName);
+        _byteBuffer.Symbol(symbolName, value);
         return this;
     }
 
     public LineSender Column(ReadOnlySpan<char> name, ReadOnlySpan<char> value)
     {
-        // if (_options.IsHttp())
-        // {
-        //     _charBuffer.Column(name, value);
-        // }
-        // else
-        // {
-            _byteBuffer.Column(name, value);
-        // }
+        _byteBuffer.Column(name, value);
         return this;
     }
 
     public LineSender Column(ReadOnlySpan<char> name, long value)
     {
-        // if (_options.IsHttp())
-        // {
-        //     _charBuffer.Column(name, value);
-        // }
-        // else
-        // {
-            _byteBuffer.Column(name, value);
-        // }
+        _byteBuffer.Column(name, value);
         return this;
-
     }
     
     public LineSender Column(ReadOnlySpan<char> name, bool value)
     {
-        // if (_options.IsHttp())
-        // {
-        //     _charBuffer.Column(name, value);
-        // }
-        // else
-        // {
-            _byteBuffer.Column(name, value);
-        // };
+        _byteBuffer.Column(name, value);
         return this;
     }
     
     public LineSender Column(ReadOnlySpan<char> name, double value)
     {
-        // if (_options.IsHttp())
-        // {
-        //     _charBuffer.Column(name, value);
-        // }
-        // else
-        // {
-            _byteBuffer.Column(name, value);
-        // }
+        _byteBuffer.Column(name, value);
         return this;
     }
     
     public LineSender Column(ReadOnlySpan<char> name, DateTime value)
     {
-        // if (_options.IsHttp())
-        // {
-        //     _charBuffer.Column(name, value);
-        // }
-        // else
-        // {
-            _byteBuffer.Column(name, value);
-        // }
+        _byteBuffer.Column(name, value);
         return this;
     }
     
     public LineSender Column(ReadOnlySpan<char> name, DateTimeOffset value)
     {
-        // if (_options.IsHttp())
-        // {
-        //     _charBuffer.Column(name, value.UtcDateTime);
-        // }
-        // else
-        // {
-            _byteBuffer.Column(name, value.UtcDateTime);
-        // }
+        _byteBuffer.Column(name, value.UtcDateTime);
         return this;
     }
 
     public LineSender At(DateTime value)
     {
-        // if (_options.IsHttp())
-        // {
-        //     _charBuffer.At(value);
-        // }
-        // else
-        // {
-            _byteBuffer.At(value);
-        // }
+        _byteBuffer.At(value);
         HandleAutoFlush();
         return this;
     }
     
     public LineSender At(DateTimeOffset timestamp)
     {
-        // if (_options.IsHttp())
-        // {
-        //     _charBuffer.At(timestamp);
-        // }
-        // else
-        // {
-            _byteBuffer.At(timestamp);
-        // }
+        _byteBuffer.At(timestamp);
         HandleAutoFlush();
         return this;
     }
@@ -261,7 +197,7 @@ public class LineSender : IDisposable
 
     public LineSender AtNow()
     {
-        // if (_options.IsHttp())
+        // if (Options.IsHttp())
         // {
         //     _charBuffer.AtNow();
         // }
@@ -275,15 +211,15 @@ public class LineSender : IDisposable
     
     private void HandleAutoFlush()
     {
-        if (_options.auto_flush == AutoFlushType.on)
+        if (Options.auto_flush == AutoFlushType.on)
         {
-            if (RowCount >= _options.auto_flush_rows)
+            if (RowCount >= Options.auto_flush_rows)
         {
                 Flush();
                 return;
             }
             
-            if (_intervalTimer.Elapsed >= _options.auto_flush_interval)
+            if (_intervalTimer.Elapsed >= Options.auto_flush_interval)
             {
                 Flush();
                 return;
@@ -291,7 +227,7 @@ public class LineSender : IDisposable
 
             var bytes = _byteBuffer.Length;
 
-            if (_options.auto_flush_bytes <= bytes)
+            if (Options.auto_flush_bytes <= bytes)
             {
                 Flush();
             }
@@ -305,13 +241,11 @@ public class LineSender : IDisposable
 
     public async Task<(HttpRequestMessage?, HttpResponseMessage?)> SendAsync(CancellationToken cancellationToken = default)
     {
-        if (_options.IsHttp())
+        if (Options.IsHttp())
         {
             var request = new HttpRequestMessage(HttpMethod.Post, IlpEndpoint);
-            //request.Content = new StringContent(_charBuffer.ToString());
             request.Content = _byteBuffer;
-            request.Content.Headers.ContentType = MediaTypeHeaderValue.Parse("text/plain");
-            request.Content.Headers.ContentEncoding.Add("zstd");
+            request.Content.Headers.ContentType = new MediaTypeHeaderValue("text/plain") { CharSet = "utf-8"};
             
             var response = await _client.SendAsync(request);
             if (!response!.IsSuccessStatusCode)
@@ -323,7 +257,7 @@ public class LineSender : IDisposable
             return (request, response);
         }
 
-        if (_options.IsTcp())
+        if (Options.IsTcp())
         {
             for (var i = 0; i <= _byteBuffer.CurrentBufferIndex; i++)
             {
@@ -372,20 +306,20 @@ public class LineSender : IDisposable
         }
 
         _authenticated = true;
-        _byteBuffer.EncodeUtf8(_options.username);
+        _byteBuffer.EncodeUtf8(Options.username);
         _byteBuffer.SendBuffer[_byteBuffer.Position++] = (byte)'\n';
         await SendAsync(cancellationToken);
         
         var bufferLen = await ReceiveUntil('\n', cancellationToken);
 
-        if (_options.token == null)
+        if (Options.token == null)
         {
             throw new IngressError(ErrorCode.AuthError, "Must provide a token for TCP auth.");
         }
 
 
         var (key_id, privateKey, pub_key_x, pub_key_y) =
-            (_options.username, FromBase64String(_options.token!), _options.token_x, _options.token_y);
+            (Options.username, FromBase64String(Options.token!), Options.token_x, Options.token_y);
 
         var p = SecNamedCurves.GetByName("secp256r1");
         var parameters = new ECDomainParameters(p.Curve, p.G, p.N, p.H);
@@ -483,7 +417,7 @@ public class LineSender : IDisposable
         confString.Append(protocol.ToString());
         confString.Append("::");
         confString.Append($"addr={host}:{port};");
-        confString.Append($"init_buf_size={bufferSize}");
+        confString.Append($"init_buf_size={bufferSize};");
 
         if (bufferOverflowHandling == BufferOverflowHandling.SendImmediately)
         {
@@ -491,5 +425,11 @@ public class LineSender : IDisposable
         }
         
         return new LineSender(confString.ToString());
+    }
+    
+    public int QuestDbFsFileNameLimit
+    {
+        get { return _byteBuffer.QuestDbFsFileNameLimit; }
+        set { _byteBuffer.QuestDbFsFileNameLimit = value;  }
     }
 }

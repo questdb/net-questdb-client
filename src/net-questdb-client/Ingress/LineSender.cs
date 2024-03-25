@@ -46,12 +46,11 @@ public class LineSender : IDisposable
     { 
         // _buffer = new ChunkedBuffer(options.InitBufSize);
         _options = options;
-
         _intervalTimer = new Stopwatch();
-        _charBuffer = new CharBuffer();
         
         if (options.IsHttp())
         {
+            _charBuffer = new CharBuffer();
             _client = new HttpClient();
             var uri = new UriBuilder(options.protocol.ToString(), options.Host, options.Port);
             _client.BaseAddress = uri.Uri;

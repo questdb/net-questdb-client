@@ -27,6 +27,9 @@
             <Link>ilp-client-interop-test.json</Link>
             <CopyToOutputDirectory>Always</CopyToOutputDirectory>
         </None>
+        <None Update="certificate.pfx">
+          <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+        </None>
     </ItemGroup>
 
 </Project>

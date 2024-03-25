@@ -16,4 +16,20 @@
       <ProjectReference Include="..\net-questdb-client\net-questdb-client.csproj" />
     </ItemGroup>
 
+    <ItemGroup>
+      <Compile Include="obj\Debug\net6.0\.NETCoreApp,Version=v6.0.AssemblyAttributes.cs" />
+    </ItemGroup>
+
+    <ItemGroup>
+      <Content Include="obj\Debug\net6.0\net-questdb-client-benchmarks.AssemblyInfoInputs.cache" />
+      <Content Include="obj\Debug\net6.0\net-questdb-client-benchmarks.assets.cache" />
+      <Content Include="obj\Debug\net6.0\net-questdb-client-benchmarks.csproj.AssemblyReference.cache" />
+      <Content Include="obj\net-questdb-client-benchmarks.csproj.nuget.dgspec.json" />
+      <Content Include="obj\project.assets.json" />
+      <Content Include="obj\project.nuget.cache" />
+      <Content Include="obj\project.packagespec.json" />
+      <Content Include="obj\rider.project.model.nuget.info" />
+      <Content Include="obj\rider.project.restore.info" />
+    </ItemGroup>
+
 </Project>

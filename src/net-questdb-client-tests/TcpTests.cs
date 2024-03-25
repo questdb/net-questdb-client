@@ -365,7 +365,7 @@ public class TcpTests
     [Test]
     public async Task WithTls()
     {
-        using var srv = CreateTcpListener(_port);
+        using var srv = CreateTcpListener(_port, true);
         srv.WithAuth("testUser1", "Vs4e-cOLsVCntsMrZiAGAZtrkPXO00uoRLuA3d7gEcI=",
             "ANhR2AZSs4ar9urE5AZrJqu469X0r7gZ1BBEdcrAuL_6");
         srv.AcceptAsync();
@@ -603,7 +603,7 @@ public class TcpTests
     {
         Assert.That(
             () => new LineSender($"tcp::addr={_host}:{_port};"),
-            Throws.TypeOf<AggregateException>().With.Message.Contains("No connection could be made")
+            Throws.TypeOf<AggregateException>().With.Message.Contains("Connection refused")
         );
     }
 

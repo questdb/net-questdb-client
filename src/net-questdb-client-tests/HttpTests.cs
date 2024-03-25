@@ -493,6 +493,8 @@ public class HttpTests
 
         var nowMillisecond = DateTime.Now.Millisecond;
         var metric = "metric_name" + nowMillisecond;
+        
+        Assert.True(await srv.Healthcheck());
 
         for (var i = 0; i < 1E6; i++)
         {
@@ -505,7 +507,7 @@ public class HttpTests
             
             if (i % 100 == 0) 
             {
-                Assert.True(await srv.Healthcheck());
+               
                 await sender.SendAsync();
             }
 
@@ -523,10 +525,12 @@ public class HttpTests
         
         var nowMillisecond = DateTime.Now.Millisecond;
         var metric = "metric_name" + nowMillisecond;
+        
+        Assert.True(await srv.Healthcheck());
 
         using var sender =
             new LineSender(
-                $"http::addr={Host}:{Port};init_buf_size={64 * 1024};auto_flush=on;auto_flush_bytes={64 * 1024};request_timeout=30000;");
+                $"http::addr={Host}:{9000};init_buf_size={64 * 1024};auto_flush=on;auto_flush_bytes={64 * 1024};request_timeout=30000;");
 
         for (var i = 0; i < 1E6; i++)
             sender.Table(metric)
@@ -543,7 +547,10 @@ public class HttpTests
     public async Task CannotConnect()
     {
         Assert.That(
-            async () => await new LineSender($"http::addr={Host}:{Port};").Table("foo").Symbol("a", "b").AtNow().SendAsync(),
+            async () => await 
+                new LineSender($"http::addr={Host}:{Port};").Table("foo").Symbol("a", "b").
+                    AtNow()
+                    .SendAsync(),
             Throws.TypeOf<IngressError>().With.Message.Contains("Connection refused")
         );
     }

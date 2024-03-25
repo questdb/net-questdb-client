@@ -20,7 +20,7 @@ public class LineSender : IDisposable
     private ByteBuffer _byteBuffer;
     private Stopwatch _intervalTimer;
     private static HttpClient? _client;
-    private const string IlpEndpoint = "/write";
+    private const string IlpEndpoint = "write";
     public static int DefaultQuestDbFsFileNameLimit = 127;
 
     
@@ -184,14 +184,14 @@ public class LineSender : IDisposable
     public LineSender At(DateTime value)
     {
         _byteBuffer.At(value);
-        HandleAutoFlush().Wait();
+        HandleAutoFlush().ConfigureAwait(false).GetAwaiter().GetResult();
         return this;
     }
     
     public LineSender At(DateTimeOffset timestamp)
     {
         _byteBuffer.At(timestamp);
-        HandleAutoFlush().Wait();
+        HandleAutoFlush().ConfigureAwait(false).GetAwaiter().GetResult();
         return this;
     }
 
@@ -199,7 +199,7 @@ public class LineSender : IDisposable
     public LineSender AtNow()
     {
         _byteBuffer.AtNow();
-        HandleAutoFlush().Wait();
+        HandleAutoFlush().ConfigureAwait(false).GetAwaiter().GetResult();
         return this; 
     }
     
@@ -225,13 +225,12 @@ public class LineSender : IDisposable
     {
         if (Options.IsHttp())
         {
-            var (request, ct) = GenerateRequest();
+            var (request, cts) = GenerateRequest();
             try
             {
+                var response = await _client.SendAsync(request, cts.Token);
                 return await FinishOrRetryAsync(
-                    await _client.SendAsync(
-                        request, ct.Token),
-                    ct
+                    response, cts
                 );
             }
             catch (Exception ex)
@@ -273,7 +272,7 @@ public class LineSender : IDisposable
     {
         if (response.IsSuccessStatusCode)
         {
-            cts.Cancel();
+            cts.Dispose();
             _byteBuffer.Clear();
             return (response.RequestMessage, response);
         }
@@ -282,7 +281,6 @@ public class LineSender : IDisposable
         {
             throw new IngressError(ErrorCode.ServerFlushError, response.ReasonPhrase);
         }
-        
         
         var timer = new Stopwatch();
         timer.Start();
@@ -302,7 +300,7 @@ public class LineSender : IDisposable
             {
                 if (IsRetriableError(lastResponse.StatusCode) && Options.retry_timeout > TimeSpan.Zero)
                 {
-                    cts.Cancel();
+                    cts.Dispose();
                     continue;
                 }
                 

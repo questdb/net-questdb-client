@@ -18,6 +18,7 @@ public class DummyHttpServer : IDisposable
         app = bld.Build();
 
         app.MapHealthChecks("/ping");
+        app.UseDefaultExceptionHandler();
         
         app.UseFastEndpoints();
     }
@@ -47,8 +48,7 @@ public class DummyHttpServer : IDisposable
     {
         await app.StopAsync();
     }
-
-
+    
     public StringBuilder GetReceiveBuffer()
     {
         return IlpEndpoint.ReceiveBuffer;

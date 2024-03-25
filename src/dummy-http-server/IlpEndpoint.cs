@@ -32,6 +32,7 @@ public class IlpEndpoint : Endpoint<Request>
         catch (Exception ex)
         {
             LastError = ex;
+            throw;
         }
         
     }

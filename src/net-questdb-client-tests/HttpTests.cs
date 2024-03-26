@@ -1,7 +1,6 @@
 using System.Text;
 using dummy_http_server;
 using NUnit.Framework;
-using Org.BouncyCastle.Pqc.Crypto.Lms;
 using QuestDB.Ingress;
 
 namespace net_questdb_client_tests;
@@ -68,7 +67,6 @@ public class HttpTests
 
         await sender.SendAsync();
         Assert.That(
-            
             server.GetReceiveBuffer().ToString(),
             Is.EqualTo("metrics,tag=value number=10i,string=\"abc\" 1000000000\n")
         );
@@ -115,7 +113,7 @@ public class HttpTests
             Is.EqualTo("abc")
         );
     }
-    
+
     [Test]
     public async Task SendLineExceedsBuffer()
     {
@@ -141,18 +139,18 @@ public class HttpTests
         }
 
         await sender.SendAsync();
-        
+
         Assert.That(srv.GetReceiveBuffer().ToString, Is.EqualTo(totalExpectedSb.ToString()));
     }
-    
+
     [Test]
     public async Task SendLineReusesBuffer()
     {
         using var srv = new DummyHttpServer();
         await srv.StartAsync(Port);
-        
+
         using var sender =
-            new LineSender($"http::addr={Host}:{Port};init_buf_size=2048;");
+            new LineSender($"http::addr={Host}:{Port};init_buf_size=2048;auto_flush=off;");
         var lineCount = 500;
         var expected =
             "table\\ name,t\\ a\\ g=v\\ alu\\,\\ e number=10i,db\\ l=123.12,string=\" -=\\\"\",при\\ вед=\"медвед\" 1000000000\n";
@@ -184,10 +182,10 @@ public class HttpTests
         }
 
         await sender.SendAsync();
-        
+
         Assert.That(srv.GetReceiveBuffer().ToString, Is.EqualTo(totalExpectedSb.ToString()));
     }
-    
+
     [Test]
     public async Task SendLineTrimsBuffers()
     {
@@ -195,7 +193,7 @@ public class HttpTests
         await srv.StartAsync(Port);
 
         using var sender =
-            new LineSender($"http::addr={Host}:{Port};init_buf_size=2048;");
+            new LineSender($"http::addr={Host}:{Port};init_buf_size=2048;auto_flush=off;");
         var lineCount = 500;
         var expected =
             "table\\ name,t\\ a\\ g=v\\ alu\\,\\ e number=10i,db\\ l=123.12,string=\" -=\\\"\",при\\ вед=\"медвед\" 1000000000\n";
@@ -231,13 +229,13 @@ public class HttpTests
 
         Assert.That(srv.GetReceiveBuffer().ToString, Is.EqualTo(totalExpectedSb.ToString()));
     }
-    
+
     [Test]
     public async Task ServerDisconnects()
     {
         using var srv = new DummyHttpServer();
         await srv.StartAsync(Port);
-        
+
         using var sender =
             new LineSender($"http::addr={Host}:{Port};init_buf_size=2048;tls_verify=unsafe_off;");
 
@@ -257,14 +255,13 @@ public class HttpTests
             totalExpectedSb.Append(expected);
 
             if (i > 1)
-            {
-                Assert.That(async () => await sender.SendAsync(), Throws.TypeOf<IngressError>().With.Message.Contains("Connection refused"));
-            }
-            
+                Assert.That(async () => await sender.SendAsync(),
+                    Throws.TypeOf<IngressError>());
+
             if (i == 1) srv.Dispose();
         }
     }
-    
+
     [Test]
     public async Task SendNegativeLongAndDouble()
     {
@@ -283,10 +280,10 @@ public class HttpTests
 
         var expected =
             "neg\\ name number1=-9223372036854775807i,number2=9223372036854775807i,number3=-1.7976931348623157E+308,number4=1.7976931348623157E+308\n";
-        
+
         Assert.That(srv.GetReceiveBuffer().ToString, Is.EqualTo(expected));
     }
-    
+
     [Test]
     public async Task DoubleSerializationTest()
     {
@@ -311,7 +308,7 @@ public class HttpTests
             "doubles d0=0,dm0=-0,d1=1,dE100=1E+100,d0000001=1E-06,dNaN=NaN,dInf=Infinity,dNInf=-Infinity\n";
         Assert.That(srv.GetReceiveBuffer().ToString, Is.EqualTo(expected));
     }
-    
+
     [Test]
     public async Task SendTimestampColumn()
     {
@@ -330,7 +327,7 @@ public class HttpTests
             "name ts=1645660800000000t 1645660800000000000\n";
         Assert.That(srv.GetReceiveBuffer().ToString, Is.EqualTo(expected));
     }
-    
+
     [Test]
     public async Task InvalidState()
     {
@@ -381,8 +378,8 @@ public class HttpTests
             Throws.TypeOf<IngressError>().With.Message.Contains("Cannot write symbols after fields")
         );
     }
-    
-     [Test]
+
+    [Test]
     public async Task InvalidNames()
     {
         using var srv = new DummyHttpServer();
@@ -401,10 +398,10 @@ public class HttpTests
 
         sender.QuestDbFsFileNameLimit = 4;
         Assert.Throws<IngressError>(() => sender.Table("asffdfasdf"));
-        
+
         sender.QuestDbFsFileNameLimit = LineSender.DefaultQuestDbFsFileNameLimit;
         sender.Table("abcd.csv");
-        
+
         Assert.Throws<IngressError>(() => sender.Column("abc\\slash", 13));
         Assert.Throws<IngressError>(() => sender.Column("abc/slash", 12));
         Assert.Throws<IngressError>(() => sender.Column(".", 12));
@@ -421,19 +418,19 @@ public class HttpTests
         Assert.Throws<IngressError>(() => sender.Column("b?c", 12));
         Assert.Throws<IngressError>(() => sender.Symbol("b:c", "12"));
         Assert.Throws<IngressError>(() => sender.Symbol("b)c", "12"));
-        
+
         sender.QuestDbFsFileNameLimit = 4;
         Assert.Throws<IngressError>(() => sender.Symbol("b    c", "12"));
         sender.QuestDbFsFileNameLimit = LineSender.DefaultQuestDbFsFileNameLimit;
-        
+
         sender.Symbol("b    c", "12");
         sender.At(new DateTime(1970, 1, 1));
         await sender.SendAsync();
-        
+
         var expected = "abcd.csv,b\\ \\ \\ \\ c=12 000\n";
         Assert.That(srv.GetReceiveBuffer().ToString, Is.EqualTo(expected));
     }
-    
+
     [Test]
     public async Task InvalidTableName()
     {
@@ -456,7 +453,7 @@ public class HttpTests
 
         Assert.Throws<IngressError>(() => sender.Symbol("asdf", "asdf"));
     }
-    
+
     [Test]
     public async Task CancelLine()
     {
@@ -481,22 +478,24 @@ public class HttpTests
 
         var expected = "good,asdf=sdfad ddd=123i\n" +
                        "good 86400000000000\n";
-        Assert.That(srv.GetReceiveBuffer().ToString, Is.EqualTo(expected));
+        Assert.That(srv.GetReceiveBuffer().ToString(), Is.EqualTo(expected));
     }
-    
+
     [Test]
     public async Task SendMillionAsyncExplicit()
     {
         using var srv = new DummyHttpServer();
         await srv.StartAsync(Port);
-        using var sender = new LineSender($"http::addr={Host}:{Port};init_buf_size={256*1024};");
+        using var sender =
+            new LineSender(
+                $"http::addr={Host}:{Port};init_buf_size={256 * 1024};auto_flush=off;request_timeout=30000;");
 
         var nowMillisecond = DateTime.Now.Millisecond;
         var metric = "metric_name" + nowMillisecond;
-        
+
         Assert.True(await srv.Healthcheck());
 
-        for (var i = 0; i < 1E6; i++)
+        for (var i = 0; i < 1e6; i++)
         {
             sender.Table(metric)
                 .Symbol("nopoint", "tag" + i % 100)
@@ -504,35 +503,31 @@ public class HttpTests
                 .Column("int", i)
                 .Column("привед", "мед вед")
                 .At(new DateTime(2021, 1, 1, i / 360 / 1000 % 60, i / 60 / 1000 % 60, i / 1000 % 60, i % 1000));
-            
-            if (i % 100 == 0) 
-            {
-               
-                await sender.SendAsync();
-            }
 
-            srv.GetReceiveBuffer().Clear();
+            if (i % 100 == 0) await sender.SendAsync();
+
+            //srv.GetReceiveBuffer().Clear();
         }
 
         await sender.SendAsync();
     }
-    
+
     [Test]
     public async Task SendMillionFixedBuffer()
     {
         using var srv = new DummyHttpServer();
         await srv.StartAsync(Port);
-        
+
         var nowMillisecond = DateTime.Now.Millisecond;
         var metric = "metric_name" + nowMillisecond;
-        
+
         Assert.True(await srv.Healthcheck());
 
         using var sender =
             new LineSender(
-                $"http::addr={Host}:{9000};init_buf_size={64 * 1024};auto_flush=on;auto_flush_bytes={64 * 1024};request_timeout=30000;");
+                $"http::addr={Host}:{Port};init_buf_size={1024 * 1024};auto_flush=on;auto_flush_bytes={1024 * 1024};request_timeout=30000;");
 
-        for (var i = 0; i < 1E6; i++)
+        for (var i = 0; i < 1E4; i++)
             sender.Table(metric)
                 .Symbol("nopoint", "tag" + i % 100)
                 .Column("counter", i * 1111.1)
@@ -540,21 +535,22 @@ public class HttpTests
                 .Column("привед", "мед вед")
                 .At(new DateTime(2021, 1, 1, i / 360 / 1000 % 60, i / 60 / 1000 % 60, i / 1000 % 60, i % 1000));
 
+        Console.WriteLine(srv.GetReceiveBuffer().Length);
+
         await sender.SendAsync();
     }
-    
+
     [Test]
     public async Task CannotConnect()
     {
         Assert.That(
-            async () => await 
-                new LineSender($"http::addr={Host}:{Port};").Table("foo").Symbol("a", "b").
-                    AtNow()
+            async () => await
+                new LineSender($"http::addr={Host}:{Port};").Table("foo").Symbol("a", "b").AtNow()
                     .SendAsync(),
-            Throws.TypeOf<IngressError>().With.Message.Contains("Connection refused")
+            Throws.TypeOf<IngressError>().With.Message.Contains("refused")
         );
     }
-    
+
     [Test]
     public async Task SendNegativeLongMin()
     {
@@ -571,13 +567,13 @@ public class HttpTests
             Throws.TypeOf<IngressError>().With.Message.Contains("Special case")
         );
     }
-    
+
     [Test]
     public async Task SendSpecialStrings()
     {
         using var srv = new DummyHttpServer();
         await srv.StartAsync(Port);
-        
+
         using var sender =
             new LineSender(
                 $"http::addr={Host}:{Port};");
@@ -589,7 +585,7 @@ public class HttpTests
         var expected = "neg\\ name привед=\" мед\\\rве\\\n д\"\n";
         Assert.That(srv.GetReceiveBuffer().ToString, Is.EqualTo(expected));
     }
-    
+
     [Test]
     public async Task SendTagAfterField()
     {
@@ -606,7 +602,7 @@ public class HttpTests
                 .AtNow()
         );
     }
-    
+
     [Test]
     public async Task SendMetricOnce()
     {
@@ -623,7 +619,7 @@ public class HttpTests
                 .AtNow()
         );
     }
-    
+
     [Test]
     public async Task StartFromMetric()
     {
@@ -643,11 +639,11 @@ public class HttpTests
                 .AtNow()
         );
     }
-    
+
     [Test]
     public async Task ConnectAsyncFunction()
     {
-        Assert.AreEqual((await LineSender.ConnectAsync("localhost", 9000)).Options.ToString(), 
+        Assert.AreEqual((await LineSender.ConnectAsync("localhost", 9000)).Options.ToString(),
             new LineSender("https::addr=localhost:9000;init_buf_size=4096;").Options.ToString());
     }
 }

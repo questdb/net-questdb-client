@@ -1,10 +1,10 @@
 using System.Text;
 using FastEndpoints;
-using Microsoft.AspNetCore.Http.Metadata;
 
 namespace dummy_http_server;
 
-public record Request : IPlainTextRequest {
+public record Request : IPlainTextRequest
+{
     public string Content { get; set; }
 }
 
@@ -12,7 +12,7 @@ public class IlpEndpoint : Endpoint<Request>
 {
     public static readonly StringBuilder ReceiveBuffer = new();
     public static readonly List<string> LogMessages = new();
-    public static Exception LastError = new ();
+    public static Exception LastError = new();
 
     public override void Configure()
     {
@@ -34,6 +34,5 @@ public class IlpEndpoint : Endpoint<Request>
             LastError = ex;
             throw;
         }
-        
     }
 }

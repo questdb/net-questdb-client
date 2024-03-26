@@ -5,10 +5,34 @@
         <Nullable>enable</Nullable>
         <ImplicitUsings>enable</ImplicitUsings>
         <RootNamespace>dummy_http_server</RootNamespace>
+        <GenerateTargetFrameworkAttribute>false</GenerateTargetFrameworkAttribute>
     </PropertyGroup>
 
     <ItemGroup>
         <PackageReference Include="FastEndpoints" Version="5.23.0"/>
+    </ItemGroup>
+
+    <ItemGroup>
+        <Content Include="obj\Debug\net6.0\apphost.exe"/>
+        <Content Include="obj\Debug\net6.0\dummy-http-server.AssemblyInfoInputs.cache"/>
+        <Content Include="obj\Debug\net6.0\dummy-http-server.assets.cache"/>
+        <Content Include="obj\Debug\net6.0\dummy-http-server.csproj.CoreCompileInputs.cache"/>
+        <Content Include="obj\Debug\net6.0\dummy-http-server.csproj.FileListAbsolute.txt"/>
+        <Content Include="obj\Debug\net6.0\dummy-http-server.dll"/>
+        <Content Include="obj\Debug\net6.0\dummy-http-server.genruntimeconfig.cache"/>
+        <Content Include="obj\Debug\net6.0\dummy-http-server.MvcApplicationPartsAssemblyInfo.cache"/>
+        <Content Include="obj\Debug\net6.0\dummy-http-server.pdb"/>
+        <Content Include="obj\Debug\net6.0\dummy-http-server.sourcelink.json"/>
+        <Content Include="obj\Debug\net6.0\staticwebassets.build.json"/>
+        <Content Include="obj\dummy-http-server.csproj.nuget.dgspec.json"/>
+        <Content Include="obj\project.assets.json"/>
+        <Content Include="obj\project.nuget.cache"/>
+        <Content Include="obj\project.packagespec.json"/>
+        <Content Include="obj\rider.project.restore.info"/>
+    </ItemGroup>
+
+    <ItemGroup>
+        <Compile Include="obj\Debug\net6.0\.NETCoreApp,Version=v6.0.AssemblyAttributes.cs"/>
     </ItemGroup>
 
 </Project>

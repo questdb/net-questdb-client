@@ -5,21 +5,22 @@ namespace dummy_http_server;
 
 public class DummyHttpServer : IDisposable
 {
+    private int _port = 29743;
     public WebApplication app;
     public CancellationToken ct;
-    private int _port = 29743;
 
     public DummyHttpServer()
     {
         var bld = WebApplication.CreateBuilder();
         bld.Services.AddFastEndpoints();
         bld.Services.AddHealthChecks();
-        
+        bld.WebHost.ConfigureKestrel(o => { o.Limits.MaxRequestBodySize = 1073741824; });
+
         app = bld.Build();
 
         app.MapHealthChecks("/ping");
         app.UseDefaultExceptionHandler();
-        
+
         app.UseFastEndpoints();
     }
 
@@ -48,7 +49,7 @@ public class DummyHttpServer : IDisposable
     {
         await app.StopAsync();
     }
-    
+
     public StringBuilder GetReceiveBuffer()
     {
         return IlpEndpoint.ReceiveBuffer;

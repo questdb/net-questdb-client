@@ -15,57 +15,79 @@ namespace QuestDB.Ingress;
 
 public class LineSender : IDisposable
 {
-    // general
-    public QuestDBOptions Options;
-    private ByteBuffer _byteBuffer;
-    private Stopwatch _intervalTimer;
-    private static HttpClient? _client;
     private const string IlpEndpoint = "write";
     public static int DefaultQuestDbFsFileNameLimit = 127;
-
-    
-    public long RowCount { get; set; } = 0;
 
 
     // tcp
     private static readonly RemoteCertificateValidationCallback AllowAllCertCallback = (_, _, _, _) => true;
-    private Socket _underlyingSocket;
-    private Stream _dataStream;
     private bool _authenticated;
+    private ByteBuffer _byteBuffer;
+    private HttpClient? _client;
+    private Stream _dataStream;
+    private Stopwatch _intervalTimer;
 
-    public LineSender(IConfiguration config) 
+    private Socket _underlyingSocket;
+
+    // general
+    public QuestDBOptions Options;
+
+    public LineSender(IConfiguration config)
     {
         Options = config.GetSection("QuestDBOptions").Get<QuestDBOptions>();
         Hydrate(Options);
     }
 
+    public LineSender(QuestDBOptions options)
+    {
+        Hydrate(options);
+    }
+
+
+    public LineSender(string confString) : this(new QuestDBOptions(confString))
+    {
+    }
+
+
+    public int QuestDbFsFileNameLimit
+    {
+        get => _byteBuffer.QuestDbFsFileNameLimit;
+        set => _byteBuffer.QuestDbFsFileNameLimit = value;
+    }
+
+    public void Dispose()
+    {
+        if (_underlyingSocket != null) _underlyingSocket.Dispose();
+
+        if (_dataStream != null) _dataStream.Dispose();
+    }
+
+    private HttpClient GenerateClient()
+    {
+        var client = new HttpClient();
+        var uri = new UriBuilder(Options.protocol.ToString(), Options.Host, Options.Port);
+        client.BaseAddress = uri.Uri;
+        client.Timeout = TimeSpan.FromSeconds(300);
+
+        if (Options.username != null && Options.password != null)
+            client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Basic",
+                Convert.ToBase64String(Encoding.ASCII.GetBytes($"{Options.username}:{Options.password}")));
+        else if (Options.token != null)
+            client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", Options.token);
+        return client;
+    }
+
     public void Hydrate(QuestDBOptions options)
-    { 
+    {
         // _buffer = new ChunkedBuffer(options.InitBufSize);
         Options = options;
         _intervalTimer = new Stopwatch();
         _byteBuffer = new ByteBuffer(Options.init_buf_size);
-        
-        if (options.IsHttp())
-        {
-            _client = new HttpClient();
-            var uri = new UriBuilder(options.protocol.ToString(), options.Host, options.Port);
-            _client.BaseAddress = uri.Uri;
-            _client.Timeout = Timeout.InfiniteTimeSpan;
-            
-            if (options.username != null && options.password != null)
-            {
-                _client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Basic",
-                    Convert.ToBase64String(Encoding.ASCII.GetBytes($"{options.username}:{options.password}")));
-            } else if (options.token != null)
-            {
-                _client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", options.token);
-            }
-        }
-        
+
+        if (options.IsHttp()) _client = GenerateClient();
+
         if (options.IsTcp())
         {
-           
             var socket = new Socket(AddressFamily.InterNetwork, SocketType.Stream, System.Net.Sockets.ProtocolType.Tcp);
             NetworkStream? networkStream = null;
             SslStream? sslStream = null;
@@ -86,9 +108,7 @@ public class LineSender : IDisposable
                     };
                     sslStream.AuthenticateAsClient(sslOptions);
                     if (!sslStream.IsEncrypted)
-                    {
                         throw new IngressError(ErrorCode.TlsError, "Could not established encrypted connection.");
-                    }
 
                     dataStream = sslStream;
                 }
@@ -96,13 +116,10 @@ public class LineSender : IDisposable
                 _underlyingSocket = socket;
                 _dataStream = dataStream;
 
-                if (Options.token is not null)
-                {
-                    AuthenticateAsync().AsTask().Wait();
-                }
-
+                if (Options.token is not null) AuthenticateAsync().AsTask().Wait();
             }
-            catch {
+            catch
+            {
                 socket.Dispose();
                 networkStream?.Dispose();
                 sslStream?.Dispose();
@@ -110,27 +127,14 @@ public class LineSender : IDisposable
             }
         }
     }
-    
-    public LineSender(QuestDBOptions options)
-    {
-        Hydrate(options);
-    }
-    
-
-    public LineSender(string confString) : this(new QuestDBOptions(confString))
-    {
-
-    }
 
     private void GuardFsFileNameLimit(ReadOnlySpan<char> name)
     {
         if (Encoding.UTF8.GetBytes(name.ToString()).Length > QuestDbFsFileNameLimit)
-        {
             throw new IngressError(ErrorCode.InvalidApiCall,
                 $"Name is too long, must be under {QuestDbFsFileNameLimit} bytes.");
-        }
     }
-    
+
     public LineSender Table(ReadOnlySpan<char> name)
     {
         GuardFsFileNameLimit(name);
@@ -156,25 +160,25 @@ public class LineSender : IDisposable
         _byteBuffer.Column(name, value);
         return this;
     }
-    
+
     public LineSender Column(ReadOnlySpan<char> name, bool value)
     {
         _byteBuffer.Column(name, value);
         return this;
     }
-    
+
     public LineSender Column(ReadOnlySpan<char> name, double value)
     {
         _byteBuffer.Column(name, value);
         return this;
     }
-    
+
     public LineSender Column(ReadOnlySpan<char> name, DateTime value)
     {
         _byteBuffer.Column(name, value);
         return this;
     }
-    
+
     public LineSender Column(ReadOnlySpan<char> name, DateTimeOffset value)
     {
         _byteBuffer.Column(name, value.UtcDateTime);
@@ -184,14 +188,14 @@ public class LineSender : IDisposable
     public LineSender At(DateTime value)
     {
         _byteBuffer.At(value);
-        HandleAutoFlush().ConfigureAwait(false).GetAwaiter().GetResult();
+        HandleAutoFlush();
         return this;
     }
-    
+
     public LineSender At(DateTimeOffset timestamp)
     {
         _byteBuffer.At(timestamp);
-        HandleAutoFlush().ConfigureAwait(false).GetAwaiter().GetResult();
+        HandleAutoFlush();
         return this;
     }
 
@@ -199,36 +203,65 @@ public class LineSender : IDisposable
     public LineSender AtNow()
     {
         _byteBuffer.AtNow();
-        HandleAutoFlush().ConfigureAwait(false).GetAwaiter().GetResult();
-        return this; 
+        HandleAutoFlush();
+        return this;
     }
-    
-    private async Task HandleAutoFlush()
+
+    private void HandleAutoFlush()
     {
         if (Options.auto_flush == AutoFlushType.on)
-        {
-            if (RowCount >= Options.auto_flush_rows
-                || _intervalTimer.Elapsed >= Options.auto_flush_interval 
+            if (_byteBuffer.RowCount >= Options.auto_flush_rows
+                || _intervalTimer.Elapsed >= Options.auto_flush_interval
                 || Options.auto_flush_bytes <= _byteBuffer.Length)
-            {
-                await FlushAsync();
-            }
-        }
+                Send();
     }
 
     public async Task FlushAsync()
     {
-        var (_, response) = await SendAsync();
+        await SendAsync();
     }
 
-    public async Task<(HttpRequestMessage?, HttpResponseMessage?)> SendAsync(CancellationToken cancellationToken = default)
+    public (HttpRequestMessage?, HttpResponseMessage?) Send()
     {
         if (Options.IsHttp())
         {
             var (request, cts) = GenerateRequest();
+            var client = GenerateClient();
             try
             {
-                var response = await _client.SendAsync(request, cts.Token);
+                var response = client.Send(request, HttpCompletionOption.ResponseHeadersRead, cts.Token);
+                return FinishOrRetry(
+                    response
+                );
+            }
+            catch (Exception ex)
+            {
+                throw new IngressError(ErrorCode.ServerFlushError, ex.Message, ex);
+            }
+        }
+
+        if (Options.IsTcp())
+        {
+            _byteBuffer.WriteToStream(_dataStream);
+            _byteBuffer.Clear();
+            return (null, null);
+        }
+
+        throw new NotImplementedException();
+    }
+
+
+    public async Task<(HttpRequestMessage?, HttpResponseMessage?)> SendAsync()
+    {
+        if (_byteBuffer.Length == 0) return (null, null);
+
+        if (Options.IsHttp())
+        {
+            var (request, cts) = GenerateRequest();
+            var client = GenerateClient();
+            try
+            {
+                var response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cts.Token);
                 return await FinishOrRetryAsync(
                     response, cts
                 );
@@ -262,13 +295,52 @@ public class LineSender : IDisposable
             case (HttpStatusCode)524: // A Timeout Occurred
             case (HttpStatusCode)529: // Site is overloaded
             case (HttpStatusCode)599: // Network Timeout Error
-                    return true;
+                return true;
             default:
                 return false;
         }
     }
-    
-    public async Task<(HttpRequestMessage?, HttpResponseMessage?)> FinishOrRetryAsync(HttpResponseMessage response, CancellationTokenSource cts = default)
+
+    public (HttpRequestMessage?, HttpResponseMessage?) FinishOrRetry(HttpResponseMessage response)
+    {
+        if (response.IsSuccessStatusCode)
+        {
+            _byteBuffer.Clear();
+            return (response.RequestMessage, response);
+        }
+
+        if (!(IsRetriableError(response.StatusCode) && Options.retry_timeout > TimeSpan.Zero))
+            throw new IngressError(ErrorCode.ServerFlushError, response.ReasonPhrase);
+
+        var timer = new Stopwatch();
+        timer.Start();
+
+        var retryInterval = TimeSpan.FromMilliseconds(10);
+        var lastResponse = response;
+
+        while (timer.Elapsed < Options.retry_timeout)
+        {
+            var jitter = TimeSpan.FromMilliseconds(Random.Shared.Next(0, 10) - 5);
+            Thread.Sleep(retryInterval + jitter);
+
+            var (nextRequest, nextToken) = GenerateRequest();
+            lastResponse = _client.Send(nextRequest);
+            if (!lastResponse!.IsSuccessStatusCode)
+            {
+                if (IsRetriableError(lastResponse.StatusCode) && Options.retry_timeout > TimeSpan.Zero) continue;
+
+                throw new IngressError(ErrorCode.ServerFlushError, lastResponse.ReasonPhrase);
+            }
+
+            _byteBuffer.Clear();
+            return (lastResponse.RequestMessage, lastResponse);
+        }
+
+        throw new IngressError(ErrorCode.ServerFlushError, lastResponse.ReasonPhrase);
+    }
+
+    public async Task<(HttpRequestMessage?, HttpResponseMessage?)> FinishOrRetryAsync(HttpResponseMessage response,
+        CancellationTokenSource cts = default)
     {
         if (response.IsSuccessStatusCode)
         {
@@ -278,15 +350,13 @@ public class LineSender : IDisposable
         }
 
         if (!(IsRetriableError(response.StatusCode) && Options.retry_timeout > TimeSpan.Zero))
-        {
             throw new IngressError(ErrorCode.ServerFlushError, response.ReasonPhrase);
-        }
-        
+
         var timer = new Stopwatch();
         timer.Start();
 
         var retryInterval = TimeSpan.FromMilliseconds(10);
-        HttpResponseMessage lastResponse = response;
+        var lastResponse = response;
 
         while (timer.Elapsed < Options.retry_timeout)
         {
@@ -303,19 +373,19 @@ public class LineSender : IDisposable
                     cts.Dispose();
                     continue;
                 }
-                
+
                 throw new IngressError(ErrorCode.ServerFlushError, lastResponse.ReasonPhrase);
             }
 
             _byteBuffer.Clear();
             return (lastResponse.RequestMessage, lastResponse);
         }
-        
+
         throw new IngressError(ErrorCode.ServerFlushError, lastResponse.ReasonPhrase);
     }
-    
+
     /// <summary>
-    /// Performs Key based Authentication with QuestDB
+    ///     Performs Key based Authentication with QuestDB
     /// </summary>
     /// <param name="keyId">Key or User Id</param>
     /// <param name="encodedPrivateKey">Base64 Url safe encoded Secp256r1 private key or `d` token in JWT key</param>
@@ -323,22 +393,16 @@ public class LineSender : IDisposable
     /// <exception cref="InvalidOperationException">Throws InvalidOperationException if already authenticated</exception>
     private async ValueTask AuthenticateAsync(CancellationToken cancellationToken = default)
     {
-        if (_authenticated)
-        {
-            throw new IngressError(ErrorCode.AuthError, "Already authenticated.");
-        }
+        if (_authenticated) throw new IngressError(ErrorCode.AuthError, "Already authenticated.");
 
         _authenticated = true;
         _byteBuffer.EncodeUtf8(Options.username);
         _byteBuffer.SendBuffer[_byteBuffer.Position++] = (byte)'\n';
-        await SendAsync(cancellationToken);
-        
+        await SendAsync();
+
         var bufferLen = await ReceiveUntil('\n', cancellationToken);
 
-        if (Options.token == null)
-        {
-            throw new IngressError(ErrorCode.AuthError, "Must provide a token for TCP auth.");
-        }
+        if (Options.token == null) throw new IngressError(ErrorCode.AuthError, "Must provide a token for TCP auth.");
 
 
         var (key_id, privateKey, pub_key_x, pub_key_y) =
@@ -362,7 +426,7 @@ public class LineSender : IDisposable
         await _dataStream.WriteAsync(_byteBuffer.SendBuffer, 0, _byteBuffer.Position, cancellationToken);
         _byteBuffer.Position = 0;
     }
-    
+
     private async ValueTask<int> ReceiveUntil(char endChar, CancellationToken cancellationToken)
     {
         var totalReceived = 0;
@@ -381,6 +445,7 @@ public class LineSender : IDisposable
                 throw new IngressError(ErrorCode.SocketError, "Authentication failed, or server disconnected.");
             }
         }
+
         throw new IngressError(ErrorCode.SocketError, "Buffer is too small to receive the message.");
     }
 
@@ -392,41 +457,28 @@ public class LineSender : IDisposable
         return Convert.FromBase64String(urlUnsafe);
     }
 
-    public void Dispose()
-    {
-        if (_underlyingSocket != null)
-        {
-            _underlyingSocket.Dispose();
-        }
-
-        if (_dataStream != null)
-        {
-            _dataStream.Dispose();
-        }
-    }
-
     public async Task DisposeAsync()
     {
         Dispose();
     }
 
     /// <summary>
-    /// Trims buffer memory.
+    ///     Trims buffer memory.
     /// </summary>
     public void Truncate()
     {
         _byteBuffer.TrimExcessBuffers();
     }
-    
+
     /// <summary>
-    /// Cancel current unsent line. Works only in Extend buffer overflow mode.
+    ///     Cancel current unsent line. Works only in Extend buffer overflow mode.
     /// </summary>
     /// <exception cref="InvalidOperationException"></exception>
     public void CancelLine()
     {
         _byteBuffer.CancelLine();
     }
-    
+
     public static async ValueTask<LineSender> ConnectAsync(
         string host,
         int port,
@@ -443,28 +495,20 @@ public class LineSender : IDisposable
         confString.Append($"init_buf_size={bufferSize};");
 
         if (bufferOverflowHandling == BufferOverflowHandling.SendImmediately)
-        {
             confString.Append($"auto_flush_bytes={bufferSize};");
-        }
-        
+
         return new LineSender(confString.ToString());
-    }
-    
-    public int QuestDbFsFileNameLimit
-    {
-        get { return _byteBuffer.QuestDbFsFileNameLimit; }
-        set { _byteBuffer.QuestDbFsFileNameLimit = value;  }
     }
 
     public (HttpRequestMessage, CancellationTokenSource) GenerateRequest()
     {
         var request = new HttpRequestMessage(HttpMethod.Post, IlpEndpoint) { Content = _byteBuffer };
-        request.Content.Headers.ContentType = new MediaTypeHeaderValue("text/plain") { CharSet = "utf-8"};
+        request.Content.Headers.ContentType = new MediaTypeHeaderValue("text/plain") { CharSet = "utf-8" };
 
         var cts = new CancellationTokenSource();
         cts.CancelAfter(Options.request_timeout
-                        + TimeSpan.FromSeconds((double)_byteBuffer.Length / (double)Options.request_min_throughput));
-        
+                        + TimeSpan.FromSeconds(_byteBuffer.Length / (double)Options.request_min_throughput));
+
         return (request, cts);
     }
 }

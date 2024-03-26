@@ -3,7 +3,6 @@ using System.Globalization;
 using System.Net;
 using System.Runtime.CompilerServices;
 using System.Text;
-using Microsoft.VisualBasic;
 using Strings = Org.BouncyCastle.Utilities.Strings;
 
 namespace QuestDB.Ingress;
@@ -30,28 +29,14 @@ public class ByteBuffer : HttpContent, IEnumerable<byte>
         QuestDbFsFileNameLimit = DefaultQuestDbFsFileNameLimit;
     }
 
+    public int Length { get; set; }
+
     public int RowCount { get; set; }
 
     /// <summary>
     ///     Maximum allowed column / table name. Usually set to 127 but can be overwritten in QuestDB server to higher value
     /// </summary>
     public int QuestDbFsFileNameLimit { get; set; }
-
-
-    public int Length
-    {
-        get
-        {
-            var count = 0;
-            for (var i = 0; i <= CurrentBufferIndex; i++)
-            {
-                var length = i == CurrentBufferIndex ? Position : Buffers[i].Length;
-                count += length;
-            }
-
-            return count;
-        }
-    }
 
     public IEnumerator<byte> GetEnumerator()
     {
@@ -238,6 +223,7 @@ public class ByteBuffer : HttpContent, IEnumerable<byte>
         SendBuffer = Buffers[CurrentBufferIndex].Buffer;
         Position = 0;
         RowCount = 0;
+        Length = 0;
     }
 
     /// <summary>
@@ -314,6 +300,7 @@ public class ByteBuffer : HttpContent, IEnumerable<byte>
         if (Position + len >= SendBuffer.Length) NextBuffer();
         num.Slice(pos, len).CopyTo(SendBuffer.AsSpan(Position));
         Position += len;
+        Length += len;
 
         return this;
     }
@@ -339,6 +326,8 @@ public class ByteBuffer : HttpContent, IEnumerable<byte>
         var bytes = SendBuffer.AsSpan(Position);
         Span<char> chars = stackalloc char[1] { c };
         Position += Encoding.UTF8.GetBytes(chars, bytes);
+
+        Length += Encoding.UTF8.GetBytes(chars, bytes);
     }
 
     private void PutSpecial(char c)
@@ -380,6 +369,7 @@ public class ByteBuffer : HttpContent, IEnumerable<byte>
         if (Position + 2 > SendBuffer.Length) NextBuffer();
 
         SendBuffer[Position++] = (byte)c;
+        Length++;
         return this;
     }
 
@@ -423,6 +413,7 @@ public class ByteBuffer : HttpContent, IEnumerable<byte>
             throw new InvalidOperationException("Cannot cancel line in BufferOverflowHandling.SendImmediately mode");
 
         CurrentBufferIndex = LineStartBufferIndex;
+        Length -= Position - LineStartBufferPosition;
         Position = LineStartBufferPosition;
     }
 
@@ -443,11 +434,15 @@ public class ByteBuffer : HttpContent, IEnumerable<byte>
             }
         }
     }
-    
-    
+
     public async Task WriteToStreamAsync(Stream stream)
     {
         await SerializeToStreamAsync(stream, null);
+    }
+
+    public void WriteToStream(Stream stream)
+    {
+        SerializeToStream(stream, null, default);
     }
 
     protected override void SerializeToStream(Stream stream, TransportContext? context, CancellationToken ct)
@@ -467,10 +462,10 @@ public class ByteBuffer : HttpContent, IEnumerable<byte>
         await SerializeToStreamAsync(stream, null, default);
         return stream;
     }
-    
+
     public override string ToString()
     {
-        return Strings.FromUtf8ByteArray(this.ToArray());
+        return Strings.FromUtf8ByteArray(ToArray());
     }
 
     public byte[] ToArray()

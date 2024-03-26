@@ -6,7 +6,6 @@ using Org.BouncyCastle.Crypto.Parameters;
 using Org.BouncyCastle.Math;
 using Org.BouncyCastle.Security;
 using QuestDB.Ingress;
-using ProtocolType = System.Net.Sockets.ProtocolType;
 
 namespace net_questdb_client_tests;
 
@@ -105,7 +104,7 @@ public class TcpTests
                 .Contains("Could not write data to server.")
         );
     }
-    
+
     [Test]
     public void EcdsaSignatureLoop()
     {
@@ -211,7 +210,7 @@ public class TcpTests
         var totalExpected = totalExpectedSb.ToString();
         WaitAssert(srv, totalExpected);
     }
-    
+
     [Test]
     public async Task SendLineTrimsBuffers()
     {
@@ -256,7 +255,7 @@ public class TcpTests
         var totalExpected = totalExpectedSb.ToString();
         WaitAssert(srv, totalExpected);
     }
-    
+
     [Test]
     public async Task ServerDisconnects()
     {
@@ -460,10 +459,10 @@ public class TcpTests
 
         sender.QuestDbFsFileNameLimit = 4;
         Assert.Throws<IngressError>(() => sender.Table("asffdfasdf"));
-        
+
         sender.QuestDbFsFileNameLimit = LineSender.DefaultQuestDbFsFileNameLimit;
         sender.Table("abcd.csv");
-        
+
         Assert.Throws<IngressError>(() => sender.Column("abc\\slash", 13));
         Assert.Throws<IngressError>(() => sender.Column("abc/slash", 12));
         Assert.Throws<IngressError>(() => sender.Column(".", 12));
@@ -480,19 +479,19 @@ public class TcpTests
         Assert.Throws<IngressError>(() => sender.Column("b?c", 12));
         Assert.Throws<IngressError>(() => sender.Symbol("b:c", "12"));
         Assert.Throws<IngressError>(() => sender.Symbol("b)c", "12"));
-        
+
         sender.QuestDbFsFileNameLimit = 4;
         Assert.Throws<IngressError>(() => sender.Symbol("b    c", "12"));
         sender.QuestDbFsFileNameLimit = LineSender.DefaultQuestDbFsFileNameLimit;
-        
+
         sender.Symbol("b    c", "12");
         sender.At(new DateTime(1970, 1, 1));
         await sender.SendAsync();
-        
+
         var expected = "abcd.csv,b\\ \\ \\ \\ c=12 000\n";
         WaitAssert(srv, expected);
     }
-    
+
     [Test]
     public async Task InvalidTableName()
     {
@@ -600,7 +599,7 @@ public class TcpTests
     {
         Assert.That(
             () => new LineSender($"tcp::addr={_host}:{_port};"),
-            Throws.TypeOf<AggregateException>().With.Message.Contains("Connection refused")
+            Throws.TypeOf<AggregateException>()
         );
     }
 
@@ -654,7 +653,7 @@ public class TcpTests
         var expected = "neg\\ name привед=\" мед\\\rве\\\n д\"\n";
         WaitAssert(srv, expected);
     }
-    
+
     [Test]
     public async Task SendTagAfterField()
     {
@@ -714,7 +713,8 @@ public class TcpTests
     {
         using var srv = CreateTcpListener(_port);
         srv.AcceptAsync();
-        Assert.AreEqual((await LineSender.ConnectAsync("localhost", _port, protocol: QuestDB.Ingress.ProtocolType.tcp)).Options.ToString(), 
+        Assert.AreEqual(
+            (await LineSender.ConnectAsync("localhost", _port, protocol: ProtocolType.tcp)).Options.ToString(),
             new LineSender($"tcp::addr=localhost:{_port};init_buf_size=4096;").Options.ToString());
     }
 

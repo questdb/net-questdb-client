@@ -1,18 +1,18 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
-  <PropertyGroup>
-    <RootNamespace>QuestDBDemo</RootNamespace>
-    <Nullable>enable</Nullable>
-    <LangVersion>10</LangVersion>
-    <GeneratePackageOnBuild>false</GeneratePackageOnBuild>
-    <Title>QuestDB client - Basic Example</Title>
-    <Description>Basic example using the QuestDB ILP protocol client</Description>
-    <TargetFramework>net6.0</TargetFramework>
-    <OutputType>Exe</OutputType>
-  </PropertyGroup>
+    <PropertyGroup>
+        <RootNamespace>QuestDBDemo</RootNamespace>
+        <Nullable>enable</Nullable>
+        <LangVersion>10</LangVersion>
+        <GeneratePackageOnBuild>false</GeneratePackageOnBuild>
+        <Title>QuestDB client - Basic Example</Title>
+        <Description>Basic example using the QuestDB ILP protocol client</Description>
+        <TargetFramework>net6.0</TargetFramework>
+        <OutputType>Exe</OutputType>
+    </PropertyGroup>
 
-  <ItemGroup>
-    <ProjectReference Include="..\net-questdb-client\net-questdb-client.csproj" />
-  </ItemGroup>
+    <ItemGroup>
+        <ProjectReference Include="..\net-questdb-client\net-questdb-client.csproj"/>
+    </ItemGroup>
 
 </Project>

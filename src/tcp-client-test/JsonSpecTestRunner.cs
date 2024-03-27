@@ -40,26 +40,22 @@ public class JsonSpecTestRunner
 {
     private const int Port = 29472;
     private static readonly TestCase[]? TestCases = ReadTestCases();
-    
+
     [TestCaseSource(nameof(TestCases))]
     public async Task Run(TestCase testCase)
     {
         using var srv = CreateTcpListener(Port);
         srv.AcceptAsync();
-        
+
         using var ls = await LineTcpSender.ConnectAsync(IPAddress.Loopback.ToString(), Port, tlsMode: TlsMode.Disable);
         Exception? exception = null;
 
         try
-        {            
+        {
             ls.Table(testCase.table);
-            foreach (var symbol in testCase.symbols)
-            {
-                ls.Symbol(symbol.name, symbol.value);
-            }
-            
+            foreach (var symbol in testCase.symbols) ls.Symbol(symbol.name, symbol.value);
+
             foreach (var column in testCase.columns)
-            {
                 switch (column.type)
                 {
                     case "STRING":
@@ -73,27 +69,24 @@ public class JsonSpecTestRunner
                     case "BOOLEAN":
                         ls.Column(column.name, ((JsonElement)column.value).GetBoolean());
                         break;
-                    
+
                     case "LONG":
                         ls.Column(column.name, (long)((JsonElement)column.value).GetDouble());
                         break;
-                    
+
                     default:
                         throw new NotSupportedException("Column type not supported: " + column.type);
                 }
-            }
-            
+
             ls.AtNow();
             ls.Send();
         }
         catch (Exception? ex)
         {
-            if (testCase.result.status == "SUCCESS")
-            {
-                throw;
-            }
+            if (testCase.result.status == "SUCCESS") throw;
             exception = ex;
         }
+
         ls.Dispose();
 
         if (testCase.result.status == "SUCCESS")
@@ -103,17 +96,14 @@ public class JsonSpecTestRunner
         else if (testCase.result.status == "ERROR")
         {
             Assert.NotNull(exception, "Exception should be thrown");
-            if (exception is NotSupportedException)
-            {
-                throw exception;
-            }
+            if (exception is NotSupportedException) throw exception;
         }
         else
         {
             Assert.Fail("Unsupported test case result status: " + testCase.result.status);
         }
     }
-    
+
     private static void WaitAssert(DummyIlpServer srv, string expected)
     {
         var expectedLen = Encoding.UTF8.GetBytes(expected).Length;
@@ -125,7 +115,7 @@ public class JsonSpecTestRunner
     {
         return new DummyIlpServer(port, tls);
     }
-    
+
     private static TestCase[]? ReadTestCases()
     {
         using var jsonFile = File.OpenRead("ilp-client-interop-test.json");
@@ -151,7 +141,7 @@ public class JsonSpecTestRunner
         public string name { get; set; }
         public string value { get; set; }
     }
-    
+
     public class TestCaseColumn
     {
         public string type { get; set; }

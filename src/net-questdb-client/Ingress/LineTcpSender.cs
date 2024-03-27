@@ -40,21 +40,21 @@ public class LineTcpSender : IDisposable
 {
     private static readonly RemoteCertificateValidationCallback AllowAllCertCallback = (_, _, _, _) => true;
     private static readonly long EpochTicks = new DateTime(1970, 1, 1).Ticks;
+    public static int DefaultQuestDbFsFileNameLimit = 127;
     private readonly BufferOverflowHandling _bufferOverflowHandling;
     private readonly List<(byte[] Buffer, int Length)> _buffers = new();
-    public static int DefaultQuestDbFsFileNameLimit = 127;
     private readonly Stream _networkStream;
-    private Socket? _underlyingSocket;
     private bool _authenticated;
     private int _currentBufferIndex;
     private bool _hasTable;
+    private int _lineStartBufferIndex;
+    private int _lineStartBufferPosition;
     private bool _noFields = true;
     private bool _noSymbols = true;
     private int _position;
     private bool _quoted;
     private byte[] _sendBuffer;
-    private int _lineStartBufferPosition;
-    private int _lineStartBufferIndex;
+    private Socket? _underlyingSocket;
 
     private LineTcpSender(Stream networkStream, int bufferSize,
         BufferOverflowHandling bufferOverflowHandling)
@@ -66,7 +66,10 @@ public class LineTcpSender : IDisposable
         QuestDbFsFileNameLimit = DefaultQuestDbFsFileNameLimit;
     }
 
-    /// <summary>Gets or sets a value, in milliseconds, that determines how long the underlying stream will attempt to write before timing out.</summary>
+    /// <summary>
+    ///     Gets or sets a value, in milliseconds, that determines how long the underlying stream will attempt to write
+    ///     before timing out.
+    /// </summary>
     public int WriteTimeout
     {
         get => _networkStream.WriteTimeout;
@@ -74,25 +77,25 @@ public class LineTcpSender : IDisposable
     }
 
     /// <summary>
-    /// Shows if TCP socket is connected. Returns false if LineTcpSender is created from Stream
+    ///     Shows if TCP socket is connected. Returns false if LineTcpSender is created from Stream
     /// </summary>
     public bool IsConnected => _underlyingSocket?.Connected ?? false;
 
     /// <summary>
-    /// Closes the connection to QuestDB server and frees resources
+    ///     Maximum allowed column / table name. Usually set to 127 but can be overwritten in QuestDB server to higher value
+    /// </summary>
+    public int QuestDbFsFileNameLimit { get; set; }
+
+    /// <summary>
+    ///     Closes the connection to QuestDB server and frees resources
     /// </summary>
     public void Dispose()
     {
         _networkStream.Dispose();
     }
-    
-    /// <summary>
-    /// Maximum allowed column / table name. Usually set to 127 but can be overwritten in QuestDB server to higher value
-    /// </summary>
-    public int QuestDbFsFileNameLimit { get; set; }
 
     /// <summary>
-    /// Connects to QuestDB server
+    ///     Connects to QuestDB server
     /// </summary>
     /// <param name="host">QuestDB host name or IP address</param>
     /// <param name="port">QuestDB port name</param>
@@ -124,7 +127,7 @@ public class LineTcpSender : IDisposable
     }
 
     /// <summary>
-    /// Uses connected Socket instance to create LineTcpSender
+    ///     Uses connected Socket instance to create LineTcpSender
     /// </summary>
     /// <param name="host">QuestDB server host name. Need if tslMode is Enabled</param>
     /// <param name="socket">TCP Socket instance. Socket must be connected to QuestDB ILP host</param>
@@ -178,7 +181,7 @@ public class LineTcpSender : IDisposable
     }
 
     /// <summary>
-    /// Creates LineTcpSender from IO Stream. Usually to be used with Network or SSL stream
+    ///     Creates LineTcpSender from IO Stream. Usually to be used with Network or SSL stream
     /// </summary>
     /// <param name="networkStream">Instance of Stream to operate on</param>
     /// <param name="bufferOverflowHandling">Initial size of IO buffer. Defaults to 4096</param>
@@ -192,7 +195,7 @@ public class LineTcpSender : IDisposable
     }
 
     /// <summary>
-    /// Performs Key based Authentication with QuestDB
+    ///     Performs Key based Authentication with QuestDB
     /// </summary>
     /// <param name="keyId">Key or User Id</param>
     /// <param name="encodedPrivateKey">Base64 Url safe encoded Secp256r1 private key or `d` token in JWT key</param>
@@ -231,7 +234,7 @@ public class LineTcpSender : IDisposable
     }
 
     /// <summary>
-    /// Set table name for the Line. Table name can be different from line to line.
+    ///     Set table name for the Line. Table name can be different from line to line.
     /// </summary>
     /// <param name="name">Table name</param>
     /// <returns>Itself</returns>
@@ -252,13 +255,13 @@ public class LineTcpSender : IDisposable
 
         _lineStartBufferIndex = _currentBufferIndex;
         _lineStartBufferPosition = _position;
-        
+
         EncodeUtf8(name);
         return this;
     }
 
     /// <summary>
-    /// Set value for a Symbol column. Symbols must be written before other columns
+    ///     Set value for a Symbol column. Symbols must be written before other columns
     /// </summary>
     /// <param name="symbolName">Symbol column name</param>
     /// <param name="value">Symbol value</param>
@@ -274,7 +277,7 @@ public class LineTcpSender : IDisposable
                 if (IsEmpty(symbolName)) throw new ArgumentException(nameof(symbolName) + " cannot be empty");
                 throw new ArgumentException(nameof(symbolName) + " contains invalid characters");
             }
-            
+
             Put(',').EncodeUtf8(symbolName).Put('=').EncodeUtf8(value);
             _noSymbols = false;
             return this;
@@ -285,7 +288,7 @@ public class LineTcpSender : IDisposable
     }
 
     /// <summary>
-    /// Set value of String column.
+    ///     Set value of String column.
     /// </summary>
     /// <param name="name">Column name</param>
     /// <param name="value">Column value</param>
@@ -301,7 +304,7 @@ public class LineTcpSender : IDisposable
     }
 
     /// <summary>
-    /// Set value of LONG column
+    ///     Set value of LONG column
     /// </summary>
     /// <param name="name">Column name</param>
     /// <param name="value">Column value</param>
@@ -313,7 +316,7 @@ public class LineTcpSender : IDisposable
     }
 
     /// <summary>
-    /// Set value of BOOLEAN column
+    ///     Set value of BOOLEAN column
     /// </summary>
     /// <param name="name">Column name</param>
     /// <param name="value">Column value</param>
@@ -323,9 +326,9 @@ public class LineTcpSender : IDisposable
         Column(name).Put(value ? 't' : 'f');
         return this;
     }
-    
+
     /// <summary>
-    /// Set value of DOUBLE column
+    ///     Set value of DOUBLE column
     /// </summary>
     /// <param name="name">Column name</param>
     /// <param name="value">Column value</param>
@@ -337,7 +340,7 @@ public class LineTcpSender : IDisposable
     }
 
     /// <summary>
-    /// Set value of TIMESTAMP column
+    ///     Set value of TIMESTAMP column
     /// </summary>
     /// <param name="name">Column name</param>
     /// <param name="timestamp">Column value</param>
@@ -348,22 +351,21 @@ public class LineTcpSender : IDisposable
         Column(name).Put(epoch / 10).Put('t');
         return this;
     }
-    
+
     /// <summary>
-    /// Finishes the line without specifying Designated Timestamp. QuestDB will set the timestamp at the time of writing to the table.
+    ///     Finishes the line without specifying Designated Timestamp. QuestDB will set the timestamp at the time of writing to
+    ///     the table.
     /// </summary>
     public void AtNow()
     {
         if (!_hasTable || (_noFields && _noSymbols))
-        {
             throw new InvalidOperationException("No symbols or column specified.");
-        }
 
         FinishLine();
     }
 
     /// <summary>
-    /// Finishes the line setting timestamp.
+    ///     Finishes the line setting timestamp.
     /// </summary>
     /// <param name="timestamp">Timestamp of the line</param>
     public void At(DateTime timestamp)
@@ -374,7 +376,7 @@ public class LineTcpSender : IDisposable
     }
 
     /// <summary>
-    /// Finishes the line setting timestamp.
+    ///     Finishes the line setting timestamp.
     /// </summary>
     /// <param name="epochNano">Nanoseconds since Unix epoch</param>
     public void At(long epochNano)
@@ -382,9 +384,9 @@ public class LineTcpSender : IDisposable
         Put(' ').Put(epochNano);
         FinishLine();
     }
-    
+
     /// <summary>
-    /// Sends buffered lines to QuestDB
+    ///     Sends buffered lines to QuestDB
     /// </summary>
     public void Send()
     {
@@ -400,7 +402,7 @@ public class LineTcpSender : IDisposable
     }
 
     /// <summary>
-    /// Sends buffered lines to QuestDB in async manner
+    ///     Sends buffered lines to QuestDB in async manner
     /// </summary>
     /// <param name="cancellationToken">Cancellation Token</param>
     public async Task SendAsync(CancellationToken cancellationToken = default)
@@ -417,32 +419,27 @@ public class LineTcpSender : IDisposable
     }
 
     /// <summary>
-    /// Cancel current unsent line. Works only in Extend buffer overflow mode.
+    ///     Cancel current unsent line. Works only in Extend buffer overflow mode.
     /// </summary>
     /// <exception cref="InvalidOperationException"></exception>
     public void CancelLine()
     {
         if (_bufferOverflowHandling == BufferOverflowHandling.SendImmediately)
-        {
             throw new InvalidOperationException("Cannot cancel line in BufferOverflowHandling.SendImmediately mode");
-        }
 
         _currentBufferIndex = _lineStartBufferIndex;
         _position = _lineStartBufferPosition;
     }
 
     /// <summary>
-    /// Frees unnecessary buffers. In BufferOverflowHandling.SendImmediately has no effect.
+    ///     Frees unnecessary buffers. In BufferOverflowHandling.SendImmediately has no effect.
     /// </summary>
     public void TrimExcessBuffers()
     {
-        int removeCount = _buffers.Count - _currentBufferIndex - 1;
-        if (removeCount > 0) 
-        {
-            _buffers.RemoveRange(_currentBufferIndex + 1, removeCount);
-        }
+        var removeCount = _buffers.Count - _currentBufferIndex - 1;
+        if (removeCount > 0) _buffers.RemoveRange(_currentBufferIndex + 1, removeCount);
     }
-    
+
     private static byte[] FromBase64String(string encodedPrivateKey)
     {
         var urlUnsafe = encodedPrivateKey.Replace('-', '+').Replace('_', '/');
@@ -487,7 +484,7 @@ public class LineTcpSender : IDisposable
         _noFields = true;
         _noSymbols = true;
     }
-    
+
     private LineTcpSender Column(ReadOnlySpan<char> columnName)
     {
         if (_hasTable)
@@ -497,7 +494,7 @@ public class LineTcpSender : IDisposable
                 if (IsEmpty(columnName)) throw new ArgumentException(nameof(columnName) + " cannot be empty");
                 throw new ArgumentException(nameof(columnName) + " contains invalid characters");
             }
-            
+
             if (_noFields)
             {
                 Put(' ');

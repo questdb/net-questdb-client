@@ -25,7 +25,6 @@
 
 using BenchmarkDotNet.Attributes;
 using dummy_http_server;
-using Org.BouncyCastle.Crypto.Agreement.Srp;
 using QuestDB.Ingress;
 using tcp_client_test;
 
@@ -90,8 +89,6 @@ public class BenchInserts
                 _httpServer.Clear();
             }
         }
-        
-        
     }
 
 

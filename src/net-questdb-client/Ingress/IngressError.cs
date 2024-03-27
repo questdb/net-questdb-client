@@ -26,21 +26,21 @@
 namespace QuestDB.Ingress;
 
 /// <summary>
-/// Custom error class for ILP-related errors.
+///     Custom error class for ILP-related errors.
 /// </summary>
 public class IngressError : Exception
 {
-    public ErrorCode Code { get; }
-    
-    public IngressError(ErrorCode code, string? message) 
+    public IngressError(ErrorCode code, string? message)
         : base($"{code.ToString()} : {message}")
     {
-        this.Code = code;
+        Code = code;
     }
-    
-    public IngressError(ErrorCode code, string? message, Exception inner) 
+
+    public IngressError(ErrorCode code, string? message, Exception inner)
         : base($"{code.ToString()} : {message}", inner)
     {
-        this.Code = code;
+        Code = code;
     }
+
+    public ErrorCode Code { get; }
 }

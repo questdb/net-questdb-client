@@ -28,13 +28,12 @@ using System.Globalization;
 using System.Net;
 using System.Runtime.CompilerServices;
 using System.Text;
-using Microsoft.Extensions.DependencyInjection;
 using Strings = Org.BouncyCastle.Utilities.Strings;
 
 namespace QuestDB.Ingress;
 
 /// <summary>
-/// Buffer for building up batches of ILP rows.
+///     Buffer for building up batches of ILP rows.
 /// </summary>
 public class ByteBuffer : HttpContent, IEnumerable<byte>
 {
@@ -42,6 +41,7 @@ public class ByteBuffer : HttpContent, IEnumerable<byte>
     public static int DefaultQuestDbFsFileNameLimit = 127;
     public readonly List<(byte[] Buffer, int Length)> Buffers = new();
     public int CurrentBufferIndex;
+    public string CurrentTableName;
     public bool HasTable;
     public int LineStartBufferIndex;
     public int LineStartBufferPosition;
@@ -51,7 +51,6 @@ public class ByteBuffer : HttpContent, IEnumerable<byte>
     public bool Quoted;
     public byte[] SendBuffer;
     public bool WithinTransaction;
-    public string CurrentTableName;
 
     public ByteBuffer(int bufferSize)
     {
@@ -77,7 +76,7 @@ public class ByteBuffer : HttpContent, IEnumerable<byte>
     }
 
     /// <summary>
-    /// Fulfill <see cref="IEnumerable"/> interface.
+    ///     Fulfill <see cref="IEnumerable" /> interface.
     /// </summary>
     /// <returns>IEnumerator</returns>
     IEnumerator IEnumerable.GetEnumerator()
@@ -88,16 +87,13 @@ public class ByteBuffer : HttpContent, IEnumerable<byte>
     public ByteBuffer Transaction(ReadOnlySpan<char> tableName)
     {
         if (WithinTransaction)
-        {
-            throw new IngressError(ErrorCode.InvalidApiCall, "Cannot start another transaction - only one allowed at a time.");
-        }
+            throw new IngressError(ErrorCode.InvalidApiCall,
+                "Cannot start another transaction - only one allowed at a time.");
 
         if (Length > 0)
-        {
             throw new IngressError(ErrorCode.InvalidApiCall,
                 "Buffer must be clear before you can start a transaction.");
-        }
-        
+
         GuardInvalidTableName(tableName);
         CurrentTableName = tableName.ToString();
         WithinTransaction = true;
@@ -105,8 +101,8 @@ public class ByteBuffer : HttpContent, IEnumerable<byte>
     }
 
     /// <summary>
-    /// Set table name for the Line.
-    /// Each line can have a different table name within a batch.
+    ///     Set table name for the Line.
+    ///     Each line can have a different table name within a batch.
     /// </summary>
     /// <param name="name">Table name</param>
     /// <returns>Itself</returns>
@@ -115,11 +111,9 @@ public class ByteBuffer : HttpContent, IEnumerable<byte>
     public ByteBuffer Table(ReadOnlySpan<char> name)
     {
         if (WithinTransaction && name != CurrentTableName)
-        {
             throw new IngressError(ErrorCode.InvalidApiCall,
                 "Transactions can only be for one table.");
-        }
-        
+
         GuardTableAlreadySet();
         GuardInvalidTableName(name);
 
@@ -134,21 +128,20 @@ public class ByteBuffer : HttpContent, IEnumerable<byte>
     }
 
     /// <summary>
-    /// Set value for a Symbol column.
-    /// Symbols must be written before other columns
+    ///     Set value for a Symbol column.
+    ///     Symbols must be written before other columns
     /// </summary>
     /// <param name="symbolName">Name of the symbol column.</param>
     /// <param name="value">Value for the column.</param>
     /// <returns></returns>
-    /// <exception cref="IngressError"><see cref="ErrorCode.InvalidApiCall"/> when table has not been specified,
-    /// or non-symbol fields have already been written.</exception>
+    /// <exception cref="IngressError">
+    ///     <see cref="ErrorCode.InvalidApiCall" /> when table has not been specified,
+    ///     or non-symbol fields have already been written.
+    /// </exception>
     public ByteBuffer Symbol(ReadOnlySpan<char> symbolName, ReadOnlySpan<char> value)
     {
-        if (WithinTransaction && !HasTable)
-        {
-            Table(CurrentTableName);
-        }
-        
+        if (WithinTransaction && !HasTable) Table(CurrentTableName);
+
         if (!HasTable) throw new IngressError(ErrorCode.InvalidApiCall, "Table must be specified first.");
 
         if (!NoFields) throw new IngressError(ErrorCode.InvalidApiCall, "Cannot write symbols after fields.");
@@ -168,10 +161,7 @@ public class ByteBuffer : HttpContent, IEnumerable<byte>
     /// <returns>Itself</returns>
     public ByteBuffer Column(ReadOnlySpan<char> name, ReadOnlySpan<char> value)
     {
-        if (WithinTransaction && !HasTable)
-        {
-            Table(CurrentTableName);
-        }
+        if (WithinTransaction && !HasTable) Table(CurrentTableName);
         Column(name).Put('\"');
         Quoted = true;
         EncodeUtf8(value);
@@ -188,10 +178,7 @@ public class ByteBuffer : HttpContent, IEnumerable<byte>
     /// <returns>Itself</returns>
     public ByteBuffer Column(ReadOnlySpan<char> name, long value)
     {
-        if (WithinTransaction && !HasTable)
-        {
-            Table(CurrentTableName);
-        }
+        if (WithinTransaction && !HasTable) Table(CurrentTableName);
         Column(name).Put(value).Put('i');
         return this;
     }
@@ -204,10 +191,7 @@ public class ByteBuffer : HttpContent, IEnumerable<byte>
     /// <returns>Itself</returns>
     public ByteBuffer Column(ReadOnlySpan<char> name, bool value)
     {
-        if (WithinTransaction && !HasTable)
-        {
-            Table(CurrentTableName);
-        }
+        if (WithinTransaction && !HasTable) Table(CurrentTableName);
         Column(name).Put(value ? 't' : 'f');
         return this;
     }
@@ -220,10 +204,7 @@ public class ByteBuffer : HttpContent, IEnumerable<byte>
     /// <returns>Itself</returns>
     public ByteBuffer Column(ReadOnlySpan<char> name, double value)
     {
-        if (WithinTransaction && !HasTable)
-        {
-            Table(CurrentTableName);
-        }
+        if (WithinTransaction && !HasTable) Table(CurrentTableName);
         Column(name).Put(value.ToString(CultureInfo.InvariantCulture));
         return this;
     }
@@ -236,10 +217,7 @@ public class ByteBuffer : HttpContent, IEnumerable<byte>
     /// <returns>Itself</returns>
     public ByteBuffer Column(ReadOnlySpan<char> name, DateTime timestamp)
     {
-        if (WithinTransaction && !HasTable)
-        {
-            Table(CurrentTableName);
-        }
+        if (WithinTransaction && !HasTable) Table(CurrentTableName);
         var epoch = timestamp.Ticks - EpochTicks;
         Column(name).Put(epoch / 10).Put('t');
         return this;
@@ -253,10 +231,7 @@ public class ByteBuffer : HttpContent, IEnumerable<byte>
     /// <returns>Itself</returns>
     public ByteBuffer Column(ReadOnlySpan<char> name, DateTimeOffset timestamp)
     {
-        if (WithinTransaction && !HasTable)
-        {
-            Table(CurrentTableName);
-        }
+        if (WithinTransaction && !HasTable) Table(CurrentTableName);
         Column(name, timestamp.UtcDateTime);
         return this;
     }
@@ -312,19 +287,16 @@ public class ByteBuffer : HttpContent, IEnumerable<byte>
     {
         CurrentBufferIndex = 0;
         SendBuffer = Buffers[CurrentBufferIndex].Buffer;
-        for (int i = 0; i < Buffers.Count; i++)
-        {
-            Buffers[i] = (Buffers[i].Buffer, 0);
-        }
+        for (var i = 0; i < Buffers.Count; i++) Buffers[i] = (Buffers[i].Buffer, 0);
         Position = 0;
         RowCount = 0;
         Length = 0;
         WithinTransaction = false;
         CurrentTableName = "";
     }
-    
+
     /// <summary>
-    /// Removes excess buffers.
+    ///     Removes excess buffers.
     /// </summary>
     public void TrimExcessBuffers()
     {
@@ -506,13 +478,13 @@ public class ByteBuffer : HttpContent, IEnumerable<byte>
     public void CancelLine()
     {
         CurrentBufferIndex = LineStartBufferIndex;
-        Length -= (Position - LineStartBufferPosition);
+        Length -= Position - LineStartBufferPosition;
         Position = LineStartBufferPosition;
     }
 
     /// <summary>
-    /// Writes the chunked buffer contents to a stream.
-    /// Used to fulfill the <see cref="HttpContent"/> requirements.
+    ///     Writes the chunked buffer contents to a stream.
+    ///     Used to fulfill the <see cref="HttpContent" /> requirements.
     /// </summary>
     /// <param name="stream"></param>
     /// <param name="context"></param>
@@ -536,7 +508,7 @@ public class ByteBuffer : HttpContent, IEnumerable<byte>
     }
 
     /// <summary>
-    /// Writes the chunked buffer contents to a stream.
+    ///     Writes the chunked buffer contents to a stream.
     /// </summary>
     /// <param name="stream"></param>
     /// <exception cref="IngressError">When writing to stream fails.</exception>
@@ -544,9 +516,9 @@ public class ByteBuffer : HttpContent, IEnumerable<byte>
     {
         await SerializeToStreamAsync(stream, null);
     }
-    
+
     /// <summary>
-    /// Fulfills <see cref="HttpContent"/>
+    ///     Fulfills <see cref="HttpContent" />
     /// </summary>
     /// <exception cref="IngressError">When writing to stream fails.</exception>
     protected override void SerializeToStream(Stream stream, TransportContext? context, CancellationToken ct)
@@ -555,7 +527,7 @@ public class ByteBuffer : HttpContent, IEnumerable<byte>
     }
 
     /// <summary>
-    /// Fulfills <see cref="HttpContent"/>
+    ///     Fulfills <see cref="HttpContent" />
     /// </summary>
     protected override bool TryComputeLength(out long length)
     {
@@ -564,7 +536,7 @@ public class ByteBuffer : HttpContent, IEnumerable<byte>
     }
 
     /// <summary>
-    /// Fulfills <see cref="HttpContent"/>
+    ///     Fulfills <see cref="HttpContent" />
     /// </summary>
     /// <exception cref="IngressError">When writing to stream fails.</exception>
     protected override async Task<Stream> CreateContentReadStreamAsync()
@@ -585,18 +557,17 @@ public class ByteBuffer : HttpContent, IEnumerable<byte>
         SerializeToStream(stream, null, CancellationToken.None);
         return stream.ToArray();
     }
-    
+
     /// <summary>
-    /// Guards against invalid table names.
-    /// Table names must fit the following criteria:
+    ///     Guards against invalid table names.
+    ///     Table names must fit the following criteria:
     ///     - They must be non-empty
-    ///     - A full stop `.` may only appear when sandwiched 
+    ///     - A full stop `.` may only appear when sandwiched
     /// </summary>
     /// <param name="str"></param>
-    /// <exception cref="IngressError"><see cref="ErrorCode.InvalidName"/> when table name does not meet validation criteria.</exception>
+    /// <exception cref="IngressError"><see cref="ErrorCode.InvalidName" /> when table name does not meet validation criteria.</exception>
     public static void GuardInvalidTableName(ReadOnlySpan<char> str)
     {
-        
         if (str.IsEmpty)
             throw new IngressError(ErrorCode.InvalidName,
                 "Table names must have a non-zero length.");

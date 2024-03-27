@@ -26,8 +26,7 @@
 namespace QuestDB.Ingress;
 
 /// <summary>
-/// Standard error codes for QuestDB ILP clients.
-/// 
+///     Standard error codes for QuestDB ILP clients.
 /// </summary>
 public enum ErrorCode
 {
@@ -65,5 +64,5 @@ public enum ErrorCode
     ServerFlushError,
 
     /// Bad configuration.
-    ConfigError,
+    ConfigError
 }

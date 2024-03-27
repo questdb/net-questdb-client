@@ -559,7 +559,7 @@ public class HttpTests
                 .Column("int", i)
                 .Column("привед", "мед вед")
                 .At(new DateTime(2021, 1, 1, i / 360 / 1000 % 60, i / 60 / 1000 % 60, i / 1000 % 60, i % 1000));
-        
+
         await sender.SendAsync();
     }
 
@@ -675,7 +675,7 @@ public class HttpTests
     {
         using var srv = new DummyHttpServer();
         await srv.StartAsync(Port);
-        
+
         using var sender =
             new LineSender(
                 $"http::addr={Host}:{Port};");
@@ -685,13 +685,13 @@ public class HttpTests
         var expected = "tableName,foo=bah\n";
         Assert.That(srv.GetReceiveBuffer().ToString, Is.EqualTo(expected));
     }
-    
+
     [Test]
     public async Task TransactionCanOnlyHaveOneTable()
     {
         using var srv = new DummyHttpServer();
         await srv.StartAsync(Port);
-        
+
         using var sender =
             new LineSender(
                 $"http::addr={Host}:{Port};");
@@ -699,20 +699,20 @@ public class HttpTests
         Assert.That(
             () => sender.Table("other table name"),
             Throws.TypeOf<IngressError>().With.Message.Contains("only be for one table")
-            );
+        );
 
         await sender.SendAsync();
 
         // check its fine after sending
         sender.Transaction("other table name");
     }
-    
+
     [Test]
     public async Task TransactionIsSingleton()
     {
         using var srv = new DummyHttpServer();
         await srv.StartAsync(Port);
-        
+
         using var sender =
             new LineSender(
                 $"http::addr={Host}:{Port};");
@@ -727,33 +727,29 @@ public class HttpTests
         // check its fine after sending
         sender.Transaction("other table name");
     }
-    
-     
+
     [Test]
     public async Task TransactionShouldNotBeAutoFlushed()
     {
         using var srv = new DummyHttpServer();
         await srv.StartAsync(Port);
-        
+
         using var sender =
             new LineSender(
                 $"http::addr={Host}:{Port};auto_flush=on;auto_flush_rows=1;");
 
-
         sender.Transaction("tableName");
-        for (int i = 0; i < 100; i++)
-        {
+        for (var i = 0; i < 100; i++)
             sender
                 .Symbol("foo", "bah")
                 .Column("num", i)
                 .AtNow();
-        }
-        
+
         Assert.That(sender.RowCount == 100);
         Assert.That(sender.WithinTransaction);
-        
+
         await sender.SendAsync();
-        
+
         Assert.That(sender.RowCount == 0);
         Assert.That(!sender.WithinTransaction);
     }

@@ -103,15 +103,15 @@ public class JsonSpecTestRunner
             Assert.Fail("Unsupported test case result status: " + testCase.result.status);
         }
     }
-    
-      [TestCaseSource(nameof(TestCases))]
+
+    [TestCaseSource(nameof(TestCases))]
     public async Task RunHttp(TestCase testCase)
     {
         using var server = new DummyHttpServer();
         await server.StartAsync(HttpPort);
-        
+
         Assert.That(await server.Healthcheck());
-        
+
         using var sender = new LineSender(
             $"http::addr={IPAddress.Loopback}:{HttpPort};");
 
@@ -165,9 +165,9 @@ public class JsonSpecTestRunner
         if (testCase.result.status == "SUCCESS")
         {
             Assert.That(
-                    server.GetReceiveBuffer().ToString(),
-                    Is.EqualTo(testCase.result.line + "\n")
-                );
+                server.GetReceiveBuffer().ToString(),
+                Is.EqualTo(testCase.result.line + "\n")
+            );
         }
         else if (testCase.result.status == "ERROR")
         {

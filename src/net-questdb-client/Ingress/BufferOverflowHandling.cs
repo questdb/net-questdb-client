@@ -24,9 +24,8 @@
 
 namespace QuestDB.Ingress;
 
-
 /// <summary>
-/// Deprecated enum. Always used in Extend mode in favour of new `auto_flush` functionality.
+///     Deprecated enum. Always used in Extend mode in favour of new `auto_flush` functionality.
 /// </summary>
 [Obsolete]
 public enum BufferOverflowHandling

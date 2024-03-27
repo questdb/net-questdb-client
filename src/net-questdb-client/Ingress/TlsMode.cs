@@ -26,7 +26,7 @@
 namespace QuestDB.Ingress;
 
 /// <summary>
-/// Deprecated TLS selection class.
+///     Deprecated TLS selection class.
 /// </summary>
 [Obsolete]
 public enum TlsMode

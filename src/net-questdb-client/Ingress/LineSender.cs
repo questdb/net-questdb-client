@@ -222,31 +222,7 @@ public class LineSender : IDisposable
 
     public (HttpRequestMessage?, HttpResponseMessage?) Send()
     {
-        if (Options.IsHttp())
-        {
-            var (request, cts) = GenerateRequest();
-            var client = GenerateClient();
-            try
-            {
-                var response = client.Send(request, HttpCompletionOption.ResponseHeadersRead, cts.Token);
-                return FinishOrRetry(
-                    response
-                );
-            }
-            catch (Exception ex)
-            {
-                throw new IngressError(ErrorCode.ServerFlushError, ex.Message, ex);
-            }
-        }
-
-        if (Options.IsTcp())
-        {
-            _byteBuffer.WriteToStream(_dataStream);
-            _byteBuffer.Clear();
-            return (null, null);
-        }
-
-        throw new NotImplementedException();
+        return SendAsync().Result;
     }
 
 
@@ -298,44 +274,6 @@ public class LineSender : IDisposable
             default:
                 return false;
         }
-    }
-
-    public (HttpRequestMessage?, HttpResponseMessage?) FinishOrRetry(HttpResponseMessage response)
-    {
-        if (response.IsSuccessStatusCode)
-        {
-            _byteBuffer.Clear();
-            return (response.RequestMessage, response);
-        }
-
-        if (!(IsRetriableError(response.StatusCode) && Options.retry_timeout > TimeSpan.Zero))
-            throw new IngressError(ErrorCode.ServerFlushError, response.ReasonPhrase);
-
-        var timer = new Stopwatch();
-        timer.Start();
-
-        var retryInterval = TimeSpan.FromMilliseconds(10);
-        var lastResponse = response;
-
-        while (timer.Elapsed < Options.retry_timeout)
-        {
-            var jitter = TimeSpan.FromMilliseconds(Random.Shared.Next(0, 10) - 5);
-            Thread.Sleep(retryInterval + jitter);
-
-            var (nextRequest, nextToken) = GenerateRequest();
-            lastResponse = _client.Send(nextRequest);
-            if (!lastResponse!.IsSuccessStatusCode)
-            {
-                if (IsRetriableError(lastResponse.StatusCode) && Options.retry_timeout > TimeSpan.Zero) continue;
-
-                throw new IngressError(ErrorCode.ServerFlushError, lastResponse.ReasonPhrase);
-            }
-
-            _byteBuffer.Clear();
-            return (lastResponse.RequestMessage, lastResponse);
-        }
-
-        throw new IngressError(ErrorCode.ServerFlushError, lastResponse.ReasonPhrase);
     }
 
     public async Task<(HttpRequestMessage?, HttpResponseMessage?)> FinishOrRetryAsync(HttpResponseMessage response,

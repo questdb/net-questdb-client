@@ -19,3 +19,5 @@ src/dummy-http-server/bin/
 src/dummy-http-server/obj/
 src/example-streaming/bin/
 src/example-streaming/obj/
+src/net-questdb-client-benchmarks/BenchmarkDot*
+src/net-questdb-client-benchmarks/obj

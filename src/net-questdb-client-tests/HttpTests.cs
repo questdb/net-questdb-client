@@ -495,7 +495,7 @@ public class HttpTests
 
         Assert.True(await srv.Healthcheck());
 
-        for (var i = 0; i < 1e6; i++)
+        for (var i = 0; i < 1E6; i++)
         {
             sender.Table(metric)
                 .Symbol("nopoint", "tag" + i % 100)
@@ -527,15 +527,13 @@ public class HttpTests
             new LineSender(
                 $"http::addr={Host}:{Port};init_buf_size={1024 * 1024};auto_flush=on;auto_flush_bytes={1024 * 1024};request_timeout=30000;");
 
-        for (var i = 0; i < 1E4; i++)
+        for (var i = 0; i < 1E6; i++)
             sender.Table(metric)
                 .Symbol("nopoint", "tag" + i % 100)
                 .Column("counter", i * 1111.1)
                 .Column("int", i)
                 .Column("привед", "мед вед")
                 .At(new DateTime(2021, 1, 1, i / 360 / 1000 % 60, i / 60 / 1000 % 60, i / 1000 % 60, i % 1000));
-
-        Console.WriteLine(srv.GetReceiveBuffer().Length);
         
         await sender.SendAsync();
     }

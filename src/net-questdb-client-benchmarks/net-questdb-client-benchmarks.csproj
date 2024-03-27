@@ -21,6 +21,8 @@
 
     <ItemGroup>
       <Compile Include="obj\Debug\net6.0\.NETCoreApp,Version=v6.0.AssemblyAttributes.cs" />
+      <Compile Remove="obj\**" />
+      <Compile Remove="BenchmarkDotNet.Artifacts\**" />
     </ItemGroup>
 
     <ItemGroup>
@@ -33,6 +35,16 @@
       <Content Include="obj\project.packagespec.json" />
       <Content Include="obj\rider.project.model.nuget.info" />
       <Content Include="obj\rider.project.restore.info" />
+    </ItemGroup>
+
+    <ItemGroup>
+      <EmbeddedResource Remove="obj\**" />
+      <EmbeddedResource Remove="BenchmarkDotNet.Artifacts\**" />
+    </ItemGroup>
+
+    <ItemGroup>
+      <None Remove="obj\**" />
+      <None Remove="BenchmarkDotNet.Artifacts\**" />
     </ItemGroup>
 
 </Project>

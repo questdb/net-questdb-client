@@ -26,7 +26,7 @@
 namespace QuestDB.Ingress;
 
 /// <summary>
-///     Custom error class for ILP-related errors.
+///     Custom exception for ILP-related errors.
 /// </summary>
 public class IngressError : Exception
 {

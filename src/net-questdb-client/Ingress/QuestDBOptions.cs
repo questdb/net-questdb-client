@@ -69,7 +69,7 @@ public class QuestDBOptions
         auto_flush_rows = int.Parse(confStr.auto_flush_rows ?? int.MaxValue.ToString());
         auto_flush_bytes = int.Parse(confStr.auto_flush_bytes ?? int.MaxValue.ToString());
         auto_flush_interval = TimeSpan.FromMilliseconds(int.Parse(confStr.auto_flush_interval!));
-        bind_interface = confStr.bind_interface;
+        //bind_interface = confStr.bind_interface;
 
 
         init_buf_size = int.Parse(confStr.init_buf_size!);
@@ -152,7 +152,8 @@ public class QuestDBOptions
     /// <summary>
     ///     Not in use.
     /// </summary>
-    public string? bind_interface { get; set; }
+    // public string? bind_interface =>
+    //     throw new IngressError(ErrorCode.ConfigError, "Not supported!", new NotImplementedException());
 
     /// <summary>
     ///     Initial buffer size for the ILP rows in bytes.

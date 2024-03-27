@@ -164,7 +164,12 @@ public class LineSender : IDisposable
     }
 
     /// <summary>
+    /// Starts a new transaction.
     /// </summary>
+    /// <remarks>
+    /// This function starts a transaction. Within a transaction, only one table can be specified, which
+    /// applies to all ILP rows in the batch. The batch will not be sent until explicitly committed.
+    /// </remarks>
     /// <param name="tableName"></param>
     /// <returns></returns>
     /// <exception cref="IngressError"></exception>
@@ -177,6 +182,12 @@ public class LineSender : IDisposable
         return this;
     }
 
+    public async Task<bool> Commit()
+    {
+        var (_, response) = await SendAsync();
+        return response.IsSuccessStatusCode;
+    }
+ 
     /// <inheritdoc cref="ByteBuffer.Table" />
     public LineSender Table(ReadOnlySpan<char> name)
     {

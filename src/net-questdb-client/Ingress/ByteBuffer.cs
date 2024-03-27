@@ -59,8 +59,14 @@ public class ByteBuffer : HttpContent, IEnumerable<byte>
         QuestDbFsFileNameLimit = DefaultQuestDbFsFileNameLimit;
     }
 
+    /// <summary>
+    /// The length of the buffered content in bytes.
+    /// </summary>
     public int Length { get; set; }
 
+    /// <summary>
+    /// The number of buffered ILP rows.
+    /// </summary>
     public int RowCount { get; set; }
 
     /// <summary>
@@ -76,7 +82,7 @@ public class ByteBuffer : HttpContent, IEnumerable<byte>
     }
 
     /// <summary>
-    ///     Fulfill <see cref="IEnumerable" /> interface.
+    ///     Fulfills the <see cref="IEnumerable" /> interface.
     /// </summary>
     /// <returns>IEnumerator</returns>
     IEnumerator IEnumerable.GetEnumerator()
@@ -84,6 +90,7 @@ public class ByteBuffer : HttpContent, IEnumerable<byte>
         return GetEnumerator();
     }
 
+    /// <inheritdoc cref="LineSender.Transaction"/>
     public ByteBuffer Transaction(ReadOnlySpan<char> tableName)
     {
         if (WithinTransaction)
@@ -441,6 +448,12 @@ public class ByteBuffer : HttpContent, IEnumerable<byte>
         return this;
     }
 
+    /// <summary>
+    ///     Swaps to the next buffer in <see cref="Buffers" />.
+    /// </summary>
+    /// <remarks>
+    ///     A new <c>byte[]</c> will be allocated if there is not already an overflow buffer.
+    /// </remarks>
     private void NextBuffer()
     {
         Buffers[CurrentBufferIndex] = (SendBuffer, Position);
@@ -459,12 +472,38 @@ public class ByteBuffer : HttpContent, IEnumerable<byte>
         Position = 0;
     }
 
+    /// <summary>
+    ///     Ensures that a table has not been specified for this row.
+    /// </summary>
+    /// <remarks>
+    ///     A row must be completed before a table can be specified.
+    ///     <para />
+    ///     <code>
+    /// var sender = new LineSender("http::localhost:9000");
+    /// sender.Table("bah", "baz").Table("foo"); // not ok
+    /// sender.Table("foo").Symbol("bah", "baz"); // ok
+    /// </code>
+    /// </remarks>
+    /// <exception cref="IngressError"></exception>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void GuardTableAlreadySet()
     {
         if (HasTable) throw new IngressError(ErrorCode.InvalidApiCall, "Table has already been specified.");
     }
 
+    /// <summary>
+    ///     Ensures that a table has been specified for this row.
+    /// </summary>
+    /// <remarks>
+    ///     Table must be specified before columns or symbols.
+    ///     <para />
+    ///     <code>
+    /// var sender = new LineSender("http::localhost:9000");
+    /// sender.Symbol("bah", "baz"); // not ok
+    /// sender.Table("foo").Symbol("bah", "baz"); // ok
+    /// </code>
+    /// </remarks>
+    /// <exception cref="IngressError"></exception>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void GuardTableNotSet()
     {
@@ -546,12 +585,20 @@ public class ByteBuffer : HttpContent, IEnumerable<byte>
         return stream;
     }
 
+    /// <summary>
+    ///     Converts the contents of the <see cref="Buffers" /> to a UTF-16 string, decoding as UTF-8.
+    /// </summary>
+    /// <returns></returns>
     public override string ToString()
     {
         return Strings.FromUtf8ByteArray(ToArray());
     }
 
-    public byte[] ToArray()
+    /// <summary>
+    ///     Copies the contents of the <see cref="Buffers" /> into a new array.
+    /// </summary>
+    /// <returns></returns>
+    private byte[] ToArray()
     {
         var stream = new MemoryStream();
         SerializeToStream(stream, null, CancellationToken.None);
@@ -560,28 +607,25 @@ public class ByteBuffer : HttpContent, IEnumerable<byte>
 
     /// <summary>
     ///     Guards against invalid table names.
-    ///     Table names must fit the following criteria:
-    ///     - They must be non-empty
-    ///     - A full stop `.` may only appear when sandwiched
     /// </summary>
     /// <param name="str"></param>
     /// <exception cref="IngressError"><see cref="ErrorCode.InvalidName" /> when table name does not meet validation criteria.</exception>
-    public static void GuardInvalidTableName(ReadOnlySpan<char> str)
+    private static void GuardInvalidTableName(ReadOnlySpan<char> tableName)
     {
-        if (str.IsEmpty)
+        if (tableName.IsEmpty)
             throw new IngressError(ErrorCode.InvalidName,
                 "Table names must have a non-zero length.");
 
         var prev = '\0';
-        for (var i = 0; i < str.Length; i++)
+        for (var i = 0; i < tableName.Length; i++)
         {
-            var c = str[i];
+            var c = tableName[i];
             switch (c)
             {
                 case '.':
-                    if (i == 0 || i == str.Length - 1 || prev == '.')
+                    if (i == 0 || i == tableName.Length - 1 || prev == '.')
                         throw new IngressError(ErrorCode.InvalidName,
-                            $"Bad string {str}. Found invalid dot `.` at position {i}.");
+                            $"Bad string {tableName}. Found invalid dot `.` at position {i}.");
                     break;
                 case '?':
                 case ',':
@@ -614,25 +658,30 @@ public class ByteBuffer : HttpContent, IEnumerable<byte>
                 case '\x000f':
                 case '\x007f':
                     throw new IngressError(ErrorCode.InvalidName,
-                        $"Bad string {str}. Table names can't contain a {c} character, which was found at byte position {i}");
+                        $"Bad string {tableName}. Table names can't contain a {c} character, which was found at byte position {i}");
                 case '\xfeff':
                     throw new IngressError(ErrorCode.InvalidName,
-                        $"Bad string {str}. Table names can't contain a UTF-8 BOM character, was was found at byte position {i}.");
+                        $"Bad string {tableName}. Table names can't contain a UTF-8 BOM character, was was found at byte position {i}.");
             }
 
             prev = c;
         }
     }
 
-    public static void GuardInvalidColumnName(ReadOnlySpan<char> str)
+    /// <summary>
+    ///     Guards against invalid column names.
+    /// </summary>
+    /// <param name="str"></param>
+    /// <exception cref="IngressError"><see cref="ErrorCode.InvalidName" /> when table name does not meet validation criteria.</exception>
+    private static void GuardInvalidColumnName(ReadOnlySpan<char> columnName)
     {
-        if (str.IsEmpty)
+        if (columnName.IsEmpty)
             throw new IngressError(ErrorCode.InvalidName,
                 "Column names must have a non-zero length.");
 
-        for (var i = 0; i < str.Length; i++)
+        for (var i = 0; i < columnName.Length; i++)
         {
-            var c = str[i];
+            var c = columnName[i];
             switch (c)
             {
                 case '-':
@@ -668,10 +717,10 @@ public class ByteBuffer : HttpContent, IEnumerable<byte>
                 case '\x000f':
                 case '\x007f':
                     throw new IngressError(ErrorCode.InvalidName,
-                        $"Bad string {str}. Column names can't contain a {c} character, which was found at byte position {i}");
+                        $"Bad string {columnName}. Column names can't contain a {c} character, which was found at byte position {i}");
                 case '\xfeff':
                     throw new IngressError(ErrorCode.InvalidName,
-                        $"Bad string {str}. Column names can't contain a UTF-8 BOM character, was was found at byte position {i}.");
+                        $"Bad string {columnName}. Column names can't contain a UTF-8 BOM character, was was found at byte position {i}.");
             }
         }
     }

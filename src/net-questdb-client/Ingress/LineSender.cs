@@ -65,7 +65,7 @@ public class LineSender : IDisposable
 
     public LineSender(IConfiguration config)
     {
-        Options = config.GetSection("QuestDBOptions").Get<QuestDBOptions>();
+        Options = config.GetSection(QuestDBOptions.QuestDB).Get<QuestDBOptions>();
         Hydrate(Options);
     }
 
@@ -117,7 +117,7 @@ public class LineSender : IDisposable
             try
             {
                 socket.ConnectAsync(Options.Host, Options.Port).Wait();
-                networkStream = new NetworkStream(socket, Options.OwnSocket);
+                networkStream = new NetworkStream(socket, Options.own_socket);
                 Stream dataStream = networkStream;
 
                 if (Options.protocol == ProtocolType.tcps)

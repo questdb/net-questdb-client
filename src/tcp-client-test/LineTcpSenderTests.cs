@@ -255,7 +255,7 @@ public class LineTcpSenderTests
         using var srv = CreateTcpListener(_port);
         srv.AcceptAsync();
 
-        using var ls = await LineTcpSender.ConnectAsync(IPAddress.Loopback.ToString(), _port, 2048, BufferOverflowHandling.Extend, tlsMode: TlsMode.Disable);
+        using var ls = await LineTcpSender.ConnectAsync(IPAddress.Loopback.ToString(), _port, 2048, tlsMode: TlsMode.Disable);
         var lineCount = 500;
         var expected =
             "table\\ name,t\\ a\\ g=v\\ alu\\,\\ e number=10i,db\\ l=123.12,string=\" -=\\\"\",при\\ вед=\"медвед\" 1000000000\n";

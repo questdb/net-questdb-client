@@ -24,7 +24,6 @@
 
 
 using System.Data.Common;
-using System.Net.Http.Headers;
 using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Text.Json.Serialization;
@@ -96,49 +95,51 @@ public class QuestDBOptions
     }
 
     // Config properties
-    
+
     /// <summary>
-    /// Protocol type for the sender to use.
-    /// Defaults to <see cref="ProtocolType.http"/>.
+    ///     Protocol type for the sender to use.
+    ///     Defaults to <see cref="ProtocolType.http" />.
     /// </summary>
     /// <remarks>
-    ///     Available protocols: <see cref="ProtocolType.http"/>, <see cref="ProtocolType.https"/>, <see cref="ProtocolType.tcp"/>, <see cref="ProtocolType.tcps"/>
+    ///     Available protocols: <see cref="ProtocolType.http" />, <see cref="ProtocolType.https" />,
+    ///     <see cref="ProtocolType.tcp" />, <see cref="ProtocolType.tcps" />
     /// </remarks>
-    [JsonIgnore] public ProtocolType protocol { get; set; } = ProtocolType.http;
-    
+    [JsonIgnore]
+    public ProtocolType protocol { get; set; } = ProtocolType.http;
+
     /// <summary>
-    /// Address host/port pair.
-    /// Defaults to <c>localhost:9000</c>.
+    ///     Address host/port pair.
+    ///     Defaults to <c>localhost:9000</c>.
     /// </summary>
     /// <remarks>
-    ///     Used to populate the <see cref="Host"/> and <see cref="Port"/> fields.
+    ///     Used to populate the <see cref="Host" /> and <see cref="Port" /> fields.
     /// </remarks>
     public string addr { get; set; } = "localhost:9000";
-    
+
     /// <summary>
-    /// Enables or disables automatic flushing of rows.
-    /// Defaults to <see cref="AutoFlushType.on"/>.
+    ///     Enables or disables automatic flushing of rows.
+    ///     Defaults to <see cref="AutoFlushType.on" />.
     /// </summary>
     /// <remarks>
-    ///     Possible values: <see cref="AutoFlushType.on"/>, <see cref="AutoFlushType.off"/>
+    ///     Possible values: <see cref="AutoFlushType.on" />, <see cref="AutoFlushType.off" />
     /// </remarks>
     public AutoFlushType auto_flush { get; set; } = AutoFlushType.on;
-    
+
     /// <summary>
-    /// Sets the number of rows to batch before auto-flushing.
-    /// Defaults to <c>75000</c>.
+    ///     Sets the number of rows to batch before auto-flushing.
+    ///     Defaults to <c>75000</c>.
     /// </summary>
     public int auto_flush_rows { get; set; } = 75000;
 
     /// <summary>
-    /// Sets the number of bytes to batch before auto-flushing.
-    /// Defaults to <see cref="int.MaxValue"/>.
+    ///     Sets the number of bytes to batch before auto-flushing.
+    ///     Defaults to <see cref="int.MaxValue" />.
     /// </summary>
     public int auto_flush_bytes { get; set; } = int.MaxValue;
-    
+
     /// <summary>
-    /// Sets the number of milliseconds to wait before auto-flushing.
-    /// Defaults to <c>1000</c>.
+    ///     Sets the number of milliseconds to wait before auto-flushing.
+    ///     Defaults to <c>1000</c>.
     /// </summary>
     /// <remarks>
     ///     Please note that this is <b>not</b> a periodic timer.
@@ -147,21 +148,21 @@ public class QuestDBOptions
     ///     to ensure all data is sent.
     /// </remarks>
     public TimeSpan auto_flush_interval { get; set; } = TimeSpan.FromMilliseconds(1000);
-    
+
     /// <summary>
-    /// Not in use.
+    ///     Not in use.
     /// </summary>
     public string? bind_interface { get; set; }
-    
+
     /// <summary>
-    /// Initial buffer size for the ILP rows in bytes.
-    /// Defaults to <c>64 KiB</c>.
+    ///     Initial buffer size for the ILP rows in bytes.
+    ///     Defaults to <c>64 KiB</c>.
     /// </summary>
     public int init_buf_size { get; set; } = 65536;
-    
+
     /// <summary>
-    /// Maximum buffer size for the ILP rows in bytes.
-    /// Defaults to <c>100 MiB</c>.
+    ///     Maximum buffer size for the ILP rows in bytes.
+    ///     Defaults to <c>100 MiB</c>.
     /// </summary>
     /// <remarks>
     ///     If this buffer size is exceeded, an error will be thrown when completing a row.
@@ -169,137 +170,143 @@ public class QuestDBOptions
     /// </remarks>
 
     public int max_buf_size { get; set; } = 104857600;
-    
+
     /// <summary>
-    /// Maximum length of table and column names in QuestDB.
-    /// Defaults to <c>127</c>.
-    /// <remarks>
-    /// This field mirrors a setting within QuestDB. QuestDB stores data on the file system,
-    /// and requires that names meet certain criteria for compatibility with the host filesystem.
-    /// </remarks>
+    ///     Maximum length of table and column names in QuestDB.
+    ///     Defaults to <c>127</c>.
+    ///     <remarks>
+    ///         This field mirrors a setting within QuestDB. QuestDB stores data on the file system,
+    ///         and requires that names meet certain criteria for compatibility with the host filesystem.
+    ///     </remarks>
     /// </summary>
     public int max_name_len { get; set; } = 127;
-    
+
     /// <summary>
-    /// A username, used for authentication.
+    ///     A username, used for authentication.
     /// </summary>
     /// <remarks>
-    /// If using Basic Authentication, this will be combined with the <see cref="password"/> field
-    /// and sent with HTTP requests.
-    /// <para />
-    /// If using TCP authentication, this will be used to establish a TLS connection.
+    ///     If using Basic Authentication, this will be combined with the <see cref="password" /> field
+    ///     and sent with HTTP requests.
+    ///     <para />
+    ///     If using TCP authentication, this will be used to establish a TLS connection.
     /// </remarks>
     public string? username { get; set; }
 
     /// <summary>
-    /// A password, user for authentication.
+    ///     A password, user for authentication.
     /// </summary>
-    ///     /// <remarks>
-    /// If using Basic Authentication, this will be combined with the <see cref="username"/> field
-    /// and sent with HTTP requests.
+    /// ///
+    /// <remarks>
+    ///     If using Basic Authentication, this will be combined with the <see cref="username" /> field
+    ///     and sent with HTTP requests.
     /// </remarks>
-    [JsonIgnore] public string? password { get; set; }
+    [JsonIgnore]
+    public string? password { get; set; }
 
     /// <summary>
-    /// A token, used for authentication.
+    ///     A token, used for authentication.
     /// </summary>
     /// <remarks>
-    /// If using Token Authentication, this will be sent with HTTP requests.
-    /// <para />
-    /// If using TCP authentication, this will be used to establish a TLS connection.
+    ///     If using Token Authentication, this will be sent with HTTP requests.
+    ///     <para />
+    ///     If using TCP authentication, this will be used to establish a TLS connection.
     /// </remarks>
     public string? token { get; set; }
-    
+
     /// <summary>
-    /// Used in other ILP clients for authentication.
+    ///     Used in other ILP clients for authentication.
     /// </summary>
     [Obsolete]
     [JsonIgnore]
     public string? token_x { get; set; }
-    
+
     /// <summary>
-    /// Used in other ILP clients for authentication.
+    ///     Used in other ILP clients for authentication.
     /// </summary>
     [Obsolete]
     [JsonIgnore]
     public string? token_y { get; set; }
-    
+
     /// <summary>
-    /// Timeout for authentication requests.
-    /// Defaults to 15 seconds.
+    ///     Timeout for authentication requests.
+    ///     Defaults to 15 seconds.
     /// </summary>
     public TimeSpan auth_timeout { get; set; } = TimeSpan.FromMilliseconds(15000);
-    
+
     /// <summary>
-    /// Specifies a minimum expect network throughput when sending data to QuestDB.
-    /// Defaults to <c>100 KiB </c>
+    ///     Specifies a minimum expect network throughput when sending data to QuestDB.
+    ///     Defaults to <c>100 KiB </c>
     /// </summary>
     /// <remarks>
-    /// Requests sent to the database vary in size. Therefore, a single fixed timeout value
-    /// may not be appropriate for all use cases.
-    /// <para />
-    /// To account for this, the user can specify the expected data transfer speed.
-    /// This is then used to calculate an appropriate timeout value with the following equation:
-    /// <para />
-    /// 
-    /// <see cref="HttpClient.Timeout"/> = (<see cref="ByteBuffer.Length"/> / <see cref="QuestDBOptions.request_min_throughput"/>) + <see cref="QuestDBOptions.request_timeout"/>
+    ///     Requests sent to the database vary in size. Therefore, a single fixed timeout value
+    ///     may not be appropriate for all use cases.
+    ///     <para />
+    ///     To account for this, the user can specify the expected data transfer speed.
+    ///     This is then used to calculate an appropriate timeout value with the following equation:
+    ///     <para />
+    ///     <see cref="HttpClient.Timeout" /> = (<see cref="ByteBuffer.Length" /> /
+    ///     <see cref="QuestDBOptions.request_min_throughput" />) + <see cref="QuestDBOptions.request_timeout" />
     /// </remarks>
     public int request_min_throughput { get; set; } = 102400;
-    
+
     /// <summary>
-    /// Specifies a base interval for timing out HTTP requests to QuestDB.
-    /// Defaults to <c>10000 ms</c>.
+    ///     Specifies a base interval for timing out HTTP requests to QuestDB.
+    ///     Defaults to <c>10000 ms</c>.
     /// </summary>
     /// <remarks>
-    /// This value is combined with a dynamic timeout value generated based on how large the payload is.
+    ///     This value is combined with a dynamic timeout value generated based on how large the payload is.
     /// </remarks>
-    /// <seealso cref="request_min_throughput"/>
+    /// <seealso cref="request_min_throughput" />
     public TimeSpan request_timeout { get; set; } = TimeSpan.FromMilliseconds(10000);
-    
+
     /// <summary>
-    /// Specifies a timeout interval within which retries can be sent.
-    /// Defaults to <c>10000 ms</c>.
+    ///     Specifies a timeout interval within which retries can be sent.
+    ///     Defaults to <c>10000 ms</c>.
     /// </summary>
     /// <remarks>
-    /// The <see cref="retry_timeout"/> setting specifies the length of time retries can be made.
-    /// Retries are set multiple times during this period, with some small jitter.
+    ///     The <see cref="retry_timeout" /> setting specifies the length of time retries can be made.
+    ///     Retries are set multiple times during this period, with some small jitter.
     /// </remarks>
-    /// <seealso cref="LineSender.FinishOrRetryAsync"/>.
+    /// <seealso cref="LineSender.FinishOrRetryAsync" />
+    /// .
     public TimeSpan retry_timeout { get; set; } = TimeSpan.FromMilliseconds(10000);
-    
+
     /// <summary>
-    /// Specifies whether TLS certificates should be validated or not.
-    /// Defaults to <see cref="TlsVerifyType.on"/>.
+    ///     Specifies whether TLS certificates should be validated or not.
+    ///     Defaults to <see cref="TlsVerifyType.on" />.
     /// </summary>
     /// <remarks>
-    ///     Available protocols: <see cref="ProtocolType.http"/>, <see cref="ProtocolType.https"/>, <see cref="ProtocolType.tcp"/>, <see cref="ProtocolType.tcps"/>
+    ///     Available protocols: <see cref="ProtocolType.http" />, <see cref="ProtocolType.https" />,
+    ///     <see cref="ProtocolType.tcp" />, <see cref="ProtocolType.tcps" />
     /// </remarks>
     public TlsVerifyType tls_verify { get; set; } = TlsVerifyType.on;
-    
+
     /// <summary>
-    /// todo
+    ///     todo
     /// </summary>
     public string? tls_ca { get; set; }
-    
+
     /// <summary>
-    /// todo
+    ///     todo
     /// </summary>
     public string? tls_roots { get; set; }
-    
+
     /// <summary>
-    /// todo
+    ///     todo
     /// </summary>
-    [JsonIgnore] public string? tls_roots_password { get; set; }
-    
+    [JsonIgnore]
+    public string? tls_roots_password { get; set; }
+
     /// <summary>
-    /// todo
+    ///     todo
     /// </summary>
-    [JsonIgnore] public bool own_socket { get; set; } = true;
-    
+    [JsonIgnore]
+    public bool own_socket { get; set; } = true;
+
     // Extra useful properties
     [JsonIgnore] public int Port { get; set; } = -1;
     [JsonIgnore] public string Host { get; set; }
-    
+
     public bool IsHttp()
     {
         // setup auth

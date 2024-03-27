@@ -238,12 +238,10 @@ public class LineSender : IDisposable
     private void GuardExceededMaxBufferSize()
     {
         if (_byteBuffer.Length > Options.max_buf_size)
-        {
             throw new IngressError(ErrorCode.InvalidApiCall,
                 $"Exceeded maximum buffer size. Current: {_byteBuffer.Length} Maximum: {Options.max_buf_size}");
-        }
     }
-    
+
     /// <inheritdoc cref="ByteBuffer.At(DateTime)" />
     public LineSender At(DateTime value)
     {
@@ -271,7 +269,7 @@ public class LineSender : IDisposable
     private void HandleAutoFlush()
     {
         GuardExceededMaxBufferSize();
-        
+
         // noop if within transaction
         if (_byteBuffer.WithinTransaction) return;
 

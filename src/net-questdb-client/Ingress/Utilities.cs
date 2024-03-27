@@ -1,114 +1,31 @@
+/*******************************************************************************
+ *     ___                  _   ____  ____
+ *    / _ \ _   _  ___  ___| |_|  _ \| __ )
+ *   | | | | | | |/ _ \/ __| __| | | |  _ \
+ *   | |_| | |_| |  __/\__ \ |_| |_| | |_) |
+ *    \__\_\\__,_|\___||___/\__|____/|____/
+ *
+ *  Copyright (c) 2014-2019 Appsicle
+ *  Copyright (c) 2019-2024 QuestDB
+ *
+ *  Licensed under the Apache License, Version 2.0 (the "License");
+ *  you may not use this file except in compliance with the License.
+ *  You may obtain a copy of the License at
+ *
+ *  http://www.apache.org/licenses/LICENSE-2.0
+ *
+ *  Unless required by applicable law or agreed to in writing, software
+ *  distributed under the License is distributed on an "AS IS" BASIS,
+ *  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ *  See the License for the specific language governing permissions and
+ *  limitations under the License.
+ *
+ ******************************************************************************/
+
+
 namespace QuestDB.Ingress;
 
 public static class Utilities
 {
-    public static void GuardInvalidTableName(ReadOnlySpan<char> str)
-    {
-        if (str.IsEmpty)
-            throw new IngressError(ErrorCode.InvalidName,
-                "Table names must have a non-zero length.");
-
-        var prev = '\0';
-        for (var i = 0; i < str.Length; i++)
-        {
-            var c = str[i];
-            switch (c)
-            {
-                case '.':
-                    if (i == 0 || i == str.Length - 1 || prev == '.')
-                        throw new IngressError(ErrorCode.InvalidName,
-                            $"Bad string {str}. Found invalid dot `.` at position {i}.");
-                    break;
-                case '?':
-                case ',':
-                case '\'':
-                case '\"':
-                case '\\':
-                case '/':
-                case ':':
-                case ')':
-                case '(':
-                case '+':
-                case '*':
-                case '%':
-                case '~':
-                case '\r':
-                case '\n':
-                case '\0':
-                case '\x0001':
-                case '\x0002':
-                case '\x0003':
-                case '\x0004':
-                case '\x0005':
-                case '\x0006':
-                case '\x0007':
-                case '\x0008':
-                case '\x0009':
-                case '\x000b':
-                case '\x000c':
-                case '\x000e':
-                case '\x000f':
-                case '\x007f':
-                    throw new IngressError(ErrorCode.InvalidName,
-                        $"Bad string {str}. Table names can't contain a {c} character, which was found at byte position {i}");
-                case '\xfeff':
-                    throw new IngressError(ErrorCode.InvalidName,
-                        $"Bad string {str}. Table names can't contain a UTF-8 BOM character, was was found at byte position {i}.");
-            }
-
-            prev = c;
-        }
-    }
-
-    public static void GuardInvalidColumnName(ReadOnlySpan<char> str)
-    {
-        if (str.IsEmpty)
-            throw new IngressError(ErrorCode.InvalidName,
-                "Column names must have a non-zero length.");
-
-        for (var i = 0; i < str.Length; i++)
-        {
-            var c = str[i];
-            switch (c)
-            {
-                case '-':
-                case '.':
-                case '?':
-                case ',':
-                case '\'':
-                case '\"':
-                case '\\':
-                case '/':
-                case ':':
-                case ')':
-                case '(':
-                case '+':
-                case '*':
-                case '%':
-                case '~':
-                case '\r':
-                case '\n':
-                case '\0':
-                case '\x0001':
-                case '\x0002':
-                case '\x0003':
-                case '\x0004':
-                case '\x0005':
-                case '\x0006':
-                case '\x0007':
-                case '\x0008':
-                case '\x0009':
-                case '\x000b':
-                case '\x000c':
-                case '\x000e':
-                case '\x000f':
-                case '\x007f':
-                    throw new IngressError(ErrorCode.InvalidName,
-                        $"Bad string {str}. Column names can't contain a {c} character, which was found at byte position {i}");
-                case '\xfeff':
-                    throw new IngressError(ErrorCode.InvalidName,
-                        $"Bad string {str}. Column names can't contain a UTF-8 BOM character, was was found at byte position {i}.");
-            }
-        }
-    }
+    
 }

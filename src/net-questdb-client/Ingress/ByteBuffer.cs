@@ -1,12 +1,41 @@
+/*******************************************************************************
+ *     ___                  _   ____  ____
+ *    / _ \ _   _  ___  ___| |_|  _ \| __ )
+ *   | | | | | | |/ _ \/ __| __| | | |  _ \
+ *   | |_| | |_| |  __/\__ \ |_| |_| | |_) |
+ *    \__\_\\__,_|\___||___/\__|____/|____/
+ *
+ *  Copyright (c) 2014-2019 Appsicle
+ *  Copyright (c) 2019-2024 QuestDB
+ *
+ *  Licensed under the Apache License, Version 2.0 (the "License");
+ *  you may not use this file except in compliance with the License.
+ *  You may obtain a copy of the License at
+ *
+ *  http://www.apache.org/licenses/LICENSE-2.0
+ *
+ *  Unless required by applicable law or agreed to in writing, software
+ *  distributed under the License is distributed on an "AS IS" BASIS,
+ *  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ *  See the License for the specific language governing permissions and
+ *  limitations under the License.
+ *
+ ******************************************************************************/
+
+
 using System.Collections;
 using System.Globalization;
 using System.Net;
 using System.Runtime.CompilerServices;
 using System.Text;
+using Microsoft.Extensions.DependencyInjection;
 using Strings = Org.BouncyCastle.Utilities.Strings;
 
 namespace QuestDB.Ingress;
 
+/// <summary>
+/// Buffer for building up batches of ILP rows.
+/// </summary>
 public class ByteBuffer : HttpContent, IEnumerable<byte>
 {
     private static readonly long EpochTicks = new DateTime(1970, 1, 1).Ticks;
@@ -21,6 +50,8 @@ public class ByteBuffer : HttpContent, IEnumerable<byte>
     public int Position;
     public bool Quoted;
     public byte[] SendBuffer;
+    public bool WithinTransaction;
+    public string CurrentTableName;
 
     public ByteBuffer(int bufferSize)
     {
@@ -45,13 +76,37 @@ public class ByteBuffer : HttpContent, IEnumerable<byte>
             yield return b;
     }
 
+    /// <summary>
+    /// Fulfill <see cref="IEnumerable"/> interface.
+    /// </summary>
+    /// <returns>IEnumerator</returns>
     IEnumerator IEnumerable.GetEnumerator()
     {
         return GetEnumerator();
     }
 
+    public ByteBuffer Transaction(ReadOnlySpan<char> tableName)
+    {
+        if (WithinTransaction)
+        {
+            throw new IngressError(ErrorCode.InvalidApiCall, "Cannot start another transaction - only one allowed at a time.");
+        }
+
+        if (Length > 0)
+        {
+            throw new IngressError(ErrorCode.InvalidApiCall,
+                "Buffer must be clear before you can start a transaction.");
+        }
+        
+        GuardInvalidTableName(tableName);
+        CurrentTableName = tableName.ToString();
+        WithinTransaction = true;
+        return this;
+    }
+
     /// <summary>
-    ///     Set table name for the Line. Table name can be different from line to line.
+    /// Set table name for the Line.
+    /// Each line can have a different table name within a batch.
     /// </summary>
     /// <param name="name">Table name</param>
     /// <returns>Itself</returns>
@@ -59,8 +114,14 @@ public class ByteBuffer : HttpContent, IEnumerable<byte>
     /// <exception cref="ArgumentException">If table name empty or contains unsupported characters</exception>
     public ByteBuffer Table(ReadOnlySpan<char> name)
     {
+        if (WithinTransaction && name != CurrentTableName)
+        {
+            throw new IngressError(ErrorCode.InvalidApiCall,
+                "Transactions can only be for one table.");
+        }
+        
         GuardTableAlreadySet();
-        Utilities.GuardInvalidTableName(name);
+        GuardInvalidTableName(name);
 
         Quoted = false;
         HasTable = true;
@@ -73,20 +134,26 @@ public class ByteBuffer : HttpContent, IEnumerable<byte>
     }
 
     /// <summary>
-    ///     Set value for a Symbol column. Symbols must be written before other columns
+    /// Set value for a Symbol column.
+    /// Symbols must be written before other columns
     /// </summary>
-    /// <param name="symbolName">Symbol column name</param>
-    /// <param name="value">Symbol value</param>
-    /// <returns>Itself</returns>
-    /// <exception cref="ArgumentException">Symbol column name is invalid</exception>
-    /// <exception cref="InvalidOperationException">If table name not written or Column values are written</exception>
+    /// <param name="symbolName">Name of the symbol column.</param>
+    /// <param name="value">Value for the column.</param>
+    /// <returns></returns>
+    /// <exception cref="IngressError"><see cref="ErrorCode.InvalidApiCall"/> when table has not been specified,
+    /// or non-symbol fields have already been written.</exception>
     public ByteBuffer Symbol(ReadOnlySpan<char> symbolName, ReadOnlySpan<char> value)
     {
+        if (WithinTransaction && !HasTable)
+        {
+            Table(CurrentTableName);
+        }
+        
         if (!HasTable) throw new IngressError(ErrorCode.InvalidApiCall, "Table must be specified first.");
 
         if (!NoFields) throw new IngressError(ErrorCode.InvalidApiCall, "Cannot write symbols after fields.");
 
-        Utilities.GuardInvalidColumnName(symbolName);
+        GuardInvalidColumnName(symbolName);
 
         Put(',').EncodeUtf8(symbolName).Put('=').EncodeUtf8(value);
         NoSymbols = false;
@@ -101,6 +168,10 @@ public class ByteBuffer : HttpContent, IEnumerable<byte>
     /// <returns>Itself</returns>
     public ByteBuffer Column(ReadOnlySpan<char> name, ReadOnlySpan<char> value)
     {
+        if (WithinTransaction && !HasTable)
+        {
+            Table(CurrentTableName);
+        }
         Column(name).Put('\"');
         Quoted = true;
         EncodeUtf8(value);
@@ -117,6 +188,10 @@ public class ByteBuffer : HttpContent, IEnumerable<byte>
     /// <returns>Itself</returns>
     public ByteBuffer Column(ReadOnlySpan<char> name, long value)
     {
+        if (WithinTransaction && !HasTable)
+        {
+            Table(CurrentTableName);
+        }
         Column(name).Put(value).Put('i');
         return this;
     }
@@ -129,6 +204,10 @@ public class ByteBuffer : HttpContent, IEnumerable<byte>
     /// <returns>Itself</returns>
     public ByteBuffer Column(ReadOnlySpan<char> name, bool value)
     {
+        if (WithinTransaction && !HasTable)
+        {
+            Table(CurrentTableName);
+        }
         Column(name).Put(value ? 't' : 'f');
         return this;
     }
@@ -141,6 +220,10 @@ public class ByteBuffer : HttpContent, IEnumerable<byte>
     /// <returns>Itself</returns>
     public ByteBuffer Column(ReadOnlySpan<char> name, double value)
     {
+        if (WithinTransaction && !HasTable)
+        {
+            Table(CurrentTableName);
+        }
         Column(name).Put(value.ToString(CultureInfo.InvariantCulture));
         return this;
     }
@@ -153,6 +236,10 @@ public class ByteBuffer : HttpContent, IEnumerable<byte>
     /// <returns>Itself</returns>
     public ByteBuffer Column(ReadOnlySpan<char> name, DateTime timestamp)
     {
+        if (WithinTransaction && !HasTable)
+        {
+            Table(CurrentTableName);
+        }
         var epoch = timestamp.Ticks - EpochTicks;
         Column(name).Put(epoch / 10).Put('t');
         return this;
@@ -166,6 +253,10 @@ public class ByteBuffer : HttpContent, IEnumerable<byte>
     /// <returns>Itself</returns>
     public ByteBuffer Column(ReadOnlySpan<char> name, DateTimeOffset timestamp)
     {
+        if (WithinTransaction && !HasTable)
+        {
+            Table(CurrentTableName);
+        }
         Column(name, timestamp.UtcDateTime);
         return this;
     }
@@ -228,10 +319,12 @@ public class ByteBuffer : HttpContent, IEnumerable<byte>
         Position = 0;
         RowCount = 0;
         Length = 0;
+        WithinTransaction = false;
+        CurrentTableName = "";
     }
-
+    
     /// <summary>
-    ///     Frees unnecessary buffers.
+    /// Removes excess buffers.
     /// </summary>
     public void TrimExcessBuffers()
     {
@@ -266,8 +359,7 @@ public class ByteBuffer : HttpContent, IEnumerable<byte>
     private ByteBuffer Column(ReadOnlySpan<char> columnName)
     {
         GuardTableNotSet();
-
-        Utilities.GuardInvalidColumnName(columnName);
+        GuardInvalidColumnName(columnName);
 
         if (NoFields)
         {
@@ -413,14 +505,18 @@ public class ByteBuffer : HttpContent, IEnumerable<byte>
     /// <exception cref="InvalidOperationException"></exception>
     public void CancelLine()
     {
-        if (BufferOverflowHandling.Extend == BufferOverflowHandling.SendImmediately)
-            throw new InvalidOperationException("Cannot cancel line in BufferOverflowHandling.SendImmediately mode");
-
         CurrentBufferIndex = LineStartBufferIndex;
         Length -= (Position - LineStartBufferPosition);
         Position = LineStartBufferPosition;
     }
 
+    /// <summary>
+    /// Writes the chunked buffer contents to a stream.
+    /// Used to fulfill the <see cref="HttpContent"/> requirements.
+    /// </summary>
+    /// <param name="stream"></param>
+    /// <param name="context"></param>
+    /// <exception cref="IngressError">When writing to stream fails.</exception>
     protected override async Task SerializeToStreamAsync(Stream stream, TransportContext? context)
     {
         for (var i = 0; i <= CurrentBufferIndex; i++)
@@ -439,27 +535,38 @@ public class ByteBuffer : HttpContent, IEnumerable<byte>
         }
     }
 
+    /// <summary>
+    /// Writes the chunked buffer contents to a stream.
+    /// </summary>
+    /// <param name="stream"></param>
+    /// <exception cref="IngressError">When writing to stream fails.</exception>
     public async Task WriteToStreamAsync(Stream stream)
     {
         await SerializeToStreamAsync(stream, null);
     }
-
-    public void WriteToStream(Stream stream)
-    {
-        SerializeToStream(stream, null, default);
-    }
-
+    
+    /// <summary>
+    /// Fulfills <see cref="HttpContent"/>
+    /// </summary>
+    /// <exception cref="IngressError">When writing to stream fails.</exception>
     protected override void SerializeToStream(Stream stream, TransportContext? context, CancellationToken ct)
     {
         SerializeToStreamAsync(stream, context, ct).Wait(ct);
     }
 
+    /// <summary>
+    /// Fulfills <see cref="HttpContent"/>
+    /// </summary>
     protected override bool TryComputeLength(out long length)
     {
         length = Length;
         return true;
     }
 
+    /// <summary>
+    /// Fulfills <see cref="HttpContent"/>
+    /// </summary>
+    /// <exception cref="IngressError">When writing to stream fails.</exception>
     protected override async Task<Stream> CreateContentReadStreamAsync()
     {
         var stream = new MemoryStream();
@@ -477,5 +584,124 @@ public class ByteBuffer : HttpContent, IEnumerable<byte>
         var stream = new MemoryStream();
         SerializeToStream(stream, null, CancellationToken.None);
         return stream.ToArray();
+    }
+    
+    /// <summary>
+    /// Guards against invalid table names.
+    /// Table names must fit the following criteria:
+    ///     - They must be non-empty
+    ///     - A full stop `.` may only appear when sandwiched 
+    /// </summary>
+    /// <param name="str"></param>
+    /// <exception cref="IngressError"><see cref="ErrorCode.InvalidName"/> when table name does not meet validation criteria.</exception>
+    public static void GuardInvalidTableName(ReadOnlySpan<char> str)
+    {
+        
+        if (str.IsEmpty)
+            throw new IngressError(ErrorCode.InvalidName,
+                "Table names must have a non-zero length.");
+
+        var prev = '\0';
+        for (var i = 0; i < str.Length; i++)
+        {
+            var c = str[i];
+            switch (c)
+            {
+                case '.':
+                    if (i == 0 || i == str.Length - 1 || prev == '.')
+                        throw new IngressError(ErrorCode.InvalidName,
+                            $"Bad string {str}. Found invalid dot `.` at position {i}.");
+                    break;
+                case '?':
+                case ',':
+                case '\'':
+                case '\"':
+                case '\\':
+                case '/':
+                case ':':
+                case ')':
+                case '(':
+                case '+':
+                case '*':
+                case '%':
+                case '~':
+                case '\r':
+                case '\n':
+                case '\0':
+                case '\x0001':
+                case '\x0002':
+                case '\x0003':
+                case '\x0004':
+                case '\x0005':
+                case '\x0006':
+                case '\x0007':
+                case '\x0008':
+                case '\x0009':
+                case '\x000b':
+                case '\x000c':
+                case '\x000e':
+                case '\x000f':
+                case '\x007f':
+                    throw new IngressError(ErrorCode.InvalidName,
+                        $"Bad string {str}. Table names can't contain a {c} character, which was found at byte position {i}");
+                case '\xfeff':
+                    throw new IngressError(ErrorCode.InvalidName,
+                        $"Bad string {str}. Table names can't contain a UTF-8 BOM character, was was found at byte position {i}.");
+            }
+
+            prev = c;
+        }
+    }
+
+    public static void GuardInvalidColumnName(ReadOnlySpan<char> str)
+    {
+        if (str.IsEmpty)
+            throw new IngressError(ErrorCode.InvalidName,
+                "Column names must have a non-zero length.");
+
+        for (var i = 0; i < str.Length; i++)
+        {
+            var c = str[i];
+            switch (c)
+            {
+                case '-':
+                case '.':
+                case '?':
+                case ',':
+                case '\'':
+                case '\"':
+                case '\\':
+                case '/':
+                case ':':
+                case ')':
+                case '(':
+                case '+':
+                case '*':
+                case '%':
+                case '~':
+                case '\r':
+                case '\n':
+                case '\0':
+                case '\x0001':
+                case '\x0002':
+                case '\x0003':
+                case '\x0004':
+                case '\x0005':
+                case '\x0006':
+                case '\x0007':
+                case '\x0008':
+                case '\x0009':
+                case '\x000b':
+                case '\x000c':
+                case '\x000e':
+                case '\x000f':
+                case '\x007f':
+                    throw new IngressError(ErrorCode.InvalidName,
+                        $"Bad string {str}. Column names can't contain a {c} character, which was found at byte position {i}");
+                case '\xfeff':
+                    throw new IngressError(ErrorCode.InvalidName,
+                        $"Bad string {str}. Column names can't contain a UTF-8 BOM character, was was found at byte position {i}.");
+            }
+        }
     }
 }

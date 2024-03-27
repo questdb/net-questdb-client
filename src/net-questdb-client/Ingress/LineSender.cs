@@ -1,3 +1,28 @@
+/*******************************************************************************
+ *     ___                  _   ____  ____
+ *    / _ \ _   _  ___  ___| |_|  _ \| __ )
+ *   | | | | | | |/ _ \/ __| __| | | |  _ \
+ *   | |_| | |_| |  __/\__ \ |_| |_| | |_) |
+ *    \__\_\\__,_|\___||___/\__|____/|____/
+ *
+ *  Copyright (c) 2014-2019 Appsicle
+ *  Copyright (c) 2019-2024 QuestDB
+ *
+ *  Licensed under the Apache License, Version 2.0 (the "License");
+ *  you may not use this file except in compliance with the License.
+ *  You may obtain a copy of the License at
+ *
+ *  http://www.apache.org/licenses/LICENSE-2.0
+ *
+ *  Unless required by applicable law or agreed to in writing, software
+ *  distributed under the License is distributed on an "AS IS" BASIS,
+ *  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ *  See the License for the specific language governing permissions and
+ *  limitations under the License.
+ *
+ ******************************************************************************/
+
+
 using System.Buffers.Text;
 using System.Diagnostics;
 using System.Net;
@@ -6,6 +31,7 @@ using System.Net.Security;
 using System.Net.Sockets;
 using System.Text;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 using Org.BouncyCastle.Asn1.Sec;
 using Org.BouncyCastle.Crypto.Parameters;
 using Org.BouncyCastle.Math;
@@ -18,16 +44,22 @@ public class LineSender : IDisposable
     private const string IlpEndpoint = "write";
     public static int DefaultQuestDbFsFileNameLimit = 127;
 
+    
+    private ByteBuffer _byteBuffer;
+    private Stopwatch _intervalTimer;
+   
+    
+    // http
+    private HttpClient? _client;
+
 
     // tcp
     private static readonly RemoteCertificateValidationCallback AllowAllCertCallback = (_, _, _, _) => true;
     private bool _authenticated;
-    private ByteBuffer _byteBuffer;
-    private HttpClient? _client;
-    private Stream _dataStream;
-    private Stopwatch _intervalTimer;
 
-    private Socket _underlyingSocket;
+
+    private Stream? _dataStream;
+    private Socket? _underlyingSocket;
 
     // general
     public QuestDBOptions Options;
@@ -42,44 +74,30 @@ public class LineSender : IDisposable
     {
         Hydrate(options);
     }
-
-
+    
     public LineSender(string confString) : this(new QuestDBOptions(confString))
     {
     }
-
-
+    
     public int QuestDbFsFileNameLimit
     {
         get => _byteBuffer.QuestDbFsFileNameLimit;
         set => _byteBuffer.QuestDbFsFileNameLimit = value;
     }
 
+    /// <summary>
+    /// Closes any underlying sockets.
+    /// Fulfills <see cref="IDisposable"/> interface.
+    /// </summary>
     public void Dispose()
     {
         if (_underlyingSocket != null) _underlyingSocket.Dispose();
 
         if (_dataStream != null) _dataStream.Dispose();
     }
-
-    private HttpClient GenerateClient()
-    {
-        var client = new HttpClient();
-        var uri = new UriBuilder(Options.protocol.ToString(), Options.Host, Options.Port);
-        client.BaseAddress = uri.Uri;
-        client.Timeout = TimeSpan.FromSeconds(300);
-
-        if (Options.username != null && Options.password != null)
-            client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Basic",
-                Convert.ToBase64String(Encoding.ASCII.GetBytes($"{Options.username}:{Options.password}")));
-        else if (Options.token != null)
-            client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", Options.token);
-        return client;
-    }
-
+    
     public void Hydrate(QuestDBOptions options)
     {
-        // _buffer = new ChunkedBuffer(options.InitBufSize);
         Options = options;
         _intervalTimer = new Stopwatch();
         _byteBuffer = new ByteBuffer(Options.init_buf_size);
@@ -128,6 +146,11 @@ public class LineSender : IDisposable
         }
     }
 
+    /// <summary>
+    /// Check that the file name is not too long.
+    /// </summary>
+    /// <param name="name"></param>
+    /// <exception cref="IngressError"></exception>
     private void GuardFsFileNameLimit(ReadOnlySpan<char> name)
     {
         if (Encoding.UTF8.GetBytes(name.ToString()).Length > QuestDbFsFileNameLimit)
@@ -135,6 +158,24 @@ public class LineSender : IDisposable
                 $"Name is too long, must be under {QuestDbFsFileNameLimit} bytes.");
     }
 
+    /// <summary>
+    ///  
+    /// </summary>
+    /// <param name="tableName"></param>
+    /// <returns></returns>
+    /// <exception cref="IngressError"></exception>
+    public LineSender Transaction(ReadOnlySpan<char> tableName)
+    {
+        if (!Options.IsHttp())
+        {
+            throw new IngressError(ErrorCode.InvalidApiCall, "Transactions are only available for HTTP.");
+        }
+
+        _byteBuffer.Transaction(tableName);
+        return this;
+    }
+
+    /// <inheritdoc cref="ByteBuffer.Table"/>
     public LineSender Table(ReadOnlySpan<char> name)
     {
         GuardFsFileNameLimit(name);
@@ -142,6 +183,7 @@ public class LineSender : IDisposable
         return this;
     }
 
+    /// <inheritdoc cref="ByteBuffer.Symbol"/>
     public LineSender Symbol(ReadOnlySpan<char> symbolName, ReadOnlySpan<char> value)
     {
         GuardFsFileNameLimit(symbolName);
@@ -149,42 +191,49 @@ public class LineSender : IDisposable
         return this;
     }
 
+    /// <inheritdoc cref="ByteBuffer.Column(ReadOnlySpan&lt;char&gt;, ReadOnlySpan&lt;char&gt;)"/>
     public LineSender Column(ReadOnlySpan<char> name, ReadOnlySpan<char> value)
     {
         _byteBuffer.Column(name, value);
         return this;
     }
 
+    /// <inheritdoc cref="ByteBuffer.Column(ReadOnlySpan&lt;char&gt;, long)"/>
     public LineSender Column(ReadOnlySpan<char> name, long value)
     {
         _byteBuffer.Column(name, value);
         return this;
     }
 
+    /// <inheritdoc cref="ByteBuffer.Column(ReadOnlySpan&lt;char&gt;, bool)"/>
     public LineSender Column(ReadOnlySpan<char> name, bool value)
     {
         _byteBuffer.Column(name, value);
         return this;
     }
 
+    /// <inheritdoc cref="ByteBuffer.Column(ReadOnlySpan&lt;char&gt;, double)"/>
     public LineSender Column(ReadOnlySpan<char> name, double value)
     {
         _byteBuffer.Column(name, value);
         return this;
     }
 
+    /// <inheritdoc cref="ByteBuffer.Column(ReadOnlySpan&lt;char&gt;, DateTime)"/>
     public LineSender Column(ReadOnlySpan<char> name, DateTime value)
     {
         _byteBuffer.Column(name, value);
         return this;
     }
 
+    /// <inheritdoc cref="ByteBuffer.Column(ReadOnlySpan&lt;char&gt;, DateTimeOffset)"/>
     public LineSender Column(ReadOnlySpan<char> name, DateTimeOffset value)
     {
         _byteBuffer.Column(name, value.UtcDateTime);
         return this;
     }
 
+    /// <inheritdoc cref="ByteBuffer.At(DateTime)"/>
     public LineSender At(DateTime value)
     {
         _byteBuffer.At(value);
@@ -192,6 +241,7 @@ public class LineSender : IDisposable
         return this;
     }
 
+    /// <inheritdoc cref="ByteBuffer.At(DateTimeOffset)"/>
     public LineSender At(DateTimeOffset timestamp)
     {
         _byteBuffer.At(timestamp);
@@ -199,6 +249,7 @@ public class LineSender : IDisposable
         return this;
     }
     
+    /// <inheritdoc cref="ByteBuffer.AtNow"/>
     public LineSender AtNow()
     {
         _byteBuffer.AtNow();
@@ -208,6 +259,12 @@ public class LineSender : IDisposable
 
     private void HandleAutoFlush()
     {
+        // noop if within transaction
+        if (_byteBuffer.WithinTransaction)
+        {
+            return;
+        }
+        
         if (Options.auto_flush == AutoFlushType.on)
             if (_byteBuffer.RowCount >= Options.auto_flush_rows
                 || _intervalTimer.Elapsed >= Options.auto_flush_interval
@@ -215,16 +272,19 @@ public class LineSender : IDisposable
                 Send();
     }
 
+    /// <summary>
+    /// Alias for <see cref="SendAsync"/> with empty return value.
+    /// </summary>
     public async Task FlushAsync()
     {
         await SendAsync();
     }
 
+    /// <inheritdoc cref="SendAsync"/>
     public (HttpRequestMessage?, HttpResponseMessage?) Send()
     {
         return SendAsync().Result;
     }
-
 
     public async Task<(HttpRequestMessage?, HttpResponseMessage?)> SendAsync()
     {
@@ -257,6 +317,11 @@ public class LineSender : IDisposable
         throw new NotImplementedException();
     }
 
+    /// <summary>
+    /// Specifies whether a negative <see cref="HttpResponseMessage"/> will lead to a retry or to an exception.
+    /// </summary>
+    /// <param name="code">The <see cref="HttpStatusCode"/></param>
+    /// <returns></returns>
     private bool IsRetriableError(HttpStatusCode code)
     {
         switch (code)
@@ -322,7 +387,7 @@ public class LineSender : IDisposable
     }
 
     /// <summary>
-    ///     Performs Key based Authentication with QuestDB
+    /// Performs Key based Authentication with QuestDB
     /// </summary>
     /// <param name="keyId">Key or User Id</param>
     /// <param name="encodedPrivateKey">Base64 Url safe encoded Secp256r1 private key or `d` token in JWT key</param>
@@ -400,7 +465,7 @@ public class LineSender : IDisposable
     }
 
     /// <summary>
-    ///     Trims buffer memory.
+    /// Trims buffer memory.
     /// </summary>
     public void Truncate()
     {
@@ -408,7 +473,7 @@ public class LineSender : IDisposable
     }
 
     /// <summary>
-    ///     Cancel current unsent line. Works only in Extend buffer overflow mode.
+    /// Cancel the current line.
     /// </summary>
     /// <exception cref="InvalidOperationException"></exception>
     public void CancelLine()
@@ -416,6 +481,18 @@ public class LineSender : IDisposable
         _byteBuffer.CancelLine();
     }
 
+    /// <summary>
+    /// Deprecated intialisation for the client.
+    /// </summary>
+    /// <param name="host"></param>
+    /// <param name="port"></param>
+    /// <param name="bufferSize"></param>
+    /// <param name="bufferOverflowHandling"></param>
+    /// <param name="tlsMode"></param>
+    /// <param name="cancellationToken"></param>
+    /// <param name="protocol"></param>
+    /// <returns></returns>
+    [Obsolete]
     public static async ValueTask<LineSender> ConnectAsync(
         string host,
         int port,
@@ -449,4 +526,26 @@ public class LineSender : IDisposable
 
         return (request, cts);
     }
+    
+    private HttpClient GenerateClient()
+    {
+        var client = new HttpClient();
+        var uri = new UriBuilder(Options.protocol.ToString(), Options.Host, Options.Port);
+        client.BaseAddress = uri.Uri;
+        client.Timeout = TimeSpan.FromSeconds(300);
+
+        if (Options.username != null && Options.password != null)
+            client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Basic",
+                Convert.ToBase64String(Encoding.ASCII.GetBytes($"{Options.username}:{Options.password}")));
+        else if (Options.token != null)
+            client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", Options.token);
+        return client;
+    }
+
+    public int Length => _byteBuffer.Length;
+
+    public int RowCount => _byteBuffer.RowCount;
+
+    public bool WithinTransaction => _byteBuffer.WithinTransaction;
+
 }

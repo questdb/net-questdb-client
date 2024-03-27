@@ -1,3 +1,28 @@
+/*******************************************************************************
+ *     ___                  _   ____  ____
+ *    / _ \ _   _  ___  ___| |_|  _ \| __ )
+ *   | | | | | | |/ _ \/ __| __| | | |  _ \
+ *   | |_| | |_| |  __/\__ \ |_| |_| | |_) |
+ *    \__\_\\__,_|\___||___/\__|____/|____/
+ *
+ *  Copyright (c) 2014-2019 Appsicle
+ *  Copyright (c) 2019-2024 QuestDB
+ *
+ *  Licensed under the Apache License, Version 2.0 (the "License");
+ *  you may not use this file except in compliance with the License.
+ *  You may obtain a copy of the License at
+ *
+ *  http://www.apache.org/licenses/LICENSE-2.0
+ *
+ *  Unless required by applicable law or agreed to in writing, software
+ *  distributed under the License is distributed on an "AS IS" BASIS,
+ *  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ *  See the License for the specific language governing permissions and
+ *  limitations under the License.
+ *
+ ******************************************************************************/
+
+
 using System.Text;
 using dummy_http_server;
 using NUnit.Framework;
@@ -643,5 +668,93 @@ public class HttpTests
     {
         Assert.AreEqual((await LineSender.ConnectAsync("localhost", 9000)).Options.ToString(),
             new LineSender("https::addr=localhost:9000;init_buf_size=4096;").Options.ToString());
+    }
+
+    [Test]
+    public async Task BasicTransaction()
+    {
+        using var srv = new DummyHttpServer();
+        await srv.StartAsync(Port);
+        
+        using var sender =
+            new LineSender(
+                $"http::addr={Host}:{Port};");
+        sender.Transaction("tableName").Symbol("foo", "bah").AtNow();
+        await sender.SendAsync();
+
+        var expected = "tableName,foo=bah\n";
+        Assert.That(srv.GetReceiveBuffer().ToString, Is.EqualTo(expected));
+    }
+    
+    [Test]
+    public async Task TransactionCanOnlyHaveOneTable()
+    {
+        using var srv = new DummyHttpServer();
+        await srv.StartAsync(Port);
+        
+        using var sender =
+            new LineSender(
+                $"http::addr={Host}:{Port};");
+        sender.Transaction("tableName").Symbol("foo", "bah").AtNow();
+        Assert.That(
+            () => sender.Table("other table name"),
+            Throws.TypeOf<IngressError>().With.Message.Contains("only be for one table")
+            );
+
+        await sender.SendAsync();
+
+        // check its fine after sending
+        sender.Transaction("other table name");
+    }
+    
+    [Test]
+    public async Task TransactionIsSingleton()
+    {
+        using var srv = new DummyHttpServer();
+        await srv.StartAsync(Port);
+        
+        using var sender =
+            new LineSender(
+                $"http::addr={Host}:{Port};");
+        sender.Transaction("tableName").Symbol("foo", "bah").AtNow();
+        Assert.That(
+            () => sender.Transaction("tableName"),
+            Throws.TypeOf<IngressError>().With.Message.Contains("another transaction")
+        );
+
+        await sender.SendAsync();
+
+        // check its fine after sending
+        sender.Transaction("other table name");
+    }
+    
+     
+    [Test]
+    public async Task TransactionShouldNotBeAutoFlushed()
+    {
+        using var srv = new DummyHttpServer();
+        await srv.StartAsync(Port);
+        
+        using var sender =
+            new LineSender(
+                $"http::addr={Host}:{Port};auto_flush=on;auto_flush_rows=1;");
+
+
+        sender.Transaction("tableName");
+        for (int i = 0; i < 100; i++)
+        {
+            sender
+                .Symbol("foo", "bah")
+                .Column("num", i)
+                .AtNow();
+        }
+        
+        Assert.That(sender.RowCount == 100);
+        Assert.That(sender.WithinTransaction);
+        
+        await sender.SendAsync();
+        
+        Assert.That(sender.RowCount == 0);
+        Assert.That(!sender.WithinTransaction);
     }
 }

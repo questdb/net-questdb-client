@@ -221,6 +221,10 @@ public class ByteBuffer : HttpContent, IEnumerable<byte>
     {
         CurrentBufferIndex = 0;
         SendBuffer = Buffers[CurrentBufferIndex].Buffer;
+        for (int i = 0; i < Buffers.Count; i++)
+        {
+            Buffers[i] = (Buffers[i].Buffer, 0);
+        }
         Position = 0;
         RowCount = 0;
         Length = 0;
@@ -413,7 +417,7 @@ public class ByteBuffer : HttpContent, IEnumerable<byte>
             throw new InvalidOperationException("Cannot cancel line in BufferOverflowHandling.SendImmediately mode");
 
         CurrentBufferIndex = LineStartBufferIndex;
-        Length -= Position - LineStartBufferPosition;
+        Length -= (Position - LineStartBufferPosition);
         Position = LineStartBufferPosition;
     }
 

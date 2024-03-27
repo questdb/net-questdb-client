@@ -198,8 +198,7 @@ public class LineSender : IDisposable
         HandleAutoFlush();
         return this;
     }
-
-
+    
     public LineSender AtNow()
     {
         _byteBuffer.AtNow();
@@ -504,6 +503,7 @@ public class LineSender : IDisposable
     {
         var request = new HttpRequestMessage(HttpMethod.Post, IlpEndpoint) { Content = _byteBuffer };
         request.Content.Headers.ContentType = new MediaTypeHeaderValue("text/plain") { CharSet = "utf-8" };
+        request.Content.Headers.ContentLength = _byteBuffer.Length;
 
         var cts = new CancellationTokenSource();
         cts.CancelAfter(Options.request_timeout

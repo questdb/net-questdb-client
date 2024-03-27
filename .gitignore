@@ -17,3 +17,5 @@ src/net-questdb-client-benchmarks/bin
 src/net-questdb-client-benchmarks/obj
 src/dummy-http-server/bin/
 src/dummy-http-server/obj/
+src/example-streaming/bin/
+src/example-streaming/obj/

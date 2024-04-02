@@ -19,6 +19,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "dummy-http-server", "src\du
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "example-streaming", "src\example-streaming\example-streaming.csproj", "{467D00AD-EFEE-4915-AB09-FCA4EF589286}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "example-auth-http-tls", "src\example-auth-http-tls\example-auth-http-tls.csproj", "{24D93DBB-3783-423F-81CC-6B9BFD33F6CD}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -60,5 +62,9 @@ Global
 		{467D00AD-EFEE-4915-AB09-FCA4EF589286}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{467D00AD-EFEE-4915-AB09-FCA4EF589286}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{467D00AD-EFEE-4915-AB09-FCA4EF589286}.Release|Any CPU.Build.0 = Release|Any CPU
+		{24D93DBB-3783-423F-81CC-6B9BFD33F6CD}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{24D93DBB-3783-423F-81CC-6B9BFD33F6CD}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{24D93DBB-3783-423F-81CC-6B9BFD33F6CD}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{24D93DBB-3783-423F-81CC-6B9BFD33F6CD}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 EndGlobal

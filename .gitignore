@@ -23,3 +23,5 @@ src/net-questdb-client-benchmarks/BenchmarkDot*
 src/net-questdb-client-benchmarks/obj
 _site
 api
+src/example-auth-http-tls/obj/
+src/example-auth-http-tls/bin/

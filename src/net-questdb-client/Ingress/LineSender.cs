@@ -29,6 +29,7 @@ using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Security;
 using System.Net.Sockets;
+using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using Microsoft.Extensions.Configuration;
 using Org.BouncyCastle.Asn1.Sec;
@@ -53,7 +54,7 @@ public class LineSender : IDisposable
 
 
     // http
-    private HttpClient? _client;
+    private HttpClientHandler? _handler;
 
 
     private Stream? _dataStream;
@@ -84,13 +85,13 @@ public class LineSender : IDisposable
         set => _byteBuffer.QuestDbFsFileNameLimit = value;
     }
 
-    public int Length => _byteBuffer.Length;
+    public int length => _byteBuffer.Length;
 
-    public int RowCount => _byteBuffer.RowCount;
+    public int rowCount => _byteBuffer.RowCount;
 
-    public bool WithinTransaction => _byteBuffer.WithinTransaction;
+    public bool withinTransaction => _byteBuffer.WithinTransaction;
 
-    private bool CommittingTransaction { get; set; } = false;
+    private bool committingTransaction { get; set; }
 
     /// <summary>
     ///     Closes any underlying sockets.
@@ -109,7 +110,48 @@ public class LineSender : IDisposable
         _intervalTimer = new Stopwatch();
         _byteBuffer = new ByteBuffer(Options.init_buf_size);
 
-        if (options.IsHttp()) _client = GenerateClient();
+        if (options.IsHttp())
+        {
+            if (options.protocol == ProtocolType.https)
+            {
+                ServicePointManager.Expect100Continue = true;
+                ServicePointManager.SecurityProtocol = SecurityProtocolType.Tls12 | SecurityProtocolType.Tls13;
+
+                _handler = new HttpClientHandler();
+
+                if (options.tls_verify == TlsVerifyType.unsafe_off)
+                {
+                    _handler.ServerCertificateCustomValidationCallback += (_, _, _, _) => true;
+                }
+                else
+                {
+                    _handler.ServerCertificateCustomValidationCallback =
+                        (_, certificate, chain, errors) =>
+                        {
+                            if ((errors & ~SslPolicyErrors.RemoteCertificateChainErrors) != 0)
+                            {
+                                return false;
+                            }
+
+                            if (options.tls_roots != null)
+                            {
+                                chain.ChainPolicy.TrustMode = X509ChainTrustMode.CustomRootTrust;
+                                chain.ChainPolicy.CustomTrustStore.Add(X509Certificate2.CreateFromPemFile(options.tls_roots, options.tls_roots_password));
+                            }
+                            
+                            return chain.Build(certificate);
+                        };
+   
+                }
+
+                if (options.tls_roots != null)
+                {
+                    _handler.ClientCertificates.Add(
+                        X509Certificate2.CreateFromPemFile(options.tls_roots, options.tls_roots_password));
+                }
+
+            }
+        }
 
         if (options.IsTcp())
         {
@@ -197,6 +239,10 @@ public class LineSender : IDisposable
         return this;
     }
 
+    /// <summary>
+    /// Synchronous version of <see cref="CommitAsync"/>
+    /// </summary>
+    /// <returns></returns>
     public bool Commit()
     {
         return CommitAsync().Result;
@@ -209,11 +255,11 @@ public class LineSender : IDisposable
     /// <exception cref="IngressError">Thrown by <see cref="SendAsync"/></exception>
     public async Task<bool> CommitAsync()
     {
-        CommittingTransaction = true;
+        committingTransaction = true;
         var (_, response) = await SendAsync();
         
-        CommittingTransaction = false;
-        
+        committingTransaction = false;
+        Debug.Assert(!_byteBuffer.WithinTransaction);
         // we expect an error to be thrown before here, and response is non-null (since its HTTP).
         return response!.IsSuccessStatusCode;
     }
@@ -223,6 +269,10 @@ public class LineSender : IDisposable
     {
         GuardFsFileNameLimit(name);
         _byteBuffer.Table(name);
+        if (!_intervalTimer.IsRunning)
+        {
+            _intervalTimer.Start();
+        }
         return this;
     }
 
@@ -300,6 +350,13 @@ public class LineSender : IDisposable
         return this;
     }
 
+    /// <summary>
+    ///     Applies auto-flushing logic.
+    /// </summary>
+    /// <remarks>
+    /// Auto flush can be configured to flush by row limits, time limits, or buffer size.
+    /// 
+    /// </remarks>
     private void HandleAutoFlush()
     {
         GuardExceededMaxBufferSize();
@@ -312,6 +369,14 @@ public class LineSender : IDisposable
                 || _intervalTimer.Elapsed >= Options.auto_flush_interval
                 || Options.auto_flush_bytes <= _byteBuffer.Length)
                 Send();
+    }
+    
+    /// <summary>
+    ///     Alias for <see cref="SendAsync" /> with empty return value.
+    /// </summary>
+    public void Flush()
+    { 
+        FlushAsync().Wait();
     }
 
     /// <summary>
@@ -330,7 +395,7 @@ public class LineSender : IDisposable
 
     public async Task<(HttpRequestMessage?, HttpResponseMessage?)> SendAsync()
     {
-        if (WithinTransaction && !CommittingTransaction)
+        if (withinTransaction && !committingTransaction)
         {
             throw new IngressError(ErrorCode.InvalidApiCall, "Please call `commit()` to complete your transaction.");
         }
@@ -340,12 +405,12 @@ public class LineSender : IDisposable
         if (Options.IsHttp())
         {
             var (request, cts) = GenerateRequest();
-            var client = GenerateClient();
+            using var client = GenerateClient();
             try
             {
                 var response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cts.Token);
                 return await FinishOrRetryAsync(
-                    response, cts
+                    client, response, cts
                 );
             }
             catch (Exception ex)
@@ -388,49 +453,59 @@ public class LineSender : IDisposable
         }
     }
 
-    public async Task<(HttpRequestMessage?, HttpResponseMessage?)> FinishOrRetryAsync(HttpResponseMessage response,
-        CancellationTokenSource cts = default)
+    /// <summary>
+    /// Applies retry logic (if required).
+    /// </summary>
+    /// <remarks>
+    ///     Until <see cref="QuestDBOptions.retry_timeout"/> has elapsed, the request will be retried
+    ///     with a small jitter.
+    /// </remarks>
+    /// <param name="client">The in-use HttpClient.</param>
+    /// <param name="response">The response triggering the retry.</param>
+    /// <param name="cts">The cancellation token source.</param>
+    /// <returns></returns>
+    /// <exception cref="IngressError"></exception>
+    public async Task<(HttpRequestMessage?, HttpResponseMessage?)> FinishOrRetryAsync(HttpClient client, HttpResponseMessage response,
+        CancellationTokenSource cts = default, int retryIntervalMs = 10)
     {
-        if (response.IsSuccessStatusCode)
-        {
-            cts.Dispose();
-            _byteBuffer.Clear();
-            return (response.RequestMessage, response);
-        }
-
-        if (!(IsRetriableError(response.StatusCode) && Options.retry_timeout > TimeSpan.Zero))
-            throw new IngressError(ErrorCode.ServerFlushError, response.ReasonPhrase);
-
-        var timer = new Stopwatch();
-        timer.Start();
-
-        var retryInterval = TimeSpan.FromMilliseconds(10);
         var lastResponse = response;
 
-        while (timer.Elapsed < Options.retry_timeout)
+        if (!response.IsSuccessStatusCode)
         {
-            var jitter = TimeSpan.FromMilliseconds(Random.Shared.Next(0, 10) - 5);
-            await Task.Delay(retryInterval + jitter);
+            if (!(IsRetriableError(response.StatusCode) && Options.retry_timeout > TimeSpan.Zero))
+                throw new IngressError(ErrorCode.ServerFlushError, response.ReasonPhrase);
 
-            var (nextRequest, nextToken) = GenerateRequest();
-            cts = nextToken;
-            lastResponse = await _client.SendAsync(nextRequest, nextToken.Token);
-            if (!lastResponse!.IsSuccessStatusCode)
+            var retryTimer = new Stopwatch();
+            retryTimer.Start();
+
+            var retryInterval = TimeSpan.FromMilliseconds(retryIntervalMs);
+
+            while (retryTimer.Elapsed < Options.retry_timeout)
             {
-                if (IsRetriableError(lastResponse.StatusCode) && Options.retry_timeout > TimeSpan.Zero)
+                var jitter = TimeSpan.FromMilliseconds(Random.Shared.Next(0, retryIntervalMs) - retryIntervalMs / 2);
+                await Task.Delay(retryInterval + jitter);
+
+                var (nextRequest, nextToken) = GenerateRequest();
+                lastResponse = await client.SendAsync(nextRequest, nextToken.Token);
+                if (!lastResponse!.IsSuccessStatusCode)
                 {
-                    cts.Dispose();
-                    continue;
+                    if (IsRetriableError(lastResponse.StatusCode) && Options.retry_timeout > TimeSpan.Zero)
+                    {
+                        cts.Dispose();
+                    }
                 }
-
-                throw new IngressError(ErrorCode.ServerFlushError, lastResponse.ReasonPhrase);
             }
-
-            _byteBuffer.Clear();
-            return (lastResponse.RequestMessage, lastResponse);
         }
 
-        throw new IngressError(ErrorCode.ServerFlushError, lastResponse.ReasonPhrase);
+        if (!lastResponse.IsSuccessStatusCode)
+        {
+            throw new IngressError(ErrorCode.ServerFlushError, lastResponse.ReasonPhrase);
+        }
+        
+        cts.Dispose();
+        _byteBuffer.Clear();
+        _intervalTimer.Restart();
+        return (lastResponse.RequestMessage, lastResponse);
     }
 
     /// <summary>
@@ -445,17 +520,16 @@ public class LineSender : IDisposable
         if (_authenticated) throw new IngressError(ErrorCode.AuthError, "Already authenticated.");
 
         _authenticated = true;
-        _byteBuffer.EncodeUtf8(Options.username);
+        _byteBuffer.EncodeUtf8(Options.username); // key_id
         _byteBuffer.SendBuffer[_byteBuffer.Position++] = (byte)'\n';
         await SendAsync();
 
         var bufferLen = await ReceiveUntil('\n', cancellationToken);
 
         if (Options.token == null) throw new IngressError(ErrorCode.AuthError, "Must provide a token for TCP auth.");
-
-
-        var (key_id, privateKey, pub_key_x, pub_key_y) =
-            (Options.username, FromBase64String(Options.token!), Options.token_x, Options.token_y);
+        
+        var privateKey =
+            FromBase64String(Options.token!);
 
         var p = SecNamedCurves.GetByName("secp256r1");
         var parameters = new ECDomainParameters(p.Curve, p.G, p.N, p.H);
@@ -476,6 +550,13 @@ public class LineSender : IDisposable
         _byteBuffer.Position = 0;
     }
 
+    /// <summary>
+    ///     Receives a chunk of data from the TCP stream.
+    /// </summary>
+    /// <param name="endChar"></param>
+    /// <param name="cancellationToken"></param>
+    /// <returns></returns>
+    /// <exception cref="IngressError"></exception>
     private async ValueTask<int> ReceiveUntil(char endChar, CancellationToken cancellationToken)
     {
         var totalReceived = 0;
@@ -529,7 +610,7 @@ public class LineSender : IDisposable
     }
 
     /// <summary>
-    ///     Deprecated intialisation for the client.
+    ///     Deprecated initialisation for the client.
     /// </summary>
     /// <param name="host"></param>
     /// <param name="port"></param>
@@ -561,22 +642,26 @@ public class LineSender : IDisposable
         return new LineSender(confString.ToString());
     }
 
-    public (HttpRequestMessage, CancellationTokenSource) GenerateRequest()
+    /// <summary>
+    ///     Creates a new HTTP request with appropriate encoding and timeout.
+    /// </summary>
+    /// <returns></returns>
+    private (HttpRequestMessage, CancellationTokenSource) GenerateRequest()
     {
         var request = new HttpRequestMessage(HttpMethod.Post, IlpEndpoint) { Content = _byteBuffer };
         request.Content.Headers.ContentType = new MediaTypeHeaderValue("text/plain") { CharSet = "utf-8" };
         request.Content.Headers.ContentLength = _byteBuffer.Length;
-
-        var cts = new CancellationTokenSource();
-        cts.CancelAfter(Options.request_timeout
-                        + TimeSpan.FromSeconds(_byteBuffer.Length / (double)Options.request_min_throughput));
-
+        var cts = GenerateRequestTimeout();
         return (request, cts);
     }
 
+    /// <summary>
+    ///     Create a new HttpClient for the request.
+    /// </summary>
+    /// <returns></returns>
     private HttpClient GenerateClient()
     {
-        var client = new HttpClient();
+        var client = _handler != null ? new HttpClient(_handler) : new HttpClient();
         var uri = new UriBuilder(Options.protocol.ToString(), Options.Host, Options.Port);
         client.BaseAddress = uri.Uri;
         client.Timeout = TimeSpan.FromSeconds(300);
@@ -589,10 +674,65 @@ public class LineSender : IDisposable
         return client;
     }
 
+    /// <summary>
+    ///     Create a cancellation token with timeout equal to <see cref="QuestDBOptions.auth_timeout"/>
+    /// </summary>
+    /// <returns></returns>
     private CancellationTokenSource GenerateAuthTimeout()
     {
         var cts = new CancellationTokenSource();
         cts.CancelAfter(Options.auth_timeout);
         return cts;
+    }
+
+    /// <summary>
+    ///     Calculate the request timeout.
+    /// </summary>
+    /// <remarks>
+    ///     Large requests may need more time to transfer the data. 
+    ///     This calculation uses a base timeout (<see cref="QuestDBOptions.request_timeout"/>), and adds on
+    ///     extra time corresponding to the expected transfer rate (<see cref = "QuestDBOptions.request_min_throughput"/>)
+    /// </remarks>
+    /// <returns></returns>
+    private CancellationTokenSource GenerateRequestTimeout()
+    {
+        var cts = new CancellationTokenSource();
+        cts.CancelAfter(Options.request_timeout
+                        + TimeSpan.FromSeconds(_byteBuffer.Length / (double)Options.request_min_throughput));
+
+        return cts;
+    }
+
+    /// <summary>
+    /// Health check endpoint.
+    /// </summary>
+    /// <returns></returns>
+    public async Task<PingResponse?> PingAsync()
+    {
+        try
+        {
+            var response = await GenerateClient().GetAsync("/ping");
+            if (response.IsSuccessStatusCode)
+            {
+                var ping = new PingResponse();
+                ping.Server = response.Headers.Server.ToString();
+                ping.Date = response.Headers.Date;
+                ping.InfluxDBVersion = response.Headers.GetValues("X-Influxdb-Version").First();
+                return ping;
+            }
+        }
+        catch
+        {
+            return null;
+        }
+
+        return null;
+    }
+
+    public record PingResponse
+    {
+        public string Server { get; set; }
+        public DateTimeOffset? Date { get; set; }
+        public string InfluxDBVersion { get; set; }
     }
 }

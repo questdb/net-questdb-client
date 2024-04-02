@@ -745,13 +745,13 @@ public class HttpTests
                 .Column("num", i)
                 .AtNow();
 
-        Assert.That(sender.RowCount == 100);
-        Assert.That(sender.WithinTransaction);
+        Assert.That(sender.rowCount == 100);
+        Assert.That(sender.withinTransaction);
 
         await sender.CommitAsync();
 
-        Assert.That(sender.RowCount == 0);
-        Assert.That(!sender.WithinTransaction);
+        Assert.That(sender.rowCount == 0);
+        Assert.That(!sender.withinTransaction);
     }
 
     [Test]
@@ -777,5 +777,82 @@ public class HttpTests
             );
         
         Assert.True(await sender.CommitAsync());
+    }
+
+    [Test]
+    public async Task TokenAuthentication()
+    {
+        using var srv = new DummyHttpServer(true);
+        await srv.StartAsync(Port);
+
+        var token = srv.GetJwtToken("admin", "quest");
+
+        using var sender =
+            new LineSender(
+                $"http::addr={Host}:{Port};token={token};");
+        
+        
+        for (var i = 0; i < 100; i++)
+            sender
+                .Table("test")
+                .Symbol("foo", "bah")
+                .Column("num", i)
+                .AtNow();
+
+        await sender.FlushAsync();
+    }
+
+
+    [Test]
+    public async Task AutoFlushRows()
+    {
+        using var srv = new DummyHttpServer();
+        await srv.StartAsync(Port);
+
+        using var sender = new LineSender($"http::addr={Host}:{Port};auto_flush=on;auto_flush_rows=100;");
+
+        for (int i = 0; i < 100000; i++)
+        {
+            if ((i - 1) % 100 == 0)
+            {
+                Assert.That(sender.length == 12);
+            }
+            
+            sender.Table("foo").Symbol("bah", "baz").AtNow();
+        }
+    }
+    
+    [Test]
+    public async Task AutoFlushBytes()
+    {
+        using var srv = new DummyHttpServer();
+        await srv.StartAsync(Port);
+        using var sender = new LineSender($"http::addr={Host}:{Port};auto_flush=on;auto_flush_bytes=1200;");
+        for (int i = 0; i < 100000; i++)
+        {
+            if ((i) % 100 == 0)
+            {
+                Assert.That(sender.length == 0);
+            }
+            sender.Table("foo").Symbol("bah", "baz").AtNow();
+        }
+    }
+    
+    [Test]
+    public async Task AutoFlushInterval()
+    {
+        using var srv = new DummyHttpServer();
+        await srv.StartAsync(Port);
+        using var sender = new LineSender($"http::addr={Host}:{Port};auto_flush=on;auto_flush_interval=500;");
+        
+        for (int i = 0; i < 10; i++)
+        {
+            if (i % 2 == 0)
+            {
+                Assert.That(sender.length == 0);
+            }
+            sender.Table("foo").Symbol("bah", "baz").AtNow();
+            await Task.Delay(500);
+        }
     }
 }

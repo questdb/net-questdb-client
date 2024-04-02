@@ -23,8 +23,10 @@
  ******************************************************************************/
 
 
+using System.Security.Cryptography;
 using System.Text;
 using FastEndpoints;
+using FastEndpoints.Security;
 
 namespace dummy_http_server;
 
@@ -33,11 +35,27 @@ public class DummyHttpServer : IDisposable
     private int _port = 29743;
     public WebApplication app;
     public CancellationToken ct;
-
-    public DummyHttpServer()
+    public static string SigningKey = Guid.NewGuid().ToString("N") + Guid.NewGuid().ToString("N");
+    
+    public static string Username = "admin";
+    public static string Password = "quest";
+        
+    public DummyHttpServer(bool withTokenAuth = false)
     {
         var bld = WebApplication.CreateBuilder();
-        bld.Services.AddFastEndpoints();
+
+        if (withTokenAuth)
+        {
+            bld.Services.
+                AddAuthenticationJwtBearer(s => s.SigningKey = SigningKey)
+                .AddAuthorization()
+                .AddFastEndpoints();
+        }
+        else
+        {
+            bld.Services.AddFastEndpoints();
+        }
+
         bld.Services.AddHealthChecks();
         bld.WebHost.ConfigureKestrel(o => { o.Limits.MaxRequestBodySize = 1073741824; });
 
@@ -46,7 +64,19 @@ public class DummyHttpServer : IDisposable
         app.MapHealthChecks("/ping");
         app.UseDefaultExceptionHandler();
 
-        app.UseFastEndpoints();
+        if (withTokenAuth)
+        {
+            app
+                .UseAuthentication()
+                .UseAuthorization()
+                .UseFastEndpoints();
+        }
+        else
+        {
+            app.UseFastEndpoints();
+        }
+
+   
     }
 
     public Task appTask { get; set; }
@@ -89,5 +119,23 @@ public class DummyHttpServer : IDisposable
     {
         var response = await new HttpClient().GetAsync($"http://localhost:{_port}/ping");
         return response.IsSuccessStatusCode;
+    }
+
+
+    public string? GetJwtToken(string username, string password)
+    {
+        if (username == Username && password == Password)
+        {
+            var jwtToken = JwtBearer.CreateToken(o =>
+            {
+                o.SigningKey = SigningKey;
+                o.ExpireAt = DateTime.UtcNow.AddDays(1);
+            });
+            return jwtToken;
+        }
+        else
+        {
+            return null;
+        }
     }
 }

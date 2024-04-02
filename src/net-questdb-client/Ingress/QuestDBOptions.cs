@@ -152,8 +152,9 @@ public class QuestDBOptions
     /// <summary>
     ///     Not in use.
     /// </summary>
-    // public string? bind_interface =>
-    //     throw new IngressError(ErrorCode.ConfigError, "Not supported!", new NotImplementedException());
+    [Obsolete]
+    public string? bind_interface =>
+        throw new IngressError(ErrorCode.ConfigError, "Not supported!", new NotImplementedException());
 
     /// <summary>
     ///     Initial buffer size for the ILP rows in bytes.
@@ -266,7 +267,7 @@ public class QuestDBOptions
     /// </summary>
     /// <remarks>
     ///     The <see cref="retry_timeout" /> setting specifies the length of time retries can be made.
-    ///     Retries are set multiple times during this period, with some small jitter.
+    ///     Retries are sent multiple times during this period, with some small jitter.
     /// </remarks>
     /// <seealso cref="LineSender.FinishOrRetryAsync" />
     /// .
@@ -310,7 +311,6 @@ public class QuestDBOptions
 
     public bool IsHttp()
     {
-        // setup auth
         switch (protocol)
         {
             case ProtocolType.http:
@@ -330,21 +330,29 @@ public class QuestDBOptions
     {
         var builder = new DbConnectionStringBuilder();
 
-        foreach (var field in GetType().GetProperties(BindingFlags.Instance | BindingFlags.Public).OrderBy(x => x.Name))
+        foreach (var prop in GetType().GetProperties(BindingFlags.Instance | BindingFlags.Public).OrderBy(x => x.Name))
         {
             // exclude properties
-            if (field.IsDefined(typeof(CompilerGeneratedAttribute), false)) continue;
+            if (prop.IsDefined(typeof(CompilerGeneratedAttribute), false)) continue;
 
-            if (field.IsDefined(typeof(JsonIgnoreAttribute), false)) continue;
+            if (prop.IsDefined(typeof(JsonIgnoreAttribute), false)) continue;
 
-            var value = field.GetValue(this);
-
+            object? value;
+            try
+            { 
+                value = prop.GetValue(this);
+            }
+            catch 
+            {
+                continue;
+            }  
+            
             if (value != null)
             {
                 if (value is TimeSpan)
-                    builder.Add(field.Name, ((TimeSpan)value).TotalMilliseconds);
+                    builder.Add(prop.Name, ((TimeSpan)value).TotalMilliseconds);
                 else
-                    builder.Add(field.Name, value!);
+                    builder.Add(prop.Name, value!);
             }
         }
 

@@ -129,6 +129,7 @@ public class LineSender : IDisposable
                         RemoteCertificateValidationCallback =
                             Options.tls_verify == TlsVerifyType.unsafe_off ? AllowAllCertCallback : null
                     };
+                    
                     sslStream.AuthenticateAsClient(sslOptions);
                     if (!sslStream.IsEncrypted)
                         throw new IngressError(ErrorCode.TlsError, "Could not established encrypted connection.");
@@ -139,7 +140,8 @@ public class LineSender : IDisposable
                 _underlyingSocket = socket;
                 _dataStream = dataStream;
 
-                if (Options.token is not null) AuthenticateAsync().AsTask().Wait();
+                var authTimeout = GenerateAuthTimeout();
+                if (Options.token is not null) AuthenticateAsync(authTimeout.Token).AsTask().Wait(); // todo test auth timeout
             }
             catch
             {
@@ -559,5 +561,12 @@ public class LineSender : IDisposable
         else if (Options.token != null)
             client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", Options.token);
         return client;
+    }
+
+    private CancellationTokenSource GenerateAuthTimeout()
+    {
+        var cts = new CancellationTokenSource();
+        cts.CancelAfter(Options.auth_timeout);
+        return cts;
     }
 }

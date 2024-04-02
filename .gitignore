@@ -22,3 +22,4 @@ src/example-streaming/obj/
 src/net-questdb-client-benchmarks/BenchmarkDot*
 src/net-questdb-client-benchmarks/obj
 _site
+api

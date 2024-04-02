@@ -90,6 +90,8 @@ public class LineSender : IDisposable
 
     public bool WithinTransaction => _byteBuffer.WithinTransaction;
 
+    private bool CommittingTransaction { get; set; } = false;
+
     /// <summary>
     ///     Closes any underlying sockets.
     ///     Fulfills <see cref="IDisposable" /> interface.
@@ -164,13 +166,24 @@ public class LineSender : IDisposable
             throw new IngressError(ErrorCode.InvalidApiCall,
                 $"Name is too long, must be under {QuestDbFsFileNameLimit} bytes.");
     }
+    
+    /// <summary>
+    ///     Throws <see cref="IngressError"/> if we have exceeded the specified limit for buffer size.
+    /// </summary>
+    /// <exception cref="IngressError"></exception>
+    private void GuardExceededMaxBufferSize()
+    {
+        if (_byteBuffer.Length > Options.max_buf_size)
+            throw new IngressError(ErrorCode.InvalidApiCall,
+                $"Exceeded maximum buffer size. Current: {_byteBuffer.Length} Maximum: {Options.max_buf_size}");
+    }
 
     /// <summary>
-    /// Starts a new transaction.
+    ///     Starts a new transaction.
     /// </summary>
     /// <remarks>
-    /// This function starts a transaction. Within a transaction, only one table can be specified, which
-    /// applies to all ILP rows in the batch. The batch will not be sent until explicitly committed.
+    ///     This function starts a transaction. Within a transaction, only one table can be specified, which
+    ///     applies to all ILP rows in the batch. The batch will not be sent until explicitly committed.
     /// </remarks>
     /// <param name="tableName"></param>
     /// <returns></returns>
@@ -184,10 +197,25 @@ public class LineSender : IDisposable
         return this;
     }
 
-    public async Task<bool> Commit()
+    public bool Commit()
     {
+        return CommitAsync().Result;
+    }
+
+    /// <summary>
+    /// 
+    /// </summary>
+    /// <returns></returns>
+    /// <exception cref="IngressError">Thrown by <see cref="SendAsync"/></exception>
+    public async Task<bool> CommitAsync()
+    {
+        CommittingTransaction = true;
         var (_, response) = await SendAsync();
-        return response.IsSuccessStatusCode;
+        
+        CommittingTransaction = false;
+        
+        // we expect an error to be thrown before here, and response is non-null (since its HTTP).
+        return response!.IsSuccessStatusCode;
     }
  
     /// <inheritdoc cref="ByteBuffer.Table" />
@@ -248,13 +276,6 @@ public class LineSender : IDisposable
         return this;
     }
 
-    private void GuardExceededMaxBufferSize()
-    {
-        if (_byteBuffer.Length > Options.max_buf_size)
-            throw new IngressError(ErrorCode.InvalidApiCall,
-                $"Exceeded maximum buffer size. Current: {_byteBuffer.Length} Maximum: {Options.max_buf_size}");
-    }
-
     /// <inheritdoc cref="ByteBuffer.At(DateTime)" />
     public LineSender At(DateTime value)
     {
@@ -309,6 +330,11 @@ public class LineSender : IDisposable
 
     public async Task<(HttpRequestMessage?, HttpResponseMessage?)> SendAsync()
     {
+        if (WithinTransaction && !CommittingTransaction)
+        {
+            throw new IngressError(ErrorCode.InvalidApiCall, "Please call `commit()` to complete your transaction.");
+        }
+        
         if (_byteBuffer.Length == 0) return (null, null);
 
         if (Options.IsHttp())
@@ -330,7 +356,7 @@ public class LineSender : IDisposable
 
         if (Options.IsTcp())
         {
-            await _byteBuffer.WriteToStreamAsync(_dataStream);
+            await _byteBuffer.WriteToStreamAsync(_dataStream!);
             _byteBuffer.Clear();
             return (null, null);
         }

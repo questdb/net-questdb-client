@@ -680,7 +680,7 @@ public class HttpTests
             new LineSender(
                 $"http::addr={Host}:{Port};");
         sender.Transaction("tableName").Symbol("foo", "bah").AtNow();
-        await sender.SendAsync();
+        await sender.CommitAsync();
 
         var expected = "tableName,foo=bah\n";
         Assert.That(srv.GetReceiveBuffer().ToString, Is.EqualTo(expected));
@@ -701,7 +701,7 @@ public class HttpTests
             Throws.TypeOf<IngressError>().With.Message.Contains("only be for one table")
         );
 
-        await sender.SendAsync();
+        await sender.CommitAsync();
 
         // check its fine after sending
         sender.Transaction("other table name");
@@ -722,7 +722,7 @@ public class HttpTests
             Throws.TypeOf<IngressError>().With.Message.Contains("another transaction")
         );
 
-        await sender.SendAsync();
+        await sender.CommitAsync();
 
         // check its fine after sending
         sender.Transaction("other table name");
@@ -748,9 +748,34 @@ public class HttpTests
         Assert.That(sender.RowCount == 100);
         Assert.That(sender.WithinTransaction);
 
-        await sender.SendAsync();
+        await sender.CommitAsync();
 
         Assert.That(sender.RowCount == 0);
         Assert.That(!sender.WithinTransaction);
+    }
+
+    [Test]
+    public async Task MustUseCommitToFinishTransaction()
+    {
+        using var srv = new DummyHttpServer();
+        await srv.StartAsync(Port);
+
+        using var sender =
+            new LineSender(
+                $"http::addr={Host}:{Port};auto_flush=on;auto_flush_rows=1;");
+
+        sender.Transaction("tableName");
+        for (var i = 0; i < 100; i++)
+            sender
+                .Symbol("foo", "bah")
+                .Column("num", i)
+                .AtNow();
+        
+        Assert.That(
+            async () => await sender.FlushAsync(),
+            Throws.TypeOf<IngressError>().With.Message.Contains("commit")
+            );
+        
+        Assert.True(await sender.CommitAsync());
     }
 }

@@ -85,7 +85,8 @@ public class LineSender : IDisposable
         set => _byteBuffer.QuestDbFsFileNameLimit = value;
     }
 
-    public int length => _byteBuffer.Length;
+    public int Length => _byteBuffer.Length;
+    
 
     public int rowCount => _byteBuffer.RowCount;
 
@@ -283,11 +284,30 @@ public class LineSender : IDisposable
         _byteBuffer.Symbol(symbolName, value);
         return this;
     }
+    
+    /// <inheritdoc cref="ByteBuffer.Symbol" />
+    public LineSender Symbol(ReadOnlySpan<char> symbolName, string? value)
+    {
+        if (value != null)
+        {
+            GuardFsFileNameLimit(symbolName);
+            _byteBuffer.Symbol(symbolName, value);
+        }
+        return this;
+    }
 
     /// <inheritdoc cref="ByteBuffer.Column(ReadOnlySpan&lt;char&gt;, ReadOnlySpan&lt;char&gt;)" />
     public LineSender Column(ReadOnlySpan<char> name, ReadOnlySpan<char> value)
     {
         _byteBuffer.Column(name, value);
+        return this;
+    }
+    
+    /// <inheritdoc cref="ByteBuffer.Column(ReadOnlySpan&lt;char&gt;, ReadOnlySpan&lt;char&gt;)" />
+    public LineSender Column(ReadOnlySpan<char> name, string? value)
+    {
+        if (value != null)
+         _byteBuffer.Column(name, value);
         return this;
     }
 
@@ -297,11 +317,27 @@ public class LineSender : IDisposable
         _byteBuffer.Column(name, value);
         return this;
     }
+    
+    /// <inheritdoc cref="ByteBuffer.Column(ReadOnlySpan&lt;char&gt;, long)" />
+    public LineSender Column(ReadOnlySpan<char> name, long? value)
+    {
+        if (value != null)
+          _byteBuffer.Column(name, value.Value);
+        return this;
+    }
 
     /// <inheritdoc cref="ByteBuffer.Column(ReadOnlySpan&lt;char&gt;, bool)" />
     public LineSender Column(ReadOnlySpan<char> name, bool value)
     {
         _byteBuffer.Column(name, value);
+        return this;
+    }
+    
+    /// <inheritdoc cref="ByteBuffer.Column(ReadOnlySpan&lt;char&gt;, bool)" />
+    public LineSender Column(ReadOnlySpan<char> name, bool? value)
+    {
+        if (value != null)
+            _byteBuffer.Column(name, value.Value);
         return this;
     }
 
@@ -311,11 +347,27 @@ public class LineSender : IDisposable
         _byteBuffer.Column(name, value);
         return this;
     }
+    
+    /// <inheritdoc cref="ByteBuffer.Column(ReadOnlySpan&lt;char&gt;, double)" />
+    public LineSender Column(ReadOnlySpan<char> name, double? value)
+    {
+        if (value != null)
+            _byteBuffer.Column(name, value.Value);
+        return this;
+    }
 
     /// <inheritdoc cref="ByteBuffer.Column(ReadOnlySpan&lt;char&gt;, DateTime)" />
     public LineSender Column(ReadOnlySpan<char> name, DateTime value)
     {
         _byteBuffer.Column(name, value);
+        return this;
+    }
+    
+    /// <inheritdoc cref="ByteBuffer.Column(ReadOnlySpan&lt;char&gt;, DateTime)" />
+    public LineSender Column(ReadOnlySpan<char> name, DateTime? value)
+    {
+        if (value != null) 
+         _byteBuffer.Column(name, value.Value);
         return this;
     }
 
@@ -325,7 +377,15 @@ public class LineSender : IDisposable
         _byteBuffer.Column(name, value.UtcDateTime);
         return this;
     }
-
+    
+    /// <inheritdoc cref="ByteBuffer.Column(ReadOnlySpan&lt;char&gt;, DateTimeOffset)" />
+    public LineSender Column(ReadOnlySpan<char> name, DateTimeOffset? value)
+    {
+        if (value != null)
+            _byteBuffer.Column(name, value.Value);
+        return this;
+    }
+    
     /// <inheritdoc cref="ByteBuffer.At(DateTime)" />
     public LineSender At(DateTime value)
     {

@@ -815,7 +815,7 @@ public class HttpTests
         {
             if ((i - 1) % 100 == 0)
             {
-                Assert.That(sender.length == 12);
+                Assert.That(sender.Length == 12);
             }
             
             sender.Table("foo").Symbol("bah", "baz").AtNow();
@@ -832,7 +832,7 @@ public class HttpTests
         {
             if ((i) % 100 == 0)
             {
-                Assert.That(sender.length == 0);
+                Assert.That(sender.Length == 0);
             }
             sender.Table("foo").Symbol("bah", "baz").AtNow();
         }
@@ -849,10 +849,44 @@ public class HttpTests
         {
             if (i % 2 == 0)
             {
-                Assert.That(sender.length == 0);
+                Assert.That(sender.Length == 0);
             }
             sender.Table("foo").Symbol("bah", "baz").AtNow();
             await Task.Delay(500);
         }
+    }
+
+    [Test]
+    public async Task TestNullableVariants()
+    {
+        using var sender = new LineSender($"http::addr={Host}:{Port};");
+
+        sender.Table("foo");
+        var n = sender.Length;
+        
+        Assert.That(
+                () => sender.Symbol("bah", null),
+                Has.Length.EqualTo(n)
+            );
+        
+        Assert.That(
+            () => sender.Column("bah", (string?)null),
+            Has.Length.EqualTo(n)
+        );
+        
+        Assert.That(
+            () => sender.Column("bah", (long?)null),
+            Has.Length.EqualTo(n)
+        );
+             
+        Assert.That(
+            () => sender.Column("bah", (bool?)null),
+            Has.Length.EqualTo(n)
+        );
+        
+        Assert.That(
+            () => sender.Column("bah", (double?)null),
+            Has.Length.EqualTo(n)
+        );
     }
 }

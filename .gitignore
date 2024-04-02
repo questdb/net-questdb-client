@@ -20,8 +20,10 @@ src/dummy-http-server/obj/
 src/example-streaming/bin/
 src/example-streaming/obj/
 src/net-questdb-client-benchmarks/BenchmarkDot*
-src/net-questdb-client-benchmarks/obj
 _site
 api
 src/example-auth-http-tls/obj/
 src/example-auth-http-tls/bin/
+src/example-auth-http-tls/obj
+src/example-auth-http-tls/bin
+

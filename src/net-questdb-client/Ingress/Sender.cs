@@ -476,11 +476,24 @@ public class Sender : IDisposable
         return SendAsync().Result;
     }
 
+    /// <summary>
+    ///     Sends data to the QuestDB server.
+    /// </summary>
+    /// <remarks>
+    ///     Only usable outside of a transaction. If there are no pending rows, then this is a no-op.
+    ///     <para />
+    ///     If the <see cref="QuestDBOptions.protocol"/> is HTTP, this will return request and response information.
+    ///     <para />
+    ///     If the <see cref="QuestDBOptions.protocol"/> is TCP, this will return nulls.
+    /// </remarks>
+    /// <returns></returns>
+    /// <exception cref="IngressError"></exception>
+    /// <exception cref="NotImplementedException"></exception>
     public async Task<(HttpRequestMessage?, HttpResponseMessage?)> SendAsync()
     {
         if (withinTransaction && !committingTransaction)
         {
-            throw new IngressError(ErrorCode.InvalidApiCall, "Please call `commit()` to complete your transaction.");
+            throw new IngressError(ErrorCode.InvalidApiCall, "Please `commit` to complete your transaction.");
         }
         
         if (_buffer.Length == 0) return (null, null);
@@ -733,7 +746,8 @@ public class Sender : IDisposable
         var request = new HttpRequestMessage(HttpMethod.Post, IlpEndpoint) { Content = _buffer };
         request.Content.Headers.ContentType = new MediaTypeHeaderValue("text/plain") { CharSet = "utf-8" };
         request.Content.Headers.ContentLength = _buffer.Length;
-        var cts = GenerateRequestTimeout();
+        var cts = new CancellationTokenSource();
+        cts.CancelAfter(CalculateRequestTimeout());
         return (request, cts);
     }
 
@@ -746,13 +760,10 @@ public class Sender : IDisposable
     ///     extra time corresponding to the expected transfer rate (<see cref = "QuestDBOptions.request_min_throughput"/>)
     /// </remarks>
     /// <returns></returns>
-    private CancellationTokenSource GenerateRequestTimeout()
+    private TimeSpan CalculateRequestTimeout()
     {
-        var cts = new CancellationTokenSource();
-        cts.CancelAfter(Options.request_timeout
-                        + TimeSpan.FromSeconds(_buffer.Length / (double)Options.request_min_throughput));
-
-        return cts;
+        return Options.request_timeout
+               + TimeSpan.FromSeconds(_buffer.Length / (double)Options.request_min_throughput);
     }
 
     /// <summary>

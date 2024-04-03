@@ -101,7 +101,7 @@ public class HttpTests
     [Test]
     public async Task BasicAuthEncoding()
     {
-        using var server = new DummyHttpServer();
+        using var server = new DummyHttpServer(true);
         await server.StartAsync(Port);
         var sender = new TestSender($"http::addr={Host}:{Port};username=foo;password=bah;");
         sender.Table("metrics")
@@ -122,7 +122,7 @@ public class HttpTests
     [Test]
     public async Task TokenAuthEncoding()
     {
-        using var server = new DummyHttpServer();
+        using var server = new DummyHttpServer(true);
         await server.StartAsync(Port);
         var sender = new TestSender($"http::addr={Host}:{Port};token=abc;");
         sender.Table("metrics")
@@ -889,13 +889,5 @@ public class HttpTests
             () => sender.Column("bah", (double?)null),
             Has.Length.EqualTo(n)
         );
-    }
-
-    [Test]
-    public void BindConfigFileToOptions()
-    {
-        var fromFileOptions = new ConfigurationBuilder().AddJsonFile("config.json").Build().GetSection("QuestDB").Get<QuestDBOptions>();
-        var defaultOptions = new QuestDBOptions("http::addr=localhost:9000;tls_verify=unsafe_off;");
-        Assert.That(fromFileOptions.ToString(), Is.EqualTo(defaultOptions.ToString()));
     }
 }

@@ -38,11 +38,16 @@ public class IlpEndpoint : Endpoint<Request>
     public static readonly StringBuilder ReceiveBuffer = new();
     public static readonly List<string> LogMessages = new();
     public static Exception LastError = new();
+    public static bool withTokenAuth = false;
 
     public override void Configure()
     {
         Post("write", "api/v2/write");
-        AllowAnonymous();
+        if (!withTokenAuth)
+        {
+            AllowAnonymous();
+        }
+    
         Description(b => b.Accepts<Request>());
     }
 

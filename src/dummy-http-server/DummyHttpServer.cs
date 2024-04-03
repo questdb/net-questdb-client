@@ -44,6 +44,8 @@ public class DummyHttpServer : IDisposable
     {
         var bld = WebApplication.CreateBuilder();
 
+        IlpEndpoint.withTokenAuth = withTokenAuth;
+
         if (withTokenAuth)
         {
             bld.Services.

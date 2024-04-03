@@ -469,48 +469,45 @@ public class TcpTests
         using var srv = CreateTcpListener(_port);
         srv.AcceptAsync();
 
-        using var sender = new Sender($"tcp::addr={_host}:{_port};");
+        using var sender_lim_127 = new Sender($"tcp::addr={_host}:{_port};");
         string? nullString = null;
 
-        Assert.Throws<IngressError>(() => sender.Table("abc\\slash"));
-        Assert.Throws<IngressError>(() => sender.Table("abc/slash"));
-        Assert.Throws<IngressError>(() => sender.Table("."));
-        Assert.Throws<IngressError>(() => sender.Table(".."));
-        Assert.Throws<IngressError>(() => sender.Table(""));
-        Assert.Throws<IngressError>(() => sender.Table("asdf\tsdf"));
-        Assert.Throws<IngressError>(() => sender.Table("asdf\rsdf"));
-        Assert.Throws<IngressError>(() => sender.Table("asdfsdf."));
+        Assert.Throws<IngressError>(() => sender_lim_127.Table("abc\\slash"));
+        Assert.Throws<IngressError>(() => sender_lim_127.Table("abc/slash"));
+        Assert.Throws<IngressError>(() => sender_lim_127.Table("."));
+        Assert.Throws<IngressError>(() => sender_lim_127.Table(".."));
+        Assert.Throws<IngressError>(() => sender_lim_127.Table(""));
+        Assert.Throws<IngressError>(() => sender_lim_127.Table("asdf\tsdf"));
+        Assert.Throws<IngressError>(() => sender_lim_127.Table("asdf\rsdf"));
+        Assert.Throws<IngressError>(() => sender_lim_127.Table("asdfsdf."));
 
-        sender.QuestDbFsFileNameLimit = 4;
-        Assert.Throws<IngressError>(() => sender.Table("asffdfasdf"));
+        using var sender_lim_4 = new Sender($"tcp::addr={_host}:{_port};max_name_len=4;");
+        Assert.Throws<IngressError>(() => sender_lim_4.Table("asffdfasdf"));
+        
+        sender_lim_127.Table("abcd.csv");
 
-        sender.QuestDbFsFileNameLimit = Sender.DefaultQuestDbFsFileNameLimit;
-        sender.Table("abcd.csv");
+        Assert.Throws<IngressError>(() => sender_lim_127.Column("abc\\slash", 13));
+        Assert.Throws<IngressError>(() => sender_lim_127.Column("abc/slash", 12));
+        Assert.Throws<IngressError>(() => sender_lim_127.Column(".", 12));
+        Assert.Throws<IngressError>(() => sender_lim_127.Column("..", 12));
+        Assert.Throws<IngressError>(() => sender_lim_127.Column("", 12));
+        Assert.Throws<IngressError>(() => sender_lim_127.Column("asdf\tsdf", 12));
+        Assert.Throws<IngressError>(() => sender_lim_127.Column("asdf\rsdf", 12));
+        Assert.Throws<IngressError>(() => sender_lim_127.Column("asdfsdf.", 12));
+        Assert.Throws<IngressError>(() => sender_lim_127.Column("a+b", 12));
+        Assert.Throws<IngressError>(() => sender_lim_127.Column("b-c", 12));
+        Assert.Throws<IngressError>(() => sender_lim_127.Column("b.c", 12));
+        Assert.Throws<IngressError>(() => sender_lim_127.Column("b%c", 12));
+        Assert.Throws<IngressError>(() => sender_lim_127.Column("b~c", 12));
+        Assert.Throws<IngressError>(() => sender_lim_127.Column("b?c", 12));
+        Assert.Throws<IngressError>(() => sender_lim_127.Symbol("b:c", "12"));
+        Assert.Throws<IngressError>(() => sender_lim_127.Symbol("b)c", "12"));
+        
+        Assert.Throws<IngressError>(() => sender_lim_4.Symbol("b    c", "12"));
 
-        Assert.Throws<IngressError>(() => sender.Column("abc\\slash", 13));
-        Assert.Throws<IngressError>(() => sender.Column("abc/slash", 12));
-        Assert.Throws<IngressError>(() => sender.Column(".", 12));
-        Assert.Throws<IngressError>(() => sender.Column("..", 12));
-        Assert.Throws<IngressError>(() => sender.Column("", 12));
-        Assert.Throws<IngressError>(() => sender.Column("asdf\tsdf", 12));
-        Assert.Throws<IngressError>(() => sender.Column("asdf\rsdf", 12));
-        Assert.Throws<IngressError>(() => sender.Column("asdfsdf.", 12));
-        Assert.Throws<IngressError>(() => sender.Column("a+b", 12));
-        Assert.Throws<IngressError>(() => sender.Column("b-c", 12));
-        Assert.Throws<IngressError>(() => sender.Column("b.c", 12));
-        Assert.Throws<IngressError>(() => sender.Column("b%c", 12));
-        Assert.Throws<IngressError>(() => sender.Column("b~c", 12));
-        Assert.Throws<IngressError>(() => sender.Column("b?c", 12));
-        Assert.Throws<IngressError>(() => sender.Symbol("b:c", "12"));
-        Assert.Throws<IngressError>(() => sender.Symbol("b)c", "12"));
-
-        sender.QuestDbFsFileNameLimit = 4;
-        Assert.Throws<IngressError>(() => sender.Symbol("b    c", "12"));
-        sender.QuestDbFsFileNameLimit = Sender.DefaultQuestDbFsFileNameLimit;
-
-        sender.Symbol("b    c", "12");
-        sender.At(new DateTime(1970, 1, 1));
-        await sender.SendAsync();
+        sender_lim_127.Symbol("b    c", "12");
+        sender_lim_127.At(new DateTime(1970, 1, 1));
+        await sender_lim_127.SendAsync();
 
         var expected = "abcd.csv,b\\ \\ \\ \\ c=12 000\n";
         WaitAssert(srv, expected);

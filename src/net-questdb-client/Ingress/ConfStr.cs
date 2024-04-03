@@ -124,6 +124,9 @@ public class ConfStr
     /// <inheritdoc cref="QuestDBOptions.pool_timeout" />
     public string? pool_timeout { get; set; } = "120000";
 
+    /// <inheritdoc cref="QuestDBOptions.pool_limit" />
+    public string? pool_limit { get; set; } = "64";
+
 
     public override string ToString()
     {
@@ -221,6 +224,10 @@ public class ConfStr
             RuleFor(x => x.pool_timeout)
                 .Must(x => int.TryParse(x, out _))
                 .WithMessage("`pool_timeout` must be convertible to an int.");
+            
+            RuleFor(x => x.pool_limit)
+                .Must(x => int.TryParse(x, out _))
+                .WithMessage("`pool_limit` must be convertible to an int.");
         }
     }
 }

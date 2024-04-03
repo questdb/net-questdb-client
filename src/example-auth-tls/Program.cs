@@ -6,16 +6,16 @@ namespace QuestDBDemo;
 
 internal class Program
 {
+    /// <summary>
+    /// Demonstrates TCPS connection against QuestDB Enterprise
+    /// </summary>
+    /// <param name="args"></param>
     private static async Task Main(string[] args)
     {
-        using var sender = await LineTcpSender.ConnectAsync(
-            "localhost",
-            9009,
-            tlsMode: TlsMode.Enable);
+        using var sender =
+            new Sender(
+                "tcps::addr=localhost:9009;tls_verify=unsafe_off;username=admin;token=NgdiOWDoQNUP18WOnb1xkkEG5TzPYMda5SiUOvT1K0U=;");
         // See: https://questdb.io/docs/reference/api/ilp/authenticate
-        await sender.AuthenticateAsync(
-            "admin", // kid
-            "NgdiOWDoQNUP18WOnb1xkkEG5TzPYMda5SiUOvT1K0U="); // d
         sender.Table("trades")
             .Symbol("pair", "USDGBP")
             .Symbol("type", "buy")

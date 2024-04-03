@@ -43,21 +43,15 @@ namespace QuestDB.Ingress;
 public class Sender : IDisposable
 {
     private const string IlpEndpoint = "write";
-    public static int DefaultQuestDbFsFileNameLimit = 127;
-
 
     // tcp
     private static readonly RemoteCertificateValidationCallback AllowAllCertCallback = (_, _, _, _) => true;
     private bool _authenticated;
-
-
     private Buffer _buffer;
-
-
+    
     // http
     private SocketsHttpHandler? _handler;
     private HttpClient? _client;
-
 
     private Stream? _dataStream;
     private Stopwatch _intervalTimer;
@@ -117,7 +111,8 @@ public class Sender : IDisposable
         {
             _handler = new SocketsHttpHandler
             {
-                PooledConnectionLifetime = Options.pool_timeout 
+                PooledConnectionIdleTimeout = Options.pool_timeout,
+                MaxConnectionsPerServer = Options.pool_limit
             };
             
             if (options.protocol == ProtocolType.https)
@@ -125,9 +120,6 @@ public class Sender : IDisposable
                 
                 _handler.SslOptions.TargetHost = Options.Host;
                 _handler.SslOptions.EnabledSslProtocols = SslProtocols.Tls12 | SslProtocols.Tls13;
-                
-                _handler = new SocketsHttpHandler();
-                
 
                 if (options.tls_verify == TlsVerifyType.unsafe_off)
                 {
@@ -228,9 +220,9 @@ public class Sender : IDisposable
     /// <exception cref="IngressError"></exception>
     private void GuardFsFileNameLimit(ReadOnlySpan<char> name)
     {
-        if (Encoding.UTF8.GetBytes(name.ToString()).Length > QuestDbFsFileNameLimit)
+        if (Encoding.UTF8.GetBytes(name.ToString()).Length > Options.max_name_len)
             throw new IngressError(ErrorCode.InvalidApiCall,
-                $"Name is too long, must be under {QuestDbFsFileNameLimit} bytes.");
+                $"Name is too long, must be under {Options.max_name_len} bytes.");
     }
     
     /// <summary>
@@ -448,8 +440,8 @@ public class Sender : IDisposable
         if (_buffer.WithinTransaction) return;
 
         if (Options.auto_flush == AutoFlushType.on)
-            if (_buffer.RowCount >= Options.auto_flush_rows
-                || _intervalTimer.Elapsed >= Options.auto_flush_interval
+            if (Options.auto_flush_rows > 0 && _buffer.RowCount >= Options.auto_flush_rows
+                || Options.auto_flush_interval > TimeSpan.Zero && _intervalTimer.Elapsed >= Options.auto_flush_interval
                 || Options.auto_flush_bytes <= _buffer.Length)
                 Send();
     }

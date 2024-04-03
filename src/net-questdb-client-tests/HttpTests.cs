@@ -25,6 +25,7 @@
 
 using System.Text;
 using dummy_http_server;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Configuration;
 using NUnit.Framework;
 using QuestDB.Ingress;
@@ -36,6 +37,136 @@ public class HttpTests
     public string Host = "localhost";
     public int HttpPort = 29473;
     public int HttpsPort = 29474;
+    
+    [Test]
+    public async Task AuthBasicEncoding()
+    {
+        using var server = new DummyHttpServer(withBasicAuth: true);
+        await server.StartAsync(HttpPort);
+        var sender = new TestSender($"https::addr={Host}:{HttpsPort};username=admin;password=quest;tls_verify=unsafe_off;");
+        sender.Table("metrics")
+            .Symbol("tag", "value")
+            .Column("number", 10)
+            .Column("string", "abc")
+            .At(new DateTime(1970, 01, 01, 0, 0, 1));
+
+        await sender.SendAsync();
+
+        var request = sender.request;
+        Assert.That(
+            Convert.FromBase64String(request.Headers.Authorization.Parameter),
+            Is.EqualTo("admin:quest")
+        );
+    }
+    
+    [Test]
+    public async Task AuthBasicFailed()
+    {
+        using var server = new DummyHttpServer(withBasicAuth: true);
+        await server.StartAsync(HttpPort);
+        var sender = new TestSender($"https::addr={Host}:{HttpsPort};username=asdasdada;password=asdadad;tls_verify=unsafe_off;");
+        sender.Table("metrics")
+            .Symbol("tag", "value")
+            .Column("number", 10)
+            .Column("string", "abc")
+            .At(new DateTime(1970, 01, 01, 0, 0, 1));
+        
+        Assert.That(
+            async () => await sender.FlushAsync(),
+            Throws.TypeOf<IngressError>().With.Message.Contains("Unauthorized")
+        );
+    }
+    
+    [Test]
+    public async Task AuthBasicSuccess()
+    {
+        using var server = new DummyHttpServer(withBasicAuth: true);
+        await server.StartAsync(HttpPort);
+        var sender = new TestSender($"https::addr={Host}:{HttpsPort};username=admin;password=quest;tls_verify=unsafe_off;");
+        sender.Table("metrics")
+            .Symbol("tag", "value")
+            .Column("number", 10)
+            .Column("string", "abc")
+            .At(new DateTime(1970, 01, 01, 0, 0, 1));
+
+        await sender.SendAsync();
+
+        var request = sender.request;
+        Assert.That(
+            Convert.FromBase64String(request.Headers.Authorization.Parameter),
+            Is.EqualTo("admin:quest")
+        );
+    }
+    
+    [Test]
+    public async Task AuthTokenEncoding()
+    {
+        using var server = new DummyHttpServer(true);
+        await server.StartAsync(HttpPort);
+
+        var jwt = server.GetJwtToken("admin", "quest");
+        
+        var sender = new TestSender($"http::addr={Host}:{HttpPort};token={jwt};");
+        sender.Table("metrics")
+            .Symbol("tag", "value")
+            .Column("number", 10)
+            .Column("string", "abc")
+            .At(new DateTime(1970, 01, 01, 0, 0, 1));
+
+        await sender.SendAsync();
+
+        var request = sender.request;
+        Assert.That(
+            request.Headers.Authorization.Parameter,
+            Is.EqualTo(jwt)
+        );
+    }
+    
+    [Test]
+    public async Task AuthTokenFailed()
+    {
+        using var srv = new DummyHttpServer(true);
+        await srv.StartAsync(HttpPort);
+        
+        using var sender =
+            new Sender(
+                $"https::addr={Host}:{HttpsPort};token=askldaklds;tls_verify=unsafe_off;");
+        
+        for (var i = 0; i < 100; i++)
+            sender
+                .Table("test")
+                .Symbol("foo", "bah")
+                .Column("num", i)
+                .AtNow();
+
+        Assert.That(
+            async () => await sender.FlushAsync(),
+            Throws.TypeOf<IngressError>().With.Message.Contains("Unauthorized")
+        );
+    }
+    
+    [Test]
+    public async Task AuthTokenSuccess()
+    {
+        using var srv = new DummyHttpServer(true);
+        await srv.StartAsync(HttpPort);
+
+        var token = srv.GetJwtToken("admin", "quest");
+
+        using var sender =
+            new Sender(
+                $"https::addr={Host}:{HttpsPort};token={token};tls_verify=unsafe_off;");
+        
+        for (var i = 0; i < 100; i++)
+            sender
+                .Table("test")
+                .Symbol("foo", "bah")
+                .Column("num", i)
+                .AtNow();
+
+        await sender.FlushAsync();
+    }
+
 
     [Test]
     public async Task BasicSend()
@@ -99,48 +230,7 @@ public class HttpTests
         );
     }
 
-    [Test]
-    public async Task BasicAuthEncoding()
-    {
-        using var server = new DummyHttpServer(true);
-        await server.StartAsync(HttpPort);
-        var sender = new TestSender($"http::addr={Host}:{HttpPort};username=foo;password=bah;");
-        sender.Table("metrics")
-            .Symbol("tag", "value")
-            .Column("number", 10)
-            .Column("string", "abc")
-            .At(new DateTime(1970, 01, 01, 0, 0, 1));
-
-        await sender.SendAsync();
-
-        var request = sender.request;
-        Assert.That(
-            Convert.FromBase64String(request.Headers.Authorization.Parameter),
-            Is.EqualTo("foo:bah")
-        );
-    }
-
-    [Test]
-    public async Task TokenAuthEncoding()
-    {
-        using var server = new DummyHttpServer(true);
-        await server.StartAsync(HttpPort);
-        var sender = new TestSender($"http::addr={Host}:{HttpPort};token=abc;");
-        sender.Table("metrics")
-            .Symbol("tag", "value")
-            .Column("number", 10)
-            .Column("string", "abc")
-            .At(new DateTime(1970, 01, 01, 0, 0, 1));
-
-        await sender.SendAsync();
-
-        var request = sender.request;
-        Assert.That(
-            request.Headers.Authorization.Parameter,
-            Is.EqualTo("abc")
-        );
-    }
-
+   
     [Test]
     public async Task SendLineExceedsBuffer()
     {
@@ -312,7 +402,7 @@ public class HttpTests
     }
 
     [Test]
-    public async Task DoubleSerializationTest()
+    public async Task SerialiseDoubles()
     {
         using var srv = new DummyHttpServer();
         await srv.StartAsync(HttpPort);
@@ -411,48 +501,47 @@ public class HttpTests
     {
         using var srv = new DummyHttpServer();
         await srv.StartAsync(HttpPort);
-        using var sender = new Sender($"http::addr={Host}:{HttpPort};");
+        using var sender_lim_127 = new Sender($"http::addr={Host}:{HttpPort};");
         string? nullString = null;
 
-        Assert.Throws<IngressError>(() => sender.Table("abc\\slash"));
-        Assert.Throws<IngressError>(() => sender.Table("abc/slash"));
-        Assert.Throws<IngressError>(() => sender.Table("."));
-        Assert.Throws<IngressError>(() => sender.Table(".."));
-        Assert.Throws<IngressError>(() => sender.Table(""));
-        Assert.Throws<IngressError>(() => sender.Table("asdf\tsdf"));
-        Assert.Throws<IngressError>(() => sender.Table("asdf\rsdf"));
-        Assert.Throws<IngressError>(() => sender.Table("asdfsdf."));
+        Assert.Throws<IngressError>(() => sender_lim_127.Table("abc\\slash"));
+        Assert.Throws<IngressError>(() => sender_lim_127.Table("abc/slash"));
+        Assert.Throws<IngressError>(() => sender_lim_127.Table("."));
+        Assert.Throws<IngressError>(() => sender_lim_127.Table(".."));
+        Assert.Throws<IngressError>(() => sender_lim_127.Table(""));
+        Assert.Throws<IngressError>(() => sender_lim_127.Table("asdf\tsdf"));
+        Assert.Throws<IngressError>(() => sender_lim_127.Table("asdf\rsdf"));
+        Assert.Throws<IngressError>(() => sender_lim_127.Table("asdfsdf."));
 
-        sender.QuestDbFsFileNameLimit = 4;
-        Assert.Throws<IngressError>(() => sender.Table("asffdfasdf"));
+        using var sender_lim_4 = new Sender($"http::addr={Host}:{HttpPort};max_name_len=4;");
+        
+        Assert.Throws<IngressError>(() => sender_lim_4.Table("asffdfasdf"));
+        
+        sender_lim_127.Table("abcd.csv");
 
-        sender.QuestDbFsFileNameLimit = Sender.DefaultQuestDbFsFileNameLimit;
-        sender.Table("abcd.csv");
+        Assert.Throws<IngressError>(() => sender_lim_127.Column("abc\\slash", 13));
+        Assert.Throws<IngressError>(() => sender_lim_127.Column("abc/slash", 12));
+        Assert.Throws<IngressError>(() => sender_lim_127.Column(".", 12));
+        Assert.Throws<IngressError>(() => sender_lim_127.Column("..", 12));
+        Assert.Throws<IngressError>(() => sender_lim_127.Column("", 12));
+        Assert.Throws<IngressError>(() => sender_lim_127.Column("asdf\tsdf", 12));
+        Assert.Throws<IngressError>(() => sender_lim_127.Column("asdf\rsdf", 12));
+        Assert.Throws<IngressError>(() => sender_lim_127.Column("asdfsdf.", 12));
+        Assert.Throws<IngressError>(() => sender_lim_127.Column("a+b", 12));
+        Assert.Throws<IngressError>(() => sender_lim_127.Column("b-c", 12));
+        Assert.Throws<IngressError>(() => sender_lim_127.Column("b.c", 12));
+        Assert.Throws<IngressError>(() => sender_lim_127.Column("b%c", 12));
+        Assert.Throws<IngressError>(() => sender_lim_127.Column("b~c", 12));
+        Assert.Throws<IngressError>(() => sender_lim_127.Column("b?c", 12));
+        Assert.Throws<IngressError>(() => sender_lim_127.Symbol("b:c", "12"));
+        Assert.Throws<IngressError>(() => sender_lim_127.Symbol("b)c", "12"));
 
-        Assert.Throws<IngressError>(() => sender.Column("abc\\slash", 13));
-        Assert.Throws<IngressError>(() => sender.Column("abc/slash", 12));
-        Assert.Throws<IngressError>(() => sender.Column(".", 12));
-        Assert.Throws<IngressError>(() => sender.Column("..", 12));
-        Assert.Throws<IngressError>(() => sender.Column("", 12));
-        Assert.Throws<IngressError>(() => sender.Column("asdf\tsdf", 12));
-        Assert.Throws<IngressError>(() => sender.Column("asdf\rsdf", 12));
-        Assert.Throws<IngressError>(() => sender.Column("asdfsdf.", 12));
-        Assert.Throws<IngressError>(() => sender.Column("a+b", 12));
-        Assert.Throws<IngressError>(() => sender.Column("b-c", 12));
-        Assert.Throws<IngressError>(() => sender.Column("b.c", 12));
-        Assert.Throws<IngressError>(() => sender.Column("b%c", 12));
-        Assert.Throws<IngressError>(() => sender.Column("b~c", 12));
-        Assert.Throws<IngressError>(() => sender.Column("b?c", 12));
-        Assert.Throws<IngressError>(() => sender.Symbol("b:c", "12"));
-        Assert.Throws<IngressError>(() => sender.Symbol("b)c", "12"));
+        
+        Assert.Throws<IngressError>(() => sender_lim_4.Symbol("b    c", "12"));
 
-        sender.QuestDbFsFileNameLimit = 4;
-        Assert.Throws<IngressError>(() => sender.Symbol("b    c", "12"));
-        sender.QuestDbFsFileNameLimit = Sender.DefaultQuestDbFsFileNameLimit;
-
-        sender.Symbol("b    c", "12");
-        sender.At(new DateTime(1970, 1, 1));
-        await sender.SendAsync();
+        sender_lim_127.Symbol("b    c", "12");
+        sender_lim_127.At(new DateTime(1970, 1, 1));
+        await sender_lim_127.SendAsync();
 
         var expected = "abcd.csv,b\\ \\ \\ \\ c=12 000\n";
         Assert.That(srv.GetReceiveBuffer().ToString, Is.EqualTo(expected));
@@ -480,32 +569,39 @@ public class HttpTests
 
         Assert.Throws<IngressError>(() => sender.Symbol("asdf", "asdf"));
     }
-
+    
     [Test]
-    public async Task CancelLine()
+    public async Task NullableVariants()
     {
-        using var srv = new DummyHttpServer();
-        await srv.StartAsync(HttpPort);
         using var sender = new Sender($"http::addr={Host}:{HttpPort};");
 
-        sender.Table("good");
-        sender.Symbol("asdf", "sdfad");
-        sender.Column("ddd", 123);
-        sender.AtNow();
-
-        sender.Table("bad");
-        sender.Symbol("asdf", "sdfad");
-        sender.Column("asdf", 123);
-        sender.AtNow();
-        sender.CancelLine();
-
-        sender.Table("good");
-        sender.At(new DateTime(1970, 1, 2));
-        await sender.SendAsync();
-
-        var expected = "good,asdf=sdfad ddd=123i\n" +
-                       "good 86400000000000\n";
-        Assert.That(srv.GetReceiveBuffer().ToString(), Is.EqualTo(expected));
+        sender.Table("foo");
+        var n = sender.Length;
+        
+        Assert.That(
+            () => sender.Symbol("bah", null),
+            Has.Length.EqualTo(n)
+        );
+        
+        Assert.That(
+            () => sender.Column("bah", (string?)null),
+            Has.Length.EqualTo(n)
+        );
+        
+        Assert.That(
+            () => sender.Column("bah", (long?)null),
+            Has.Length.EqualTo(n)
+        );
+             
+        Assert.That(
+            () => sender.Column("bah", (bool?)null),
+            Has.Length.EqualTo(n)
+        );
+        
+        Assert.That(
+            () => sender.Column("bah", (double?)null),
+            Has.Length.EqualTo(n)
+        );
     }
 
     [Test]
@@ -563,17 +659,6 @@ public class HttpTests
                 .At(new DateTime(2021, 1, 1, i / 360 / 1000 % 60, i / 60 / 1000 % 60, i / 1000 % 60, i % 1000));
 
         await sender.SendAsync();
-    }
-
-    [Test]
-    public async Task CannotConnect()
-    {
-        Assert.That(
-            async () => await
-                new Sender($"http::addr={Host}:{HttpPort};").Table("foo").Symbol("a", "b").AtNow()
-                    .SendAsync(),
-            Throws.TypeOf<IngressError>().With.Message.Contains("refused")
-        );
     }
 
     [Test]
@@ -662,6 +747,44 @@ public class HttpTests
         Assert.Throws<IngressError>(
             () => sender.Symbol("number1", "1234")
                 .AtNow()
+        );
+    }
+    
+    [Test]
+    public async Task CancelLine()
+    {
+        using var srv = new DummyHttpServer();
+        await srv.StartAsync(HttpPort);
+        using var sender = new Sender($"http::addr={Host}:{HttpPort};");
+
+        sender.Table("good");
+        sender.Symbol("asdf", "sdfad");
+        sender.Column("ddd", 123);
+        sender.AtNow();
+
+        sender.Table("bad");
+        sender.Symbol("asdf", "sdfad");
+        sender.Column("asdf", 123);
+        sender.AtNow();
+        sender.CancelLine();
+
+        sender.Table("good");
+        sender.At(new DateTime(1970, 1, 2));
+        await sender.SendAsync();
+
+        var expected = "good,asdf=sdfad ddd=123i\n" +
+                       "good 86400000000000\n";
+        Assert.That(srv.GetReceiveBuffer().ToString(), Is.EqualTo(expected));
+    }
+
+    [Test]
+    public async Task CannotConnect()
+    {
+        Assert.That(
+            async () => await
+                new Sender($"http::addr={Host}:{HttpPort};").Table("foo").Symbol("a", "b").AtNow()
+                    .SendAsync(),
+            Throws.TypeOf<IngressError>().With.Message.Contains("refused")
         );
     }
 
@@ -757,7 +880,7 @@ public class HttpTests
     }
 
     [Test]
-    public async Task MustUseCommitToFinishTransaction()
+    public async Task TransactionRequiresCommitToComplete()
     {
         using var srv = new DummyHttpServer();
         await srv.StartAsync(HttpPort);
@@ -780,52 +903,6 @@ public class HttpTests
         
         Assert.True(await sender.CommitAsync());
     }
-
-    [Test]
-    public async Task TokenAuthenticationSuccess()
-    {
-        using var srv = new DummyHttpServer(true);
-        await srv.StartAsync(HttpPort);
-
-        var token = srv.GetJwtToken("admin", "quest");
-
-        using var sender =
-            new Sender(
-                $"https::addr={Host}:{HttpsPort};token={token};tls_verify=unsafe_off;");
-        
-        for (var i = 0; i < 100; i++)
-            sender
-                .Table("test")
-                .Symbol("foo", "bah")
-                .Column("num", i)
-                .AtNow();
-
-        await sender.FlushAsync();
-    }
-    
-    [Test]
-    public async Task TokenAuthenticationFailed()
-    {
-        using var srv = new DummyHttpServer(true);
-        await srv.StartAsync(HttpPort);
-        
-        using var sender =
-            new Sender(
-                $"https::addr={Host}:{HttpsPort};token=askldaklds;tls_verify=unsafe_off;");
-        
-        for (var i = 0; i < 100; i++)
-            sender
-                .Table("test")
-                .Symbol("foo", "bah")
-                .Column("num", i)
-                .AtNow();
-
-        Assert.That(
-            async () => await sender.FlushAsync(),
-            Throws.TypeOf<IngressError>().With.Message.Contains("Unauthorized")
-            );
-    }
-
 
     [Test]
     public async Task AutoFlushRows()
@@ -878,39 +955,5 @@ public class HttpTests
             sender.Table("foo").Symbol("bah", "baz").AtNow();
             await Task.Delay(500);
         }
-    }
-
-    [Test]
-    public async Task TestNullableVariants()
-    {
-        using var sender = new Sender($"http::addr={Host}:{HttpPort};");
-
-        sender.Table("foo");
-        var n = sender.Length;
-        
-        Assert.That(
-                () => sender.Symbol("bah", null),
-                Has.Length.EqualTo(n)
-            );
-        
-        Assert.That(
-            () => sender.Column("bah", (string?)null),
-            Has.Length.EqualTo(n)
-        );
-        
-        Assert.That(
-            () => sender.Column("bah", (long?)null),
-            Has.Length.EqualTo(n)
-        );
-             
-        Assert.That(
-            () => sender.Column("bah", (bool?)null),
-            Has.Length.EqualTo(n)
-        );
-        
-        Assert.That(
-            () => sender.Column("bah", (double?)null),
-            Has.Length.EqualTo(n)
-        );
     }
 }

@@ -66,7 +66,7 @@ public class QuestDBOptions
 
         auth_timeout = TimeSpan.FromMilliseconds(int.Parse(confStr.auth_timeout!));
         auto_flush = Enum.Parse<AutoFlushType>(confStr.auto_flush!, false);
-        auto_flush_rows = int.Parse(confStr.auto_flush_rows ?? int.MaxValue.ToString());
+        auto_flush_rows = int.Parse(confStr.auto_flush_rows ?? (IsHttp() ? "75000" : "600"));
         auto_flush_bytes = int.Parse(confStr.auto_flush_bytes ?? int.MaxValue.ToString());
         auto_flush_interval = TimeSpan.FromMilliseconds(int.Parse(confStr.auto_flush_interval!));
         
@@ -309,6 +309,11 @@ public class QuestDBOptions
     ///     Specifies timeout for <see cref="SocketsHttpHandler.PooledConnectionLifetime"/>.
     /// </summary>
     public TimeSpan pool_timeout { get; set; } = TimeSpan.FromMinutes(2);
+
+    /// <summary>
+    ///     Specifies limit for <see cref="SocketsHttpHandler.MaxConnectionsPerServer"/>.
+    /// </summary>
+    public int pool_limit { get; set; } = 64;
 
     // Extra useful properties
     [JsonIgnore] internal int Port { get; set; } = -1;

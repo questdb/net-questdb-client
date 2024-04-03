@@ -38,14 +38,22 @@ public class IlpEndpoint : Endpoint<Request>
     public static readonly StringBuilder ReceiveBuffer = new();
     public static readonly List<string> LogMessages = new();
     public static Exception LastError = new();
-    public static bool withTokenAuth = false;
+    public static bool WithTokenAuth = false;
+    public static bool WithBasicAuth = false;
+    private static string _username = "admin";
+    private static string _password = "quest";
 
     public override void Configure()
     {
         Post("write", "api/v2/write");
-        if (!withTokenAuth)
+        if (!WithTokenAuth)
         {
             AllowAnonymous();
+        }
+
+        if (WithBasicAuth)
+        {
+            PreProcessor<BasicAuther<Request>>();
         }
     
         Description(b => b.Accepts<Request>());
@@ -65,4 +73,25 @@ public class IlpEndpoint : Endpoint<Request>
             throw;
         }
     }
+    
+    public class BasicAuther<Request> : IPreProcessor<Request>
+    {
+        public Task PreProcessAsync(IPreProcessorContext<Request> ctx, CancellationToken ct)
+        {
+            var header = ctx.HttpContext.Request.Headers.Authorization.FirstOrDefault();
+
+            if (header != null && header.StartsWith("Basic"))
+            {
+                var splits = Encoding.ASCII.GetString(Convert.FromBase64String(header.Split(' ')[1])).Split(':');
+                if (splits[0] == _username && splits[1] == _password)
+                {
+                    return Task.CompletedTask;
+                }
+            }
+            
+            ctx.HttpContext.Response.SendUnauthorizedAsync(ct);
+            return Task.CompletedTask;
+        }
+    }
 }
+

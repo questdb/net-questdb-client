@@ -40,23 +40,31 @@ public class DummyHttpServer : IDisposable
     public static string Username = "admin";
     public static string Password = "quest";
         
-    public DummyHttpServer(bool withTokenAuth = false)
+    public DummyHttpServer(bool withTokenAuth = false, bool withBasicAuth = false)
     {
         var bld = WebApplication.CreateBuilder();
+        
+        bld.Services.AddLogging(
+            builder =>
+            {
+                builder.AddFilter("Microsoft", LogLevel.Warning)
+                    .AddFilter("System", LogLevel.Warning)
+                    .AddConsole();
+            });
 
-        IlpEndpoint.withTokenAuth = withTokenAuth;
+        IlpEndpoint.WithTokenAuth = withTokenAuth;
+        IlpEndpoint.WithBasicAuth = withBasicAuth;
 
         if (withTokenAuth)
         {
             bld.Services.
                 AddAuthenticationJwtBearer(s => s.SigningKey = SigningKey)
-                .AddAuthorization()
-                .AddFastEndpoints();
+                .AddAuthorization();
         }
-        else
-        {
-            bld.Services.AddFastEndpoints();
-        }
+        
+    
+    
+        bld.Services.AddFastEndpoints();
 
         bld.Services.AddHealthChecks();
         bld.WebHost.ConfigureKestrel(o => { o.Limits.MaxRequestBodySize = 1073741824; o.ListenLocalhost(29474,
@@ -71,15 +79,10 @@ public class DummyHttpServer : IDisposable
         {
             app
                 .UseAuthentication()
-                .UseAuthorization()
-                .UseFastEndpoints();
+                .UseAuthorization();
         }
-        else
-        {
-            app.UseFastEndpoints();
-        }
-
-   
+        
+        app.UseFastEndpoints();
     }
 
     public Task appTask { get; set; }

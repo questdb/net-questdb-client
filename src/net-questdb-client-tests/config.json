@@ -1,0 +1,6 @@
+{
+  "QuestDB": {
+    "addr": "localhost:9000",
+    "tls_verify": "unsafe_off"
+  }
+}

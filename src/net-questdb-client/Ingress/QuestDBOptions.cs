@@ -41,7 +41,7 @@ public class QuestDBOptions
     {
     }
 
-    public QuestDBOptions(string confStr) : this(new ConfStr(confStr))
+    public QuestDBOptions(string confStr = "http::addr=localhost:9000;") : this(new ConfStr(confStr))
     {
     }
 
@@ -69,9 +69,7 @@ public class QuestDBOptions
         auto_flush_rows = int.Parse(confStr.auto_flush_rows ?? int.MaxValue.ToString());
         auto_flush_bytes = int.Parse(confStr.auto_flush_bytes ?? int.MaxValue.ToString());
         auto_flush_interval = TimeSpan.FromMilliseconds(int.Parse(confStr.auto_flush_interval!));
-        //bind_interface = confStr.bind_interface;
-
-
+        
         init_buf_size = int.Parse(confStr.init_buf_size!);
         max_buf_size = int.Parse(confStr.max_buf_size!);
         max_name_len = int.Parse(confStr.max_name_len!);
@@ -285,17 +283,18 @@ public class QuestDBOptions
     public TlsVerifyType tls_verify { get; set; } = TlsVerifyType.on;
 
     /// <summary>
-    ///     todo
+    ///     Not in use
     /// </summary>
+    [Obsolete]
     public string? tls_ca { get; set; }
 
     /// <summary>
-    ///     todo
+    ///     Specifies the path to a custom certificate.
     /// </summary>
     public string? tls_roots { get; set; }
 
     /// <summary>
-    ///     todo
+    ///     Specifies the path to a custom certificate password.
     /// </summary>
     [JsonIgnore]
     public string? tls_roots_password { get; set; }
@@ -315,7 +314,7 @@ public class QuestDBOptions
     [JsonIgnore] internal int Port { get; set; } = -1;
     [JsonIgnore] internal string Host { get; set; }
 
-    public bool IsHttp()
+    internal bool IsHttp()
     {
         switch (protocol)
         {
@@ -327,7 +326,7 @@ public class QuestDBOptions
         }
     }
 
-    public bool IsTcp()
+    internal bool IsTcp()
     {
         return !IsHttp();
     }

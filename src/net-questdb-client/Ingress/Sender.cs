@@ -69,12 +69,12 @@ public class Sender : IDisposable
     public Sender(IConfiguration config)
     {
         Options = config.GetSection(QuestDBOptions.QuestDB).Get<QuestDBOptions>();
-        Hydrate(Options);
+        Build(Options);
     }
 
     public Sender(QuestDBOptions options)
     {
-        Hydrate(options);
+        Build(options);
     }
 
     public Sender(string confString) : this(new QuestDBOptions(confString))
@@ -107,7 +107,7 @@ public class Sender : IDisposable
         if (_dataStream != null) _dataStream.Dispose();
     }
 
-    public void Hydrate(QuestDBOptions options)
+    public void Build(QuestDBOptions options)
     {
         Options = options;
         _intervalTimer = new Stopwatch();

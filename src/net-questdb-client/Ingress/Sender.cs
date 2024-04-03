@@ -29,6 +29,7 @@ using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Security;
 using System.Net.Sockets;
+using System.Security.Authentication;
 using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using Microsoft.Extensions.Configuration;
@@ -54,7 +55,8 @@ public class Sender : IDisposable
 
 
     // http
-    private HttpClientHandler? _handler;
+    private SocketsHttpHandler? _handler;
+    private HttpClient? _client;
 
 
     private Stream? _dataStream;
@@ -113,20 +115,27 @@ public class Sender : IDisposable
 
         if (options.IsHttp())
         {
+            _handler = new SocketsHttpHandler
+            {
+                PooledConnectionLifetime = Options.pool_timeout 
+            };
+            
             if (options.protocol == ProtocolType.https)
             {
-                ServicePointManager.Expect100Continue = true;
-                ServicePointManager.SecurityProtocol = SecurityProtocolType.Tls12 | SecurityProtocolType.Tls13;
-
-                _handler = new HttpClientHandler();
+                
+                _handler.SslOptions.TargetHost = Options.Host;
+                _handler.SslOptions.EnabledSslProtocols = SslProtocols.Tls12 | SslProtocols.Tls13;
+                
+                _handler = new SocketsHttpHandler();
+                
 
                 if (options.tls_verify == TlsVerifyType.unsafe_off)
                 {
-                    _handler.ServerCertificateCustomValidationCallback += (_, _, _, _) => true;
+                    _handler.SslOptions.RemoteCertificateValidationCallback += (_, _, _, _) => true;
                 }
                 else
                 {
-                    _handler.ServerCertificateCustomValidationCallback =
+                    _handler.SslOptions.RemoteCertificateValidationCallback =
                         (_, certificate, chain, errors) =>
                         {
                             if ((errors & ~SslPolicyErrors.RemoteCertificateChainErrors) != 0)
@@ -140,18 +149,31 @@ public class Sender : IDisposable
                                 chain.ChainPolicy.CustomTrustStore.Add(X509Certificate2.CreateFromPemFile(options.tls_roots, options.tls_roots_password));
                             }
                             
-                            return chain.Build(certificate);
+                            return chain.Build(new X509Certificate2(certificate));
                         };
    
                 }
 
                 if (options.tls_roots != null)
                 {
-                    _handler.ClientCertificates.Add(
+                    _handler.SslOptions.ClientCertificates.Add(
                         X509Certificate2.CreateFromPemFile(options.tls_roots, options.tls_roots_password));
                 }
-
             }
+            
+            _handler.ConnectTimeout = options.auth_timeout;
+            _handler.PreAuthenticate = true;
+
+            _client = new HttpClient(_handler);
+            var uri = new UriBuilder(Options.protocol.ToString(), Options.Host, Options.Port);
+            _client.BaseAddress = uri.Uri;
+            _client.Timeout = Timeout.InfiniteTimeSpan;
+
+            if (Options.username != null && Options.password != null)
+                _client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Basic",
+                    Convert.ToBase64String(Encoding.ASCII.GetBytes($"{Options.username}:{Options.password}")));
+            else if (Options.token != null)
+                _client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", Options.token);
         }
 
         if (options.IsTcp())
@@ -184,8 +206,9 @@ public class Sender : IDisposable
 
                 _underlyingSocket = socket;
                 _dataStream = dataStream;
-
-                var authTimeout = GenerateAuthTimeout();
+                
+                var authTimeout = new CancellationTokenSource();
+                authTimeout.CancelAfter(Options.auth_timeout);
                 if (Options.token is not null) AuthenticateAsync(authTimeout.Token).AsTask().Wait(); // todo test auth timeout
             }
             catch
@@ -465,12 +488,11 @@ public class Sender : IDisposable
         if (Options.IsHttp())
         {
             var (request, cts) = GenerateRequest();
-            using var client = GenerateClient();
             try
             {
-                var response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cts.Token);
+                var response = await _client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cts.Token);
                 return await FinishOrRetryAsync(
-                    client, response, cts
+                     response, cts
                 );
             }
             catch (Exception ex)
@@ -525,7 +547,7 @@ public class Sender : IDisposable
     /// <param name="cts">The cancellation token source.</param>
     /// <returns></returns>
     /// <exception cref="IngressError"></exception>
-    public async Task<(HttpRequestMessage?, HttpResponseMessage?)> FinishOrRetryAsync(HttpClient client, HttpResponseMessage response,
+    public async Task<(HttpRequestMessage?, HttpResponseMessage?)> FinishOrRetryAsync(HttpResponseMessage response,
         CancellationTokenSource cts = default, int retryIntervalMs = 10)
     {
         var lastResponse = response;
@@ -546,7 +568,7 @@ public class Sender : IDisposable
                 await Task.Delay(retryInterval + jitter);
 
                 var (nextRequest, nextToken) = GenerateRequest();
-                lastResponse = await client.SendAsync(nextRequest, nextToken.Token);
+                lastResponse = await _client.SendAsync(nextRequest, nextToken.Token);
                 if (!lastResponse!.IsSuccessStatusCode)
                 {
                     if (IsRetriableError(lastResponse.StatusCode) && Options.retry_timeout > TimeSpan.Zero)
@@ -716,36 +738,6 @@ public class Sender : IDisposable
     }
 
     /// <summary>
-    ///     Create a new HttpClient for the request.
-    /// </summary>
-    /// <returns></returns>
-    private HttpClient GenerateClient()
-    {
-        var client = _handler != null ? new HttpClient(_handler) : new HttpClient();
-        var uri = new UriBuilder(Options.protocol.ToString(), Options.Host, Options.Port);
-        client.BaseAddress = uri.Uri;
-        client.Timeout = TimeSpan.FromSeconds(300);
-
-        if (Options.username != null && Options.password != null)
-            client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Basic",
-                Convert.ToBase64String(Encoding.ASCII.GetBytes($"{Options.username}:{Options.password}")));
-        else if (Options.token != null)
-            client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", Options.token);
-        return client;
-    }
-
-    /// <summary>
-    ///     Create a cancellation token with timeout equal to <see cref="QuestDBOptions.auth_timeout"/>
-    /// </summary>
-    /// <returns></returns>
-    private CancellationTokenSource GenerateAuthTimeout()
-    {
-        var cts = new CancellationTokenSource();
-        cts.CancelAfter(Options.auth_timeout);
-        return cts;
-    }
-
-    /// <summary>
     ///     Calculate the request timeout.
     /// </summary>
     /// <remarks>
@@ -771,7 +763,7 @@ public class Sender : IDisposable
     {
         try
         {
-            var response = await GenerateClient().GetAsync("/ping");
+            var response = await _client.GetAsync("/ping");
             if (response.IsSuccessStatusCode)
             {
                 var ping = new PingResponse();

@@ -770,32 +770,16 @@ public class Sender : IDisposable
     /// Health check endpoint.
     /// </summary>
     /// <returns></returns>
-    public async Task<PingResponse?> PingAsync()
+    public async Task<bool?> PingAsync()
     {
         try
         {
             var response = await _client.GetAsync("/ping");
-            if (response.IsSuccessStatusCode)
-            {
-                var ping = new PingResponse();
-                ping.Server = response.Headers.Server.ToString();
-                ping.Date = response.Headers.Date;
-                ping.InfluxDBVersion = response.Headers.GetValues("X-Influxdb-Version").First();
-                return ping;
-            }
+            return response.IsSuccessStatusCode;
         }
         catch
         {
-            return null;
+            return false;
         }
-
-        return null;
-    }
-
-    public record PingResponse
-    {
-        public string Server { get; set; }
-        public DateTimeOffset? Date { get; set; }
-        public string InfluxDBVersion { get; set; }
     }
 }

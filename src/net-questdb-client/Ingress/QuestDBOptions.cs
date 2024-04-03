@@ -85,6 +85,7 @@ public class QuestDBOptions
         request_min_throughput = int.Parse(confStr.request_min_throughput!);
         request_timeout = TimeSpan.FromMilliseconds(int.Parse(confStr.request_timeout!));
         retry_timeout = TimeSpan.FromMilliseconds(int.Parse(confStr.retry_timeout!));
+        pool_timeout = TimeSpan.FromMilliseconds(int.Parse(confStr.pool_timeout!));
 
         tls_verify = Enum.Parse<TlsVerifyType>(confStr.tls_verify!, false);
         tls_ca = confStr.tls_ca;
@@ -304,10 +305,15 @@ public class QuestDBOptions
     /// </summary>
     [JsonIgnore]
     public bool own_socket { get; set; } = true;
+    
+    /// <summary>
+    ///     Specifies timeout for <see cref="SocketsHttpHandler.PooledConnectionLifetime"/>.
+    /// </summary>
+    public TimeSpan pool_timeout { get; set; } = TimeSpan.FromMinutes(2);
 
     // Extra useful properties
-    [JsonIgnore] public int Port { get; set; } = -1;
-    [JsonIgnore] public string Host { get; set; }
+    [JsonIgnore] internal int Port { get; set; } = -1;
+    [JsonIgnore] internal string Host { get; set; }
 
     public bool IsHttp()
     {

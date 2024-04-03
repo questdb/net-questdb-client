@@ -120,6 +120,9 @@ public class ConfStr
 
     /// <inheritdoc cref="QuestDBOptions.own_socket" />
     public string? own_socket { get; set; } = "true";
+    
+    /// <inheritdoc cref="QuestDBOptions.pool_timeout" />
+    public string? pool_timeout { get; set; } = "120000";
 
 
     public override string ToString()
@@ -214,6 +217,10 @@ public class ConfStr
                 .Must(x => x == "true" || x == "false")
                 .When(x => x.own_socket is not null)
                 .WithMessage("`own_socket` must be `true` or `false`");
+            
+            RuleFor(x => x.pool_timeout)
+                .Must(x => int.TryParse(x, out _))
+                .WithMessage("`pool_timeout` must be convertible to an int.");
         }
     }
 }

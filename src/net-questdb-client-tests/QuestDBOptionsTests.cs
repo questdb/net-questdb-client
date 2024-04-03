@@ -79,7 +79,7 @@ public class QuestDBOptionsTests
     {
         Assert.That(
             new QuestDBOptions("http::addr=localhost:9000;").ToString()
-            , Is.EqualTo("http::addr=localhost:9000;auth_timeout=15000;auto_flush=on;auto_flush_bytes=2147483647;auto_flush_interval=1000;auto_flush_rows=75000;init_buf_size=65536;max_buf_size=104857600;max_name_len=127;request_min_throughput=102400;request_timeout=10000;retry_timeout=10000;tls_verify=on"));
+            , Is.EqualTo("http::addr=localhost:9000;auth_timeout=15000;auto_flush=on;auto_flush_bytes=2147483647;auto_flush_interval=1000;auto_flush_rows=75000;init_buf_size=65536;max_buf_size=104857600;max_name_len=127;pool_timeout=120000;request_min_throughput=102400;request_timeout=10000;retry_timeout=10000;tls_verify=on"));
     }
 
     [Test]
@@ -99,24 +99,5 @@ public class QuestDBOptionsTests
             () => new QuestDBOptions("http::addr=localhost:9000"),
             Throws.TypeOf<IngressError>().With.Message.Contains("semicolon")
         );
-    }
-
-
-    [Test]
-    public void ParsingHostAndPort()
-    {
-        var options = new QuestDBOptions("http::addr=localhost:1234;");
-        Assert.That(options.Port == 1234);
-        Assert.That(options.Host == "localhost");
-    }
-
-    [Test]
-    public void ParsingDefaultPorts()
-    {
-        var httpOptions = new QuestDBOptions("http::addr=localhost;");
-        Assert.That(httpOptions.Port == 9000);
-
-        var tcpOptions = new QuestDBOptions("tcp::addr=localhost;");
-        Assert.That(tcpOptions.Port == 9009);
     }
 }

@@ -511,10 +511,10 @@ public class Buffer : HttpContent, IEnumerable<byte>
     }
 
     /// <summary>
-    ///     Cancel current unsent line. Works only in Extend buffer overflow mode.
+    ///     Cancel current unsent row.
     /// </summary>
     /// <exception cref="InvalidOperationException"></exception>
-    public void CancelLine()
+    public void CancelRow()
     {
         CurrentBufferIndex = LineStartBufferIndex;
         Length -= Position - LineStartBufferPosition;

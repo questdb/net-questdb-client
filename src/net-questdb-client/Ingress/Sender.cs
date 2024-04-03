@@ -84,9 +84,9 @@ public class Sender : IDisposable
     public int Length => _buffer.Length;
     
 
-    public int rowCount => _buffer.RowCount;
+    public int RowCount => _buffer.RowCount;
 
-    public bool withinTransaction => _buffer.WithinTransaction;
+    public bool WithinTransaction => _buffer.WithinTransaction;
 
     private bool committingTransaction { get; set; }
 
@@ -101,7 +101,7 @@ public class Sender : IDisposable
         if (_dataStream != null) _dataStream.Dispose();
     }
 
-    public void Build(QuestDBOptions options)
+    private void Build(QuestDBOptions options)
     {
         Options = options;
         _intervalTimer = new Stopwatch();
@@ -416,6 +416,14 @@ public class Sender : IDisposable
         HandleAutoFlush();
         return this;
     }
+    
+    /// <inheritdoc cref="Buffer.At(DateTimeOffset)" />
+    public Sender At(long timestamp)
+    {
+        _buffer.At(timestamp);
+        HandleAutoFlush();
+        return this;
+    }
 
     /// <inheritdoc cref="Buffer.AtNow" />
     public Sender AtNow()
@@ -483,7 +491,7 @@ public class Sender : IDisposable
     /// <exception cref="NotImplementedException"></exception>
     public async Task<(HttpRequestMessage?, HttpResponseMessage?)> SendAsync()
     {
-        if (withinTransaction && !committingTransaction)
+        if (WithinTransaction && !committingTransaction)
         {
             throw new IngressError(ErrorCode.InvalidApiCall, "Please `commit` to complete your transaction.");
         }
@@ -552,7 +560,7 @@ public class Sender : IDisposable
     /// <param name="cts">The cancellation token source.</param>
     /// <returns></returns>
     /// <exception cref="IngressError"></exception>
-    public async Task<(HttpRequestMessage?, HttpResponseMessage?)> FinishOrRetryAsync(HttpResponseMessage response,
+    private async Task<(HttpRequestMessage?, HttpResponseMessage?)> FinishOrRetryAsync(HttpResponseMessage response,
         CancellationTokenSource cts = default, int retryIntervalMs = 10)
     {
         var lastResponse = response;
@@ -688,12 +696,12 @@ public class Sender : IDisposable
     }
 
     /// <summary>
-    ///     Cancel the current line.
+    ///     Cancel the current row.
     /// </summary>
     /// <exception cref="InvalidOperationException"></exception>
-    public void CancelLine()
+    public void CancelRow()
     {
-        _buffer.CancelLine();
+        _buffer.CancelRow();
     }
 
     /// <summary>

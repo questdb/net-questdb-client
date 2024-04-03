@@ -766,7 +766,7 @@ public class HttpTests
         sender.Symbol("asdf", "sdfad");
         sender.Column("asdf", 123);
         sender.AtNow();
-        sender.CancelLine();
+        sender.CancelRow();
 
         sender.Table("good");
         sender.At(new DateTime(1970, 1, 2));
@@ -870,13 +870,13 @@ public class HttpTests
                 .Column("num", i)
                 .AtNow();
 
-        Assert.That(sender.rowCount == 100);
-        Assert.That(sender.withinTransaction);
+        Assert.That(sender.RowCount == 100);
+        Assert.That(sender.WithinTransaction);
 
         await sender.CommitAsync();
 
-        Assert.That(sender.rowCount == 0);
-        Assert.That(!sender.withinTransaction);
+        Assert.That(sender.RowCount == 0);
+        Assert.That(!sender.WithinTransaction);
     }
 
     [Test]

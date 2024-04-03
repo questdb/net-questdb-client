@@ -39,6 +39,7 @@ public class Program
                 .WithToolchain(InProcessNoEmitToolchain.Instance))
                 .WithOptions(ConfigOptions.DisableOptimizationsValidator);
         // var summary = BenchmarkRunner.Run<BenchInserts>(config);
-        var summary = BenchmarkRunner.Run<BenchConnectionChurn>(config);
+        //var summary = BenchmarkRunner.Run<BenchConnectionChurn>(config);
+        var summary = BenchmarkRunner.Run<BenchConnectionChurnVsServer>(config);
     }
 }

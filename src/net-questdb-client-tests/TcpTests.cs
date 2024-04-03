@@ -554,7 +554,7 @@ public class TcpTests
         sender.Symbol("asdf", "sdfad");
         sender.Column("asdf", 123);
         sender.AtNow();
-        sender.CancelLine();
+        sender.CancelRow();
 
         sender.Table("good");
         sender.At(new DateTime(1970, 1, 2));

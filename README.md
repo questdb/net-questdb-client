@@ -166,36 +166,32 @@ The config string format is:
 
 ### net-questdb-client specific parameters
 
-| Name           | Default  | Description                                                                                                                                        |
-|----------------|----------|----------------------------------------------------------------------------------------------------------------------------------------------------|
-| `own_socket`   | `true`   | Specifies whether the internal TCP data stream will own the underlying socket or not.                                                              |
-| `pool_timeout` | `120000` | Sets the timeout for HTTP connections in SocketsHttpHandler.                                                                                       |
-| `pool_limit`   | `64`     | Enables or disables auto-flushing functionality. By default, the buffer will be flushed every 75,000 rows, or every 1000ms, whichever comes first. |
-
-
-| Name                     | Default  | Description                                                                                                                                                                                                                            |
-| ------------------------ | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `host`                   |          | Host or IP address of QuestDB server.                                                                                                                                                                                                   |
-| `port`                   |          | QuestDB Port. Default ILP port is 9009                                                                                                                                                                                                 |
-| `bufferSize`             | 4096     | Default send buffer size                                                                                                                                                                                                               |
-| `bufferOverflowHandling` | `Extend` | There are 2 modes: <br/> - `Extend` will grow input buffer until `Send()` or `SendAsync()` method called<br/> - `SendImmediately` will no extend the IO Buffer and automatically executes `Send()` immediatly when IO Buffer overflown |
-| `tslMode`                | `Enable` | There are 3 TSL modes:<br/>- `Enable`. TLS is enabled, server certificate is checked<br/> - `AllowAnyServerCertificate`. TLS enabled, server certificate is not checked<br/>- `Disable`                                                |
+| Name           | Default  | Description                                                                           |
+|----------------|----------|---------------------------------------------------------------------------------------|
+| `own_socket`   | `true`   | Specifies whether the internal TCP data stream will own the underlying socket or not. |
+| `pool_timeout` | `120000` | Sets the timeout for HTTP connections in SocketsHttpHandler.                          |
+| `pool_limit`   | `64`     | Sets the number of allowed open connections per host in SocketsHttpHandler.           |
 
 ## Properties and methods
 
-| Name                                                                 | Description                                                                                                    |
-| -------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
-| `AuthenticateAsync(string keyId, string privateKey)`                 | Authenticates with QuestDB certificates                                                                        |
-| `Table(string name)`                                                 | Starts new line from table name                                                                                |
-| `Symbol(string sybolName, string value)`                             | Symbol column value                                                                                            |
-| `Column(string columnName, string / long / double / DateTime value)` | Column name and value                                                                                          |
-| `At(DateTime / long timestamp)`                                      | Designated timestamp for the line                                                                              |
-| `AtNow()`                                                            | Finishes line leaving QuestDB server to set the timestamp                                                      |
-| `Send() / SendAsync() `                                              | Send IO Buffers to QuestDB                                                                                     |
-| `CancelLine()`                                                       | Cancels current line. Works only when `bufferOverflowHandling` set to `Extend`                                 |
-| `TrimExcessBuffers()`                                                | Trims empty buffers used to grow IO Buffer. Only useful when `bufferOverflowHandling` set to `Extend`          |
-| int `WriteTimeout`                                                   | Value, in milliseconds, that determines how long the underlying stream will attempt to write before timing out |
-| `IsConnected`                                                        | Indicates if the connection to QuestDB open                                                                    |
+| Name                                                                                                  | Returns                                     | Description                                                               |
+|-------------------------------------------------------------------------------------------------------|---------------------------------------------|---------------------------------------------------------------------------|
+| `Length`                                                                                              | `int`                                       | Current length in bytes of the buffer (not capacity!)                     |
+| `RowCount`                                                                                            | `int`                                       | Current row count of the buffer                                           |
+| `WithinTransaction`                                                                                   | `bool`                                      | Whether or not the Sender is currently in a transactional state.          |
+| `Transaction(ReadOnlySpan<char>)`                                                                     | `Sender`                                    | Starts a new transaction for the table.                                   |
+| `Commit() / CommitAsync()`                                                                            | `bool`                                      | Commits the current transaction.                                          |
+| `Table(ReadOnlySpan<char>)`                                                                           |                                             |                                                                           |
+| `Column(ReadOnlySpan<char>, ReadOnlySpan<char> / string / long / double / DateTime / DateTimeOffset)` | `Sender`                                    | Specify column name and value                                             |
+| `Column(ReadOnlySpan<char>, string? / long? / double? / DateTime? / DateTimeOffset?)`                 | `Sender`                                    |                                                                           |
+| `Symbol(ReadOnlySpan<char>, ReadOnlySpan<char> / string)`                                             | `Sender`                                    |                                                                           |
+| `At(DateTime / DateTimeOffset / long)`                                                                |                                             | Designated timestamp for the line. For long, this is in unix nanoseconds. |
+| `AtNow()`                                                                                             |                                             | Finishes line leaving QuestDB server to set the timestamp                 |
+| `Send() / SendAsync()`                                                                                | (HttpRequestMessage?, HttpResponseMessage?) | Send IO Buffers to QuestDB                                                |
+| `Flush() / FlushAsync()`                                                                              |                                             | Send IO Buffers to QuestDB like SendAsync, but without return value.      |
+| `CancelRow()`                                                                                         |                                             | Cancels current row.                                                      |
+| `Truncate()`                                                                                          |                                             | Trims empty buffers.                                                      |
+| `PingAsync()`                                                                                         | bool                                        | Calls the healthcheck endpoint.                                           |
 
 ## Examples
 

@@ -40,6 +40,7 @@ public class Program
                 .WithOptions(ConfigOptions.DisableOptimizationsValidator);
         // var summary = BenchmarkRunner.Run<BenchInserts>(config);
         //var summary = BenchmarkRunner.Run<BenchConnectionChurn>(config);
-        var summary = BenchmarkRunner.Run<BenchConnectionChurnVsServer>(config);
+        // var summary = BenchmarkRunner.Run<BenchConnectionChurnVsServer>(config);
+        var summary = BenchmarkRunner.Run<BenchConnectionChurnVsServer2>(config);
     }
 }

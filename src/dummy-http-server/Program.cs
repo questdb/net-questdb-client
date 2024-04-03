@@ -25,4 +25,4 @@
 
 using dummy_http_server;
 
-await new DummyHttpServer().StartAsync(29473);
+await new DummyHttpServer().RunAsync();

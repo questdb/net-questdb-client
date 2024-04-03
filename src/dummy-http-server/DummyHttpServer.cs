@@ -57,7 +57,8 @@ public class DummyHttpServer : IDisposable
         }
 
         bld.Services.AddHealthChecks();
-        bld.WebHost.ConfigureKestrel(o => { o.Limits.MaxRequestBodySize = 1073741824; });
+        bld.WebHost.ConfigureKestrel(o => { o.Limits.MaxRequestBodySize = 1073741824; o.ListenLocalhost(29474,
+            options => { options.UseHttps(); }); o.ListenLocalhost(29473); });
 
         app = bld.Build();
 
@@ -99,6 +100,12 @@ public class DummyHttpServer : IDisposable
         _port = port;
         appTask = app.RunAsync($"http://localhost:{port}");
     }
+
+    public async Task RunAsync()
+    {
+        await app.RunAsync($"http://localhost:{_port}");
+    }
+    
 
     public async Task StopAsync()
     {

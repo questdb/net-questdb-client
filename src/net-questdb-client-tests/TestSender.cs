@@ -27,7 +27,7 @@ using QuestDB.Ingress;
 
 namespace net_questdb_client_tests;
 
-public class TestSender : LineSender
+public class TestSender : Sender
 {
     public TestSender(string confString) : base(confString)
     {

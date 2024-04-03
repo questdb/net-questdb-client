@@ -39,7 +39,7 @@ using Org.BouncyCastle.Security;
 
 namespace QuestDB.Ingress;
 
-public class LineSender : IDisposable
+public class Sender : IDisposable
 {
     private const string IlpEndpoint = "write";
     public static int DefaultQuestDbFsFileNameLimit = 127;
@@ -50,7 +50,7 @@ public class LineSender : IDisposable
     private bool _authenticated;
 
 
-    private ByteBuffer _byteBuffer;
+    private Buffer _buffer;
 
 
     // http
@@ -64,33 +64,33 @@ public class LineSender : IDisposable
     // general
     public QuestDBOptions Options;
 
-    public LineSender(IConfiguration config)
+    public Sender(IConfiguration config)
     {
         Options = config.GetSection(QuestDBOptions.QuestDB).Get<QuestDBOptions>();
         Hydrate(Options);
     }
 
-    public LineSender(QuestDBOptions options)
+    public Sender(QuestDBOptions options)
     {
         Hydrate(options);
     }
 
-    public LineSender(string confString) : this(new QuestDBOptions(confString))
+    public Sender(string confString) : this(new QuestDBOptions(confString))
     {
     }
 
     public int QuestDbFsFileNameLimit
     {
-        get => _byteBuffer.QuestDbFsFileNameLimit;
-        set => _byteBuffer.QuestDbFsFileNameLimit = value;
+        get => _buffer.QuestDbFsFileNameLimit;
+        set => _buffer.QuestDbFsFileNameLimit = value;
     }
 
-    public int Length => _byteBuffer.Length;
+    public int Length => _buffer.Length;
     
 
-    public int rowCount => _byteBuffer.RowCount;
+    public int rowCount => _buffer.RowCount;
 
-    public bool withinTransaction => _byteBuffer.WithinTransaction;
+    public bool withinTransaction => _buffer.WithinTransaction;
 
     private bool committingTransaction { get; set; }
 
@@ -109,7 +109,7 @@ public class LineSender : IDisposable
     {
         Options = options;
         _intervalTimer = new Stopwatch();
-        _byteBuffer = new ByteBuffer(Options.init_buf_size);
+        _buffer = new Buffer(Options.init_buf_size);
 
         if (options.IsHttp())
         {
@@ -216,9 +216,9 @@ public class LineSender : IDisposable
     /// <exception cref="IngressError"></exception>
     private void GuardExceededMaxBufferSize()
     {
-        if (_byteBuffer.Length > Options.max_buf_size)
+        if (_buffer.Length > Options.max_buf_size)
             throw new IngressError(ErrorCode.InvalidApiCall,
-                $"Exceeded maximum buffer size. Current: {_byteBuffer.Length} Maximum: {Options.max_buf_size}");
+                $"Exceeded maximum buffer size. Current: {_buffer.Length} Maximum: {Options.max_buf_size}");
     }
 
     /// <summary>
@@ -231,12 +231,12 @@ public class LineSender : IDisposable
     /// <param name="tableName"></param>
     /// <returns></returns>
     /// <exception cref="IngressError"></exception>
-    public LineSender Transaction(ReadOnlySpan<char> tableName)
+    public Sender Transaction(ReadOnlySpan<char> tableName)
     {
         if (!Options.IsHttp())
             throw new IngressError(ErrorCode.InvalidApiCall, "Transactions are only available for HTTP.");
 
-        _byteBuffer.Transaction(tableName);
+        _buffer.Transaction(tableName);
         return this;
     }
 
@@ -260,16 +260,16 @@ public class LineSender : IDisposable
         var (_, response) = await SendAsync();
         
         committingTransaction = false;
-        Debug.Assert(!_byteBuffer.WithinTransaction);
+        Debug.Assert(!_buffer.WithinTransaction);
         // we expect an error to be thrown before here, and response is non-null (since its HTTP).
         return response!.IsSuccessStatusCode;
     }
  
-    /// <inheritdoc cref="ByteBuffer.Table" />
-    public LineSender Table(ReadOnlySpan<char> name)
+    /// <inheritdoc cref="Buffer.Table" />
+    public Sender Table(ReadOnlySpan<char> name)
     {
         GuardFsFileNameLimit(name);
-        _byteBuffer.Table(name);
+        _buffer.Table(name);
         if (!_intervalTimer.IsRunning)
         {
             _intervalTimer.Start();
@@ -277,135 +277,135 @@ public class LineSender : IDisposable
         return this;
     }
 
-    /// <inheritdoc cref="ByteBuffer.Symbol" />
-    public LineSender Symbol(ReadOnlySpan<char> symbolName, ReadOnlySpan<char> value)
+    /// <inheritdoc cref="Buffer.Symbol" />
+    public Sender Symbol(ReadOnlySpan<char> symbolName, ReadOnlySpan<char> value)
     {
         GuardFsFileNameLimit(symbolName);
-        _byteBuffer.Symbol(symbolName, value);
+        _buffer.Symbol(symbolName, value);
         return this;
     }
     
-    /// <inheritdoc cref="ByteBuffer.Symbol" />
-    public LineSender Symbol(ReadOnlySpan<char> symbolName, string? value)
+    /// <inheritdoc cref="Buffer.Symbol" />
+    public Sender Symbol(ReadOnlySpan<char> symbolName, string? value)
     {
         if (value != null)
         {
             GuardFsFileNameLimit(symbolName);
-            _byteBuffer.Symbol(symbolName, value);
+            _buffer.Symbol(symbolName, value);
         }
         return this;
     }
 
-    /// <inheritdoc cref="ByteBuffer.Column(ReadOnlySpan&lt;char&gt;, ReadOnlySpan&lt;char&gt;)" />
-    public LineSender Column(ReadOnlySpan<char> name, ReadOnlySpan<char> value)
+    /// <inheritdoc cref="Buffer.Column(ReadOnlySpan&lt;char&gt;, ReadOnlySpan&lt;char&gt;)" />
+    public Sender Column(ReadOnlySpan<char> name, ReadOnlySpan<char> value)
     {
-        _byteBuffer.Column(name, value);
+        _buffer.Column(name, value);
         return this;
     }
     
-    /// <inheritdoc cref="ByteBuffer.Column(ReadOnlySpan&lt;char&gt;, ReadOnlySpan&lt;char&gt;)" />
-    public LineSender Column(ReadOnlySpan<char> name, string? value)
+    /// <inheritdoc cref="Buffer.Column(ReadOnlySpan&lt;char&gt;, ReadOnlySpan&lt;char&gt;)" />
+    public Sender Column(ReadOnlySpan<char> name, string? value)
     {
         if (value != null)
-         _byteBuffer.Column(name, value);
+         _buffer.Column(name, value);
         return this;
     }
 
-    /// <inheritdoc cref="ByteBuffer.Column(ReadOnlySpan&lt;char&gt;, long)" />
-    public LineSender Column(ReadOnlySpan<char> name, long value)
+    /// <inheritdoc cref="Buffer.Column(ReadOnlySpan&lt;char&gt;, long)" />
+    public Sender Column(ReadOnlySpan<char> name, long value)
     {
-        _byteBuffer.Column(name, value);
+        _buffer.Column(name, value);
         return this;
     }
     
-    /// <inheritdoc cref="ByteBuffer.Column(ReadOnlySpan&lt;char&gt;, long)" />
-    public LineSender Column(ReadOnlySpan<char> name, long? value)
+    /// <inheritdoc cref="Buffer.Column(ReadOnlySpan&lt;char&gt;, long)" />
+    public Sender Column(ReadOnlySpan<char> name, long? value)
     {
         if (value != null)
-          _byteBuffer.Column(name, value.Value);
+          _buffer.Column(name, value.Value);
         return this;
     }
 
-    /// <inheritdoc cref="ByteBuffer.Column(ReadOnlySpan&lt;char&gt;, bool)" />
-    public LineSender Column(ReadOnlySpan<char> name, bool value)
+    /// <inheritdoc cref="Buffer.Column(ReadOnlySpan&lt;char&gt;, bool)" />
+    public Sender Column(ReadOnlySpan<char> name, bool value)
     {
-        _byteBuffer.Column(name, value);
+        _buffer.Column(name, value);
         return this;
     }
     
-    /// <inheritdoc cref="ByteBuffer.Column(ReadOnlySpan&lt;char&gt;, bool)" />
-    public LineSender Column(ReadOnlySpan<char> name, bool? value)
+    /// <inheritdoc cref="Buffer.Column(ReadOnlySpan&lt;char&gt;, bool)" />
+    public Sender Column(ReadOnlySpan<char> name, bool? value)
     {
         if (value != null)
-            _byteBuffer.Column(name, value.Value);
+            _buffer.Column(name, value.Value);
         return this;
     }
 
-    /// <inheritdoc cref="ByteBuffer.Column(ReadOnlySpan&lt;char&gt;, double)" />
-    public LineSender Column(ReadOnlySpan<char> name, double value)
+    /// <inheritdoc cref="Buffer.Column(ReadOnlySpan&lt;char&gt;, double)" />
+    public Sender Column(ReadOnlySpan<char> name, double value)
     {
-        _byteBuffer.Column(name, value);
+        _buffer.Column(name, value);
         return this;
     }
     
-    /// <inheritdoc cref="ByteBuffer.Column(ReadOnlySpan&lt;char&gt;, double)" />
-    public LineSender Column(ReadOnlySpan<char> name, double? value)
+    /// <inheritdoc cref="Buffer.Column(ReadOnlySpan&lt;char&gt;, double)" />
+    public Sender Column(ReadOnlySpan<char> name, double? value)
     {
         if (value != null)
-            _byteBuffer.Column(name, value.Value);
+            _buffer.Column(name, value.Value);
         return this;
     }
 
-    /// <inheritdoc cref="ByteBuffer.Column(ReadOnlySpan&lt;char&gt;, DateTime)" />
-    public LineSender Column(ReadOnlySpan<char> name, DateTime value)
+    /// <inheritdoc cref="Buffer.Column(ReadOnlySpan&lt;char&gt;, DateTime)" />
+    public Sender Column(ReadOnlySpan<char> name, DateTime value)
     {
-        _byteBuffer.Column(name, value);
+        _buffer.Column(name, value);
         return this;
     }
     
-    /// <inheritdoc cref="ByteBuffer.Column(ReadOnlySpan&lt;char&gt;, DateTime)" />
-    public LineSender Column(ReadOnlySpan<char> name, DateTime? value)
+    /// <inheritdoc cref="Buffer.Column(ReadOnlySpan&lt;char&gt;, DateTime)" />
+    public Sender Column(ReadOnlySpan<char> name, DateTime? value)
     {
         if (value != null) 
-         _byteBuffer.Column(name, value.Value);
+         _buffer.Column(name, value.Value);
         return this;
     }
 
-    /// <inheritdoc cref="ByteBuffer.Column(ReadOnlySpan&lt;char&gt;, DateTimeOffset)" />
-    public LineSender Column(ReadOnlySpan<char> name, DateTimeOffset value)
+    /// <inheritdoc cref="Buffer.Column(ReadOnlySpan&lt;char&gt;, DateTimeOffset)" />
+    public Sender Column(ReadOnlySpan<char> name, DateTimeOffset value)
     {
-        _byteBuffer.Column(name, value.UtcDateTime);
+        _buffer.Column(name, value.UtcDateTime);
         return this;
     }
     
-    /// <inheritdoc cref="ByteBuffer.Column(ReadOnlySpan&lt;char&gt;, DateTimeOffset)" />
-    public LineSender Column(ReadOnlySpan<char> name, DateTimeOffset? value)
+    /// <inheritdoc cref="Buffer.Column(ReadOnlySpan&lt;char&gt;, DateTimeOffset)" />
+    public Sender Column(ReadOnlySpan<char> name, DateTimeOffset? value)
     {
         if (value != null)
-            _byteBuffer.Column(name, value.Value);
+            _buffer.Column(name, value.Value);
         return this;
     }
     
-    /// <inheritdoc cref="ByteBuffer.At(DateTime)" />
-    public LineSender At(DateTime value)
+    /// <inheritdoc cref="Buffer.At(DateTime)" />
+    public Sender At(DateTime value)
     {
-        _byteBuffer.At(value);
+        _buffer.At(value);
         HandleAutoFlush();
         return this;
     }
 
-    /// <inheritdoc cref="ByteBuffer.At(DateTimeOffset)" />
-    public LineSender At(DateTimeOffset timestamp)
+    /// <inheritdoc cref="Buffer.At(DateTimeOffset)" />
+    public Sender At(DateTimeOffset timestamp)
     {
-        _byteBuffer.At(timestamp);
+        _buffer.At(timestamp);
         HandleAutoFlush();
         return this;
     }
 
-    /// <inheritdoc cref="ByteBuffer.AtNow" />
-    public LineSender AtNow()
+    /// <inheritdoc cref="Buffer.AtNow" />
+    public Sender AtNow()
     {
-        _byteBuffer.AtNow();
+        _buffer.AtNow();
         HandleAutoFlush();
         return this;
     }
@@ -422,12 +422,12 @@ public class LineSender : IDisposable
         GuardExceededMaxBufferSize();
 
         // noop if within transaction
-        if (_byteBuffer.WithinTransaction) return;
+        if (_buffer.WithinTransaction) return;
 
         if (Options.auto_flush == AutoFlushType.on)
-            if (_byteBuffer.RowCount >= Options.auto_flush_rows
+            if (_buffer.RowCount >= Options.auto_flush_rows
                 || _intervalTimer.Elapsed >= Options.auto_flush_interval
-                || Options.auto_flush_bytes <= _byteBuffer.Length)
+                || Options.auto_flush_bytes <= _buffer.Length)
                 Send();
     }
     
@@ -460,7 +460,7 @@ public class LineSender : IDisposable
             throw new IngressError(ErrorCode.InvalidApiCall, "Please call `commit()` to complete your transaction.");
         }
         
-        if (_byteBuffer.Length == 0) return (null, null);
+        if (_buffer.Length == 0) return (null, null);
 
         if (Options.IsHttp())
         {
@@ -481,8 +481,8 @@ public class LineSender : IDisposable
 
         if (Options.IsTcp())
         {
-            await _byteBuffer.WriteToStreamAsync(_dataStream!);
-            _byteBuffer.Clear();
+            await _buffer.WriteToStreamAsync(_dataStream!);
+            _buffer.Clear();
             return (null, null);
         }
 
@@ -563,7 +563,7 @@ public class LineSender : IDisposable
         }
         
         cts.Dispose();
-        _byteBuffer.Clear();
+        _buffer.Clear();
         _intervalTimer.Restart();
         return (lastResponse.RequestMessage, lastResponse);
     }
@@ -580,8 +580,8 @@ public class LineSender : IDisposable
         if (_authenticated) throw new IngressError(ErrorCode.AuthError, "Already authenticated.");
 
         _authenticated = true;
-        _byteBuffer.EncodeUtf8(Options.username); // key_id
-        _byteBuffer.SendBuffer[_byteBuffer.Position++] = (byte)'\n';
+        _buffer.EncodeUtf8(Options.username); // key_id
+        _buffer.SendBuffer[_buffer.Position++] = (byte)'\n';
         await SendAsync();
 
         var bufferLen = await ReceiveUntil('\n', cancellationToken);
@@ -600,14 +600,14 @@ public class LineSender : IDisposable
 
         var ecdsa = SignerUtilities.GetSigner("SHA-256withECDSA");
         ecdsa.Init(true, priKey);
-        ecdsa.BlockUpdate(_byteBuffer.SendBuffer, 0, bufferLen);
+        ecdsa.BlockUpdate(_buffer.SendBuffer, 0, bufferLen);
         var signature = ecdsa.GenerateSignature();
 
-        Base64.EncodeToUtf8(signature, _byteBuffer.SendBuffer, out _, out _byteBuffer.Position);
-        _byteBuffer.SendBuffer[_byteBuffer.Position++] = (byte)'\n';
+        Base64.EncodeToUtf8(signature, _buffer.SendBuffer, out _, out _buffer.Position);
+        _buffer.SendBuffer[_buffer.Position++] = (byte)'\n';
 
-        await _dataStream.WriteAsync(_byteBuffer.SendBuffer, 0, _byteBuffer.Position, cancellationToken);
-        _byteBuffer.Position = 0;
+        await _dataStream.WriteAsync(_buffer.SendBuffer, 0, _buffer.Position, cancellationToken);
+        _buffer.Position = 0;
     }
 
     /// <summary>
@@ -620,14 +620,14 @@ public class LineSender : IDisposable
     private async ValueTask<int> ReceiveUntil(char endChar, CancellationToken cancellationToken)
     {
         var totalReceived = 0;
-        while (totalReceived < _byteBuffer.SendBuffer.Length)
+        while (totalReceived < _buffer.SendBuffer.Length)
         {
-            var received = await _dataStream.ReadAsync(_byteBuffer.SendBuffer, totalReceived,
-                _byteBuffer.SendBuffer.Length - totalReceived, cancellationToken);
+            var received = await _dataStream.ReadAsync(_buffer.SendBuffer, totalReceived,
+                _buffer.SendBuffer.Length - totalReceived, cancellationToken);
             if (received > 0)
             {
                 totalReceived += received;
-                if (_byteBuffer.SendBuffer[totalReceived - 1] == endChar) return totalReceived - 1;
+                if (_buffer.SendBuffer[totalReceived - 1] == endChar) return totalReceived - 1;
             }
             else
             {
@@ -657,7 +657,7 @@ public class LineSender : IDisposable
     /// </summary>
     public void Truncate()
     {
-        _byteBuffer.TrimExcessBuffers();
+        _buffer.TrimExcessBuffers();
     }
 
     /// <summary>
@@ -666,7 +666,7 @@ public class LineSender : IDisposable
     /// <exception cref="InvalidOperationException"></exception>
     public void CancelLine()
     {
-        _byteBuffer.CancelLine();
+        _buffer.CancelLine();
     }
 
     /// <summary>
@@ -681,7 +681,7 @@ public class LineSender : IDisposable
     /// <param name="protocol"></param>
     /// <returns></returns>
     [Obsolete]
-    public static async ValueTask<LineSender> ConnectAsync(
+    public static async ValueTask<Sender> ConnectAsync(
         string host,
         int port,
         int bufferSize = 4096,
@@ -699,7 +699,7 @@ public class LineSender : IDisposable
         if (bufferOverflowHandling == BufferOverflowHandling.SendImmediately)
             confString.Append($"auto_flush_bytes={bufferSize};");
 
-        return new LineSender(confString.ToString());
+        return new Sender(confString.ToString());
     }
 
     /// <summary>
@@ -708,9 +708,9 @@ public class LineSender : IDisposable
     /// <returns></returns>
     private (HttpRequestMessage, CancellationTokenSource) GenerateRequest()
     {
-        var request = new HttpRequestMessage(HttpMethod.Post, IlpEndpoint) { Content = _byteBuffer };
+        var request = new HttpRequestMessage(HttpMethod.Post, IlpEndpoint) { Content = _buffer };
         request.Content.Headers.ContentType = new MediaTypeHeaderValue("text/plain") { CharSet = "utf-8" };
-        request.Content.Headers.ContentLength = _byteBuffer.Length;
+        request.Content.Headers.ContentLength = _buffer.Length;
         var cts = GenerateRequestTimeout();
         return (request, cts);
     }
@@ -758,7 +758,7 @@ public class LineSender : IDisposable
     {
         var cts = new CancellationTokenSource();
         cts.CancelAfter(Options.request_timeout
-                        + TimeSpan.FromSeconds(_byteBuffer.Length / (double)Options.request_min_throughput));
+                        + TimeSpan.FromSeconds(_buffer.Length / (double)Options.request_min_throughput));
 
         return cts;
     }

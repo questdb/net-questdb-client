@@ -8,7 +8,7 @@ internal class Program
 {
     private static async Task Main(string[] args)
     {
-        using var sender = new LineSender("https::addr=localhost:9000;tls_verify=unsafe_off;username=admin;password=quest;");
+        using var sender = new Sender("https::addr=localhost:9000;tls_verify=unsafe_off;username=admin;password=quest;");
         sender.Table("trades")
             .Symbol("pair", "USDGBP")
             .Symbol("type", "buy")

@@ -35,7 +35,7 @@ namespace QuestDB.Ingress;
 /// <summary>
 ///     Buffer for building up batches of ILP rows.
 /// </summary>
-public class ByteBuffer : HttpContent, IEnumerable<byte>
+public class Buffer : HttpContent, IEnumerable<byte>
 {
     private static readonly long EpochTicks = new DateTime(1970, 1, 1).Ticks;
     public static int DefaultQuestDbFsFileNameLimit = 127;
@@ -52,7 +52,7 @@ public class ByteBuffer : HttpContent, IEnumerable<byte>
     public byte[] SendBuffer;
     public bool WithinTransaction;
 
-    public ByteBuffer(int bufferSize)
+    public Buffer(int bufferSize)
     {
         SendBuffer = new byte[bufferSize];
         Buffers.Add((SendBuffer, 0));
@@ -90,8 +90,8 @@ public class ByteBuffer : HttpContent, IEnumerable<byte>
         return GetEnumerator();
     }
 
-    /// <inheritdoc cref="LineSender.Transaction"/>
-    public ByteBuffer Transaction(ReadOnlySpan<char> tableName)
+    /// <inheritdoc cref="Sender.Transaction"/>
+    public Buffer Transaction(ReadOnlySpan<char> tableName)
     {
         if (WithinTransaction)
             throw new IngressError(ErrorCode.InvalidApiCall,
@@ -115,7 +115,7 @@ public class ByteBuffer : HttpContent, IEnumerable<byte>
     /// <returns>Itself</returns>
     /// <exception cref="InvalidOperationException">If table name already set</exception>
     /// <exception cref="ArgumentException">If table name empty or contains unsupported characters</exception>
-    public ByteBuffer Table(ReadOnlySpan<char> name)
+    public Buffer Table(ReadOnlySpan<char> name)
     {
         if (WithinTransaction && name != CurrentTableName)
             throw new IngressError(ErrorCode.InvalidApiCall,
@@ -145,7 +145,7 @@ public class ByteBuffer : HttpContent, IEnumerable<byte>
     ///     <see cref="ErrorCode.InvalidApiCall" /> when table has not been specified,
     ///     or non-symbol fields have already been written.
     /// </exception>
-    public ByteBuffer Symbol(ReadOnlySpan<char> symbolName, ReadOnlySpan<char> value)
+    public Buffer Symbol(ReadOnlySpan<char> symbolName, ReadOnlySpan<char> value)
     {
         if (WithinTransaction && !HasTable) Table(CurrentTableName);
 
@@ -166,7 +166,7 @@ public class ByteBuffer : HttpContent, IEnumerable<byte>
     /// <param name="name">Column name</param>
     /// <param name="value">Column value</param>
     /// <returns>Itself</returns>
-    public ByteBuffer Column(ReadOnlySpan<char> name, ReadOnlySpan<char> value)
+    public Buffer Column(ReadOnlySpan<char> name, ReadOnlySpan<char> value)
     {
         if (WithinTransaction && !HasTable) Table(CurrentTableName);
         Column(name).Put('\"');
@@ -183,7 +183,7 @@ public class ByteBuffer : HttpContent, IEnumerable<byte>
     /// <param name="name">Column name</param>
     /// <param name="value">Column value</param>
     /// <returns>Itself</returns>
-    public ByteBuffer Column(ReadOnlySpan<char> name, long value)
+    public Buffer Column(ReadOnlySpan<char> name, long value)
     {
         if (WithinTransaction && !HasTable) Table(CurrentTableName);
         Column(name).Put(value).Put('i');
@@ -196,7 +196,7 @@ public class ByteBuffer : HttpContent, IEnumerable<byte>
     /// <param name="name">Column name</param>
     /// <param name="value">Column value</param>
     /// <returns>Itself</returns>
-    public ByteBuffer Column(ReadOnlySpan<char> name, bool value)
+    public Buffer Column(ReadOnlySpan<char> name, bool value)
     {
         if (WithinTransaction && !HasTable) Table(CurrentTableName);
         Column(name).Put(value ? 't' : 'f');
@@ -209,7 +209,7 @@ public class ByteBuffer : HttpContent, IEnumerable<byte>
     /// <param name="name">Column name</param>
     /// <param name="value">Column value</param>
     /// <returns>Itself</returns>
-    public ByteBuffer Column(ReadOnlySpan<char> name, double value)
+    public Buffer Column(ReadOnlySpan<char> name, double value)
     {
         if (WithinTransaction && !HasTable) Table(CurrentTableName);
         Column(name).Put(value.ToString(CultureInfo.InvariantCulture));
@@ -222,7 +222,7 @@ public class ByteBuffer : HttpContent, IEnumerable<byte>
     /// <param name="name">Column name</param>
     /// <param name="timestamp">Column value</param>
     /// <returns>Itself</returns>
-    public ByteBuffer Column(ReadOnlySpan<char> name, DateTime timestamp)
+    public Buffer Column(ReadOnlySpan<char> name, DateTime timestamp)
     {
         if (WithinTransaction && !HasTable) Table(CurrentTableName);
         var epoch = timestamp.Ticks - EpochTicks;
@@ -236,7 +236,7 @@ public class ByteBuffer : HttpContent, IEnumerable<byte>
     /// <param name="name">Column name</param>
     /// <param name="timestamp">Column value</param>
     /// <returns>Itself</returns>
-    public ByteBuffer Column(ReadOnlySpan<char> name, DateTimeOffset timestamp)
+    public Buffer Column(ReadOnlySpan<char> name, DateTimeOffset timestamp)
     {
         if (WithinTransaction && !HasTable) Table(CurrentTableName);
         Column(name, timestamp.UtcDateTime);
@@ -335,7 +335,7 @@ public class ByteBuffer : HttpContent, IEnumerable<byte>
         NoSymbols = true;
     }
 
-    private ByteBuffer Column(ReadOnlySpan<char> columnName)
+    private Buffer Column(ReadOnlySpan<char> columnName)
     {
         GuardTableNotSet();
         GuardInvalidColumnName(columnName);
@@ -353,7 +353,7 @@ public class ByteBuffer : HttpContent, IEnumerable<byte>
         return EncodeUtf8(columnName).Put('=');
     }
 
-    private ByteBuffer Put(long value)
+    private Buffer Put(long value)
     {
         if (value == long.MinValue)
             throw new IngressError(ErrorCode.InvalidApiCall, "Special case, long.MinValue cannot be handled by QuestDB",
@@ -380,7 +380,7 @@ public class ByteBuffer : HttpContent, IEnumerable<byte>
         return this;
     }
 
-    public ByteBuffer EncodeUtf8(ReadOnlySpan<char> name)
+    public Buffer EncodeUtf8(ReadOnlySpan<char> name)
     {
         for (var i = 0; i < name.Length; i++)
         {
@@ -439,7 +439,7 @@ public class ByteBuffer : HttpContent, IEnumerable<byte>
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private ByteBuffer Put(char c)
+    private Buffer Put(char c)
     {
         if (Position + 2 > SendBuffer.Length) NextBuffer();
 
@@ -479,7 +479,7 @@ public class ByteBuffer : HttpContent, IEnumerable<byte>
     ///     A row must be completed before a table can be specified.
     ///     <para />
     ///     <code>
-    /// var sender = new LineSender("http::localhost:9000");
+    /// var sender = new Sender("http::localhost:9000");
     /// sender.Table("bah", "baz").Table("foo"); // not ok
     /// sender.Table("foo").Symbol("bah", "baz"); // ok
     /// </code>
@@ -498,7 +498,7 @@ public class ByteBuffer : HttpContent, IEnumerable<byte>
     ///     Table must be specified before columns or symbols.
     ///     <para />
     ///     <code>
-    /// var sender = new LineSender("http::localhost:9000");
+    /// var sender = new Sender("http::localhost:9000");
     /// sender.Symbol("bah", "baz"); // not ok
     /// sender.Table("foo").Symbol("bah", "baz"); // ok
     /// </code>

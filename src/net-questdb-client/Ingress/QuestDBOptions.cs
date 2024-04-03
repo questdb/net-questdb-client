@@ -246,7 +246,7 @@ public class QuestDBOptions
     ///     To account for this, the user can specify the expected data transfer speed.
     ///     This is then used to calculate an appropriate timeout value with the following equation:
     ///     <para />
-    ///     <see cref="HttpClient.Timeout" /> = (<see cref="ByteBuffer.Length" /> /
+    ///     <see cref="HttpClient.Timeout" /> = (<see cref="Buffer.Length" /> /
     ///     <see cref="QuestDBOptions.request_min_throughput" />) + <see cref="QuestDBOptions.request_timeout" />
     /// </remarks>
     public int request_min_throughput { get; set; } = 102400;
@@ -269,7 +269,7 @@ public class QuestDBOptions
     ///     The <see cref="retry_timeout" /> setting specifies the length of time retries can be made.
     ///     Retries are sent multiple times during this period, with some small jitter.
     /// </remarks>
-    /// <seealso cref="LineSender.FinishOrRetryAsync" />
+    /// <seealso cref="Sender.FinishOrRetryAsync" />
     /// .
     public TimeSpan retry_timeout { get; set; } = TimeSpan.FromMilliseconds(10000);
 

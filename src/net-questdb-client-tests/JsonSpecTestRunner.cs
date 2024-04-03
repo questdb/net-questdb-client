@@ -45,7 +45,7 @@ public class JsonSpecTestRunner
         using var srv = CreateTcpListener(TcpPort);
         srv.AcceptAsync();
 
-        using var sender = new LineSender(
+        using var sender = new Sender(
             $"tcp::addr={IPAddress.Loopback}:{TcpPort};");
 
         Exception? exception = null;
@@ -112,7 +112,7 @@ public class JsonSpecTestRunner
 
         Assert.That(await server.Healthcheck());
 
-        using var sender = new LineSender(
+        using var sender = new Sender(
             $"http::addr={IPAddress.Loopback}:{HttpPort};");
 
         Exception? exception = null;

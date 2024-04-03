@@ -8,7 +8,7 @@ internal class Program
 {
     private static async Task Main(string[] args)
     {
-        using var sender = new LineSender("http::addr=localhost:9000;");
+        using var sender = new Sender("http::addr=localhost:9000;");
         sender.Table("trades")
             .Symbol("pair", "USDGBP")
             .Symbol("type", "buy")

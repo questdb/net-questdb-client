@@ -66,7 +66,7 @@ public class BenchInserts
     // [Benchmark]
     // public async Task BasicInsertsHttp()
     // {
-    //     var sender = new LineSender($"http::addr=localhost:{HttpPort};");
+    //     var sender = new Sender($"http::addr=localhost:{HttpPort};");
     //
     //     for (var i = 0; i < n; i++) sender.Table("basic_inserts").Column("number", i).AtNow();
     //
@@ -77,7 +77,7 @@ public class BenchInserts
     [Benchmark]
     public async Task TinyInsertsHttp()
     {
-        var sender = new LineSender($"http::addr=localhost:{HttpPort};auto_flush=off;");
+        var sender = new Sender($"http::addr=localhost:{HttpPort};auto_flush=off;");
 
         for (var i = 0; i < n; i++)
         {
@@ -95,7 +95,7 @@ public class BenchInserts
     // [Benchmark]
     // public async Task BasicInsertsTcp()
     // {
-    //     var sender = new LineSender($"tcp::addr=localhost:{TcpPort};");
+    //     var sender = new Sender($"tcp::addr=localhost:{TcpPort};");
     //
     //     for (int i = 0; i < n; i++)
     //     {

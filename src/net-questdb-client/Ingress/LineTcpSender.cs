@@ -35,7 +35,7 @@ using Org.BouncyCastle.Security;
 
 namespace QuestDB.Ingress;
 
-[Obsolete("This has been superseded by the LineSender class.")]
+[Obsolete("This has been superseded by the Sender class.")]
 public class LineTcpSender : IDisposable
 {
     private static readonly RemoteCertificateValidationCallback AllowAllCertCallback = (_, _, _, _) => true;

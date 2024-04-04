@@ -36,11 +36,11 @@ namespace QuestDB.Ingress;
 /// <summary>
 ///     Buffer for building up batches of ILP rows.
 /// </summary>
-public class Buffer : HttpContent, IEnumerable<byte>
+public class Buffer
 {
     private static readonly long EpochTicks = new DateTime(1970, 1, 1).Ticks;
-    private readonly List<(byte[] Buffer, int Length)> _buffers = new();
-    private int _currentBufferIndex;
+    internal readonly List<(byte[] Buffer, int Length)> _buffers = new();
+    internal int _currentBufferIndex;
     private string _currentTableName = null!;
     private bool _hasTable;
     private int _lineStartBufferIndex;
@@ -67,23 +67,7 @@ public class Buffer : HttpContent, IEnumerable<byte>
     /// The number of buffered ILP rows.
     /// </summary>
     public int RowCount { get; private set; }
-
-    public IEnumerator<byte> GetEnumerator()
-    {
-        foreach (var (buffer, length) in _buffers)
-        foreach (var b in buffer[..length])
-            yield return b;
-    }
-
-    /// <summary>
-    ///     Fulfills the <see cref="IEnumerable" /> interface.
-    /// </summary>
-    /// <returns>IEnumerator</returns>
-    IEnumerator IEnumerable.GetEnumerator()
-    {
-        return GetEnumerator();
-    }
-
+    
     /// <inheritdoc cref="Sender.Transaction"/>
     public Buffer Transaction(ReadOnlySpan<char> tableName)
     {
@@ -498,90 +482,6 @@ public class Buffer : HttpContent, IEnumerable<byte>
         _currentBufferIndex = _lineStartBufferIndex;
         Length -= Position - _lineStartBufferPosition;
         Position = _lineStartBufferPosition;
-    }
-
-    /// <summary>
-    ///     Writes the chunked buffer contents to a stream.
-    ///     Used to fulfill the <see cref="HttpContent" /> requirements.
-    /// </summary>
-    /// <param name="stream"></param>
-    /// <param name="context"></param>
-    /// <exception cref="IngressError">When writing to stream fails.</exception>
-    protected override async Task SerializeToStreamAsync(Stream stream, TransportContext? context)
-    {
-        for (var i = 0; i <= _currentBufferIndex; i++)
-        {
-            var length = i == _currentBufferIndex ? Position : _buffers[i].Length;
-
-            try
-            {
-                if (length > 0)
-                    await stream.WriteAsync(_buffers[i].Buffer, 0, length);
-            }
-            catch (IOException iox)
-            {
-                throw new IngressError(ErrorCode.SocketError, "Could not write data to server.", iox);
-            }
-        }
-    }
-
-    /// <summary>
-    ///     Writes the chunked buffer contents to a stream.
-    /// </summary>
-    /// <param name="stream"></param>
-    /// <exception cref="IngressError">When writing to stream fails.</exception>
-    public async Task WriteToStreamAsync(Stream stream)
-    {
-        await SerializeToStreamAsync(stream, null);
-    }
-
-    /// <summary>
-    ///     Fulfills <see cref="HttpContent" />
-    /// </summary>
-    /// <exception cref="IngressError">When writing to stream fails.</exception>
-    protected override void SerializeToStream(Stream stream, TransportContext? context, CancellationToken ct)
-    {
-        SerializeToStreamAsync(stream, context, ct).Wait(ct);
-    }
-
-    /// <summary>
-    ///     Fulfills <see cref="HttpContent" />
-    /// </summary>
-    protected override bool TryComputeLength(out long length)
-    {
-        length = Length;
-        return true;
-    }
-
-    /// <summary>
-    ///     Fulfills <see cref="HttpContent" />
-    /// </summary>
-    /// <exception cref="IngressError">When writing to stream fails.</exception>
-    protected override async Task<Stream> CreateContentReadStreamAsync()
-    {
-        var stream = new MemoryStream();
-        await SerializeToStreamAsync(stream, null, default);
-        return stream;
-    }
-
-    /// <summary>
-    ///     Converts the contents of the <see cref="_buffers" /> to a UTF-16 string, decoding as UTF-8.
-    /// </summary>
-    /// <returns></returns>
-    public override string ToString()
-    {
-        return Strings.FromUtf8ByteArray(ToArray());
-    }
-
-    /// <summary>
-    ///     Copies the contents of the <see cref="_buffers" /> into a new array.
-    /// </summary>
-    /// <returns></returns>
-    private byte[] ToArray()
-    {
-        var stream = new MemoryStream();
-        SerializeToStream(stream, null, CancellationToken.None);
-        return stream.ToArray();
     }
 
     /// <summary>

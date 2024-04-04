@@ -514,7 +514,7 @@ public class Sender : IDisposable
 
         if (Options.IsTcp())
         {
-            await _buffer.WriteToStreamAsync(_dataStream!);
+            await new BufferStreamContent(_buffer).WriteToStreamAsync(_dataStream!);
             _buffer.Clear();
             return (null, null);
         }
@@ -745,7 +745,7 @@ public class Sender : IDisposable
     /// <returns></returns>
     private (HttpRequestMessage, CancellationTokenSource?) GenerateRequest()
     {
-        var request = new HttpRequestMessage(HttpMethod.Post, IlpEndpoint) { Content = _buffer };
+        var request = new HttpRequestMessage(HttpMethod.Post, IlpEndpoint) { Content = new BufferStreamContent(_buffer) };
         request.Content.Headers.ContentType = new MediaTypeHeaderValue("text/plain") { CharSet = "utf-8" };
         request.Content.Headers.ContentLength = _buffer.Length;
         var cts = new CancellationTokenSource();

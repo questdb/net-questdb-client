@@ -37,14 +37,6 @@ public class ConfStr
 
             field.SetValue(this, kvp.Value);
         }
-
-        // validate
-        var validator = new Validator();
-        var validationResult = validator.Validate(this);
-
-        if (!validationResult.IsValid)
-            throw new IngressError(ErrorCode.ConfigError,
-                "Validation Errors!\n" + string.Join("", validationResult.Errors.Select(x => x.ErrorMessage)));
     }
 
 
@@ -149,81 +141,5 @@ public class ConfStr
         }
 
         return $"{protocol}::{builder.ConnectionString}";
-    }
-
-    /// <summary>
-    ///     General validator for the configuration.
-    ///     Any general properties about types i.e valid ranges etc.
-    ///     can be verified here.
-    /// </summary>
-    private class Validator : AbstractValidator<ConfStr>
-    {
-        public Validator()
-        {
-            RuleFor(x => x.protocol)
-                .IsEnumName(typeof(ProtocolType))
-                // ReSharper disable once StringLiteralTypo
-                .WithMessage("`protocol` must be one of: http, https, tcp, tcps");
-
-            // addr - must be a valid host:port pair or host
-            RuleFor(x => x.addr)
-                .Must(x => int.TryParse(x!.Split(':')[1], out _))
-                .When(x => x!.addr!.Contains(':'))
-                .WithMessage("`addr` must be a valid host:port pairing.");
-
-            RuleFor(x => x.auto_flush)
-                .IsEnumName(typeof(AutoFlushType))
-                .WithMessage("`auto_flush` must be one of: off, on");
-
-            RuleFor(x => x.auto_flush_rows)
-                .Must(x => int.TryParse(x, out _))
-                .When(x => x.auto_flush_rows is not null)
-                .WithMessage("`auto_flush_rows` must be convertible to an int.");
-
-            RuleFor(x => x.auto_flush_bytes)
-                .Must(x => int.TryParse(x, out _))
-                .When(x => x.auto_flush_bytes is not null)
-                .WithMessage("`auto_flush_bytes` must be convertible to an int.");
-
-            RuleFor(x => x.auto_flush_interval)
-                .Must(x => int.TryParse(x, out _))
-                .WithMessage("`auto_flush_interval` must be convertible to an int.");
-
-            RuleFor(x => x.bind_interface)
-                .Must(x => int.TryParse(x!.Split(':')[1], out _))
-                .When(x => x.bind_interface is not null)
-                .WithMessage("`bind_interface` must be a valid host:port pairing.");
-
-            RuleFor(x => x.request_min_throughput)
-                .Must(x => int.TryParse(x, out _))
-                .WithMessage("`request_min_throughput` must be convertible to an int.");
-
-            RuleFor(x => x.request_timeout)
-                .Must(x => int.TryParse(x, out _))
-                .WithMessage("`request_timeout` must be convertible to an int.");
-
-            RuleFor(x => x.retry_timeout)
-                .Must(x => int.TryParse(x, out _))
-                .WithMessage("`retry_timeout` must be convertible to an int.");
-
-            // RuleFor(x => x.auto_flush_bytes)
-            //     .Must(x => x is null)
-            //     .When(x => x.auto_flush_rows != null)
-            //     .WithMessage("Cannot set `auto_flush_bytes` if `auto_flush_rows` is set.");
-
-            RuleFor(x => x.tls_verify)
-                .IsEnumName(typeof(TlsVerifyType))
-                .WithMessage("`tls_verify_type` is case sensitive.");
-
-            RuleFor(x => x.own_socket)
-                .Must(x => x == "true" || x == "false")
-                .When(x => x.own_socket is not null)
-                .WithMessage("`own_socket` must be `true` or `false`");
-            
-            RuleFor(x => x.pool_timeout)
-                .Must(x => int.TryParse(x, out _))
-                .WithMessage("`pool_timeout` must be convertible to an int.");
-            
-        }
     }
 }

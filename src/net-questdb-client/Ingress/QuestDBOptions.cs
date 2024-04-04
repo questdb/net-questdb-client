@@ -24,7 +24,9 @@
  ******************************************************************************/
 
 
+using System.Collections.Immutable;
 using System.Data.Common;
+using System.Globalization;
 using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Text.Json.Serialization;
@@ -39,64 +41,103 @@ namespace QuestDB.Ingress;
 public class QuestDBOptions
 {
     public const string QuestDB = "QuestDB";
+    private DbConnectionStringBuilder _connectionStringBuilder;
 
     public QuestDBOptions()
     {
     }
 
-    public QuestDBOptions(string confStr = "http::addr=localhost:9000;") : this(new ConfStr(confStr))
+    private void ParseIntWithDefault(string name, string defaultValue, out int field)
     {
+        if (!int.TryParse(ReadOptionFromBuilder(name) ?? defaultValue, out field))
+        {
+            throw new IngressError(ErrorCode.ConfigError, $"`{name}` should be convertible to an int.");
+        }
     }
 
-    public QuestDBOptions(ConfStr confStr)
+    private void ParseMillisecondsWithDefault(string name, string defaultValue, out TimeSpan field)
     {
-        protocol = Enum.Parse<ProtocolType>(confStr.protocol!);
+        ParseIntWithDefault(name, defaultValue, out var ms);
+        field = TimeSpan.FromMilliseconds(ms);
+    }
 
-        addr = confStr.addr ?? throw new IngressError(ErrorCode.ConfigError, "Must provide an `addr`.");
-
-        if (addr.Contains(':'))
+    private void ParseEnumWithDefault<T>(string name, string defaultValue, out T field) where T : struct, Enum
+    {
+        if (!Enum.TryParse(ReadOptionFromBuilder(name) ?? defaultValue, ignoreCase: false, out field))
         {
-            var addrSplits = addr.Split(':');
-            Host = addrSplits[0];
-            Port = int.Parse(addrSplits[1]);
+            throw new IngressError(ErrorCode.ConfigError, $"`{name}` must be one of: " + string.Join(", ", typeof(T).GetEnumNames()));
         }
-        else
+    }
+    
+    private void ParseBoolWithDefault(string name, string defaultValue, out bool field)
+    {
+          
+        if (!bool.TryParse(ReadOptionFromBuilder(name) ?? defaultValue, out field))
         {
-            Host = addr;
+            throw new IngressError(ErrorCode.ConfigError, $"`{name}` should be convertible to an bool.");
         }
+    }
+    
+    private void ParseStringWithDefault(string name, string defaultValue, out string? field)
+    {
 
-        if (Port == -1) Port = IsHttp() ? 9000 : 9009;
+        field = ReadOptionFromBuilder(name) ?? defaultValue;
+    }
 
-        auth_timeout = TimeSpan.FromMilliseconds(int.Parse(confStr.auth_timeout!));
-        auto_flush = Enum.Parse<AutoFlushType>(confStr.auto_flush!, false);
-        auto_flush_rows = int.Parse(confStr.auto_flush_rows ?? (IsHttp() ? "75000" : "600"));
-        auto_flush_bytes = int.Parse(confStr.auto_flush_bytes ?? int.MaxValue.ToString());
-        auto_flush_interval = TimeSpan.FromMilliseconds(int.Parse(confStr.auto_flush_interval!));
+    private void ReadConfigStringIntoBuilder(string confStr)
+    {
+        if (!confStr.Contains("::"))
+        {
+            throw new IngressError(ErrorCode.ConfigError, "Config string must contain a protocol, separated by `::`");
+        }
         
-        init_buf_size = int.Parse(confStr.init_buf_size!);
-        max_buf_size = int.Parse(confStr.max_buf_size!);
-        max_name_len = int.Parse(confStr.max_name_len!);
-
-        username = confStr.username;
-        password = confStr.password;
-        token = confStr.token;
-        // token_x = confStr.token_x;
-        // token_y = confStr.token_y;
-
-        request_min_throughput = int.Parse(confStr.request_min_throughput!);
-        request_timeout = TimeSpan.FromMilliseconds(int.Parse(confStr.request_timeout!));
-        retry_timeout = TimeSpan.FromMilliseconds(int.Parse(confStr.retry_timeout!));
-        pool_timeout = TimeSpan.FromMilliseconds(int.Parse(confStr.pool_timeout!));
-
-        tls_verify = Enum.Parse<TlsVerifyType>(confStr.tls_verify!, false);
-        // tls_ca = confStr.tls_ca;
-        tls_roots = confStr.tls_roots;
-        tls_roots_password = confStr.tls_roots_password;
-
-        own_socket = bool.Parse(confStr.own_socket!);
+        var splits = confStr.Split("::");
+        
+        if (splits[1].Last() != ';')
+            throw new IngressError(ErrorCode.ConfigError, "Config string must end with a semicolon.");
+        
+        _connectionStringBuilder= new DbConnectionStringBuilder
+        {
+            ConnectionString = splits[1]
+        };
+        
+        VerifyCorrectKeysInConfigString();
+        
+        _connectionStringBuilder.Add("protocol", splits[0]);
     }
 
-    // Config properties
+    private string? ReadOptionFromBuilder(string name)
+    {
+        object? retval = null;
+        _connectionStringBuilder.TryGetValue(name, out retval);
+        return (string?)retval;
+    }
+    
+    public QuestDBOptions(string confStr)
+    {
+        ReadConfigStringIntoBuilder(confStr);
+        ParseEnumWithDefault(nameof(protocol),  "http", out _protocol);
+        ParseStringWithDefault(nameof(addr), "localhost:9000", out _addr);
+        ParseEnumWithDefault(nameof(auto_flush), "on", out _autoFlush);
+        ParseIntWithDefault(nameof(auto_flush_rows),  (IsHttp() ? "75000" : "600"), out _autoFlushRows);
+        ParseIntWithDefault(nameof(auto_flush_bytes),   int.MaxValue.ToString(), out _autoFlushBytes);
+        ParseMillisecondsWithDefault(nameof(auto_flush_interval),  "1000", out _autoFlushInterval);
+        ParseIntWithDefault(nameof(init_buf_size),   "65536", out _initBufSize);
+        ParseIntWithDefault(nameof(max_buf_size),  "104857600", out _maxBufSize);
+        ParseIntWithDefault(nameof(max_name_len), "127", out _maxNameLen);
+        ParseStringWithDefault(nameof(username), null, out _username);
+        ParseStringWithDefault(nameof(password), null, out _password);
+        ParseStringWithDefault(nameof(token), null, out _token);
+        ParseIntWithDefault(nameof(request_min_throughput), "102400", out _requestMinThroughput);
+        ParseMillisecondsWithDefault(nameof(auth_timeout), "15000", out _authTimeout);
+        ParseMillisecondsWithDefault(nameof(request_timeout), "10000", out _requestTimeout);
+        ParseMillisecondsWithDefault(nameof(retry_timeout),  "10000", out _retryTimeout);
+        ParseMillisecondsWithDefault(nameof(pool_timeout),  "120000", out _poolTimeout);
+        ParseEnumWithDefault(nameof(tls_verify),  "on", out _tlsVerify);
+        ParseStringWithDefault(nameof(tls_roots), null, out _tlsRoots);
+        ParseStringWithDefault(nameof(tls_roots_password), null, out _tlsRootsPassword);
+        ParseBoolWithDefault(nameof(own_socket), "true", out _ownSocket);
+    }
 
     /// <summary>
     ///     Protocol type for the sender to use.
@@ -107,7 +148,13 @@ public class QuestDBOptions
     ///     <see cref="ProtocolType.tcp" />, <see cref="ProtocolType.tcps" />
     /// </remarks>
     [JsonIgnore]
-    public ProtocolType protocol { get; set; } = ProtocolType.http;
+    public ProtocolType protocol
+    {
+        get { return _protocol; }
+        set { _protocol = value;  }
+    }
+
+    private ProtocolType _protocol = ProtocolType.http;
 
     /// <summary>
     ///     Address host/port pair.
@@ -116,7 +163,11 @@ public class QuestDBOptions
     /// <remarks>
     ///     Used to populate the <see cref="Host" /> and <see cref="Port" /> fields.
     /// </remarks>
-    public string addr { get; set; } = "localhost:9000";
+    public string addr
+    {
+        get => _addr;
+        set => _addr = value;
+    }
 
     /// <summary>
     ///     Enables or disables automatic flushing of rows.
@@ -125,19 +176,31 @@ public class QuestDBOptions
     /// <remarks>
     ///     Possible values: <see cref="AutoFlushType.on" />, <see cref="AutoFlushType.off" />
     /// </remarks>
-    public AutoFlushType auto_flush { get; set; } = AutoFlushType.on;
+    public AutoFlushType auto_flush
+    {
+        get => _autoFlush;
+        set => _autoFlush = value;
+    }
 
     /// <summary>
     ///     Sets the number of rows to batch before auto-flushing.
     ///     Defaults to <c>75000</c>.
     /// </summary>
-    public int auto_flush_rows { get; set; } = 75000;
+    public int auto_flush_rows
+    {
+        get => _autoFlushRows;
+        set => _autoFlushRows = value;
+    }
 
     /// <summary>
     ///     Sets the number of bytes to batch before auto-flushing.
     ///     Defaults to <see cref="int.MaxValue" />.
     /// </summary>
-    public int auto_flush_bytes { get; set; } = int.MaxValue;
+    public int auto_flush_bytes
+    {
+        get => _autoFlushBytes;
+        set => _autoFlushBytes = value;
+    }
 
     /// <summary>
     ///     Sets the number of milliseconds to wait before auto-flushing.
@@ -149,7 +212,11 @@ public class QuestDBOptions
     ///     You should continue to finish your submission with a manual flush
     ///     to ensure all data is sent.
     /// </remarks>
-    public TimeSpan auto_flush_interval { get; set; } = TimeSpan.FromMilliseconds(1000);
+    public TimeSpan auto_flush_interval
+    {
+        get => _autoFlushInterval;
+        set => _autoFlushInterval = value;
+    }
 
     /// <summary>
     ///     Not in use.
@@ -162,7 +229,11 @@ public class QuestDBOptions
     ///     Initial buffer size for the ILP rows in bytes.
     ///     Defaults to <c>64 KiB</c>.
     /// </summary>
-    public int init_buf_size { get; set; } = 65536;
+    public int init_buf_size
+    {
+        get => _initBufSize;
+        set => _initBufSize = value;
+    }
 
     /// <summary>
     ///     Maximum buffer size for the ILP rows in bytes.
@@ -173,7 +244,11 @@ public class QuestDBOptions
     ///     Please ensure that you flush frequently enough to stay under this limit.
     /// </remarks>
 
-    public int max_buf_size { get; set; } = 104857600;
+    public int max_buf_size
+    {
+        get => _maxBufSize;
+        set => _maxBufSize = value;
+    }
 
     /// <summary>
     ///     Maximum length of table and column names in QuestDB.
@@ -183,7 +258,11 @@ public class QuestDBOptions
     ///         and requires that names meet certain criteria for compatibility with the host filesystem.
     ///     </remarks>
     /// </summary>
-    public int max_name_len { get; set; } = 127;
+    public int max_name_len
+    {
+        get => _maxNameLen;
+        set => _maxNameLen = value;
+    }
 
     /// <summary>
     ///     A username, used for authentication.
@@ -194,7 +273,11 @@ public class QuestDBOptions
     ///     <para />
     ///     If using TCP authentication, this will be used to establish a TLS connection.
     /// </remarks>
-    public string? username { get; set; }
+    public string? username
+    {
+        get => _username;
+        set => _username = value;
+    }
 
     /// <summary>
     ///     A password, user for authentication.
@@ -205,7 +288,11 @@ public class QuestDBOptions
     ///     and sent with HTTP requests.
     /// </remarks>
     [JsonIgnore]
-    public string? password { get; set; }
+    public string? password
+    {
+        get => _password;
+        set => _password = value;
+    }
 
     /// <summary>
     ///     A token, used for authentication.
@@ -215,27 +302,43 @@ public class QuestDBOptions
     ///     <para />
     ///     If using TCP authentication, this will be used to establish a TLS connection.
     /// </remarks>
-    public string? token { get; set; }
+    public string? token
+    {
+        get => _token;
+        set => _token = value;
+    }
 
     /// <summary>
     ///     Used in other ILP clients for authentication.
     /// </summary>
     [Obsolete]
     [JsonIgnore]
-    public string? token_x { get; set; }
+    public string? token_x
+    {
+        get => _tokenX;
+        set => _tokenX = value;
+    }
 
     /// <summary>
     ///     Used in other ILP clients for authentication.
     /// </summary>
     [Obsolete]
     [JsonIgnore]
-    public string? token_y { get; set; }
+    public string? token_y
+    {
+        get => _tokenY;
+        set => _tokenY = value;
+    }
 
     /// <summary>
     ///     Timeout for authentication requests.
     ///     Defaults to 15 seconds.
     /// </summary>
-    public TimeSpan auth_timeout { get; set; } = TimeSpan.FromMilliseconds(15000);
+    public TimeSpan auth_timeout
+    {
+        get => _authTimeout;
+        set => _authTimeout = value;
+    }
 
     /// <summary>
     ///     Specifies a minimum expect network throughput when sending data to QuestDB.
@@ -251,7 +354,11 @@ public class QuestDBOptions
     ///     <see cref="HttpClient.Timeout" /> = (<see cref="Buffer.Length" /> /
     ///     <see cref="QuestDBOptions.request_min_throughput" />) + <see cref="QuestDBOptions.request_timeout" />
     /// </remarks>
-    public int request_min_throughput { get; set; } = 102400;
+    public int request_min_throughput
+    {
+        get => _requestMinThroughput;
+        set => _requestMinThroughput = value;
+    }
 
     /// <summary>
     ///     Specifies a base interval for timing out HTTP requests to QuestDB.
@@ -261,7 +368,11 @@ public class QuestDBOptions
     ///     This value is combined with a dynamic timeout value generated based on how large the payload is.
     /// </remarks>
     /// <seealso cref="request_min_throughput" />
-    public TimeSpan request_timeout { get; set; } = TimeSpan.FromMilliseconds(10000);
+    public TimeSpan request_timeout
+    {
+        get => _requestTimeout;
+        set => _requestTimeout = value;
+    }
 
     /// <summary>
     ///     Specifies a timeout interval within which retries can be sent.
@@ -273,7 +384,11 @@ public class QuestDBOptions
     /// </remarks>
     /// <seealso cref="Sender.FinishOrRetryAsync" />
     /// .
-    public TimeSpan retry_timeout { get; set; } = TimeSpan.FromMilliseconds(10000);
+    public TimeSpan retry_timeout
+    {
+        get => _retryTimeout;
+        set => _retryTimeout = value;
+    }
 
     /// <summary>
     ///     Specifies whether TLS certificates should be validated or not.
@@ -283,40 +398,114 @@ public class QuestDBOptions
     ///     Available protocols: <see cref="ProtocolType.http" />, <see cref="ProtocolType.https" />,
     ///     <see cref="ProtocolType.tcp" />, <see cref="ProtocolType.tcps" />
     /// </remarks>
-    public TlsVerifyType tls_verify { get; set; } = TlsVerifyType.on;
+    public TlsVerifyType tls_verify
+    {
+        get => _tlsVerify;
+        set => _tlsVerify = value;
+    }
 
     /// <summary>
     ///     Not in use
     /// </summary>
     [Obsolete]
-    public string? tls_ca { get; set; }
+    public string? tls_ca
+    {
+        get => _tlsCa;
+        set => _tlsCa = value;
+    }
 
     /// <summary>
     ///     Specifies the path to a custom certificate.
     /// </summary>
-    public string? tls_roots { get; set; }
+    public string? tls_roots
+    {
+        get => _tlsRoots;
+        set => _tlsRoots = value;
+    }
 
     /// <summary>
     ///     Specifies the path to a custom certificate password.
     /// </summary>
     [JsonIgnore]
-    public string? tls_roots_password { get; set; }
+    public string? tls_roots_password
+    {
+        get => _tlsRootsPassword;
+        set => _tlsRootsPassword = value;
+    }
 
     /// <summary>
     ///     todo
     /// </summary>
     [JsonIgnore]
-    public bool own_socket { get; set; } = true;
-    
+    public bool own_socket
+    {
+        get => _ownSocket;
+        set => _ownSocket = value;
+    }
+
     /// <summary>
     ///     Specifies timeout for <see cref="SocketsHttpHandler.PooledConnectionLifetime"/>.
     /// </summary>
-    public TimeSpan pool_timeout { get; set; } = TimeSpan.FromMinutes(2);
+    public TimeSpan pool_timeout
+    {
+        get => _poolTimeout;
+        set => _poolTimeout = value;
+    }
+    
+    [JsonIgnore]
+    internal string Host
+    {
+        get => addr.Contains(':') ? addr.Split(':')[0] : addr;
+    }
+    
+    [JsonIgnore] internal int Port
+    {
+        get
+        {
+            if (addr.Contains(':'))
+            {
+                return int.Parse(addr.Split(':')[1]);
+            }
 
-    // Extra useful properties
-    [JsonIgnore] internal int Port { get; set; } = -1;
-    [JsonIgnore] internal string Host { get; set; } = null!;
+            switch (protocol)
+            {
+                case ProtocolType.http:
+                    case ProtocolType.https:
+                        return 9000;
+                case ProtocolType.tcp:
+                    case ProtocolType.tcps:
+                        return 9009;
+                default:
+                    throw new NotImplementedException();
+            }
+        }
+    }
 
+    
+    private string _addr = "localhost:9000";
+    private AutoFlushType _autoFlush = AutoFlushType.on;
+    private int _autoFlushRows = 75000;
+    private int _autoFlushBytes = int.MaxValue;
+    private TimeSpan _autoFlushInterval = TimeSpan.FromMilliseconds(1000);
+    private int _initBufSize = 65536;
+    private int _maxBufSize = 104857600;
+    private int _maxNameLen = 127;
+    private string? _username;
+    private string? _password;
+    private string? _token;
+    private string? _tokenX;
+    private string? _tokenY;
+    private TimeSpan _authTimeout = TimeSpan.FromMilliseconds(15000);
+    private int _requestMinThroughput = 102400;
+    private TimeSpan _requestTimeout = TimeSpan.FromMilliseconds(10000);
+    private TimeSpan _retryTimeout = TimeSpan.FromMilliseconds(10000);
+    private TlsVerifyType _tlsVerify = TlsVerifyType.on;
+    private string? _tlsCa;
+    private string? _tlsRoots;
+    private string? _tlsRootsPassword;
+    private bool _ownSocket = true;
+    private TimeSpan _poolTimeout = TimeSpan.FromMinutes(2);
+    
     internal bool IsHttp()
     {
         switch (protocol)
@@ -359,11 +548,28 @@ public class QuestDBOptions
             {
                 if (value is TimeSpan span)
                     builder.Add(prop.Name, span.TotalMilliseconds);
+                else if (value is string str && !string.IsNullOrEmpty(str))
+                {
+                    builder.Add(prop.Name, value);
+                }
                 else
                     builder.Add(prop.Name, value);
             }
         }
 
-        return $"{protocol.ToString()}::{builder.ConnectionString}";
+        return $"{protocol.ToString()}::{builder.ConnectionString};";
+    }
+
+    public void VerifyCorrectKeysInConfigString()
+    {
+        var props = GetType().GetProperties(BindingFlags.Instance | BindingFlags.Public).Select(x => x.Name)
+            .ToImmutableHashSet();
+        foreach (string key in _connectionStringBuilder.Keys)
+        {
+            if (!props.Contains(key))
+            {
+                throw new IngressError(ErrorCode.ConfigError, $"Invalid property: `{key}`");
+            }
+        }
     }
 }

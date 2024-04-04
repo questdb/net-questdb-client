@@ -47,9 +47,9 @@ public class Buffer : HttpContent, IEnumerable<byte>
     private int _lineStartBufferPosition;
     private bool _noFields = true;
     private bool _noSymbols = true;
-    public int Position;
+    internal int Position;
     private bool _quoted;
-    public byte[] SendBuffer;
+    internal byte[] SendBuffer;
     public bool WithinTransaction;
 
     public Buffer(int bufferSize)
@@ -303,14 +303,6 @@ public class Buffer : HttpContent, IEnumerable<byte>
     {
         var removeCount = _buffers.Count - _currentBufferIndex - 1;
         if (removeCount > 0) _buffers.RemoveRange(_currentBufferIndex + 1, removeCount);
-    }
-
-    public static byte[] FromBase64String(string encodedPrivateKey)
-    {
-        var urlUnsafe = encodedPrivateKey.Replace('-', '+').Replace('_', '/');
-        var padding = 3 - (urlUnsafe.Length + 3) % 4;
-        if (padding != 0) urlUnsafe += new string('=', padding);
-        return Convert.FromBase64String(urlUnsafe);
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]

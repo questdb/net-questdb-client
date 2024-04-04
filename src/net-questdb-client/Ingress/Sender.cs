@@ -92,8 +92,9 @@ public class Sender : IDisposable
     public void Dispose()
     {
         if (_underlyingSocket != null) _underlyingSocket.Dispose();
-
         if (_dataStream != null) _dataStream.Dispose();
+        if (_client != null) _client.Dispose();
+        if (_handler != null) _handler.Dispose();
     }
 
     private void Build(QuestDBOptions options)
@@ -141,11 +142,11 @@ public class Sender : IDisposable
    
                 }
 
-                if (options.tls_roots != null)
+                if (!string.IsNullOrEmpty(Options.tls_roots))
                 {
                     _handler.SslOptions.ClientCertificates ??= new X509Certificate2Collection();
                     _handler.SslOptions.ClientCertificates.Add(
-                        X509Certificate2.CreateFromPemFile(options.tls_roots, options.tls_roots_password));
+                        X509Certificate2.CreateFromPemFile(options.tls_roots!, options.tls_roots_password));
                 }
             }
             
@@ -157,10 +158,10 @@ public class Sender : IDisposable
             _client.BaseAddress = uri.Uri;
             _client.Timeout = Timeout.InfiniteTimeSpan;
 
-            if (Options is { username: not null, password: not null })
+            if (!string.IsNullOrEmpty(options.username) && !string.IsNullOrEmpty(Options.password))
                 _client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Basic",
                     Convert.ToBase64String(Encoding.ASCII.GetBytes($"{Options.username}:{Options.password}")));
-            else if (Options.token != null)
+            else if (!string.IsNullOrEmpty(Options.token))
                 _client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", Options.token);
         }
 
@@ -197,7 +198,7 @@ public class Sender : IDisposable
                 
                 var authTimeout = new CancellationTokenSource();
                 authTimeout.CancelAfter(Options.auth_timeout);
-                if (Options.token is not null) AuthenticateAsync(authTimeout.Token).AsTask().Wait(authTimeout.Token); 
+                if (!string.IsNullOrEmpty(Options.token)) AuthenticateAsync(authTimeout.Token).AsTask().Wait(authTimeout.Token); 
             }
             catch
             {

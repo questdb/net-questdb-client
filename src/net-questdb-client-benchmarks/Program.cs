@@ -36,7 +36,7 @@ public class Program
     {
         var config =
             DefaultConfig.Instance.AddJob(Job.MediumRun.WithLaunchCount(1)
-                .WithToolchain(InProcessNoEmitToolchain.Instance))
+                    .WithToolchain(InProcessNoEmitToolchain.Instance))
                 .WithOptions(ConfigOptions.DisableOptimizationsValidator);
         // var summary = BenchmarkRunner.Run<BenchInserts>(config);
         //var summary = BenchmarkRunner.Run<BenchConnectionChurn>(config);

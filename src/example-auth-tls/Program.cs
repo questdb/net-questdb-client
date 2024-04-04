@@ -7,7 +7,7 @@ namespace QuestDBDemo;
 internal class Program
 {
     /// <summary>
-    /// Demonstrates TCPS connection against QuestDB Enterprise
+    ///     Demonstrates TCPS connection against QuestDB Enterprise
     /// </summary>
     /// <param name="args"></param>
     private static async Task Main(string[] args)

@@ -149,7 +149,10 @@ public class LineTcpSenderTests
             parameters);
 
         var m = new byte[512];
-        for (var i = 0; i < m.Length; i++) m[i] = (byte)i;
+        for (var i = 0; i < m.Length; i++)
+        {
+            m[i] = (byte)i;
+        }
 
         var ecdsa = SignerUtilities.GetSigner("SHA-256withECDSA");
         ecdsa.Init(true, priKey);
@@ -331,7 +334,10 @@ public class LineTcpSenderTests
                 Assert.That(ex.Message.StartsWith("Unable to write data to the transport connection:"), Is.True);
             }
 
-            if (i == 1) srv.Dispose();
+            if (i == 1)
+            {
+                srv.Dispose();
+            }
         }
     }
 
@@ -575,7 +581,10 @@ public class LineTcpSenderTests
                 .Column("привед", "мед вед")
                 .At(new DateTime(2021, 1, 1, i / 360 / 1000 % 60, i / 60 / 1000 % 60, i / 1000 % 60, i % 1000));
 
-            if (i % 100 == 0) await ls.SendAsync();
+            if (i % 100 == 0)
+            {
+                await ls.SendAsync();
+            }
         }
 
         await ls.SendAsync();
@@ -593,12 +602,14 @@ public class LineTcpSenderTests
         using var ls = await LineTcpSender.ConnectAsync(IPAddress.Loopback.ToString(), _port, 64 * 1024,
             BufferOverflowHandling.SendImmediately, TlsMode.Disable);
         for (var i = 0; i < 1E6; i++)
+        {
             ls.Table(metric)
                 .Symbol("nopoint", "tag" + i % 100)
                 .Column("counter", i * 1111.1)
                 .Column("int", i)
                 .Column("привед", "мед вед")
                 .At(new DateTime(2021, 1, 1, i / 360 / 1000 % 60, i / 60 / 1000 % 60, i / 1000 % 60, i % 1000));
+        }
 
         await ls.SendAsync();
     }
@@ -643,7 +654,11 @@ public class LineTcpSenderTests
     private static void WaitAssert(DummyIlpServer srv, string expected)
     {
         var expectedLen = Encoding.UTF8.GetBytes(expected).Length;
-        for (var i = 0; i < 500 && srv.TotalReceived < expectedLen; i++) Thread.Sleep(10);
+        for (var i = 0; i < 500 && srv.TotalReceived < expectedLen; i++)
+        {
+            Thread.Sleep(10);
+        }
+
         Assert.AreEqual(expected, srv.GetTextReceived());
     }
 

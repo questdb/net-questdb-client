@@ -10,7 +10,7 @@
 
     <ItemGroup>
         <PackageReference Include="FastEndpoints" Version="5.23.0"/>
-        <PackageReference Include="FastEndpoints.Security" Version="5.23.0" />
+        <PackageReference Include="FastEndpoints.Security" Version="5.23.0"/>
     </ItemGroup>
 
     <ItemGroup>

@@ -48,17 +48,17 @@ public class Sender : IDisposable
     // tcp
     private static readonly RemoteCertificateValidationCallback AllowAllCertCallback = (_, _, _, _) => true;
     private bool _authenticated;
+    private Buffer _buffer = null!;
+    private HttpClient? _client;
     private Stream? _dataStream;
-    private Socket? _underlyingSocket;
-    
+
     // http
     private SocketsHttpHandler? _handler;
-    private HttpClient? _client;
     private Stopwatch _intervalTimer = null!;
+    private Socket? _underlyingSocket;
 
     // general
     public QuestDBOptions Options = null!;
-    private Buffer _buffer = null!;
 
     public Sender(IConfiguration config)
     {
@@ -76,9 +76,9 @@ public class Sender : IDisposable
     public Sender(string confString) : this(new QuestDBOptions(confString))
     {
     }
-    
+
     public int Length => _buffer.Length;
-    
+
     public int RowCount => _buffer.RowCount;
 
     public bool WithinTransaction => _buffer.WithinTransaction;
@@ -91,10 +91,25 @@ public class Sender : IDisposable
     /// </summary>
     public void Dispose()
     {
-        if (_underlyingSocket != null) _underlyingSocket.Dispose();
-        if (_dataStream != null) _dataStream.Dispose();
-        if (_client != null) _client.Dispose();
-        if (_handler != null) _handler.Dispose();
+        if (_underlyingSocket != null)
+        {
+            _underlyingSocket.Dispose();
+        }
+
+        if (_dataStream != null)
+        {
+            _dataStream.Dispose();
+        }
+
+        if (_client != null)
+        {
+            _client.Dispose();
+        }
+
+        if (_handler != null)
+        {
+            _handler.Dispose();
+        }
     }
 
     private void Build(QuestDBOptions options)
@@ -110,10 +125,9 @@ public class Sender : IDisposable
                 PooledConnectionIdleTimeout = Options.pool_timeout,
                 MaxConnectionsPerServer = 1
             };
-            
+
             if (options.protocol == ProtocolType.https)
             {
-                
                 _handler.SslOptions.TargetHost = Options.Host;
                 _handler.SslOptions.EnabledSslProtocols = SslProtocols.Tls12 | SslProtocols.Tls13;
 
@@ -134,12 +148,12 @@ public class Sender : IDisposable
                             if (options.tls_roots != null)
                             {
                                 chain!.ChainPolicy.TrustMode = X509ChainTrustMode.CustomRootTrust;
-                                chain.ChainPolicy.CustomTrustStore.Add(X509Certificate2.CreateFromPemFile(options.tls_roots, options.tls_roots_password));
+                                chain.ChainPolicy.CustomTrustStore.Add(
+                                    X509Certificate2.CreateFromPemFile(options.tls_roots, options.tls_roots_password));
                             }
-                            
+
                             return chain!.Build(new X509Certificate2(certificate!));
                         };
-   
                 }
 
                 if (!string.IsNullOrEmpty(Options.tls_roots))
@@ -149,7 +163,7 @@ public class Sender : IDisposable
                         X509Certificate2.CreateFromPemFile(options.tls_roots!, options.tls_roots_password));
                 }
             }
-            
+
             _handler.ConnectTimeout = options.auth_timeout;
             _handler.PreAuthenticate = true;
 
@@ -159,10 +173,14 @@ public class Sender : IDisposable
             _client.Timeout = Timeout.InfiniteTimeSpan;
 
             if (!string.IsNullOrEmpty(options.username) && !string.IsNullOrEmpty(Options.password))
+            {
                 _client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Basic",
                     Convert.ToBase64String(Encoding.ASCII.GetBytes($"{Options.username}:{Options.password}")));
+            }
             else if (!string.IsNullOrEmpty(Options.token))
+            {
                 _client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", Options.token);
+            }
         }
 
         if (options.IsTcp())
@@ -185,20 +203,25 @@ public class Sender : IDisposable
                         RemoteCertificateValidationCallback =
                             Options.tls_verify == TlsVerifyType.unsafe_off ? AllowAllCertCallback : null
                     };
-                    
+
                     sslStream.AuthenticateAsClient(sslOptions);
                     if (!sslStream.IsEncrypted)
+                    {
                         throw new IngressError(ErrorCode.TlsError, "Could not established encrypted connection.");
+                    }
 
                     dataStream = sslStream;
                 }
 
                 _underlyingSocket = socket;
                 _dataStream = dataStream;
-                
+
                 var authTimeout = new CancellationTokenSource();
                 authTimeout.CancelAfter(Options.auth_timeout);
-                if (!string.IsNullOrEmpty(Options.token)) AuthenticateAsync(authTimeout.Token).AsTask().Wait(authTimeout.Token); 
+                if (!string.IsNullOrEmpty(Options.token))
+                {
+                    AuthenticateAsync(authTimeout.Token).AsTask().Wait(authTimeout.Token);
+                }
             }
             catch
             {
@@ -218,19 +241,23 @@ public class Sender : IDisposable
     private void GuardFsFileNameLimit(ReadOnlySpan<char> name)
     {
         if (Encoding.UTF8.GetBytes(name.ToString()).Length > Options.max_name_len)
+        {
             throw new IngressError(ErrorCode.InvalidApiCall,
                 $"Name is too long, must be under {Options.max_name_len} bytes.");
+        }
     }
-    
+
     /// <summary>
-    ///     Throws <see cref="IngressError"/> if we have exceeded the specified limit for buffer size.
+    ///     Throws <see cref="IngressError" /> if we have exceeded the specified limit for buffer size.
     /// </summary>
     /// <exception cref="IngressError"></exception>
     private void GuardExceededMaxBufferSize()
     {
         if (_buffer.Length > Options.max_buf_size)
+        {
             throw new IngressError(ErrorCode.InvalidApiCall,
                 $"Exceeded maximum buffer size. Current: {_buffer.Length} Maximum: {Options.max_buf_size}");
+        }
     }
 
     /// <summary>
@@ -246,14 +273,16 @@ public class Sender : IDisposable
     public Sender Transaction(ReadOnlySpan<char> tableName)
     {
         if (!Options.IsHttp())
+        {
             throw new IngressError(ErrorCode.InvalidApiCall, "Transactions are only available for HTTP.");
+        }
 
         _buffer.Transaction(tableName);
         return this;
     }
 
     /// <summary>
-    /// Synchronous version of <see cref="CommitAsync"/>
+    ///     Synchronous version of <see cref="CommitAsync" />
     /// </summary>
     /// <returns></returns>
     public void Commit()
@@ -262,19 +291,18 @@ public class Sender : IDisposable
     }
 
     /// <summary>
-    /// 
     /// </summary>
     /// <returns></returns>
-    /// <exception cref="IngressError">Thrown by <see cref="SendAsync"/></exception>
+    /// <exception cref="IngressError">Thrown by <see cref="SendAsync" /></exception>
     public async Task CommitAsync(CancellationToken ct = default)
     {
         CommittingTransaction = true;
-         await SendAsync(ct);
-        
+        await SendAsync(ct);
+
         CommittingTransaction = false;
         Debug.Assert(!_buffer.WithinTransaction);
     }
- 
+
     /// <inheritdoc cref="Buffer.Table" />
     public Sender Table(ReadOnlySpan<char> name)
     {
@@ -284,6 +312,7 @@ public class Sender : IDisposable
         {
             _intervalTimer.Start();
         }
+
         return this;
     }
 
@@ -294,7 +323,7 @@ public class Sender : IDisposable
         _buffer.Symbol(symbolName, value);
         return this;
     }
-    
+
     /// <inheritdoc cref="Buffer.Symbol" />
     public Sender Symbol(ReadOnlySpan<char> symbolName, string? value)
     {
@@ -303,6 +332,7 @@ public class Sender : IDisposable
             GuardFsFileNameLimit(symbolName);
             _buffer.Symbol(symbolName, value);
         }
+
         return this;
     }
 
@@ -312,12 +342,15 @@ public class Sender : IDisposable
         _buffer.Column(name, value);
         return this;
     }
-    
+
     /// <inheritdoc cref="Buffer.Column(ReadOnlySpan&lt;char&gt;, ReadOnlySpan&lt;char&gt;)" />
     public Sender Column(ReadOnlySpan<char> name, string? value)
     {
         if (value != null)
-         _buffer.Column(name, value);
+        {
+            _buffer.Column(name, value);
+        }
+
         return this;
     }
 
@@ -327,12 +360,15 @@ public class Sender : IDisposable
         _buffer.Column(name, value);
         return this;
     }
-    
+
     /// <inheritdoc cref="Buffer.Column(ReadOnlySpan&lt;char&gt;, long)" />
     public Sender Column(ReadOnlySpan<char> name, long? value)
     {
         if (value != null)
-          _buffer.Column(name, value.Value);
+        {
+            _buffer.Column(name, value.Value);
+        }
+
         return this;
     }
 
@@ -342,12 +378,15 @@ public class Sender : IDisposable
         _buffer.Column(name, value);
         return this;
     }
-    
+
     /// <inheritdoc cref="Buffer.Column(ReadOnlySpan&lt;char&gt;, bool)" />
     public Sender Column(ReadOnlySpan<char> name, bool? value)
     {
         if (value != null)
+        {
             _buffer.Column(name, value.Value);
+        }
+
         return this;
     }
 
@@ -357,12 +396,15 @@ public class Sender : IDisposable
         _buffer.Column(name, value);
         return this;
     }
-    
+
     /// <inheritdoc cref="Buffer.Column(ReadOnlySpan&lt;char&gt;, double)" />
     public Sender Column(ReadOnlySpan<char> name, double? value)
     {
         if (value != null)
+        {
             _buffer.Column(name, value.Value);
+        }
+
         return this;
     }
 
@@ -372,12 +414,15 @@ public class Sender : IDisposable
         _buffer.Column(name, value);
         return this;
     }
-    
+
     /// <inheritdoc cref="Buffer.Column(ReadOnlySpan&lt;char&gt;, DateTime)" />
     public Sender Column(ReadOnlySpan<char> name, DateTime? value)
     {
-        if (value != null) 
-         _buffer.Column(name, value.Value);
+        if (value != null)
+        {
+            _buffer.Column(name, value.Value);
+        }
+
         return this;
     }
 
@@ -387,21 +432,24 @@ public class Sender : IDisposable
         _buffer.Column(name, value.UtcDateTime);
         return this;
     }
-    
+
     /// <inheritdoc cref="Buffer.Column(ReadOnlySpan&lt;char&gt;, DateTimeOffset)" />
     public Sender Column(ReadOnlySpan<char> name, DateTimeOffset? value)
     {
         if (value != null)
+        {
             _buffer.Column(name, value.Value);
+        }
+
         return this;
     }
-    
+
     /// <inheritdoc cref="Buffer.At(DateTime)" />
     public async Task<Sender> At(DateTime value, CancellationToken ct = default)
     {
         _buffer.At(value);
-       await HandleAutoFlush(ct);
-       return this;
+        await HandleAutoFlush(ct);
+        return this;
     }
 
     /// <inheritdoc cref="Buffer.At(DateTimeOffset)" />
@@ -411,7 +459,7 @@ public class Sender : IDisposable
         await HandleAutoFlush(ct);
         return this;
     }
-    
+
     /// <inheritdoc cref="Buffer.At(DateTimeOffset)" />
     public async Task<Sender> At(long timestamp, CancellationToken ct = default)
     {
@@ -432,19 +480,26 @@ public class Sender : IDisposable
     ///     Applies auto-flushing logic.
     /// </summary>
     /// <remarks>
-    /// Auto flush can be configured to flush by row limits, time limits, or buffer size.
-    /// 
+    ///     Auto flush can be configured to flush by row limits, time limits, or buffer size.
     /// </remarks>
     private async Task HandleAutoFlush(CancellationToken ct = default)
     {
         // noop if within transaction
-        if (_buffer.WithinTransaction) return;
+        if (_buffer.WithinTransaction)
+        {
+            return;
+        }
 
         if (Options.auto_flush == AutoFlushType.on)
-            if (Options.auto_flush_rows > 0 && _buffer.RowCount >= Options.auto_flush_rows
-                || Options.auto_flush_interval > TimeSpan.Zero && _intervalTimer.Elapsed >= Options.auto_flush_interval
+        {
+            if ((Options.auto_flush_rows > 0 && _buffer.RowCount >= Options.auto_flush_rows)
+                || (Options.auto_flush_interval > TimeSpan.Zero &&
+                    _intervalTimer.Elapsed >= Options.auto_flush_interval)
                 || Options.auto_flush_bytes <= _buffer.Length)
+            {
                 await SendAsync(ct);
+            }
+        }
     }
 
     /// <inheritdoc cref="SendAsync" />
@@ -460,17 +515,17 @@ public class Sender : IDisposable
     /// <remarks>
     ///     Only usable outside of a transaction. If there are no pending rows, then this is a no-op.
     ///     <para />
-    ///     If the <see cref="QuestDBOptions.protocol"/> is HTTP, this will return request and response information.
+    ///     If the <see cref="QuestDBOptions.protocol" /> is HTTP, this will return request and response information.
     ///     <para />
-    ///     If the <see cref="QuestDBOptions.protocol"/> is TCP, this will return nulls.
+    ///     If the <see cref="QuestDBOptions.protocol" /> is TCP, this will return nulls.
     /// </remarks>
     /// <returns></returns>
     /// <exception cref="IngressError"></exception>
     /// <exception cref="NotImplementedException"></exception>
     public async Task SendAsync(CancellationToken ct = default)
-    {    
+    {
         GuardExceededMaxBufferSize();
-        
+
         if (WithinTransaction && !CommittingTransaction)
         {
             throw new IngressError(ErrorCode.InvalidApiCall, "Please `commit` to complete your transaction.");
@@ -488,7 +543,7 @@ public class Sender : IDisposable
             {
                 var response = await _client!.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cts!.Token);
                 await FinishOrRetryAsync(
-                     response, cts
+                    response, cts
                 );
                 return;
             }
@@ -534,10 +589,10 @@ public class Sender : IDisposable
     }
 
     /// <summary>
-    /// Applies retry logic (if required).
+    ///     Applies retry logic (if required).
     /// </summary>
     /// <remarks>
-    ///     Until <see cref="QuestDBOptions.retry_timeout"/> has elapsed, the request will be retried
+    ///     Until <see cref="QuestDBOptions.retry_timeout" /> has elapsed, the request will be retried
     ///     with a small jitter.
     /// </remarks>
     /// <param name="response">The response triggering the retry.</param>
@@ -553,7 +608,9 @@ public class Sender : IDisposable
         if (!response.IsSuccessStatusCode)
         {
             if (!(IsRetriableError(response.StatusCode) && Options.retry_timeout > TimeSpan.Zero))
+            {
                 throw new IngressError(ErrorCode.ServerFlushError, response.ReasonPhrase);
+            }
 
             var retryTimer = new Stopwatch();
             retryTimer.Start();
@@ -581,23 +638,26 @@ public class Sender : IDisposable
         {
             throw new IngressError(ErrorCode.ServerFlushError, lastResponse.ReasonPhrase);
         }
-        
+
         cts!.Dispose();
         _buffer.Clear();
         _intervalTimer.Restart();
     }
 
     /// <summary>
-    ///      Performs Key based Authentication with QuestDB.
+    ///     Performs Key based Authentication with QuestDB.
     /// </summary>
     /// <remarks>
-    ///     Uses <see cref="QuestDBOptions.username"/> and <see cref="QuestDBOptions.password"/>.
+    ///     Uses <see cref="QuestDBOptions.username" /> and <see cref="QuestDBOptions.password" />.
     /// </remarks>
     /// <param name="cancellationToken"></param>
-    /// <exception cref="IngressError"></exception> 
+    /// <exception cref="IngressError"></exception>
     private async ValueTask AuthenticateAsync(CancellationToken cancellationToken = default)
     {
-        if (_authenticated) throw new IngressError(ErrorCode.AuthError, "Already authenticated.");
+        if (_authenticated)
+        {
+            throw new IngressError(ErrorCode.AuthError, "Already authenticated.");
+        }
 
         _authenticated = true;
         _buffer.EncodeUtf8(Options.username); // key_id
@@ -607,8 +667,11 @@ public class Sender : IDisposable
 
         var bufferLen = await ReceiveUntil('\n', cancellationToken);
 
-        if (Options.token == null) throw new IngressError(ErrorCode.AuthError, "Must provide a token for TCP auth.");
-        
+        if (Options.token == null)
+        {
+            throw new IngressError(ErrorCode.AuthError, "Must provide a token for TCP auth.");
+        }
+
         var privateKey =
             FromBase64String(Options.token!);
 
@@ -622,8 +685,8 @@ public class Sender : IDisposable
 
         var ecdsa = SignerUtilities.GetSigner("SHA-256withECDSA");
         ecdsa.Init(true, priKey);
- 
-       
+
+
         ecdsa.BlockUpdate(_buffer._sendBuffer, 0, bufferLen);
         var signature = ecdsa.GenerateSignature();
 
@@ -651,7 +714,10 @@ public class Sender : IDisposable
             if (received > 0)
             {
                 totalReceived += received;
-                if (_buffer._sendBuffer[totalReceived - 1] == endChar) return totalReceived - 1;
+                if (_buffer._sendBuffer[totalReceived - 1] == endChar)
+                {
+                    return totalReceived - 1;
+                }
             }
             else
             {
@@ -667,7 +733,11 @@ public class Sender : IDisposable
     {
         var urlUnsafe = encodedPrivateKey.Replace('-', '+').Replace('_', '/');
         var padding = 3 - (urlUnsafe.Length + 3) % 4;
-        if (padding != 0) urlUnsafe += new string('=', padding);
+        if (padding != 0)
+        {
+            urlUnsafe += new string('=', padding);
+        }
+
         return Convert.FromBase64String(urlUnsafe);
     }
 
@@ -722,7 +792,9 @@ public class Sender : IDisposable
         confString.Append($"init_buf_size={bufferSize};");
 
         if (bufferOverflowHandling == BufferOverflowHandling.SendImmediately)
+        {
             confString.Append($"auto_flush_bytes={bufferSize};");
+        }
 
         return ValueTask.FromResult(new Sender(confString.ToString()));
     }
@@ -733,7 +805,8 @@ public class Sender : IDisposable
     /// <returns></returns>
     private (HttpRequestMessage, CancellationTokenSource?) GenerateRequest(CancellationToken ct = default)
     {
-        var request = new HttpRequestMessage(HttpMethod.Post, IlpEndpoint) { Content = new BufferStreamContent(_buffer) };
+        var request = new HttpRequestMessage(HttpMethod.Post, IlpEndpoint)
+            { Content = new BufferStreamContent(_buffer) };
         request.Content.Headers.ContentType = new MediaTypeHeaderValue("text/plain") { CharSet = "utf-8" };
         request.Content.Headers.ContentLength = _buffer.Length;
         var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
@@ -745,9 +818,9 @@ public class Sender : IDisposable
     ///     Calculate the request timeout.
     /// </summary>
     /// <remarks>
-    ///     Large requests may need more time to transfer the data. 
-    ///     This calculation uses a base timeout (<see cref="QuestDBOptions.request_timeout"/>), and adds on
-    ///     extra time corresponding to the expected transfer rate (<see cref = "QuestDBOptions.request_min_throughput"/>)
+    ///     Large requests may need more time to transfer the data.
+    ///     This calculation uses a base timeout (<see cref="QuestDBOptions.request_timeout" />), and adds on
+    ///     extra time corresponding to the expected transfer rate (<see cref="QuestDBOptions.request_min_throughput" />)
     /// </remarks>
     /// <returns></returns>
     private TimeSpan CalculateRequestTimeout()
@@ -757,7 +830,7 @@ public class Sender : IDisposable
     }
 
     /// <summary>
-    /// Health check endpoint.
+    ///     Health check endpoint.
     /// </summary>
     /// <returns></returns>
     public async Task<bool?> PingAsync()

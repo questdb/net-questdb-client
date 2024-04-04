@@ -26,6 +26,7 @@
 
 // ReSharper disable InconsistentNaming
 // ReSharper disable IdentifierTypo
+
 namespace QuestDB.Ingress;
 
 /// <summary>

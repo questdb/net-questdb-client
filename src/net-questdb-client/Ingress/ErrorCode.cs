@@ -41,7 +41,7 @@ public enum ErrorCode
     SocketError,
 
     /// The string or symbol field is not encoded in valid UTF-8.
-    ///
+    /// 
     /// *This error is reserved for the
     /// [C and C++ API](https://github.com/questdb/c-questdb-client/).*
     InvalidUtf8,

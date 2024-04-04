@@ -53,9 +53,13 @@ public class JsonSpecTestRunner
         try
         {
             ls.Table(testCase.table);
-            foreach (var symbol in testCase.symbols) ls.Symbol(symbol.name, symbol.value);
+            foreach (var symbol in testCase.symbols)
+            {
+                ls.Symbol(symbol.name, symbol.value);
+            }
 
             foreach (var column in testCase.columns)
+            {
                 switch (column.type)
                 {
                     case "STRING":
@@ -77,13 +81,18 @@ public class JsonSpecTestRunner
                     default:
                         throw new NotSupportedException("Column type not supported: " + column.type);
                 }
+            }
 
             ls.AtNow();
             ls.Send();
         }
         catch (Exception? ex)
         {
-            if (testCase.result.status == "SUCCESS") throw;
+            if (testCase.result.status == "SUCCESS")
+            {
+                throw;
+            }
+
             exception = ex;
         }
 
@@ -96,7 +105,10 @@ public class JsonSpecTestRunner
         else if (testCase.result.status == "ERROR")
         {
             Assert.NotNull(exception, "Exception should be thrown");
-            if (exception is NotSupportedException) throw exception;
+            if (exception is NotSupportedException)
+            {
+                throw exception;
+            }
         }
         else
         {
@@ -107,7 +119,11 @@ public class JsonSpecTestRunner
     private static void WaitAssert(DummyIlpServer srv, string expected)
     {
         var expectedLen = Encoding.UTF8.GetBytes(expected).Length;
-        for (var i = 0; i < 500 && srv.TotalReceived < expectedLen; i++) Thread.Sleep(10);
+        for (var i = 0; i < 500 && srv.TotalReceived < expectedLen; i++)
+        {
+            Thread.Sleep(10);
+        }
+
         Assert.AreEqual(expected, srv.GetTextReceived());
     }
 

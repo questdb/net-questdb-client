@@ -4,13 +4,13 @@ namespace QuestDB.Ingress;
 
 public class BufferStreamContent : HttpContent
 {
-    private Buffer Buffer { get; }
-
     public BufferStreamContent(Buffer buffer)
     {
         Buffer = buffer;
     }
-    
+
+    private Buffer Buffer { get; }
+
     /// <summary>
     ///     Writes the chunked buffer contents to a stream.
     ///     Used to fulfill the <see cref="HttpContent" /> requirements.
@@ -27,7 +27,9 @@ public class BufferStreamContent : HttpContent
             try
             {
                 if (length > 0)
+                {
                     await stream.WriteAsync(Buffer._buffers[i].Buffer, 0, length);
+                }
             }
             catch (IOException iox)
             {
@@ -44,7 +46,7 @@ public class BufferStreamContent : HttpContent
         length = Buffer.Length;
         return true;
     }
-    
+
     /// <summary>
     ///     Fulfills <see cref="HttpContent" />
     /// </summary>
@@ -55,7 +57,7 @@ public class BufferStreamContent : HttpContent
         await SerializeToStreamAsync(stream, null, default);
         return stream;
     }
-    
+
     /// <summary>
     ///     Fulfills <see cref="HttpContent" />
     /// </summary>
@@ -64,7 +66,7 @@ public class BufferStreamContent : HttpContent
     {
         SerializeToStreamAsync(stream, context, ct).Wait(ct);
     }
-    
+
     /// <summary>
     ///     Writes the chunked buffer contents to a stream.
     /// </summary>
@@ -74,5 +76,4 @@ public class BufferStreamContent : HttpContent
     {
         await SerializeToStreamAsync(stream, null);
     }
-
 }

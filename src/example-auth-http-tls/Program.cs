@@ -1,17 +1,16 @@
-﻿using System;
-using System.Threading.Tasks;
-using QuestDB.Ingress;
+﻿using QuestDB.Ingress;
 
 namespace QuestDBDemo;
 
 internal class Program
 {
     /// <summary>
-    /// Runs against QuestDB Enterprise, demonstrating HTTPS and Basic Authentication support.
+    ///     Runs against QuestDB Enterprise, demonstrating HTTPS and Basic Authentication support.
     /// </summary>
     private static async Task Main(string[] args)
     {
-        using var sender = new Sender("https::addr=localhost:9000;tls_verify=unsafe_off;username=admin;password=quest;");
+        using var sender =
+            new Sender("https::addr=localhost:9000;tls_verify=unsafe_off;username=admin;password=quest;");
         sender.Table("trades")
             .Symbol("pair", "USDGBP")
             .Symbol("type", "buy")

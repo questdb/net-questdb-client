@@ -26,10 +26,10 @@
 
 using System.Collections.Immutable;
 using System.Data.Common;
-using System.Globalization;
 using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Text.Json.Serialization;
+
 // ReSharper disable InconsistentNaming
 // ReSharper disable PropertyCanBeMadeInitOnly.Global
 
@@ -41,89 +41,50 @@ namespace QuestDB.Ingress;
 public class QuestDBOptions
 {
     public const string QuestDB = "QuestDB";
+
+
+    private string _addr = "localhost:9000";
+    private TimeSpan _authTimeout = TimeSpan.FromMilliseconds(15000);
+    private AutoFlushType _autoFlush = AutoFlushType.on;
+    private int _autoFlushBytes = int.MaxValue;
+    private TimeSpan _autoFlushInterval = TimeSpan.FromMilliseconds(1000);
+    private int _autoFlushRows = 75000;
     private DbConnectionStringBuilder _connectionStringBuilder;
+    private int _initBufSize = 65536;
+    private int _maxBufSize = 104857600;
+    private int _maxNameLen = 127;
+    private bool _ownSocket = true;
+    private string? _password;
+    private TimeSpan _poolTimeout = TimeSpan.FromMinutes(2);
+
+    private ProtocolType _protocol = ProtocolType.http;
+    private int _requestMinThroughput = 102400;
+    private TimeSpan _requestTimeout = TimeSpan.FromMilliseconds(10000);
+    private TimeSpan _retryTimeout = TimeSpan.FromMilliseconds(10000);
+    private string? _tlsCa;
+    private string? _tlsRoots;
+    private string? _tlsRootsPassword;
+    private TlsVerifyType _tlsVerify = TlsVerifyType.on;
+    private string? _token;
+    private string? _tokenX;
+    private string? _tokenY;
+    private string? _username;
 
     public QuestDBOptions()
     {
     }
 
-    private void ParseIntWithDefault(string name, string defaultValue, out int field)
-    {
-        if (!int.TryParse(ReadOptionFromBuilder(name) ?? defaultValue, out field))
-        {
-            throw new IngressError(ErrorCode.ConfigError, $"`{name}` should be convertible to an int.");
-        }
-    }
-
-    private void ParseMillisecondsWithDefault(string name, string defaultValue, out TimeSpan field)
-    {
-        ParseIntWithDefault(name, defaultValue, out var ms);
-        field = TimeSpan.FromMilliseconds(ms);
-    }
-
-    private void ParseEnumWithDefault<T>(string name, string defaultValue, out T field) where T : struct, Enum
-    {
-        if (!Enum.TryParse(ReadOptionFromBuilder(name) ?? defaultValue, ignoreCase: false, out field))
-        {
-            throw new IngressError(ErrorCode.ConfigError, $"`{name}` must be one of: " + string.Join(", ", typeof(T).GetEnumNames()));
-        }
-    }
-    
-    private void ParseBoolWithDefault(string name, string defaultValue, out bool field)
-    {
-          
-        if (!bool.TryParse(ReadOptionFromBuilder(name) ?? defaultValue, out field))
-        {
-            throw new IngressError(ErrorCode.ConfigError, $"`{name}` should be convertible to an bool.");
-        }
-    }
-    
-    private void ParseStringWithDefault(string name, string defaultValue, out string? field)
-    {
-
-        field = ReadOptionFromBuilder(name) ?? defaultValue;
-    }
-
-    private void ReadConfigStringIntoBuilder(string confStr)
-    {
-        if (!confStr.Contains("::"))
-        {
-            throw new IngressError(ErrorCode.ConfigError, "Config string must contain a protocol, separated by `::`");
-        }
-        
-        var splits = confStr.Split("::");
-        
-        if (splits[1].Last() != ';')
-            throw new IngressError(ErrorCode.ConfigError, "Config string must end with a semicolon.");
-        
-        _connectionStringBuilder= new DbConnectionStringBuilder
-        {
-            ConnectionString = splits[1]
-        };
-        
-        VerifyCorrectKeysInConfigString();
-        
-        _connectionStringBuilder.Add("protocol", splits[0]);
-    }
-
-    private string? ReadOptionFromBuilder(string name)
-    {
-        object? retval = null;
-        _connectionStringBuilder.TryGetValue(name, out retval);
-        return (string?)retval;
-    }
-    
     public QuestDBOptions(string confStr)
     {
         ReadConfigStringIntoBuilder(confStr);
-        ParseEnumWithDefault(nameof(protocol),  "http", out _protocol);
+        ParseEnumWithDefault(nameof(protocol), "http", out _protocol);
         ParseStringWithDefault(nameof(addr), "localhost:9000", out _addr);
         ParseEnumWithDefault(nameof(auto_flush), "on", out _autoFlush);
-        ParseIntWithDefault(nameof(auto_flush_rows),  (IsHttp() ? "75000" : "600"), out _autoFlushRows);
-        ParseIntWithDefault(nameof(auto_flush_bytes),   int.MaxValue.ToString(), out _autoFlushBytes);
-        ParseMillisecondsWithDefault(nameof(auto_flush_interval),  "1000", out _autoFlushInterval);
-        ParseIntWithDefault(nameof(init_buf_size),   "65536", out _initBufSize);
-        ParseIntWithDefault(nameof(max_buf_size),  "104857600", out _maxBufSize);
+        ParseIntWithDefault(nameof(auto_flush_rows), IsHttp() ? "75000" : "600", out _autoFlushRows);
+        ParseIntWithDefault(nameof(auto_flush_bytes), int.MaxValue.ToString(), out _autoFlushBytes);
+        ParseMillisecondsWithDefault(nameof(auto_flush_interval), "1000", out _autoFlushInterval);
+        ParseIntWithDefault(nameof(init_buf_size), "65536", out _initBufSize);
+        ParseIntWithDefault(nameof(max_buf_size), "104857600", out _maxBufSize);
         ParseIntWithDefault(nameof(max_name_len), "127", out _maxNameLen);
         ParseStringWithDefault(nameof(username), null, out _username);
         ParseStringWithDefault(nameof(password), null, out _password);
@@ -131,9 +92,9 @@ public class QuestDBOptions
         ParseIntWithDefault(nameof(request_min_throughput), "102400", out _requestMinThroughput);
         ParseMillisecondsWithDefault(nameof(auth_timeout), "15000", out _authTimeout);
         ParseMillisecondsWithDefault(nameof(request_timeout), "10000", out _requestTimeout);
-        ParseMillisecondsWithDefault(nameof(retry_timeout),  "10000", out _retryTimeout);
-        ParseMillisecondsWithDefault(nameof(pool_timeout),  "120000", out _poolTimeout);
-        ParseEnumWithDefault(nameof(tls_verify),  "on", out _tlsVerify);
+        ParseMillisecondsWithDefault(nameof(retry_timeout), "10000", out _retryTimeout);
+        ParseMillisecondsWithDefault(nameof(pool_timeout), "120000", out _poolTimeout);
+        ParseEnumWithDefault(nameof(tls_verify), "on", out _tlsVerify);
         ParseStringWithDefault(nameof(tls_roots), null, out _tlsRoots);
         ParseStringWithDefault(nameof(tls_roots_password), null, out _tlsRootsPassword);
         ParseBoolWithDefault(nameof(own_socket), "true", out _ownSocket);
@@ -150,11 +111,9 @@ public class QuestDBOptions
     [JsonIgnore]
     public ProtocolType protocol
     {
-        get { return _protocol; }
-        set { _protocol = value;  }
+        get => _protocol;
+        set => _protocol = value;
     }
-
-    private ProtocolType _protocol = ProtocolType.http;
 
     /// <summary>
     ///     Address host/port pair.
@@ -444,21 +403,18 @@ public class QuestDBOptions
     }
 
     /// <summary>
-    ///     Specifies timeout for <see cref="SocketsHttpHandler.PooledConnectionLifetime"/>.
+    ///     Specifies timeout for <see cref="SocketsHttpHandler.PooledConnectionLifetime" />.
     /// </summary>
     public TimeSpan pool_timeout
     {
         get => _poolTimeout;
         set => _poolTimeout = value;
     }
-    
+
+    [JsonIgnore] internal string Host => addr.Contains(':') ? addr.Split(':')[0] : addr;
+
     [JsonIgnore]
-    internal string Host
-    {
-        get => addr.Contains(':') ? addr.Split(':')[0] : addr;
-    }
-    
-    [JsonIgnore] internal int Port
+    internal int Port
     {
         get
         {
@@ -470,42 +426,84 @@ public class QuestDBOptions
             switch (protocol)
             {
                 case ProtocolType.http:
-                    case ProtocolType.https:
-                        return 9000;
+                case ProtocolType.https:
+                    return 9000;
                 case ProtocolType.tcp:
-                    case ProtocolType.tcps:
-                        return 9009;
+                case ProtocolType.tcps:
+                    return 9009;
                 default:
                     throw new NotImplementedException();
             }
         }
     }
 
-    
-    private string _addr = "localhost:9000";
-    private AutoFlushType _autoFlush = AutoFlushType.on;
-    private int _autoFlushRows = 75000;
-    private int _autoFlushBytes = int.MaxValue;
-    private TimeSpan _autoFlushInterval = TimeSpan.FromMilliseconds(1000);
-    private int _initBufSize = 65536;
-    private int _maxBufSize = 104857600;
-    private int _maxNameLen = 127;
-    private string? _username;
-    private string? _password;
-    private string? _token;
-    private string? _tokenX;
-    private string? _tokenY;
-    private TimeSpan _authTimeout = TimeSpan.FromMilliseconds(15000);
-    private int _requestMinThroughput = 102400;
-    private TimeSpan _requestTimeout = TimeSpan.FromMilliseconds(10000);
-    private TimeSpan _retryTimeout = TimeSpan.FromMilliseconds(10000);
-    private TlsVerifyType _tlsVerify = TlsVerifyType.on;
-    private string? _tlsCa;
-    private string? _tlsRoots;
-    private string? _tlsRootsPassword;
-    private bool _ownSocket = true;
-    private TimeSpan _poolTimeout = TimeSpan.FromMinutes(2);
-    
+    private void ParseIntWithDefault(string name, string defaultValue, out int field)
+    {
+        if (!int.TryParse(ReadOptionFromBuilder(name) ?? defaultValue, out field))
+        {
+            throw new IngressError(ErrorCode.ConfigError, $"`{name}` should be convertible to an int.");
+        }
+    }
+
+    private void ParseMillisecondsWithDefault(string name, string defaultValue, out TimeSpan field)
+    {
+        ParseIntWithDefault(name, defaultValue, out var ms);
+        field = TimeSpan.FromMilliseconds(ms);
+    }
+
+    private void ParseEnumWithDefault<T>(string name, string defaultValue, out T field) where T : struct, Enum
+    {
+        if (!Enum.TryParse(ReadOptionFromBuilder(name) ?? defaultValue, false, out field))
+        {
+            throw new IngressError(ErrorCode.ConfigError,
+                $"`{name}` must be one of: " + string.Join(", ", typeof(T).GetEnumNames()));
+        }
+    }
+
+    private void ParseBoolWithDefault(string name, string defaultValue, out bool field)
+    {
+        if (!bool.TryParse(ReadOptionFromBuilder(name) ?? defaultValue, out field))
+        {
+            throw new IngressError(ErrorCode.ConfigError, $"`{name}` should be convertible to an bool.");
+        }
+    }
+
+    private void ParseStringWithDefault(string name, string defaultValue, out string? field)
+    {
+        field = ReadOptionFromBuilder(name) ?? defaultValue;
+    }
+
+    private void ReadConfigStringIntoBuilder(string confStr)
+    {
+        if (!confStr.Contains("::"))
+        {
+            throw new IngressError(ErrorCode.ConfigError, "Config string must contain a protocol, separated by `::`");
+        }
+
+        var splits = confStr.Split("::");
+
+        if (splits[1].Last() != ';')
+        {
+            throw new IngressError(ErrorCode.ConfigError, "Config string must end with a semicolon.");
+        }
+
+        _connectionStringBuilder = new DbConnectionStringBuilder
+        {
+            ConnectionString = splits[1]
+        };
+
+        VerifyCorrectKeysInConfigString();
+
+        _connectionStringBuilder.Add("protocol", splits[0]);
+    }
+
+    private string? ReadOptionFromBuilder(string name)
+    {
+        object? retval = null;
+        _connectionStringBuilder.TryGetValue(name, out retval);
+        return (string?)retval;
+    }
+
     internal bool IsHttp()
     {
         switch (protocol)
@@ -530,30 +528,40 @@ public class QuestDBOptions
         foreach (var prop in GetType().GetProperties(BindingFlags.Instance | BindingFlags.Public).OrderBy(x => x.Name))
         {
             // exclude properties
-            if (prop.IsDefined(typeof(CompilerGeneratedAttribute), false)) continue;
+            if (prop.IsDefined(typeof(CompilerGeneratedAttribute), false))
+            {
+                continue;
+            }
 
-            if (prop.IsDefined(typeof(JsonIgnoreAttribute), false)) continue;
+            if (prop.IsDefined(typeof(JsonIgnoreAttribute), false))
+            {
+                continue;
+            }
 
             object? value;
             try
-            { 
+            {
                 value = prop.GetValue(this);
             }
-            catch 
+            catch
             {
                 continue;
-            }  
-            
+            }
+
             if (value != null)
             {
                 if (value is TimeSpan span)
+                {
                     builder.Add(prop.Name, span.TotalMilliseconds);
+                }
                 else if (value is string str && !string.IsNullOrEmpty(str))
                 {
                     builder.Add(prop.Name, value);
                 }
                 else
+                {
                     builder.Add(prop.Name, value);
+                }
             }
         }
 

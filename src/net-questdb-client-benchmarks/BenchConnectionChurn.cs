@@ -26,59 +26,65 @@
 using BenchmarkDotNet.Attributes;
 using dummy_http_server;
 using QuestDB.Ingress;
-using tcp_client_test;
 
 namespace net_questdb_client_benchmarks;
 
-[MarkdownExporterAttribute.GitHub()]
+[MarkdownExporterAttribute.GitHub]
 public class BenchConnectionChurn
 {
     private readonly DummyHttpServer _httpServer;
-    private readonly int HttpPort = 29473;
-    private readonly int HttpsPort = 29474;
+    private readonly int _httpPort = 29473;
+    private readonly int _httpsPort = 29474;
 
-    [Params(10000, 100000, 1000000)] public int rows_per_iteration;
+    [Params(1000, 10000, 100000)] public int BatchSize;
 
-    [Params(1000, 10000, 100000)] public int batch_size;
+    [Params(1, 2, 4, 8, 16)] public int ConnectionLimit;
 
-    [Params(1, 2, 4, 8, 16)] public int number_of_tables;
+    [Params(1, 2, 4, 8, 16)] public int NumberOfTables;
 
-    [Params(1, 2, 4, 8, 16)] public int connection_limit;
+    [Params(10000, 100000, 1000000)] public int RowsPerIteration;
 
     public BenchConnectionChurn()
     {
         _httpServer = new DummyHttpServer();
-        _httpServer.StartAsync(HttpPort).Wait();
+        _httpServer.StartAsync(_httpPort).Wait();
     }
 
     [GlobalSetup]
     public async Task Setup()
     {
-        if (_httpServer != null) _httpServer.Clear();
+        if (_httpServer != null)
+        {
+            _httpServer.Clear();
+        }
     }
 
     [GlobalCleanup]
     public void Cleanup()
     {
-        if (_httpServer != null) _httpServer.Dispose();
+        if (_httpServer != null)
+        {
+            _httpServer.Dispose();
+        }
     }
-    
+
     [Benchmark]
     public async Task RandomTableEveryRow()
     {
-        var sender = new Sender($"http::addr=localhost:{HttpPort};auto_flush=on;auto_flush_rows={batch_size};pool_limit={connection_limit};");
-    
+        var sender =
+            new Sender(
+                $"http::addr=localhost:{_httpPort};auto_flush=on;auto_flush_rows={BatchSize};pool_limit={ConnectionLimit};");
         
-        for (var i = 0; i < rows_per_iteration; i++)
+        for (var i = 0; i < RowsPerIteration; i++)
         {
-            sender.Table($"random_table_{Random.Shared.NextInt64(0, number_of_tables - 1)}").Column("number", i).AtNow();
-            if (i % batch_size == 0)
+            await sender.Table($"random_table_{Random.Shared.NextInt64(0, NumberOfTables - 1)}").Column("number", i)
+                .AtNow();
+            if (i % BatchSize == 0)
             {
                 _httpServer.Clear();
             }
-        }        
-        await sender.SendAsync();
+        }
 
+        await sender.SendAsync();
     }
-    
 }

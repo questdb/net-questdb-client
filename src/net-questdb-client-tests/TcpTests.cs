@@ -65,7 +65,7 @@ public class TcpTests
         srv.WithAuth("testUser1", "Vs4e-cOLsVCntsMrZiAGAZtrkPXO00uoRLuA3d7gEcI=",
             "ANhR2AZSs4ar9urE5AZrJqu469X0r7gZ1BBEdcrAuL_6");
         srv.AcceptAsync();
-        
+
         using var ls =
             new Sender(
                 $"tcp::addr={_host}:{_port};username=testUser1;token=NgdiOWDoQNUP18WOnb1xkkEG5TzPYMda5SiUOvT1K0U=;");
@@ -141,7 +141,10 @@ public class TcpTests
             parameters);
 
         var m = new byte[512];
-        for (var i = 0; i < m.Length; i++) m[i] = (byte)i;
+        for (var i = 0; i < m.Length; i++)
+        {
+            m[i] = (byte)i;
+        }
 
         var ecdsa = SignerUtilities.GetSigner("SHA-256withECDSA");
         ecdsa.Init(true, priKey);
@@ -312,7 +315,10 @@ public class TcpTests
                 Assert.That(ex.Message.Contains("Could not write data"), Is.True);
             }
 
-            if (i == 1) srv.Dispose();
+            if (i == 1)
+            {
+                srv.Dispose();
+            }
         }
     }
 
@@ -483,7 +489,7 @@ public class TcpTests
 
         using var sender_lim_4 = new Sender($"tcp::addr={_host}:{_port};max_name_len=4;");
         Assert.Throws<IngressError>(() => sender_lim_4.Table("asffdfasdf"));
-        
+
         sender_lim_127.Table("abcd.csv");
 
         Assert.Throws<IngressError>(() => sender_lim_127.Column("abc\\slash", 13));
@@ -502,7 +508,7 @@ public class TcpTests
         Assert.Throws<IngressError>(() => sender_lim_127.Column("b?c", 12));
         Assert.Throws<IngressError>(() => sender_lim_127.Symbol("b:c", "12"));
         Assert.Throws<IngressError>(() => sender_lim_127.Symbol("b)c", "12"));
-        
+
         Assert.Throws<IngressError>(() => sender_lim_4.Symbol("b    c", "12"));
 
         sender_lim_127.Symbol("b    c", "12");
@@ -585,7 +591,10 @@ public class TcpTests
                 .Column("привед", "мед вед")
                 .At(new DateTime(2021, 1, 1, i / 360 / 1000 % 60, i / 60 / 1000 % 60, i / 1000 % 60, i % 1000));
 
-            if (i % 100 == 0) await sender.SendAsync();
+            if (i % 100 == 0)
+            {
+                await sender.SendAsync();
+            }
         }
 
         await sender.SendAsync();
@@ -605,12 +614,14 @@ public class TcpTests
                 $"tcp::addr={_host}:{_port};init_buf_size={64 * 1024};auto_flush=on;auto_flush_bytes={64 * 1024};");
 
         for (var i = 0; i < 1E6; i++)
+        {
             sender.Table(metric)
                 .Symbol("nopoint", "tag" + i % 100)
                 .Column("counter", i * 1111.1)
                 .Column("int", i)
                 .Column("привед", "мед вед")
                 .At(new DateTime(2021, 1, 1, i / 360 / 1000 % 60, i / 60 / 1000 % 60, i / 1000 % 60, i % 1000));
+        }
 
         await sender.SendAsync();
     }
@@ -742,7 +753,11 @@ public class TcpTests
     private static void WaitAssert(DummyIlpServer srv, string expected)
     {
         var expectedLen = Encoding.UTF8.GetBytes(expected).Length;
-        for (var i = 0; i < 500 && srv.TotalReceived < expectedLen; i++) Thread.Sleep(10);
+        for (var i = 0; i < 500 && srv.TotalReceived < expectedLen; i++)
+        {
+            Thread.Sleep(10);
+        }
+
         Assert.That(srv.GetTextReceived(), Is.EqualTo(expected));
     }
 

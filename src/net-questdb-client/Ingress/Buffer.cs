@@ -24,12 +24,9 @@
  ******************************************************************************/
 
 
-using System.Collections;
 using System.Globalization;
-using System.Net;
 using System.Runtime.CompilerServices;
 using System.Text;
-using Strings = Org.BouncyCastle.Utilities.Strings;
 
 namespace QuestDB.Ingress;
 
@@ -59,25 +56,29 @@ public class Buffer
     }
 
     /// <summary>
-    /// The length of the buffered content in bytes.
+    ///     The length of the buffered content in bytes.
     /// </summary>
     public int Length { get; private set; }
 
     /// <summary>
-    /// The number of buffered ILP rows.
+    ///     The number of buffered ILP rows.
     /// </summary>
     public int RowCount { get; private set; }
-    
-    /// <inheritdoc cref="Sender.Transaction"/>
+
+    /// <inheritdoc cref="Sender.Transaction" />
     public Buffer Transaction(ReadOnlySpan<char> tableName)
     {
         if (WithinTransaction)
+        {
             throw new IngressError(ErrorCode.InvalidApiCall,
                 "Cannot start another transaction - only one allowed at a time.");
+        }
 
         if (Length > 0)
+        {
             throw new IngressError(ErrorCode.InvalidApiCall,
                 "Buffer must be clear before you can start a transaction.");
+        }
 
         GuardInvalidTableName(tableName);
         _currentTableName = tableName.ToString();
@@ -96,8 +97,10 @@ public class Buffer
     public Buffer Table(ReadOnlySpan<char> name)
     {
         if (WithinTransaction && name != _currentTableName)
+        {
             throw new IngressError(ErrorCode.InvalidApiCall,
                 "Transactions can only be for one table.");
+        }
 
         GuardTableAlreadySet();
         GuardInvalidTableName(name);
@@ -125,11 +128,20 @@ public class Buffer
     /// </exception>
     public Buffer Symbol(ReadOnlySpan<char> symbolName, ReadOnlySpan<char> value)
     {
-        if (WithinTransaction && !_hasTable) Table(_currentTableName);
+        if (WithinTransaction && !_hasTable)
+        {
+            Table(_currentTableName);
+        }
 
-        if (!_hasTable) throw new IngressError(ErrorCode.InvalidApiCall, "Table must be specified first.");
+        if (!_hasTable)
+        {
+            throw new IngressError(ErrorCode.InvalidApiCall, "Table must be specified first.");
+        }
 
-        if (!_noFields) throw new IngressError(ErrorCode.InvalidApiCall, "Cannot write symbols after fields.");
+        if (!_noFields)
+        {
+            throw new IngressError(ErrorCode.InvalidApiCall, "Cannot write symbols after fields.");
+        }
 
         GuardInvalidColumnName(symbolName);
 
@@ -146,7 +158,11 @@ public class Buffer
     /// <returns>Itself</returns>
     public Buffer Column(ReadOnlySpan<char> name, ReadOnlySpan<char> value)
     {
-        if (WithinTransaction && !_hasTable) Table(_currentTableName);
+        if (WithinTransaction && !_hasTable)
+        {
+            Table(_currentTableName);
+        }
+
         Column(name).Put('\"');
         _quoted = true;
         EncodeUtf8(value);
@@ -163,7 +179,11 @@ public class Buffer
     /// <returns>Itself</returns>
     public Buffer Column(ReadOnlySpan<char> name, long value)
     {
-        if (WithinTransaction && !_hasTable) Table(_currentTableName);
+        if (WithinTransaction && !_hasTable)
+        {
+            Table(_currentTableName);
+        }
+
         Column(name).Put(value).Put('i');
         return this;
     }
@@ -176,7 +196,11 @@ public class Buffer
     /// <returns>Itself</returns>
     public Buffer Column(ReadOnlySpan<char> name, bool value)
     {
-        if (WithinTransaction && !_hasTable) Table(_currentTableName);
+        if (WithinTransaction && !_hasTable)
+        {
+            Table(_currentTableName);
+        }
+
         Column(name).Put(value ? 't' : 'f');
         return this;
     }
@@ -189,7 +213,11 @@ public class Buffer
     /// <returns>Itself</returns>
     public Buffer Column(ReadOnlySpan<char> name, double value)
     {
-        if (WithinTransaction && !_hasTable) Table(_currentTableName);
+        if (WithinTransaction && !_hasTable)
+        {
+            Table(_currentTableName);
+        }
+
         Column(name).Put(value.ToString(CultureInfo.InvariantCulture));
         return this;
     }
@@ -202,7 +230,11 @@ public class Buffer
     /// <returns>Itself</returns>
     public Buffer Column(ReadOnlySpan<char> name, DateTime timestamp)
     {
-        if (WithinTransaction && !_hasTable) Table(_currentTableName);
+        if (WithinTransaction && !_hasTable)
+        {
+            Table(_currentTableName);
+        }
+
         var epoch = timestamp.Ticks - EpochTicks;
         Column(name).Put(epoch / 10).Put('t');
         return this;
@@ -216,7 +248,11 @@ public class Buffer
     /// <returns>Itself</returns>
     public Buffer Column(ReadOnlySpan<char> name, DateTimeOffset timestamp)
     {
-        if (WithinTransaction && !_hasTable) Table(_currentTableName);
+        if (WithinTransaction && !_hasTable)
+        {
+            Table(_currentTableName);
+        }
+
         Column(name, timestamp.UtcDateTime);
         return this;
     }
@@ -230,7 +266,9 @@ public class Buffer
         GuardTableNotSet();
 
         if (_noFields && _noSymbols)
+        {
             throw new IngressError(ErrorCode.InvalidApiCall, "Did not specify any symbols or columns.");
+        }
 
         FinishLine();
     }
@@ -272,7 +310,11 @@ public class Buffer
     {
         _currentBufferIndex = 0;
         _sendBuffer = _buffers[_currentBufferIndex].Buffer;
-        for (var i = 0; i < _buffers.Count; i++) _buffers[i] = (_buffers[i].Buffer, 0);
+        for (var i = 0; i < _buffers.Count; i++)
+        {
+            _buffers[i] = (_buffers[i].Buffer, 0);
+        }
+
         _position = 0;
         RowCount = 0;
         Length = 0;
@@ -286,7 +328,10 @@ public class Buffer
     public void TrimExcessBuffers()
     {
         var removeCount = _buffers.Count - _currentBufferIndex - 1;
-        if (removeCount > 0) _buffers.RemoveRange(_currentBufferIndex + 1, removeCount);
+        if (removeCount > 0)
+        {
+            _buffers.RemoveRange(_currentBufferIndex + 1, removeCount);
+        }
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -320,8 +365,10 @@ public class Buffer
     private Buffer Put(long value)
     {
         if (value == long.MinValue)
+        {
             throw new IngressError(ErrorCode.InvalidApiCall, "Special case, long.MinValue cannot be handled by QuestDB",
                 new ArgumentOutOfRangeException());
+        }
 
         Span<byte> num = stackalloc byte[20];
         var pos = num.Length;
@@ -333,10 +380,17 @@ public class Buffer
             remaining /= 10;
         } while (remaining != 0);
 
-        if (value < 0) num[--pos] = (byte)'-';
+        if (value < 0)
+        {
+            num[--pos] = (byte)'-';
+        }
 
         var len = num.Length - pos;
-        if (_position + len >= _sendBuffer.Length) NextBuffer();
+        if (_position + len >= _sendBuffer.Length)
+        {
+            NextBuffer();
+        }
+
         num.Slice(pos, len).CopyTo(_sendBuffer.AsSpan(_position));
         _position += len;
         Length += len;
@@ -349,9 +403,13 @@ public class Buffer
         foreach (var c in name)
         {
             if (c < 128)
+            {
                 PutSpecial(c);
+            }
             else
+            {
                 PutUtf8(c);
+            }
         }
 
         return this;
@@ -359,7 +417,10 @@ public class Buffer
 
     private void PutUtf8(char c)
     {
-        if (_position + 4 >= _sendBuffer.Length) NextBuffer();
+        if (_position + 4 >= _sendBuffer.Length)
+        {
+            NextBuffer();
+        }
 
         var bytes = _sendBuffer.AsSpan(_position);
         Span<char> chars = stackalloc char[1] { c };
@@ -375,7 +436,11 @@ public class Buffer
             case ' ':
             case ',':
             case '=':
-                if (!_quoted) Put('\\');
+                if (!_quoted)
+                {
+                    Put('\\');
+                }
+
                 goto default;
             default:
                 Put(c);
@@ -385,7 +450,10 @@ public class Buffer
                 Put('\\').Put(c);
                 break;
             case '"':
-                if (_quoted) Put('\\');
+                if (_quoted)
+                {
+                    Put('\\');
+                }
 
                 Put(c);
                 break;
@@ -398,13 +466,19 @@ public class Buffer
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void Put(ReadOnlySpan<char> chars)
     {
-        foreach (var c in chars) Put(c);
+        foreach (var c in chars)
+        {
+            Put(c);
+        }
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal Buffer Put(char c)
     {
-        if (_position + 2 > _sendBuffer.Length) NextBuffer();
+        if (_position + 2 > _sendBuffer.Length)
+        {
+            NextBuffer();
+        }
 
         _sendBuffer[_position++] = (byte)c;
         Length++;
@@ -451,7 +525,10 @@ public class Buffer
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void GuardTableAlreadySet()
     {
-        if (_hasTable) throw new IngressError(ErrorCode.InvalidApiCall, "Table has already been specified.");
+        if (_hasTable)
+        {
+            throw new IngressError(ErrorCode.InvalidApiCall, "Table has already been specified.");
+        }
     }
 
     /// <summary>
@@ -470,7 +547,10 @@ public class Buffer
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void GuardTableNotSet()
     {
-        if (!_hasTable) throw new IngressError(ErrorCode.InvalidApiCall, "Table must be specified first.");
+        if (!_hasTable)
+        {
+            throw new IngressError(ErrorCode.InvalidApiCall, "Table must be specified first.");
+        }
     }
 
     /// <summary>
@@ -492,8 +572,10 @@ public class Buffer
     private static void GuardInvalidTableName(ReadOnlySpan<char> tableName)
     {
         if (tableName.IsEmpty)
+        {
             throw new IngressError(ErrorCode.InvalidName,
                 "Table names must have a non-zero length.");
+        }
 
         var prev = '\0';
         for (var i = 0; i < tableName.Length; i++)
@@ -503,8 +585,11 @@ public class Buffer
             {
                 case '.':
                     if (i == 0 || i == tableName.Length - 1 || prev == '.')
+                    {
                         throw new IngressError(ErrorCode.InvalidName,
                             $"Bad string {tableName}. Found invalid dot `.` at position {i}.");
+                    }
+
                     break;
                 case '?':
                 case ',':
@@ -555,8 +640,10 @@ public class Buffer
     private static void GuardInvalidColumnName(ReadOnlySpan<char> columnName)
     {
         if (columnName.IsEmpty)
+        {
             throw new IngressError(ErrorCode.InvalidName,
                 "Column names must have a non-zero length.");
+        }
 
         for (var i = 0; i < columnName.Length; i++)
         {

@@ -23,7 +23,6 @@
  ******************************************************************************/
 
 
-using System.Security.Cryptography;
 using System.Text;
 using FastEndpoints;
 using FastEndpoints.Security;
@@ -32,18 +31,18 @@ namespace dummy_http_server;
 
 public class DummyHttpServer : IDisposable
 {
+    public static string SigningKey = Guid.NewGuid().ToString("N") + Guid.NewGuid().ToString("N");
+
+    public static string Username = "admin";
+    public static string Password = "quest";
     private int _port = 29743;
     public WebApplication app;
     public CancellationToken ct;
-    public static string SigningKey = Guid.NewGuid().ToString("N") + Guid.NewGuid().ToString("N");
-    
-    public static string Username = "admin";
-    public static string Password = "quest";
-        
+
     public DummyHttpServer(bool withTokenAuth = false, bool withBasicAuth = false)
     {
         var bld = WebApplication.CreateBuilder();
-        
+
         bld.Services.AddLogging(
             builder =>
             {
@@ -57,18 +56,21 @@ public class DummyHttpServer : IDisposable
 
         if (withTokenAuth)
         {
-            bld.Services.
-                AddAuthenticationJwtBearer(s => s.SigningKey = SigningKey)
+            bld.Services.AddAuthenticationJwtBearer(s => s.SigningKey = SigningKey)
                 .AddAuthorization();
         }
-        
-    
-    
+
+
         bld.Services.AddFastEndpoints();
 
         bld.Services.AddHealthChecks();
-        bld.WebHost.ConfigureKestrel(o => { o.Limits.MaxRequestBodySize = 1073741824; o.ListenLocalhost(29474,
-            options => { options.UseHttps(); }); o.ListenLocalhost(29473); });
+        bld.WebHost.ConfigureKestrel(o =>
+        {
+            o.Limits.MaxRequestBodySize = 1073741824;
+            o.ListenLocalhost(29474,
+                options => { options.UseHttps(); });
+            o.ListenLocalhost(29473);
+        });
 
         app = bld.Build();
 
@@ -81,7 +83,7 @@ public class DummyHttpServer : IDisposable
                 .UseAuthentication()
                 .UseAuthorization();
         }
-        
+
         app.UseFastEndpoints();
     }
 
@@ -110,7 +112,7 @@ public class DummyHttpServer : IDisposable
     {
         await app.RunAsync($"http://localhost:{_port}");
     }
-    
+
 
     public async Task StopAsync()
     {
@@ -145,9 +147,7 @@ public class DummyHttpServer : IDisposable
             });
             return jwtToken;
         }
-        else
-        {
-            return null;
-        }
+
+        return null;
     }
 }

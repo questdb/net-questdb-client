@@ -40,8 +40,8 @@ public class IlpEndpoint : Endpoint<Request>
     public static Exception LastError = new();
     public static bool WithTokenAuth = false;
     public static bool WithBasicAuth = false;
-    private static string _username = "admin";
-    private static string _password = "quest";
+    private static readonly string _username = "admin";
+    private static readonly string _password = "quest";
 
     public override void Configure()
     {
@@ -55,7 +55,7 @@ public class IlpEndpoint : Endpoint<Request>
         {
             PreProcessor<BasicAuther<Request>>();
         }
-    
+
         Description(b => b.Accepts<Request>());
     }
 
@@ -73,7 +73,7 @@ public class IlpEndpoint : Endpoint<Request>
             throw;
         }
     }
-    
+
     public class BasicAuther<Request> : IPreProcessor<Request>
     {
         public Task PreProcessAsync(IPreProcessorContext<Request> ctx, CancellationToken ct)
@@ -88,10 +88,9 @@ public class IlpEndpoint : Endpoint<Request>
                     return Task.CompletedTask;
                 }
             }
-            
+
             ctx.HttpContext.Response.SendUnauthorizedAsync(ct);
             return Task.CompletedTask;
         }
     }
 }
-

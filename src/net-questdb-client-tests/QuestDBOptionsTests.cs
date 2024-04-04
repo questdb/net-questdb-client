@@ -101,12 +101,13 @@ public class QuestDBOptionsTests
             Throws.TypeOf<IngressError>().With.Message.Contains("semicolon")
         );
     }
-    
-    
+
+
     [Test]
     public void BindConfigFileToOptions()
     {
-        var fromFileOptions = new ConfigurationBuilder().AddJsonFile("config.json").Build().GetSection("QuestDB").Get<QuestDBOptions>();
+        var fromFileOptions = new ConfigurationBuilder().AddJsonFile("config.json").Build().GetSection("QuestDB")
+            .Get<QuestDBOptions>();
         var defaultOptions = new QuestDBOptions("http::addr=localhost:9000;tls_verify=unsafe_off;");
         Assert.That(fromFileOptions.ToString(), Is.EqualTo(defaultOptions.ToString()));
     }

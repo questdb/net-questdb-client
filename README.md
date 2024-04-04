@@ -1,7 +1,7 @@
   <a href="https://slack.questdb.io">
     <img src="https://slack.questdb.io/badge.svg" alt="QuestDB community Slack channel"/>
   </a>
-  
+
 <div align="center">
   <a href="https://questdb.io/" target="blank"><img alt="QuestDB Logo" src="https://questdb.io/img/questdb-logo-themed.svg" width="305px"/></a>
 </div>
@@ -113,7 +113,7 @@ sender.Table("metric_name")
 await sender.SendAsync();
 ```
 
-#### HTTP Authentication (Token) 
+#### HTTP Authentication (Token)
 
 ```c#
 using var sender = new Sender("https::addr=localhost:9009;tls_verify=unsafe_off;username=admin;token=<bearer token>");
@@ -135,14 +135,13 @@ await sender.SendAsync();
 
 ## Configuration Parameters
 
-These options are set either using a config string, or by initialising QuestDBOptions. 
+These options are set either using a config string, or by initialising QuestDBOptions.
 
 The config string format is:
 
 ```
 {http/https/tcp/tcps}::addr={host}:{port};key1=val1;key2=val2;keyN=valN;
 ```
-
 
 | Name                     | Default                    | Description                                                                                                                                                     |
 |--------------------------|----------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------|
@@ -206,7 +205,8 @@ The config string format is:
 
 ### Does this client perform both read and write operations?
 
-No. This client is for write only. For querying, see the [Query & SQL overview](https://questdb.io/docs/reference/sql/overview/)
+No. This client is for write only. For querying, see
+the [Query & SQL overview](https://questdb.io/docs/reference/sql/overview/)
 
 ### Where do I report issues with the client?
 
@@ -224,7 +224,8 @@ Come visit the [QuestDB community Slack]([https://discuss.elastic.co/c/app-searc
 
 We welcome contributors to the project. Before you begin, a couple notes...
 
-- Prior to opening a pull request, please create an issue to [discuss the scope of your proposal](https://github.com/questdb/c-questdb-client/issues).
+- Prior to opening a pull request, please create an issue
+  to [discuss the scope of your proposal](https://github.com/questdb/c-questdb-client/issues).
 - Please write simple code and concise documentation, when appropriate.
 
 ## License 📗

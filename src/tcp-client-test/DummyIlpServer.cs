@@ -87,7 +87,11 @@ public class DummyIlpServer : IDisposable
                 await sslStream.AuthenticateAsServerAsync(GetCertificate());
             }
 
-            if (_keyId != null) await RunServerAuth(dataStream);
+            if (_keyId != null)
+            {
+                await RunServerAuth(dataStream);
+            }
+
             await SaveData(dataStream, socket);
         }
         catch (SocketException ex)
@@ -127,7 +131,11 @@ public class DummyIlpServer : IDisposable
         Console.WriteLine(signatureRaw);
         var signature = Convert.FromBase64String(Pad(signatureRaw));
 
-        if (_publicKeyX == null || _publicKeyY == null) throw new InvalidOperationException("public key not set");
+        if (_publicKeyX == null || _publicKeyY == null)
+        {
+            throw new InvalidOperationException("public key not set");
+        }
+
         var pubKey1 = FromBase64String(_publicKeyX);
         var pubKey2 = FromBase64String(_publicKeyY);
 
@@ -142,13 +150,20 @@ public class DummyIlpServer : IDisposable
         var ecdsa = SignerUtilities.GetSigner("SHA-256withECDSA");
         ecdsa.Init(false, pubKey);
         ecdsa.BlockUpdate(challenge, 0, challenge.Length);
-        if (!ecdsa.VerifySignature(signature)) connection.Close();
+        if (!ecdsa.VerifySignature(signature))
+        {
+            connection.Close();
+        }
     }
 
     private static string Pad(string text)
     {
         var padding = 3 - (text.Length + 3) % 4;
-        if (padding == 0) return text;
+        if (padding == 0)
+        {
+            return text;
+        }
+
         return text + new string('=', padding);
     }
 
@@ -168,6 +183,7 @@ public class DummyIlpServer : IDisposable
             var n = await connection.ReadAsync(_buffer.AsMemory(len));
             var inBuffer = len + n;
             for (var i = len; i < inBuffer; i++)
+            {
                 if (_buffer[i] == '\n')
                 {
                     if (i + 1 < inBuffer)
@@ -178,6 +194,7 @@ public class DummyIlpServer : IDisposable
 
                     return i;
                 }
+            }
 
             len += n;
         }

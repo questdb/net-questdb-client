@@ -78,7 +78,7 @@ public class JsonSpecTestRunner
                         throw new NotSupportedException("Column type not supported: " + column.type);
                 }
 
-            sender.AtNow();
+            await sender.AtNow();
             await sender.SendAsync();
         }
         catch (Exception? ex)
@@ -145,20 +145,13 @@ public class JsonSpecTestRunner
                         throw new NotSupportedException("Column type not supported: " + column.type);
                 }
 
-            sender.AtNow();
-            try
-            {
-                await sender.SendAsync();
-            }
-            catch (Exception ex)
-            {
-                TestContext.Write(server.GetLastError());
-                throw ex;
-            }
+            await sender.AtNow();
+            await sender.SendAsync();
             
         }
         catch (Exception? ex)
         {
+            TestContext.Write(server.GetLastError());
             if (testCase.result.status == "SUCCESS") throw;
             exception = ex;
         }
@@ -174,7 +167,7 @@ public class JsonSpecTestRunner
         }
         else if (testCase.result.status == "ERROR")
         {
-            Assert.NotNull(exception, "Exception should be thrown");
+            Assert.NotNull(exception, $"Exception should be thrown: {exception}");
             if (exception is NotSupportedException) throw exception;
         }
         else

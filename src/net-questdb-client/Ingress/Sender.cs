@@ -266,10 +266,10 @@ public class Sender : IDisposable
     /// </summary>
     /// <returns></returns>
     /// <exception cref="IngressError">Thrown by <see cref="SendAsync"/></exception>
-    public async Task CommitAsync()
+    public async Task CommitAsync(CancellationToken ct = default)
     {
         CommittingTransaction = true;
-         await SendAsync();
+         await SendAsync(ct);
         
         CommittingTransaction = false;
         Debug.Assert(!_buffer.WithinTransaction);
@@ -397,34 +397,34 @@ public class Sender : IDisposable
     }
     
     /// <inheritdoc cref="Buffer.At(DateTime)" />
-    public Sender At(DateTime value)
+    public async Task<Sender> At(DateTime value, CancellationToken ct = default)
     {
         _buffer.At(value);
-        HandleAutoFlush();
-        return this;
+       await HandleAutoFlush(ct);
+       return this;
     }
 
     /// <inheritdoc cref="Buffer.At(DateTimeOffset)" />
-    public Sender At(DateTimeOffset timestamp)
+    public async Task<Sender> At(DateTimeOffset timestamp, CancellationToken ct = default)
     {
         _buffer.At(timestamp);
-        HandleAutoFlush();
+        await HandleAutoFlush(ct);
         return this;
     }
     
     /// <inheritdoc cref="Buffer.At(DateTimeOffset)" />
-    public Sender At(long timestamp)
+    public async Task<Sender> At(long timestamp, CancellationToken ct = default)
     {
         _buffer.At(timestamp);
-        HandleAutoFlush();
+        await HandleAutoFlush(ct);
         return this;
     }
 
     /// <inheritdoc cref="Buffer.AtNow" />
-    public Sender AtNow()
+    public async Task<Sender> AtNow(CancellationToken ct = default)
     {
         _buffer.AtNow();
-        HandleAutoFlush();
+        await HandleAutoFlush(ct);
         return this;
     }
 
@@ -435,7 +435,7 @@ public class Sender : IDisposable
     /// Auto flush can be configured to flush by row limits, time limits, or buffer size.
     /// 
     /// </remarks>
-    private void HandleAutoFlush()
+    private async Task HandleAutoFlush(CancellationToken ct = default)
     {
         // noop if within transaction
         if (_buffer.WithinTransaction) return;
@@ -444,7 +444,7 @@ public class Sender : IDisposable
             if (Options.auto_flush_rows > 0 && _buffer.RowCount >= Options.auto_flush_rows
                 || Options.auto_flush_interval > TimeSpan.Zero && _intervalTimer.Elapsed >= Options.auto_flush_interval
                 || Options.auto_flush_bytes <= _buffer.Length)
-                Send();
+                await SendAsync(ct);
     }
 
     /// <inheritdoc cref="SendAsync" />
@@ -467,7 +467,7 @@ public class Sender : IDisposable
     /// <returns></returns>
     /// <exception cref="IngressError"></exception>
     /// <exception cref="NotImplementedException"></exception>
-    public async Task SendAsync()
+    public async Task SendAsync(CancellationToken ct = default)
     {    
         GuardExceededMaxBufferSize();
         
@@ -483,7 +483,7 @@ public class Sender : IDisposable
 
         if (Options.IsHttp())
         {
-            var (request, cts) = GenerateRequest();
+            var (request, cts) = GenerateRequest(ct);
             try
             {
                 var response = await _client!.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cts!.Token);
@@ -731,12 +731,12 @@ public class Sender : IDisposable
     ///     Creates a new HTTP request with appropriate encoding and timeout.
     /// </summary>
     /// <returns></returns>
-    private (HttpRequestMessage, CancellationTokenSource?) GenerateRequest()
+    private (HttpRequestMessage, CancellationTokenSource?) GenerateRequest(CancellationToken ct = default)
     {
         var request = new HttpRequestMessage(HttpMethod.Post, IlpEndpoint) { Content = new BufferStreamContent(_buffer) };
         request.Content.Headers.ContentType = new MediaTypeHeaderValue("text/plain") { CharSet = "utf-8" };
         request.Content.Headers.ContentLength = _buffer.Length;
-        var cts = new CancellationTokenSource();
+        var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         cts.CancelAfter(CalculateRequestTimeout());
         return (request, cts);
     }

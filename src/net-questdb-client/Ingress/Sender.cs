@@ -616,7 +616,8 @@ public class Sender : IDisposable
 
         _authenticated = true;
         _buffer.EncodeUtf8(Options.username); // key_id
-        _buffer.SendBuffer[_buffer.Position++] = (byte)'\n';
+
+        _buffer.Put('\n');
         await SendAsync();
 
         var bufferLen = await ReceiveUntil('\n', cancellationToken);
@@ -636,14 +637,16 @@ public class Sender : IDisposable
 
         var ecdsa = SignerUtilities.GetSigner("SHA-256withECDSA");
         ecdsa.Init(true, priKey);
-        ecdsa.BlockUpdate(_buffer.SendBuffer, 0, bufferLen);
+ 
+       
+        ecdsa.BlockUpdate(_buffer._sendBuffer, 0, bufferLen);
         var signature = ecdsa.GenerateSignature();
 
-        Base64.EncodeToUtf8(signature, _buffer.SendBuffer, out _, out _buffer.Position);
-        _buffer.SendBuffer[_buffer.Position++] = (byte)'\n';
+        Base64.EncodeToUtf8(signature, _buffer._sendBuffer, out _, out _buffer._position);
+        _buffer.Put('\n');
 
-        await _dataStream!.WriteAsync(_buffer.SendBuffer, 0, _buffer.Position, cancellationToken);
-        _buffer.Position = 0;
+        await _dataStream!.WriteAsync(_buffer._sendBuffer, 0, _buffer._position, cancellationToken);
+        _buffer.Clear();
     }
 
     /// <summary>
@@ -656,14 +659,14 @@ public class Sender : IDisposable
     private async ValueTask<int> ReceiveUntil(char endChar, CancellationToken cancellationToken)
     {
         var totalReceived = 0;
-        while (totalReceived < _buffer.SendBuffer.Length)
+        while (totalReceived < _buffer._sendBuffer.Length)
         {
-            var received = await _dataStream!.ReadAsync(_buffer.SendBuffer, totalReceived,
-                _buffer.SendBuffer.Length - totalReceived, cancellationToken);
+            var received = await _dataStream!.ReadAsync(_buffer._sendBuffer, totalReceived,
+                _buffer._sendBuffer.Length - totalReceived, cancellationToken);
             if (received > 0)
             {
                 totalReceived += received;
-                if (_buffer.SendBuffer[totalReceived - 1] == endChar) return totalReceived - 1;
+                if (_buffer._sendBuffer[totalReceived - 1] == endChar) return totalReceived - 1;
             }
             else
             {

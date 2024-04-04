@@ -47,15 +47,15 @@ public class Buffer
     private int _lineStartBufferPosition;
     private bool _noFields = true;
     private bool _noSymbols = true;
-    internal int Position;
+    internal int _position;
     private bool _quoted;
-    internal byte[] SendBuffer;
+    internal byte[] _sendBuffer;
     public bool WithinTransaction;
 
     public Buffer(int bufferSize)
     {
-        SendBuffer = new byte[bufferSize];
-        _buffers.Add((SendBuffer, 0));
+        _sendBuffer = new byte[bufferSize];
+        _buffers.Add((_sendBuffer, 0));
     }
 
     /// <summary>
@@ -106,7 +106,7 @@ public class Buffer
         _hasTable = true;
 
         _lineStartBufferIndex = _currentBufferIndex;
-        _lineStartBufferPosition = Position;
+        _lineStartBufferPosition = _position;
 
         EncodeUtf8(name);
         return this;
@@ -271,9 +271,9 @@ public class Buffer
     public void Clear()
     {
         _currentBufferIndex = 0;
-        SendBuffer = _buffers[_currentBufferIndex].Buffer;
+        _sendBuffer = _buffers[_currentBufferIndex].Buffer;
         for (var i = 0; i < _buffers.Count; i++) _buffers[i] = (_buffers[i].Buffer, 0);
-        Position = 0;
+        _position = 0;
         RowCount = 0;
         Length = 0;
         WithinTransaction = false;
@@ -336,9 +336,9 @@ public class Buffer
         if (value < 0) num[--pos] = (byte)'-';
 
         var len = num.Length - pos;
-        if (Position + len >= SendBuffer.Length) NextBuffer();
-        num.Slice(pos, len).CopyTo(SendBuffer.AsSpan(Position));
-        Position += len;
+        if (_position + len >= _sendBuffer.Length) NextBuffer();
+        num.Slice(pos, len).CopyTo(_sendBuffer.AsSpan(_position));
+        _position += len;
         Length += len;
 
         return this;
@@ -359,11 +359,11 @@ public class Buffer
 
     private void PutUtf8(char c)
     {
-        if (Position + 4 >= SendBuffer.Length) NextBuffer();
+        if (_position + 4 >= _sendBuffer.Length) NextBuffer();
 
-        var bytes = SendBuffer.AsSpan(Position);
+        var bytes = _sendBuffer.AsSpan(_position);
         Span<char> chars = stackalloc char[1] { c };
-        Position += Encoding.UTF8.GetBytes(chars, bytes);
+        _position += Encoding.UTF8.GetBytes(chars, bytes);
 
         Length += Encoding.UTF8.GetBytes(chars, bytes);
     }
@@ -402,11 +402,11 @@ public class Buffer
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private Buffer Put(char c)
+    internal Buffer Put(char c)
     {
-        if (Position + 2 > SendBuffer.Length) NextBuffer();
+        if (_position + 2 > _sendBuffer.Length) NextBuffer();
 
-        SendBuffer[Position++] = (byte)c;
+        _sendBuffer[_position++] = (byte)c;
         Length++;
         return this;
     }
@@ -419,20 +419,20 @@ public class Buffer
     /// </remarks>
     private void NextBuffer()
     {
-        _buffers[_currentBufferIndex] = (SendBuffer, Position);
+        _buffers[_currentBufferIndex] = (_sendBuffer, _position);
         _currentBufferIndex++;
 
         if (_buffers.Count <= _currentBufferIndex)
         {
-            SendBuffer = new byte[SendBuffer.Length];
-            _buffers.Add((SendBuffer, 0));
+            _sendBuffer = new byte[_sendBuffer.Length];
+            _buffers.Add((_sendBuffer, 0));
         }
         else
         {
-            SendBuffer = _buffers[_currentBufferIndex].Buffer;
+            _sendBuffer = _buffers[_currentBufferIndex].Buffer;
         }
 
-        Position = 0;
+        _position = 0;
     }
 
     /// <summary>
@@ -480,8 +480,8 @@ public class Buffer
     public void CancelRow()
     {
         _currentBufferIndex = _lineStartBufferIndex;
-        Length -= Position - _lineStartBufferPosition;
-        Position = _lineStartBufferPosition;
+        Length -= _position - _lineStartBufferPosition;
+        _position = _lineStartBufferPosition;
     }
 
     /// <summary>
@@ -602,5 +602,10 @@ public class Buffer
                         $"Bad string {columnName}. Column names can't contain a UTF-8 BOM character, was was found at byte position {i}.");
             }
         }
+    }
+
+    public ReadOnlySpan<byte> GetSendBuffer()
+    {
+        return _sendBuffer;
     }
 }

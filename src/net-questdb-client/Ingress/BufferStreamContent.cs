@@ -22,7 +22,7 @@ public class BufferStreamContent : HttpContent
     {
         for (var i = 0; i <= Buffer._currentBufferIndex; i++)
         {
-            var length = i == Buffer._currentBufferIndex ? Buffer.Position : Buffer._buffers[i].Length;
+            var length = i == Buffer._currentBufferIndex ? Buffer._position : Buffer._buffers[i].Length;
 
             try
             {

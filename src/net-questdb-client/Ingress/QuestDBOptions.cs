@@ -87,7 +87,6 @@ public class QuestDBOptions
         request_timeout = TimeSpan.FromMilliseconds(int.Parse(confStr.request_timeout!));
         retry_timeout = TimeSpan.FromMilliseconds(int.Parse(confStr.retry_timeout!));
         pool_timeout = TimeSpan.FromMilliseconds(int.Parse(confStr.pool_timeout!));
-        pool_limit = int.Parse(confStr.pool_limit!);
 
         tls_verify = Enum.Parse<TlsVerifyType>(confStr.tls_verify!, false);
         // tls_ca = confStr.tls_ca;
@@ -313,11 +312,6 @@ public class QuestDBOptions
     ///     Specifies timeout for <see cref="SocketsHttpHandler.PooledConnectionLifetime"/>.
     /// </summary>
     public TimeSpan pool_timeout { get; set; } = TimeSpan.FromMinutes(2);
-
-    /// <summary>
-    ///     Specifies limit for <see cref="SocketsHttpHandler.MaxConnectionsPerServer"/>.
-    /// </summary>
-    public int pool_limit { get; set; } = 64;
 
     // Extra useful properties
     [JsonIgnore] internal int Port { get; set; } = -1;

@@ -37,7 +37,7 @@ public class BenchConnectionChurnVsServer2
     private readonly int TcpPort = 9009;
     private static HttpClient _client;
 
-    [Params(10000000)] public int rows_per_iteration;
+    [Params(100000)] public int rows_per_iteration;
 
     [Params(5000)] public int batch_size;
 

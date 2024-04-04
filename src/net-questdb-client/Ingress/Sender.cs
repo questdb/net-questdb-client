@@ -107,7 +107,7 @@ public class Sender : IDisposable
             _handler = new SocketsHttpHandler
             {
                 PooledConnectionIdleTimeout = Options.pool_timeout,
-                MaxConnectionsPerServer = Options.pool_limit
+                MaxConnectionsPerServer = 1
             };
             
             if (options.protocol == ProtocolType.https)

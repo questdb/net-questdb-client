@@ -1,3 +1,4 @@
+// ReSharper disable CommentTypo
 /*******************************************************************************
  *     ___                  _   ____  ____
  *    / _ \ _   _  ___  ___| |_|  _ \| __ )
@@ -38,45 +39,38 @@ namespace QuestDB.Ingress;
 public class Buffer : HttpContent, IEnumerable<byte>
 {
     private static readonly long EpochTicks = new DateTime(1970, 1, 1).Ticks;
-    public static int DefaultQuestDbFsFileNameLimit = 127;
-    public readonly List<(byte[] Buffer, int Length)> Buffers = new();
-    public int CurrentBufferIndex;
-    public string CurrentTableName;
-    public bool HasTable;
-    public int LineStartBufferIndex;
-    public int LineStartBufferPosition;
-    public bool NoFields = true;
-    public bool NoSymbols = true;
+    private readonly List<(byte[] Buffer, int Length)> _buffers = new();
+    private int _currentBufferIndex;
+    private string _currentTableName = null!;
+    private bool _hasTable;
+    private int _lineStartBufferIndex;
+    private int _lineStartBufferPosition;
+    private bool _noFields = true;
+    private bool _noSymbols = true;
     public int Position;
-    public bool Quoted;
+    private bool _quoted;
     public byte[] SendBuffer;
     public bool WithinTransaction;
 
     public Buffer(int bufferSize)
     {
         SendBuffer = new byte[bufferSize];
-        Buffers.Add((SendBuffer, 0));
-        QuestDbFsFileNameLimit = DefaultQuestDbFsFileNameLimit;
+        _buffers.Add((SendBuffer, 0));
     }
 
     /// <summary>
     /// The length of the buffered content in bytes.
     /// </summary>
-    public int Length { get; set; }
+    public int Length { get; private set; }
 
     /// <summary>
     /// The number of buffered ILP rows.
     /// </summary>
-    public int RowCount { get; set; }
-
-    /// <summary>
-    ///     Maximum allowed column / table name. Usually set to 127 but can be overwritten in QuestDB server to higher value
-    /// </summary>
-    public int QuestDbFsFileNameLimit { get; set; }
+    public int RowCount { get; private set; }
 
     public IEnumerator<byte> GetEnumerator()
     {
-        foreach (var (buffer, length) in Buffers)
+        foreach (var (buffer, length) in _buffers)
         foreach (var b in buffer[..length])
             yield return b;
     }
@@ -102,7 +96,7 @@ public class Buffer : HttpContent, IEnumerable<byte>
                 "Buffer must be clear before you can start a transaction.");
 
         GuardInvalidTableName(tableName);
-        CurrentTableName = tableName.ToString();
+        _currentTableName = tableName.ToString();
         WithinTransaction = true;
         return this;
     }
@@ -117,18 +111,18 @@ public class Buffer : HttpContent, IEnumerable<byte>
     /// <exception cref="ArgumentException">If table name empty or contains unsupported characters</exception>
     public Buffer Table(ReadOnlySpan<char> name)
     {
-        if (WithinTransaction && name != CurrentTableName)
+        if (WithinTransaction && name != _currentTableName)
             throw new IngressError(ErrorCode.InvalidApiCall,
                 "Transactions can only be for one table.");
 
         GuardTableAlreadySet();
         GuardInvalidTableName(name);
 
-        Quoted = false;
-        HasTable = true;
+        _quoted = false;
+        _hasTable = true;
 
-        LineStartBufferIndex = CurrentBufferIndex;
-        LineStartBufferPosition = Position;
+        _lineStartBufferIndex = _currentBufferIndex;
+        _lineStartBufferPosition = Position;
 
         EncodeUtf8(name);
         return this;
@@ -147,16 +141,16 @@ public class Buffer : HttpContent, IEnumerable<byte>
     /// </exception>
     public Buffer Symbol(ReadOnlySpan<char> symbolName, ReadOnlySpan<char> value)
     {
-        if (WithinTransaction && !HasTable) Table(CurrentTableName);
+        if (WithinTransaction && !_hasTable) Table(_currentTableName);
 
-        if (!HasTable) throw new IngressError(ErrorCode.InvalidApiCall, "Table must be specified first.");
+        if (!_hasTable) throw new IngressError(ErrorCode.InvalidApiCall, "Table must be specified first.");
 
-        if (!NoFields) throw new IngressError(ErrorCode.InvalidApiCall, "Cannot write symbols after fields.");
+        if (!_noFields) throw new IngressError(ErrorCode.InvalidApiCall, "Cannot write symbols after fields.");
 
         GuardInvalidColumnName(symbolName);
 
         Put(',').EncodeUtf8(symbolName).Put('=').EncodeUtf8(value);
-        NoSymbols = false;
+        _noSymbols = false;
         return this;
     }
 
@@ -168,11 +162,11 @@ public class Buffer : HttpContent, IEnumerable<byte>
     /// <returns>Itself</returns>
     public Buffer Column(ReadOnlySpan<char> name, ReadOnlySpan<char> value)
     {
-        if (WithinTransaction && !HasTable) Table(CurrentTableName);
+        if (WithinTransaction && !_hasTable) Table(_currentTableName);
         Column(name).Put('\"');
-        Quoted = true;
+        _quoted = true;
         EncodeUtf8(value);
-        Quoted = false;
+        _quoted = false;
         Put('\"');
         return this;
     }
@@ -185,7 +179,7 @@ public class Buffer : HttpContent, IEnumerable<byte>
     /// <returns>Itself</returns>
     public Buffer Column(ReadOnlySpan<char> name, long value)
     {
-        if (WithinTransaction && !HasTable) Table(CurrentTableName);
+        if (WithinTransaction && !_hasTable) Table(_currentTableName);
         Column(name).Put(value).Put('i');
         return this;
     }
@@ -198,7 +192,7 @@ public class Buffer : HttpContent, IEnumerable<byte>
     /// <returns>Itself</returns>
     public Buffer Column(ReadOnlySpan<char> name, bool value)
     {
-        if (WithinTransaction && !HasTable) Table(CurrentTableName);
+        if (WithinTransaction && !_hasTable) Table(_currentTableName);
         Column(name).Put(value ? 't' : 'f');
         return this;
     }
@@ -211,7 +205,7 @@ public class Buffer : HttpContent, IEnumerable<byte>
     /// <returns>Itself</returns>
     public Buffer Column(ReadOnlySpan<char> name, double value)
     {
-        if (WithinTransaction && !HasTable) Table(CurrentTableName);
+        if (WithinTransaction && !_hasTable) Table(_currentTableName);
         Column(name).Put(value.ToString(CultureInfo.InvariantCulture));
         return this;
     }
@@ -224,7 +218,7 @@ public class Buffer : HttpContent, IEnumerable<byte>
     /// <returns>Itself</returns>
     public Buffer Column(ReadOnlySpan<char> name, DateTime timestamp)
     {
-        if (WithinTransaction && !HasTable) Table(CurrentTableName);
+        if (WithinTransaction && !_hasTable) Table(_currentTableName);
         var epoch = timestamp.Ticks - EpochTicks;
         Column(name).Put(epoch / 10).Put('t');
         return this;
@@ -238,7 +232,7 @@ public class Buffer : HttpContent, IEnumerable<byte>
     /// <returns>Itself</returns>
     public Buffer Column(ReadOnlySpan<char> name, DateTimeOffset timestamp)
     {
-        if (WithinTransaction && !HasTable) Table(CurrentTableName);
+        if (WithinTransaction && !_hasTable) Table(_currentTableName);
         Column(name, timestamp.UtcDateTime);
         return this;
     }
@@ -251,7 +245,7 @@ public class Buffer : HttpContent, IEnumerable<byte>
     {
         GuardTableNotSet();
 
-        if (NoFields && NoSymbols)
+        if (_noFields && _noSymbols)
             throw new IngressError(ErrorCode.InvalidApiCall, "Did not specify any symbols or columns.");
 
         FinishLine();
@@ -292,14 +286,14 @@ public class Buffer : HttpContent, IEnumerable<byte>
     /// </summary>
     public void Clear()
     {
-        CurrentBufferIndex = 0;
-        SendBuffer = Buffers[CurrentBufferIndex].Buffer;
-        for (var i = 0; i < Buffers.Count; i++) Buffers[i] = (Buffers[i].Buffer, 0);
+        _currentBufferIndex = 0;
+        SendBuffer = _buffers[_currentBufferIndex].Buffer;
+        for (var i = 0; i < _buffers.Count; i++) _buffers[i] = (_buffers[i].Buffer, 0);
         Position = 0;
         RowCount = 0;
         Length = 0;
         WithinTransaction = false;
-        CurrentTableName = "";
+        _currentTableName = "";
     }
 
     /// <summary>
@@ -307,8 +301,8 @@ public class Buffer : HttpContent, IEnumerable<byte>
     /// </summary>
     public void TrimExcessBuffers()
     {
-        var removeCount = Buffers.Count - CurrentBufferIndex - 1;
-        if (removeCount > 0) Buffers.RemoveRange(CurrentBufferIndex + 1, removeCount);
+        var removeCount = _buffers.Count - _currentBufferIndex - 1;
+        if (removeCount > 0) _buffers.RemoveRange(_currentBufferIndex + 1, removeCount);
     }
 
     public static byte[] FromBase64String(string encodedPrivateKey)
@@ -320,19 +314,13 @@ public class Buffer : HttpContent, IEnumerable<byte>
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static bool IsEmpty(ReadOnlySpan<char> name)
-    {
-        return name.Length == 0;
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void FinishLine()
     {
         Put('\n');
         RowCount++;
-        HasTable = false;
-        NoFields = true;
-        NoSymbols = true;
+        _hasTable = false;
+        _noFields = true;
+        _noSymbols = true;
     }
 
     private Buffer Column(ReadOnlySpan<char> columnName)
@@ -340,10 +328,10 @@ public class Buffer : HttpContent, IEnumerable<byte>
         GuardTableNotSet();
         GuardInvalidColumnName(columnName);
 
-        if (NoFields)
+        if (_noFields)
         {
             Put(' ');
-            NoFields = false;
+            _noFields = false;
         }
         else
         {
@@ -382,9 +370,8 @@ public class Buffer : HttpContent, IEnumerable<byte>
 
     public Buffer EncodeUtf8(ReadOnlySpan<char> name)
     {
-        for (var i = 0; i < name.Length; i++)
+        foreach (var c in name)
         {
-            var c = name[i];
             if (c < 128)
                 PutSpecial(c);
             else
@@ -412,7 +399,7 @@ public class Buffer : HttpContent, IEnumerable<byte>
             case ' ':
             case ',':
             case '=':
-                if (!Quoted) Put('\\');
+                if (!_quoted) Put('\\');
                 goto default;
             default:
                 Put(c);
@@ -422,7 +409,7 @@ public class Buffer : HttpContent, IEnumerable<byte>
                 Put('\\').Put(c);
                 break;
             case '"':
-                if (Quoted) Put('\\');
+                if (_quoted) Put('\\');
 
                 Put(c);
                 break;
@@ -449,24 +436,24 @@ public class Buffer : HttpContent, IEnumerable<byte>
     }
 
     /// <summary>
-    ///     Swaps to the next buffer in <see cref="Buffers" />.
+    ///     Swaps to the next buffer in <see cref="_buffers" />.
     /// </summary>
     /// <remarks>
     ///     A new <c>byte[]</c> will be allocated if there is not already an overflow buffer.
     /// </remarks>
     private void NextBuffer()
     {
-        Buffers[CurrentBufferIndex] = (SendBuffer, Position);
-        CurrentBufferIndex++;
+        _buffers[_currentBufferIndex] = (SendBuffer, Position);
+        _currentBufferIndex++;
 
-        if (Buffers.Count <= CurrentBufferIndex)
+        if (_buffers.Count <= _currentBufferIndex)
         {
             SendBuffer = new byte[SendBuffer.Length];
-            Buffers.Add((SendBuffer, 0));
+            _buffers.Add((SendBuffer, 0));
         }
         else
         {
-            SendBuffer = Buffers[CurrentBufferIndex].Buffer;
+            SendBuffer = _buffers[_currentBufferIndex].Buffer;
         }
 
         Position = 0;
@@ -488,7 +475,7 @@ public class Buffer : HttpContent, IEnumerable<byte>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void GuardTableAlreadySet()
     {
-        if (HasTable) throw new IngressError(ErrorCode.InvalidApiCall, "Table has already been specified.");
+        if (_hasTable) throw new IngressError(ErrorCode.InvalidApiCall, "Table has already been specified.");
     }
 
     /// <summary>
@@ -507,7 +494,7 @@ public class Buffer : HttpContent, IEnumerable<byte>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void GuardTableNotSet()
     {
-        if (!HasTable) throw new IngressError(ErrorCode.InvalidApiCall, "Table must be specified first.");
+        if (!_hasTable) throw new IngressError(ErrorCode.InvalidApiCall, "Table must be specified first.");
     }
 
     /// <summary>
@@ -516,9 +503,9 @@ public class Buffer : HttpContent, IEnumerable<byte>
     /// <exception cref="InvalidOperationException"></exception>
     public void CancelRow()
     {
-        CurrentBufferIndex = LineStartBufferIndex;
-        Length -= Position - LineStartBufferPosition;
-        Position = LineStartBufferPosition;
+        _currentBufferIndex = _lineStartBufferIndex;
+        Length -= Position - _lineStartBufferPosition;
+        Position = _lineStartBufferPosition;
     }
 
     /// <summary>
@@ -530,14 +517,14 @@ public class Buffer : HttpContent, IEnumerable<byte>
     /// <exception cref="IngressError">When writing to stream fails.</exception>
     protected override async Task SerializeToStreamAsync(Stream stream, TransportContext? context)
     {
-        for (var i = 0; i <= CurrentBufferIndex; i++)
+        for (var i = 0; i <= _currentBufferIndex; i++)
         {
-            var length = i == CurrentBufferIndex ? Position : Buffers[i].Length;
+            var length = i == _currentBufferIndex ? Position : _buffers[i].Length;
 
             try
             {
                 if (length > 0)
-                    await stream.WriteAsync(Buffers[i].Buffer, 0, length);
+                    await stream.WriteAsync(_buffers[i].Buffer, 0, length);
             }
             catch (IOException iox)
             {
@@ -586,7 +573,7 @@ public class Buffer : HttpContent, IEnumerable<byte>
     }
 
     /// <summary>
-    ///     Converts the contents of the <see cref="Buffers" /> to a UTF-16 string, decoding as UTF-8.
+    ///     Converts the contents of the <see cref="_buffers" /> to a UTF-16 string, decoding as UTF-8.
     /// </summary>
     /// <returns></returns>
     public override string ToString()
@@ -595,7 +582,7 @@ public class Buffer : HttpContent, IEnumerable<byte>
     }
 
     /// <summary>
-    ///     Copies the contents of the <see cref="Buffers" /> into a new array.
+    ///     Copies the contents of the <see cref="_buffers" /> into a new array.
     /// </summary>
     /// <returns></returns>
     private byte[] ToArray()
@@ -608,7 +595,7 @@ public class Buffer : HttpContent, IEnumerable<byte>
     /// <summary>
     ///     Guards against invalid table names.
     /// </summary>
-    /// <param name="str"></param>
+    /// <param name="tableName"></param>
     /// <exception cref="IngressError"><see cref="ErrorCode.InvalidName" /> when table name does not meet validation criteria.</exception>
     private static void GuardInvalidTableName(ReadOnlySpan<char> tableName)
     {
@@ -671,7 +658,7 @@ public class Buffer : HttpContent, IEnumerable<byte>
     /// <summary>
     ///     Guards against invalid column names.
     /// </summary>
-    /// <param name="str"></param>
+    /// <param name="columnName"></param>
     /// <exception cref="IngressError"><see cref="ErrorCode.InvalidName" /> when table name does not meet validation criteria.</exception>
     private static void GuardInvalidColumnName(ReadOnlySpan<char> columnName)
     {

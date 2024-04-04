@@ -1,3 +1,4 @@
+// ReSharper disable CommentTypo
 /*******************************************************************************
  *     ___                  _   ____  ____
  *    / _ \ _   _  ___  ___| |_|  _ \| __ )
@@ -23,6 +24,8 @@
  ******************************************************************************/
 
 
+// ReSharper disable InconsistentNaming
+// ReSharper disable IdentifierTypo
 namespace QuestDB.Ingress;
 
 /// <summary>

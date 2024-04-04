@@ -1,3 +1,4 @@
+// ReSharper disable CommentTypo
 /*******************************************************************************
  *     ___                  _   ____  ____
  *    / _ \ _   _  ___  ___| |_|  _ \| __ )
@@ -47,25 +48,27 @@ public class Sender : IDisposable
     // tcp
     private static readonly RemoteCertificateValidationCallback AllowAllCertCallback = (_, _, _, _) => true;
     private bool _authenticated;
-    private Buffer _buffer;
+    private Buffer _buffer = null!;
     
     // http
     private SocketsHttpHandler? _handler;
     private HttpClient? _client;
 
     private Stream? _dataStream;
-    private Stopwatch _intervalTimer;
+    private Stopwatch _intervalTimer = null!;
     private Socket? _underlyingSocket;
 
     // general
-    public QuestDBOptions Options;
+    public QuestDBOptions Options = null!;
 
     public Sender(IConfiguration config)
     {
-        Options = config.GetSection(QuestDBOptions.QuestDB).Get<QuestDBOptions>();
+        var options = config.GetSection(QuestDBOptions.QuestDB).Get<QuestDBOptions>();
+        Options = options ?? throw new IngressError(ErrorCode.ConfigError, "Could not bind configuration.");
         Build(Options);
     }
 
+    // ReSharper disable once MemberCanBePrivate.Global
     public Sender(QuestDBOptions options)
     {
         Build(options);
@@ -74,21 +77,13 @@ public class Sender : IDisposable
     public Sender(string confString) : this(new QuestDBOptions(confString))
     {
     }
-
-    public int QuestDbFsFileNameLimit
-    {
-        get => _buffer.QuestDbFsFileNameLimit;
-        set => _buffer.QuestDbFsFileNameLimit = value;
-    }
-
     public int Length => _buffer.Length;
     
-
     public int RowCount => _buffer.RowCount;
 
     public bool WithinTransaction => _buffer.WithinTransaction;
 
-    private bool committingTransaction { get; set; }
+    private bool CommittingTransaction { get; set; }
 
     /// <summary>
     ///     Closes any underlying sockets.
@@ -137,17 +132,18 @@ public class Sender : IDisposable
 
                             if (options.tls_roots != null)
                             {
-                                chain.ChainPolicy.TrustMode = X509ChainTrustMode.CustomRootTrust;
+                                chain!.ChainPolicy.TrustMode = X509ChainTrustMode.CustomRootTrust;
                                 chain.ChainPolicy.CustomTrustStore.Add(X509Certificate2.CreateFromPemFile(options.tls_roots, options.tls_roots_password));
                             }
                             
-                            return chain.Build(new X509Certificate2(certificate));
+                            return chain!.Build(new X509Certificate2(certificate!));
                         };
    
                 }
 
                 if (options.tls_roots != null)
                 {
+                    _handler.SslOptions.ClientCertificates ??= new X509Certificate2Collection();
                     _handler.SslOptions.ClientCertificates.Add(
                         X509Certificate2.CreateFromPemFile(options.tls_roots, options.tls_roots_password));
                 }
@@ -161,7 +157,7 @@ public class Sender : IDisposable
             _client.BaseAddress = uri.Uri;
             _client.Timeout = Timeout.InfiniteTimeSpan;
 
-            if (Options.username != null && Options.password != null)
+            if (Options is { username: not null, password: not null })
                 _client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Basic",
                     Convert.ToBase64String(Encoding.ASCII.GetBytes($"{Options.username}:{Options.password}")));
             else if (Options.token != null)
@@ -201,7 +197,7 @@ public class Sender : IDisposable
                 
                 var authTimeout = new CancellationTokenSource();
                 authTimeout.CancelAfter(Options.auth_timeout);
-                if (Options.token is not null) AuthenticateAsync(authTimeout.Token).AsTask().Wait(); // todo test auth timeout
+                if (Options.token is not null) AuthenticateAsync(authTimeout.Token).AsTask().Wait(authTimeout.Token); 
             }
             catch
             {
@@ -271,10 +267,10 @@ public class Sender : IDisposable
     /// <exception cref="IngressError">Thrown by <see cref="SendAsync"/></exception>
     public async Task<bool> CommitAsync()
     {
-        committingTransaction = true;
+        CommittingTransaction = true;
         var (_, response) = await SendAsync();
         
-        committingTransaction = false;
+        CommittingTransaction = false;
         Debug.Assert(!_buffer.WithinTransaction);
         // we expect an error to be thrown before here, and response is non-null (since its HTTP).
         return response!.IsSuccessStatusCode;
@@ -471,6 +467,7 @@ public class Sender : IDisposable
     }
 
     /// <inheritdoc cref="SendAsync" />
+    // ReSharper disable once MemberCanBePrivate.Global
     public (HttpRequestMessage?, HttpResponseMessage?) Send()
     {
         return SendAsync().Result;
@@ -491,7 +488,7 @@ public class Sender : IDisposable
     /// <exception cref="NotImplementedException"></exception>
     public async Task<(HttpRequestMessage?, HttpResponseMessage?)> SendAsync()
     {
-        if (WithinTransaction && !committingTransaction)
+        if (WithinTransaction && !CommittingTransaction)
         {
             throw new IngressError(ErrorCode.InvalidApiCall, "Please `commit` to complete your transaction.");
         }
@@ -503,7 +500,7 @@ public class Sender : IDisposable
             var (request, cts) = GenerateRequest();
             try
             {
-                var response = await _client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cts.Token);
+                var response = await _client!.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cts!.Token);
                 return await FinishOrRetryAsync(
                      response, cts
                 );
@@ -529,7 +526,8 @@ public class Sender : IDisposable
     /// </summary>
     /// <param name="code">The <see cref="HttpStatusCode" /></param>
     /// <returns></returns>
-    private bool IsRetriableError(HttpStatusCode code)
+    // ReSharper disable once IdentifierTypo
+    private static bool IsRetriableError(HttpStatusCode code)
     {
         switch (code)
         {
@@ -555,13 +553,13 @@ public class Sender : IDisposable
     ///     Until <see cref="QuestDBOptions.retry_timeout"/> has elapsed, the request will be retried
     ///     with a small jitter.
     /// </remarks>
-    /// <param name="client">The in-use HttpClient.</param>
     /// <param name="response">The response triggering the retry.</param>
     /// <param name="cts">The cancellation token source.</param>
+    /// <param name="retryIntervalMs">The base interval between retries.</param>
     /// <returns></returns>
     /// <exception cref="IngressError"></exception>
     private async Task<(HttpRequestMessage?, HttpResponseMessage?)> FinishOrRetryAsync(HttpResponseMessage response,
-        CancellationTokenSource cts = default, int retryIntervalMs = 10)
+        CancellationTokenSource? cts = default, int retryIntervalMs = 10)
     {
         var lastResponse = response;
 
@@ -577,16 +575,16 @@ public class Sender : IDisposable
 
             while (retryTimer.Elapsed < Options.retry_timeout)
             {
-                var jitter = TimeSpan.FromMilliseconds(Random.Shared.Next(0, retryIntervalMs) - retryIntervalMs / 2);
+                var jitter = TimeSpan.FromMilliseconds(Random.Shared.Next(0, retryIntervalMs) - retryIntervalMs / 2.0);
                 await Task.Delay(retryInterval + jitter);
 
                 var (nextRequest, nextToken) = GenerateRequest();
-                lastResponse = await _client.SendAsync(nextRequest, nextToken.Token);
-                if (!lastResponse!.IsSuccessStatusCode)
+                lastResponse = await _client!.SendAsync(nextRequest, nextToken!.Token);
+                if (!lastResponse.IsSuccessStatusCode)
                 {
                     if (IsRetriableError(lastResponse.StatusCode) && Options.retry_timeout > TimeSpan.Zero)
                     {
-                        cts.Dispose();
+                        cts!.Dispose();
                     }
                 }
             }
@@ -597,19 +595,20 @@ public class Sender : IDisposable
             throw new IngressError(ErrorCode.ServerFlushError, lastResponse.ReasonPhrase);
         }
         
-        cts.Dispose();
+        cts!.Dispose();
         _buffer.Clear();
         _intervalTimer.Restart();
         return (lastResponse.RequestMessage, lastResponse);
     }
 
     /// <summary>
-    ///     Performs Key based Authentication with QuestDB
+    ///      Performs Key based Authentication with QuestDB.
     /// </summary>
-    /// <param name="keyId">Key or User Id</param>
-    /// <param name="encodedPrivateKey">Base64 Url safe encoded Secp256r1 private key or `d` token in JWT key</param>
-    /// <param name="cancellationToken">cancellation token</param>
-    /// <exception cref="InvalidOperationException">Throws InvalidOperationException if already authenticated</exception>
+    /// <remarks>
+    ///     Uses <see cref="QuestDBOptions.username"/> and <see cref="QuestDBOptions.password"/>.
+    /// </remarks>
+    /// <param name="cancellationToken"></param>
+    /// <exception cref="IngressError"></exception> 
     private async ValueTask AuthenticateAsync(CancellationToken cancellationToken = default)
     {
         if (_authenticated) throw new IngressError(ErrorCode.AuthError, "Already authenticated.");
@@ -626,6 +625,7 @@ public class Sender : IDisposable
         var privateKey =
             FromBase64String(Options.token!);
 
+        // ReSharper disable once StringLiteralTypo
         var p = SecNamedCurves.GetByName("secp256r1");
         var parameters = new ECDomainParameters(p.Curve, p.G, p.N, p.H);
         var priKey = new ECPrivateKeyParameters(
@@ -641,7 +641,7 @@ public class Sender : IDisposable
         Base64.EncodeToUtf8(signature, _buffer.SendBuffer, out _, out _buffer.Position);
         _buffer.SendBuffer[_buffer.Position++] = (byte)'\n';
 
-        await _dataStream.WriteAsync(_buffer.SendBuffer, 0, _buffer.Position, cancellationToken);
+        await _dataStream!.WriteAsync(_buffer.SendBuffer, 0, _buffer.Position, cancellationToken);
         _buffer.Position = 0;
     }
 
@@ -657,7 +657,7 @@ public class Sender : IDisposable
         var totalReceived = 0;
         while (totalReceived < _buffer.SendBuffer.Length)
         {
-            var received = await _dataStream.ReadAsync(_buffer.SendBuffer, totalReceived,
+            var received = await _dataStream!.ReadAsync(_buffer.SendBuffer, totalReceived,
                 _buffer.SendBuffer.Length - totalReceived, cancellationToken);
             if (received > 0)
             {
@@ -682,9 +682,10 @@ public class Sender : IDisposable
         return Convert.FromBase64String(urlUnsafe);
     }
 
-    public async Task DisposeAsync()
+    public Task DisposeAsync()
     {
         Dispose();
+        return Task.CompletedTask;
     }
 
     /// <summary>
@@ -716,7 +717,7 @@ public class Sender : IDisposable
     /// <param name="protocol"></param>
     /// <returns></returns>
     [Obsolete]
-    public static async ValueTask<Sender> ConnectAsync(
+    public static ValueTask<Sender> ConnectAsync(
         string host,
         int port,
         int bufferSize = 4096,
@@ -734,14 +735,14 @@ public class Sender : IDisposable
         if (bufferOverflowHandling == BufferOverflowHandling.SendImmediately)
             confString.Append($"auto_flush_bytes={bufferSize};");
 
-        return new Sender(confString.ToString());
+        return ValueTask.FromResult(new Sender(confString.ToString()));
     }
 
     /// <summary>
     ///     Creates a new HTTP request with appropriate encoding and timeout.
     /// </summary>
     /// <returns></returns>
-    private (HttpRequestMessage, CancellationTokenSource) GenerateRequest()
+    private (HttpRequestMessage, CancellationTokenSource?) GenerateRequest()
     {
         var request = new HttpRequestMessage(HttpMethod.Post, IlpEndpoint) { Content = _buffer };
         request.Content.Headers.ContentType = new MediaTypeHeaderValue("text/plain") { CharSet = "utf-8" };
@@ -774,7 +775,7 @@ public class Sender : IDisposable
     {
         try
         {
-            var response = await _client.GetAsync("/ping");
+            var response = await _client!.GetAsync("/ping");
             return response.IsSuccessStatusCode;
         }
         catch

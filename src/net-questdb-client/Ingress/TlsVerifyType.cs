@@ -23,6 +23,7 @@
  ******************************************************************************/
 
 
+// ReSharper disable InconsistentNaming
 namespace QuestDB.Ingress;
 
 /// <summary>

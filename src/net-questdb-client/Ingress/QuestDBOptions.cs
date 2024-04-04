@@ -1,3 +1,4 @@
+// ReSharper disable CommentTypo
 /*******************************************************************************
  *     ___                  _   ____  ____
  *    / _ \ _   _  ___  ___| |_|  _ \| __ )
@@ -27,6 +28,8 @@ using System.Data.Common;
 using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Text.Json.Serialization;
+// ReSharper disable InconsistentNaming
+// ReSharper disable PropertyCanBeMadeInitOnly.Global
 
 namespace QuestDB.Ingress;
 
@@ -49,7 +52,7 @@ public class QuestDBOptions
     {
         protocol = Enum.Parse<ProtocolType>(confStr.protocol!);
 
-        addr = confStr.addr;
+        addr = confStr.addr ?? throw new IngressError(ErrorCode.ConfigError, "Must provide an `addr`.");
 
         if (addr.Contains(':'))
         {
@@ -77,16 +80,17 @@ public class QuestDBOptions
         username = confStr.username;
         password = confStr.password;
         token = confStr.token;
-        token_x = confStr.token_x;
-        token_y = confStr.token_y;
+        // token_x = confStr.token_x;
+        // token_y = confStr.token_y;
 
         request_min_throughput = int.Parse(confStr.request_min_throughput!);
         request_timeout = TimeSpan.FromMilliseconds(int.Parse(confStr.request_timeout!));
         retry_timeout = TimeSpan.FromMilliseconds(int.Parse(confStr.retry_timeout!));
         pool_timeout = TimeSpan.FromMilliseconds(int.Parse(confStr.pool_timeout!));
+        pool_limit = int.Parse(confStr.pool_limit!);
 
         tls_verify = Enum.Parse<TlsVerifyType>(confStr.tls_verify!, false);
-        tls_ca = confStr.tls_ca;
+        // tls_ca = confStr.tls_ca;
         tls_roots = confStr.tls_roots;
         tls_roots_password = confStr.tls_roots_password;
 
@@ -152,7 +156,7 @@ public class QuestDBOptions
     ///     Not in use.
     /// </summary>
     [Obsolete]
-    public string? bind_interface =>
+    public string bind_interface =>
         throw new IngressError(ErrorCode.ConfigError, "Not supported!", new NotImplementedException());
 
     /// <summary>
@@ -317,7 +321,7 @@ public class QuestDBOptions
 
     // Extra useful properties
     [JsonIgnore] internal int Port { get; set; } = -1;
-    [JsonIgnore] internal string Host { get; set; }
+    [JsonIgnore] internal string Host { get; set; } = null!;
 
     internal bool IsHttp()
     {
@@ -359,10 +363,10 @@ public class QuestDBOptions
             
             if (value != null)
             {
-                if (value is TimeSpan)
-                    builder.Add(prop.Name, ((TimeSpan)value).TotalMilliseconds);
+                if (value is TimeSpan span)
+                    builder.Add(prop.Name, span.TotalMilliseconds);
                 else
-                    builder.Add(prop.Name, value!);
+                    builder.Add(prop.Name, value);
             }
         }
 

@@ -3,6 +3,8 @@ using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Text.Json.Serialization;
 using FluentValidation;
+// ReSharper disable InconsistentNaming
+// ReSharper disable UnusedAutoPropertyAccessor.Global
 
 namespace QuestDB.Ingress;
 
@@ -19,8 +21,10 @@ public class ConfStr
             throw new IngressError(ErrorCode.ConfigError, "Config string must end with a semicolon.");
 
         // load conf string
-        var parameters = new DbConnectionStringBuilder();
-        parameters.ConnectionString = splits[1];
+        var parameters = new DbConnectionStringBuilder
+        {
+            ConnectionString = splits[1]
+        };
 
         // load from conf str
         foreach (KeyValuePair<string, object> kvp in parameters)
@@ -45,6 +49,7 @@ public class ConfStr
 
 
     /// <inheritdoc cref="QuestDBOptions.protocol" />
+    // ReSharper disable once MemberInitializerValueIgnored
     public string? protocol { get; set; } = "http";
 
     /// <inheritdoc cref="QuestDBOptions.addr" />
@@ -143,10 +148,7 @@ public class ConfStr
 
             if (value != null)
             {
-                if (value is TimeSpan)
-                    builder.Add(field.Name, ((TimeSpan)value).TotalMilliseconds);
-                else
-                    builder.Add(field.Name, value!);
+                builder.Add(field.Name, value is TimeSpan span ? span.TotalMilliseconds : value);
             }
         }
 
@@ -158,18 +160,19 @@ public class ConfStr
     ///     Any general properties about types i.e valid ranges etc.
     ///     can be verified here.
     /// </summary>
-    public class Validator : AbstractValidator<ConfStr>
+    private class Validator : AbstractValidator<ConfStr>
     {
         public Validator()
         {
             RuleFor(x => x.protocol)
                 .IsEnumName(typeof(ProtocolType))
+                // ReSharper disable once StringLiteralTypo
                 .WithMessage("`protocol` must be one of: http, https, tcp, tcps");
 
             // addr - must be a valid host:port pair or host
             RuleFor(x => x.addr)
-                .Must(x => int.TryParse(x.Split(':')[1], out _))
-                .When(x => x.addr.Contains(':'))
+                .Must(x => int.TryParse(x!.Split(':')[1], out _))
+                .When(x => x!.addr!.Contains(':'))
                 .WithMessage("`addr` must be a valid host:port pairing.");
 
             RuleFor(x => x.auto_flush)
@@ -191,7 +194,7 @@ public class ConfStr
                 .WithMessage("`auto_flush_interval` must be convertible to an int.");
 
             RuleFor(x => x.bind_interface)
-                .Must(x => int.TryParse(x.Split(':')[1], out _))
+                .Must(x => int.TryParse(x!.Split(':')[1], out _))
                 .When(x => x.bind_interface is not null)
                 .WithMessage("`bind_interface` must be a valid host:port pairing.");
 

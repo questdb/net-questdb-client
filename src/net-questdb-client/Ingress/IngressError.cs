@@ -1,3 +1,4 @@
+// ReSharper disable CommentTypo
 /*******************************************************************************
  *     ___                  _   ____  ____
  *    / _ \ _   _  ___  ___| |_|  _ \| __ )
@@ -42,5 +43,6 @@ public class IngressError : Exception
         Code = code;
     }
 
+    // ReSharper disable once UnusedAutoPropertyAccessor.Global
     public ErrorCode Code { get; }
 }

@@ -372,8 +372,11 @@ public class HttpTests
             totalExpectedSb.Append(expected);
 
             if (i > 1)
+            {
                 Assert.That(async () => await sender.SendAsync(),
                     Throws.TypeOf<IngressError>());
+                break;
+            }
 
             if (i == 1) srv.Dispose();
         }

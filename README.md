@@ -31,6 +31,11 @@ See: [https://www.nuget.org/packages/net-questdb-client/](https://www.nuget.org/
 
 ## Usage
 
+`Sender` is single-threaded, and uses a single connection to the database.
+
+If you want to send in parallel, you can use multiple senders and standard async functionality
+to wait in parallel.
+
 ### Basic usage
 
 ```c#
@@ -170,7 +175,6 @@ The config string format is:
 |----------------|----------|---------------------------------------------------------------------------------------|
 | `own_socket`   | `true`   | Specifies whether the internal TCP data stream will own the underlying socket or not. |
 | `pool_timeout` | `120000` | Sets the timeout for HTTP connections in SocketsHttpHandler.                          |
-| `pool_limit`   | `64`     | Sets the number of allowed open connections per host in SocketsHttpHandler.           |
 
 ## Properties and methods
 

@@ -45,19 +45,19 @@ public class Sender : IDisposable
 {
     private const string IlpEndpoint = "write";
 
-    // tcp
+
     private static readonly RemoteCertificateValidationCallback AllowAllCertCallback = (_, _, _, _) => true;
     private bool _authenticated;
     private Buffer _buffer = null!;
     private HttpClient? _client;
     private Stream? _dataStream;
 
-    // http
+
     private SocketsHttpHandler? _handler;
     private Stopwatch _intervalTimer = null!;
     private Socket? _underlyingSocket;
 
-    // general
+
     public QuestDBOptions Options = null!;
 
     public Sender(IConfiguration config)
@@ -75,6 +75,11 @@ public class Sender : IDisposable
 
     public Sender(string confString) : this(new QuestDBOptions(confString))
     {
+    }
+    
+    public static Sender Configure(string confString)
+    {
+        return new Sender(confString);
     }
 
     public int Length => _buffer.Length;

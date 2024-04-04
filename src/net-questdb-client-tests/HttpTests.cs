@@ -39,32 +39,11 @@ public class HttpTests
     public int HttpsPort = 29474;
     
     [Test]
-    public async Task AuthBasicEncoding()
-    {
-        using var server = new DummyHttpServer(withBasicAuth: true);
-        await server.StartAsync(HttpPort);
-        var sender = new TestSender($"https::addr={Host}:{HttpsPort};username=admin;password=quest;tls_verify=unsafe_off;");
-        sender.Table("metrics")
-            .Symbol("tag", "value")
-            .Column("number", 10)
-            .Column("string", "abc")
-            .At(new DateTime(1970, 01, 01, 0, 0, 1));
-
-        await sender.SendAsync();
-
-        var request = sender.request;
-        Assert.That(
-            Convert.FromBase64String(request.Headers.Authorization.Parameter),
-            Is.EqualTo("admin:quest")
-        );
-    }
-    
-    [Test]
     public async Task AuthBasicFailed()
     {
         using var server = new DummyHttpServer(withBasicAuth: true);
         await server.StartAsync(HttpPort);
-        var sender = new TestSender($"https::addr={Host}:{HttpsPort};username=asdasdada;password=asdadad;tls_verify=unsafe_off;");
+        var sender = new Sender($"https::addr={Host}:{HttpsPort};username=asdasdada;password=asdadad;tls_verify=unsafe_off;");
         sender.Table("metrics")
             .Symbol("tag", "value")
             .Column("number", 10)
@@ -72,7 +51,7 @@ public class HttpTests
             .At(new DateTime(1970, 01, 01, 0, 0, 1));
         
         Assert.That(
-            async () => await sender.FlushAsync(),
+            async () => await sender.SendAsync(),
             Throws.TypeOf<IngressError>().With.Message.Contains("Unauthorized")
         );
     }
@@ -82,7 +61,7 @@ public class HttpTests
     {
         using var server = new DummyHttpServer(withBasicAuth: true);
         await server.StartAsync(HttpPort);
-        var sender = new TestSender($"https::addr={Host}:{HttpsPort};username=admin;password=quest;tls_verify=unsafe_off;");
+        var sender = new Sender($"https::addr={Host}:{HttpsPort};username=admin;password=quest;tls_verify=unsafe_off;");
         sender.Table("metrics")
             .Symbol("tag", "value")
             .Column("number", 10)
@@ -90,38 +69,8 @@ public class HttpTests
             .At(new DateTime(1970, 01, 01, 0, 0, 1));
 
         await sender.SendAsync();
-
-        var request = sender.request;
-        Assert.That(
-            Convert.FromBase64String(request.Headers.Authorization.Parameter),
-            Is.EqualTo("admin:quest")
-        );
     }
-    
-    [Test]
-    public async Task AuthTokenEncoding()
-    {
-        using var server = new DummyHttpServer(true);
-        await server.StartAsync(HttpPort);
 
-        var jwt = server.GetJwtToken("admin", "quest");
-        
-        var sender = new TestSender($"http::addr={Host}:{HttpPort};token={jwt};");
-        sender.Table("metrics")
-            .Symbol("tag", "value")
-            .Column("number", 10)
-            .Column("string", "abc")
-            .At(new DateTime(1970, 01, 01, 0, 0, 1));
-
-        await sender.SendAsync();
-
-        var request = sender.request;
-        Assert.That(
-            request.Headers.Authorization.Parameter,
-            Is.EqualTo(jwt)
-        );
-    }
-    
     [Test]
     public async Task AuthTokenFailed()
     {
@@ -140,7 +89,7 @@ public class HttpTests
                 .AtNow();
 
         Assert.That(
-            async () => await sender.FlushAsync(),
+            async () => await sender.SendAsync(),
             Throws.TypeOf<IngressError>().With.Message.Contains("Unauthorized")
         );
     }
@@ -164,7 +113,7 @@ public class HttpTests
                 .Column("num", i)
                 .AtNow();
 
-        await sender.FlushAsync();
+        await sender.SendAsync();
     }
 
 
@@ -173,12 +122,12 @@ public class HttpTests
     {
         using var server = new DummyHttpServer();
         await server.StartAsync(HttpPort);
-        var sender = new TestSender($"http::addr={Host}:{HttpPort};");
+        var sender = new Sender($"http::addr={Host}:{HttpPort};");
         var ts = DateTime.UtcNow;
         sender.Table("name")
             .Column("ts", ts)
             .At(ts);
-        var response = await sender.SendAsync();
+        await sender.SendAsync();
         Console.WriteLine(server.GetReceiveBuffer().ToString());
         await server.StopAsync();
     }
@@ -189,7 +138,7 @@ public class HttpTests
         Assert.That(
             () =>
             {
-                var sender = new TestSender($"http::addr={Host}:{HttpPort};");
+                var sender = new Sender($"http::addr={Host}:{HttpPort};");
                 sender.Table("metric name")
                     .Symbol("t ,a g", "v alu, e");
             },
@@ -203,7 +152,7 @@ public class HttpTests
         Assert.That(
             () =>
             {
-                var sender = new TestSender($"http::addr={Host}:{HttpPort};");
+                var sender = new Sender($"http::addr={Host}:{HttpPort};");
                 sender.Table("metric name")
                     .Column("t a, g", "v alu e");
             },
@@ -216,7 +165,7 @@ public class HttpTests
     {
         using var server = new DummyHttpServer();
         await server.StartAsync(HttpPort);
-        var sender = new TestSender($"http::addr={Host}:{HttpPort};");
+        var sender = new Sender($"http::addr={Host}:{HttpPort};");
         sender.Table("metrics")
             .Symbol("tag", "value")
             .Column("number", 10)
@@ -923,11 +872,12 @@ public class HttpTests
                 .AtNow();
         
         Assert.That(
-            async () => await sender.FlushAsync(),
+            async () => await sender.SendAsync(),
+            
             Throws.TypeOf<IngressError>().With.Message.Contains("commit")
             );
-        
-        Assert.True(await sender.CommitAsync());
+
+        await sender.CommitAsync();
     }
 
     [Test]
@@ -970,7 +920,7 @@ public class HttpTests
     {
         using var srv = new DummyHttpServer();
         await srv.StartAsync(HttpPort);
-        using var sender = new Sender($"http::addr={Host}:{HttpPort};auto_flush=on;auto_flush_interval=500;");
+        using var sender = new Sender($"http::addr={Host}:{HttpPort};auto_flush=on;auto_flush_interval=250;");
         
         for (int i = 0; i < 10; i++)
         {

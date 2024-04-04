@@ -146,13 +146,16 @@ public class JsonSpecTestRunner
                 }
 
             sender.AtNow();
-            var (request, response) = await sender.SendAsync();
-
-            if (!response.IsSuccessStatusCode)
+            try
+            {
+                await sender.SendAsync();
+            }
+            catch (Exception ex)
             {
                 TestContext.Write(server.GetLastError());
-                throw new IngressError(ErrorCode.ServerFlushError, response.ReasonPhrase);
+                throw ex;
             }
+            
         }
         catch (Exception? ex)
         {

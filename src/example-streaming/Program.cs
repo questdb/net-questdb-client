@@ -20,7 +20,7 @@ for (var i = 0; i < rowsToSend; i++)
         .At(DateTime.UtcNow);
 
 // Ensure no pending rows.
-await sender.FlushAsync();
+await sender.SendAsync();
 
 
 timer.Stop();

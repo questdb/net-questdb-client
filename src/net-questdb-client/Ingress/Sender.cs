@@ -256,9 +256,9 @@ public class Sender : IDisposable
     /// Synchronous version of <see cref="CommitAsync"/>
     /// </summary>
     /// <returns></returns>
-    public bool Commit()
+    public void Commit()
     {
-        return CommitAsync().Result;
+        CommitAsync().Wait();
     }
 
     /// <summary>
@@ -266,15 +266,13 @@ public class Sender : IDisposable
     /// </summary>
     /// <returns></returns>
     /// <exception cref="IngressError">Thrown by <see cref="SendAsync"/></exception>
-    public async Task<bool> CommitAsync()
+    public async Task CommitAsync()
     {
         CommittingTransaction = true;
-        var (_, response) = await SendAsync();
+         await SendAsync();
         
         CommittingTransaction = false;
         Debug.Assert(!_buffer.WithinTransaction);
-        // we expect an error to be thrown before here, and response is non-null (since its HTTP).
-        return response!.IsSuccessStatusCode;
     }
  
     /// <inheritdoc cref="Buffer.Table" />
@@ -448,28 +446,12 @@ public class Sender : IDisposable
                 || Options.auto_flush_bytes <= _buffer.Length)
                 Send();
     }
-    
-    /// <summary>
-    ///     Alias for <see cref="SendAsync" /> with empty return value.
-    /// </summary>
-    public void Flush()
-    { 
-        FlushAsync().Wait();
-    }
-
-    /// <summary>
-    ///     Alias for <see cref="SendAsync" /> with empty return value.
-    /// </summary>
-    public async Task FlushAsync()
-    {
-        await SendAsync();
-    }
 
     /// <inheritdoc cref="SendAsync" />
     // ReSharper disable once MemberCanBePrivate.Global
-    public (HttpRequestMessage?, HttpResponseMessage?) Send()
+    public void Send()
     {
-        return SendAsync().Result;
+        SendAsync().Wait();
     }
 
     /// <summary>
@@ -485,7 +467,7 @@ public class Sender : IDisposable
     /// <returns></returns>
     /// <exception cref="IngressError"></exception>
     /// <exception cref="NotImplementedException"></exception>
-    public async Task<(HttpRequestMessage?, HttpResponseMessage?)> SendAsync()
+    public async Task SendAsync()
     {    
         GuardExceededMaxBufferSize();
         
@@ -493,8 +475,11 @@ public class Sender : IDisposable
         {
             throw new IngressError(ErrorCode.InvalidApiCall, "Please `commit` to complete your transaction.");
         }
-        
-        if (_buffer.Length == 0) return (null, null);
+
+        if (_buffer.Length == 0)
+        {
+            return;
+        }
 
         if (Options.IsHttp())
         {
@@ -502,9 +487,10 @@ public class Sender : IDisposable
             try
             {
                 var response = await _client!.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cts!.Token);
-                return await FinishOrRetryAsync(
+                await FinishOrRetryAsync(
                      response, cts
                 );
+                return;
             }
             catch (Exception ex)
             {
@@ -516,7 +502,7 @@ public class Sender : IDisposable
         {
             await new BufferStreamContent(_buffer).WriteToStreamAsync(_dataStream!);
             _buffer.Clear();
-            return (null, null);
+            return;
         }
 
         throw new NotImplementedException();
@@ -559,7 +545,7 @@ public class Sender : IDisposable
     /// <param name="retryIntervalMs">The base interval between retries.</param>
     /// <returns></returns>
     /// <exception cref="IngressError"></exception>
-    private async Task<(HttpRequestMessage?, HttpResponseMessage?)> FinishOrRetryAsync(HttpResponseMessage response,
+    private async Task FinishOrRetryAsync(HttpResponseMessage response,
         CancellationTokenSource? cts = default, int retryIntervalMs = 10)
     {
         var lastResponse = response;
@@ -599,7 +585,6 @@ public class Sender : IDisposable
         cts!.Dispose();
         _buffer.Clear();
         _intervalTimer.Restart();
-        return (lastResponse.RequestMessage, lastResponse);
     }
 
     /// <summary>

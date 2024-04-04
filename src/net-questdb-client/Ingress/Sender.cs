@@ -48,18 +48,17 @@ public class Sender : IDisposable
     // tcp
     private static readonly RemoteCertificateValidationCallback AllowAllCertCallback = (_, _, _, _) => true;
     private bool _authenticated;
-    private Buffer _buffer = null!;
+    private Stream? _dataStream;
+    private Socket? _underlyingSocket;
     
     // http
     private SocketsHttpHandler? _handler;
     private HttpClient? _client;
-
-    private Stream? _dataStream;
     private Stopwatch _intervalTimer = null!;
-    private Socket? _underlyingSocket;
 
     // general
     public QuestDBOptions Options = null!;
+    private Buffer _buffer = null!;
 
     public Sender(IConfiguration config)
     {
@@ -77,6 +76,7 @@ public class Sender : IDisposable
     public Sender(string confString) : this(new QuestDBOptions(confString))
     {
     }
+    
     public int Length => _buffer.Length;
     
     public int RowCount => _buffer.RowCount;

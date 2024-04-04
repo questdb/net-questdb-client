@@ -438,8 +438,6 @@ public class Sender : IDisposable
     /// </remarks>
     private void HandleAutoFlush()
     {
-        GuardExceededMaxBufferSize();
-
         // noop if within transaction
         if (_buffer.WithinTransaction) return;
 
@@ -487,7 +485,9 @@ public class Sender : IDisposable
     /// <exception cref="IngressError"></exception>
     /// <exception cref="NotImplementedException"></exception>
     public async Task<(HttpRequestMessage?, HttpResponseMessage?)> SendAsync()
-    {
+    {    
+        GuardExceededMaxBufferSize();
+        
         if (WithinTransaction && !CommittingTransaction)
         {
             throw new IngressError(ErrorCode.InvalidApiCall, "Please `commit` to complete your transaction.");

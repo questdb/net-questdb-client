@@ -259,6 +259,29 @@ public class HttpTests
 
         Assert.That(srv.GetReceiveBuffer().ToString, Is.EqualTo(totalExpectedSb.ToString()));
     }
+    
+    [Test]
+    public async Task SendLineExceedsBufferLimit()
+    {
+        using var srv = new DummyHttpServer();
+        await srv.StartAsync(HttpPort);
+
+        using var sender =
+            new Sender($"http::addr={Host}:{HttpPort};init_buf_size=1024;max_buf_size=2048;auto_flush=off;");
+        
+        for (var i = 0; i < 500; i++)
+        {
+            sender.Table("table name")
+                .Symbol("t a g", "v alu, e")
+                .Column("number", 10)
+                .Column("db l", 123.12)
+                .Column("string", " -=\"")
+                .Column("при вед", "медвед")
+                .At(new DateTime(1970, 01, 01, 0, 0, 1));
+        }
+
+        Assert.That(async () => await sender.SendAsync(), Throws.TypeOf<IngressError>().With.Message.Contains("maximum buffer size"));
+    }
 
     [Test]
     public async Task SendLineReusesBuffer()

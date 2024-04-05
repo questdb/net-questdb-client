@@ -6,8 +6,10 @@ using System.Security.Authentication;
 using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using Microsoft.Extensions.Options;
+using QuestDB.Ingress.Buffers;
 using QuestDB.Ingress.Enums;
-using QuestDB.Ingress.Misc;
+using QuestDB.Ingress.Utils;
+using Buffer = QuestDB.Ingress.Buffers.Buffer;
 
 
 namespace QuestDB.Ingress.Senders;
@@ -21,9 +23,9 @@ public class HttpSender : ISender
     
     public int Length => _buffer.Length;
     public int RowCount => _buffer.RowCount;
-    public bool WithinTransaction { get; set; }
+    public bool WithinTransaction => _buffer.WithinTransaction;
     public bool CommittingTransaction { get; set; }
-    public DateTime LastFlush { get; set; }
+    public DateTime LastFlush { get; set; } = DateTime.MaxValue;
 
     public HttpSender() {}
 
@@ -37,9 +39,9 @@ public class HttpSender : ISender
     {
     }
 
-    public ISender Configure(string confStr)
+    public ISender Configure(QuestDBOptions options)
     {
-        return new HttpSender() { Options = new QuestDBOptions(confStr)};
+        return new HttpSender() { Options = options };
     }
     
     public ISender Build()
@@ -141,9 +143,15 @@ public class HttpSender : ISender
                + TimeSpan.FromSeconds(_buffer.Length / (double)Options.request_min_throughput);
     }
 
-    /// <inheritdoc cref="QuestDB.Ingress.Sender.ISender.Transaction(ReadOnlySpan&lt;char&gt;)"/>
+    /// <inheritdoc cref="SenderOld.ISender.Transaction(ReadOnlySpan&lt;char&gt;)"/>
     public ISender Transaction(ReadOnlySpan<char> tableName)
     {
+        if (WithinTransaction)
+        {
+            throw new IngressError(ErrorCode.InvalidApiCall,
+                "Cannot start another transaction - only one allowed at a time.");
+        }
+        
         if (Length > 0)
         {
             throw new IngressError(ErrorCode.InvalidApiCall,
@@ -263,6 +271,11 @@ public class HttpSender : ISender
     /// <inheritdoc cref="ISender.SendAsync"/>
     public async Task SendAsync(CancellationToken ct = default)
     {
+        if (WithinTransaction && !CommittingTransaction)
+        {
+            throw new IngressError(ErrorCode.InvalidApiCall, "Please `commit` to complete your transaction.");
+        }
+        
         if (_buffer.Length == 0)
         {
             return;
@@ -371,14 +384,19 @@ public class HttpSender : ISender
         _handler.DisposeNullable();
     }
     
+    public async ValueTask DisposeAsync()
+    {
+        Dispose();
+    }
     
-    /// <inheritdoc cref="QuestDB.Ingress.Sender.ISender.Truncate"/>
+    
+    /// <inheritdoc cref="SenderOld.ISender.Truncate"/>
     public void Truncate()
     {
         _buffer.TrimExcessBuffers();
     }
 
-    /// <inheritdoc cref="QuestDB.Ingress.Sender.ISender.CancelRow"/>
+    /// <inheritdoc cref="SenderOld.ISender.CancelRow"/>
     public void CancelRow()
     {
         _buffer.CancelRow();

@@ -28,9 +28,9 @@ using System.Globalization;
 using System.Runtime.CompilerServices;
 using System.Text;
 using QuestDB.Ingress.Enums;
-using QuestDB.Ingress.Misc;
+using QuestDB.Ingress.Utils;
 
-namespace QuestDB.Ingress;
+namespace QuestDB.Ingress.Buffers;
 
 /// <summary>
 ///     Buffer for building up batches of ILP rows.
@@ -71,7 +71,7 @@ public class Buffer
     /// </summary>
     public int RowCount { get; private set; }
 
-    /// <inheritdoc cref="Sender.Transaction" />
+    /// <inheritdoc cref="SenderOld.Transaction" />
     public Buffer Transaction(ReadOnlySpan<char> tableName)
     {
         if (WithinTransaction)
@@ -586,8 +586,10 @@ public class Buffer
         _currentBufferIndex = _lineStartBufferIndex;
         Length -= _position - _lineStartBufferPosition;
         _position = _lineStartBufferPosition;
+        _hasTable = false;
     }
 
+    
     /// <summary>
     ///     Guards against invalid table names.
     /// </summary>

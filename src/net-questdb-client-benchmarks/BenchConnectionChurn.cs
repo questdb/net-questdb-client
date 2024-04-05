@@ -72,7 +72,7 @@ public class BenchConnectionChurn
     public async Task RandomTableEveryRow()
     {
         var sender =
-            new Sender(
+            new SenderOld(
                 $"http::addr=localhost:{_httpPort};auto_flush=on;auto_flush_rows={BatchSize};pool_limit={ConnectionLimit};");
         
         for (var i = 0; i < RowsPerIteration; i++)

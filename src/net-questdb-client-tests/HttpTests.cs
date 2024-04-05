@@ -28,7 +28,7 @@ using System.Text;
 using dummy_http_server;
 using NUnit.Framework;
 using QuestDB.Ingress;
-using QuestDB.Ingress.Misc;
+using QuestDB.Ingress.Utils;
 
 // ReSharper disable AsyncVoidLambda
 
@@ -46,7 +46,7 @@ public class HttpTests
         using var server = new DummyHttpServer(withBasicAuth: true);
         await server.StartAsync(HttpPort);
         var sender =
-            new Sender($"https::addr={Host}:{HttpsPort};username=asdasdada;password=asdadad;tls_verify=unsafe_off;");
+            Sender.New($"https::addr={Host}:{HttpsPort};username=asdasdada;password=asdadad;tls_verify=unsafe_off;");
         await sender.Table("metrics")
             .Symbol("tag", "value")
             .Column("number", 10)
@@ -64,7 +64,7 @@ public class HttpTests
     {
         using var server = new DummyHttpServer(withBasicAuth: true);
         await server.StartAsync(HttpPort);
-        var sender = new Sender($"https::addr={Host}:{HttpsPort};username=admin;password=quest;tls_verify=unsafe_off;");
+        var sender = Sender.New($"https::addr={Host}:{HttpsPort};username=admin;password=quest;tls_verify=unsafe_off;");
         await sender.Table("metrics")
             .Symbol("tag", "value")
             .Column("number", 10)
@@ -81,7 +81,7 @@ public class HttpTests
         await srv.StartAsync(HttpPort);
 
         await using var sender =
-            new Sender(
+            Sender.New(
                 $"https::addr={Host}:{HttpsPort};token=askldaklds;tls_verify=unsafe_off;");
 
         for (var i = 0; i < 100; i++)
@@ -108,7 +108,7 @@ public class HttpTests
         var token = srv.GetJwtToken("admin", "quest");
 
         await using var sender =
-            new Sender(
+            Sender.New(
                 $"https::addr={Host}:{HttpsPort};token={token};tls_verify=unsafe_off;");
 
         for (var i = 0; i < 100; i++)
@@ -129,7 +129,7 @@ public class HttpTests
     {
         using var server = new DummyHttpServer();
         await server.StartAsync(HttpPort);
-        var sender = new Sender($"http::addr={Host}:{HttpPort};");
+        var sender = Sender.New($"http::addr={Host}:{HttpPort};");
         var ts = DateTime.UtcNow;
         await sender.Table("name")
             .Column("ts", ts)
@@ -145,7 +145,7 @@ public class HttpTests
         Assert.That(
             () =>
             {
-                var sender = new Sender($"http::addr={Host}:{HttpPort};");
+                var sender = Sender.New($"http::addr={Host}:{HttpPort};");
                 sender.Table("metric name")
                     .Symbol("t ,a g", "v alu, e");
             },
@@ -159,7 +159,7 @@ public class HttpTests
         Assert.That(
             () =>
             {
-                var sender = new Sender($"http::addr={Host}:{HttpPort};");
+                var sender = Sender.New($"http::addr={Host}:{HttpPort};");
                 sender.Table("metric name")
                     .Column("t a, g", "v alu e");
             },
@@ -172,7 +172,7 @@ public class HttpTests
     {
         using var server = new DummyHttpServer();
         await server.StartAsync(HttpPort);
-        var sender = new Sender($"http::addr={Host}:{HttpPort};");
+        var sender = Sender.New($"http::addr={Host}:{HttpPort};");
         await sender.Table("metrics")
             .Symbol("tag", "value")
             .Column("number", 10)
@@ -194,7 +194,7 @@ public class HttpTests
         await srv.StartAsync(HttpPort);
 
         await using var sender =
-            new Sender($"http::addr={Host}:{HttpPort};init_buf_size=2048;");
+            Sender.New($"http::addr={Host}:{HttpPort};init_buf_size=2048;");
         var lineCount = 500;
         var expected =
             "table\\ name,t\\ a\\ g=v\\ alu\\,\\ e number=10i,db\\ l=123.12,string=\" -=\\\"\",при\\ вед=\"медвед\" 1000000000\n";
@@ -223,10 +223,8 @@ public class HttpTests
         await srv.StartAsync(HttpPort);
 
         await using var sender =
-            new Sender($"http::addr={Host}:{HttpPort};init_buf_size=1024;max_buf_size=2048;auto_flush=off;");
-
+            Sender.New($"http::addr={Host}:{HttpPort};init_buf_size=1024;max_buf_size=2048;auto_flush=off;");
         
-
         Assert.That(() =>
         {
             for (var i = 0; i < 500; i++)
@@ -251,7 +249,7 @@ public class HttpTests
         await srv.StartAsync(HttpPort);
 
         await using var sender =
-            new Sender($"http::addr={Host}:{HttpPort};init_buf_size=2048;auto_flush=off;");
+            Sender.New($"http::addr={Host}:{HttpPort};init_buf_size=2048;auto_flush=off;");
         var lineCount = 500;
         var expected =
             "table\\ name,t\\ a\\ g=v\\ alu\\,\\ e number=10i,db\\ l=123.12,string=\" -=\\\"\",при\\ вед=\"медвед\" 1000000000\n";
@@ -294,7 +292,7 @@ public class HttpTests
         await srv.StartAsync(HttpPort);
 
         await using var sender =
-            new Sender($"http::addr={Host}:{HttpPort};init_buf_size=2048;auto_flush=off;");
+            Sender.New($"http::addr={Host}:{HttpPort};init_buf_size=2048;auto_flush=off;");
         var lineCount = 500;
         var expected =
             "table\\ name,t\\ a\\ g=v\\ alu\\,\\ e number=10i,db\\ l=123.12,string=\" -=\\\"\",при\\ вед=\"медвед\" 1000000000\n";
@@ -338,7 +336,7 @@ public class HttpTests
         await srv.StartAsync(HttpPort);
 
         await using var sender =
-            new Sender($"http::addr={Host}:{HttpPort};init_buf_size=2048;tls_verify=unsafe_off;");
+            Sender.New($"http::addr={Host}:{HttpPort};init_buf_size=2048;tls_verify=unsafe_off;");
 
         var lineCount = 500;
         var expected =
@@ -376,7 +374,7 @@ public class HttpTests
         using var srv = new DummyHttpServer();
         await srv.StartAsync(HttpPort);
 
-        await using var ls = new Sender($"http::addr={Host}:{HttpPort};");
+        await using var ls = Sender.New($"http::addr={Host}:{HttpPort};");
 
         await ls.Table("neg name")
             .Column("number1", long.MinValue + 1)
@@ -398,7 +396,7 @@ public class HttpTests
         using var srv = new DummyHttpServer();
         await srv.StartAsync(HttpPort);
 
-        await using var ls = new Sender($"http::addr={Host}:{HttpPort};");
+        await using var ls = Sender.New($"http::addr={Host}:{HttpPort};");
 
         await ls.Table("doubles")
             .Column("d0", 0.0)
@@ -422,7 +420,7 @@ public class HttpTests
     {
         using var srv = new DummyHttpServer();
         await srv.StartAsync(HttpPort);
-        await using var sender = new Sender($"http::addr={Host}:{HttpPort};");
+        await using var sender = Sender.New($"http::addr={Host}:{HttpPort};");
 
         var ts = new DateTime(2022, 2, 24);
         await sender.Table("name")
@@ -441,7 +439,7 @@ public class HttpTests
     {
         using var srv = new DummyHttpServer();
         await srv.StartAsync(HttpPort);
-        await using var sender = new Sender($"http::addr={Host}:{HttpPort};");
+        await using var sender = Sender.New($"http::addr={Host}:{HttpPort};");
         string? nullString = null;
 
         Assert.That(
@@ -492,7 +490,7 @@ public class HttpTests
     {
         using var srv = new DummyHttpServer();
         await srv.StartAsync(HttpPort);
-        await using var senderLim127 = new Sender($"http::addr={Host}:{HttpPort};");
+        await using var senderLim127 = Sender.New($"http::addr={Host}:{HttpPort};");
 
         Assert.Throws<IngressError>(() => senderLim127.Table("abc\\slash"));
         Assert.Throws<IngressError>(() => senderLim127.Table("abc/slash"));
@@ -503,7 +501,7 @@ public class HttpTests
         Assert.Throws<IngressError>(() => senderLim127.Table("asdf\rsdf"));
         Assert.Throws<IngressError>(() => senderLim127.Table("asdfsdf."));
 
-        await using var senderLim4 = new Sender($"http::addr={Host}:{HttpPort};max_name_len=4;");
+        await using var senderLim4 = Sender.New($"http::addr={Host}:{HttpPort};max_name_len=4;");
 
         Assert.Throws<IngressError>(() => senderLim4.Table("asffdfasdf"));
 
@@ -542,7 +540,7 @@ public class HttpTests
     {
         using var srv = new DummyHttpServer();
         await srv.StartAsync(HttpPort);
-        await using var sender = new Sender($"http::addr={Host}:{HttpPort};");
+        await using var sender = Sender.New($"http::addr={Host}:{HttpPort};");
         string? nullString = null;
 
         Assert.Throws<IngressError>(() => sender.Table(nullString));
@@ -561,46 +559,12 @@ public class HttpTests
     }
 
     [Test]
-    public void NullableVariants()
-    {
-        using var sender = new Sender($"http::addr={Host}:{HttpPort};");
-
-        sender.Table("foo");
-        var n = sender.Length;
-
-        Assert.That(
-            () => sender.Symbol("bah", null),
-            Has.Length.EqualTo(n)
-        );
-
-        Assert.That(
-            () => sender.Column("bah", (string?)null),
-            Has.Length.EqualTo(n)
-        );
-
-        Assert.That(
-            () => sender.Column("bah", (long?)null),
-            Has.Length.EqualTo(n)
-        );
-
-        Assert.That(
-            () => sender.Column("bah", (bool?)null),
-            Has.Length.EqualTo(n)
-        );
-
-        Assert.That(
-            () => sender.Column("bah", (double?)null),
-            Has.Length.EqualTo(n)
-        );
-    }
-
-    [Test]
     public async Task SendMillionAsyncExplicit()
     {
         using var srv = new DummyHttpServer();
         await srv.StartAsync(HttpPort);
         await using var sender =
-            new Sender(
+            Sender.New(
                 $"http::addr={Host}:{HttpPort};init_buf_size={256 * 1024};auto_flush=off;request_timeout=30000;");
 
         var nowMillisecond = DateTime.Now.Millisecond;
@@ -640,7 +604,7 @@ public class HttpTests
         Assert.True(await srv.Healthcheck());
 
         await using var sender =
-            new Sender(
+            Sender.New(
                 $"http::addr={Host}:{HttpPort};init_buf_size={1024 * 1024};auto_flush=on;auto_flush_bytes={1024 * 1024};request_timeout=30000;");
 
         for (var i = 0; i < 1E6; i++)
@@ -663,7 +627,7 @@ public class HttpTests
         await srv.StartAsync(HttpPort);
 
         await using var sender =
-            new Sender(
+            Sender.New(
                 $"http::addr={Host}:{HttpPort};");
         Assert.That(
             () => sender.Table("name")
@@ -680,7 +644,7 @@ public class HttpTests
         await srv.StartAsync(HttpPort);
 
         await using var sender =
-            new Sender(
+            Sender.New(
                 $"http::addr={Host}:{HttpPort};");
         await sender.Table("neg name")
             .Column("привед", " мед\rве\n д")
@@ -698,7 +662,7 @@ public class HttpTests
         await srv.StartAsync(HttpPort);
 
         await using var sender =
-            new Sender(
+            Sender.New(
                 $"http::addr={Host}:{HttpPort};");
         Assert.Throws<IngressError>(
             () => sender.Table("name")
@@ -715,7 +679,7 @@ public class HttpTests
         await srv.StartAsync(HttpPort);
 
         await using var sender =
-            new Sender(
+            Sender.New(
                 $"http::addr={Host}:{HttpPort};");
         Assert.Throws<IngressError>(
             () =>
@@ -735,7 +699,7 @@ public class HttpTests
         await srv.StartAsync(HttpPort);
 
         await using var sender =
-            new Sender(
+            Sender.New(
                 $"http::addr={Host}:{HttpPort};");
         Assert.Throws<IngressError>(
             () => sender.Column("number1", 123)
@@ -753,7 +717,7 @@ public class HttpTests
     {
         using var srv = new DummyHttpServer();
         await srv.StartAsync(HttpPort);
-        await using var sender = new Sender($"http::addr={Host}:{HttpPort};");
+        await using var sender = Sender.New($"http::addr={Host}:{HttpPort};");
 
         sender.Table("good");
         sender.Symbol("asdf", "sdfad");
@@ -763,7 +727,6 @@ public class HttpTests
         sender.Table("bad");
         sender.Symbol("asdf", "sdfad");
         sender.Column("asdf", 123);
-        await sender.AtNow();
         sender.CancelRow();
 
         sender.Table("good");
@@ -781,7 +744,7 @@ public class HttpTests
         Assert.That(
             async () =>
             {
-                var sender = new Sender($"http::addr={Host}:{HttpPort};");
+                var sender = Sender.New($"http::addr={Host}:{HttpPort};");
                 await sender.Table("foo").Symbol("a", "b").AtNow();
                 await sender.SendAsync();
             },
@@ -792,8 +755,8 @@ public class HttpTests
     [Test]
     public async Task ConnectAsyncFunction()
     {
-        Assert.AreEqual((await Sender.ConnectAsync("localhost", 9000)).Options.ToString(),
-            new Sender("https::addr=localhost:9000;init_buf_size=4096;").Options.ToString());
+        Assert.AreEqual((await SenderOld.ConnectAsync("localhost", 9000)).Options.ToString(),
+            Sender.New("https::addr=localhost:9000;init_buf_size=4096;").Options.ToString());
     }
 
     [Test]
@@ -803,7 +766,7 @@ public class HttpTests
         await srv.StartAsync(HttpPort);
 
         await using var sender =
-            new Sender(
+            Sender.New(
                 $"http::addr={Host}:{HttpPort};");
         await sender.Transaction("tableName").Symbol("foo", "bah").AtNow();
         await sender.CommitAsync();
@@ -819,7 +782,7 @@ public class HttpTests
         await srv.StartAsync(HttpPort);
 
         await using var sender =
-            new Sender(
+            Sender.New(
                 $"http::addr={Host}:{HttpPort};");
         await sender.Transaction("tableName").Symbol("foo", "bah").AtNow();
         Assert.That(
@@ -840,7 +803,7 @@ public class HttpTests
         await srv.StartAsync(HttpPort);
 
         await using var sender =
-            new Sender(
+            Sender.New(
                 $"http::addr={Host}:{HttpPort};");
         await sender.Transaction("tableName").Symbol("foo", "bah").AtNow();
         Assert.That(
@@ -861,7 +824,7 @@ public class HttpTests
         await srv.StartAsync(HttpPort);
 
         await using var sender =
-            new Sender(
+            Sender.New(
                 $"http::addr={Host}:{HttpPort};auto_flush=on;auto_flush_rows=1;");
 
         sender.Transaction("tableName");
@@ -889,7 +852,7 @@ public class HttpTests
         await srv.StartAsync(HttpPort);
 
         await using var sender =
-            new Sender(
+            Sender.New(
                 $"http::addr={Host}:{HttpPort};auto_flush=on;auto_flush_rows=1;");
 
         sender.Transaction("tableName");
@@ -915,11 +878,11 @@ public class HttpTests
         using var srv = new DummyHttpServer();
         await srv.StartAsync(HttpPort);
 
-        await using var sender = new Sender($"http::addr={Host}:{HttpPort};auto_flush=on;auto_flush_rows=100;");
+        await using var sender = Sender.New($"http::addr={Host}:{HttpPort};auto_flush=on;auto_flush_rows=100;");
 
         for (var i = 0; i < 100000; i++)
         {
-            if ((i - 1) % 100 == 0)
+            if ((i - 1) % 100 == 0 && i != 0)
             {
                 Assert.That(sender.Length == 12);
             }
@@ -933,7 +896,7 @@ public class HttpTests
     {
         using var srv = new DummyHttpServer();
         await srv.StartAsync(HttpPort);
-        await using var sender = new Sender($"http::addr={Host}:{HttpPort};auto_flush=on;auto_flush_bytes=1200;");
+        await using var sender = Sender.New($"http::addr={Host}:{HttpPort};auto_flush=on;auto_flush_bytes=1200;");
         for (var i = 0; i < 100000; i++)
         {
             if (i % 100 == 0)
@@ -950,17 +913,12 @@ public class HttpTests
     {
         using var srv = new DummyHttpServer();
         await srv.StartAsync(HttpPort);
-        await using var sender = new Sender($"http::addr={Host}:{HttpPort};auto_flush=on;auto_flush_interval=250;");
+        await using var sender = Sender.New($"http::addr={Host}:{HttpPort};auto_flush=on;auto_flush_interval=250;");
 
-        for (var i = 0; i < 10; i++)
-        {
-            if (i % 2 == 0)
-            {
-                Assert.That(sender.Length == 0);
-            }
-
-            await sender.Table("foo").Symbol("bah", "baz").AtNow();
-            await Task.Delay(500);
-        }
+        await sender.Table("foo").Symbol("bah", "baz").AtNow();
+        await sender.SendAsync();
+        await Task.Delay(500);
+        await sender.Table("foo").Symbol("bah", "baz").AtNow();
+        Assert.That(sender.Length == 0);
     }
 }

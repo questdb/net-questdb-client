@@ -80,7 +80,7 @@ public class BenchInserts
     [Benchmark]
     public async Task BasicInsertsHttp()
     {
-        var sender = new Sender($"http::addr=localhost:{_httpPort};auto_flush=on;auto_flush_rows={BatchSize};");
+        var sender = new SenderOld($"http::addr=localhost:{_httpPort};auto_flush=on;auto_flush_rows={BatchSize};");
 
         for (var i = 0; i < RowsPerIteration; i++)
         {

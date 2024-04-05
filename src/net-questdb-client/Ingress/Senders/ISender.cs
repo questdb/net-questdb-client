@@ -1,12 +1,13 @@
 using System.Net.Http.Headers;
+using Org.BouncyCastle.Crmf;
 using QuestDB.Ingress.Enums;
-using QuestDB.Ingress.Misc;
+using QuestDB.Ingress.Utils;
 
 namespace QuestDB.Ingress.Senders;
 
-public interface ISender : IDisposable
+public interface ISender : IDisposable, IAsyncDisposable
 {
-    public ISender Configure(string? confStr);
+    public ISender Configure(QuestDBOptions options);
 
     public ISender Build();
     public ISender Transaction(ReadOnlySpan<char> tableName) 
@@ -22,7 +23,7 @@ public interface ISender : IDisposable
     public ISender Column(ReadOnlySpan<char> name, bool value);
     public ISender Column(ReadOnlySpan<char> name, double value);
     public ISender Column(ReadOnlySpan<char> name, DateTime value);
-    public ISender Column(ReadOnlySpan<char> name, DateTimeOffset value);
+    public ISender Column(ReadOnlySpan<char> name, DateTimeOffset value) => Column(name, value.UtcDateTime);
     public Task At(DateTime value, CancellationToken ct = default);
     public Task At(DateTimeOffset value, CancellationToken ct = default) => At(value.UtcDateTime, ct);
     public Task At(long value, CancellationToken ct = default);
@@ -31,13 +32,11 @@ public interface ISender : IDisposable
     
     // transport
     public Task SendAsync(CancellationToken ct = default);
-    
-    
     public int Length { get; }
     public int RowCount { get; }
     public bool WithinTransaction { get; }
     public bool CommittingTransaction { get; }
-    public DateTime LastFlush { get; }
+    public DateTime LastFlush { get; } 
     public QuestDBOptions Options { get; }
     
     /// <summary>
@@ -52,10 +51,10 @@ public interface ISender : IDisposable
     
     internal async Task FlushIfNecessary(CancellationToken ct = default)
     {
-        if (Options.auto_flush == AutoFlushType.on && 
-        (Options.auto_flush_rows > 0 && RowCount >= Options.auto_flush_rows 
-         || Options.auto_flush_bytes > 0 && Options.auto_flush_bytes >= Length 
-         ||  Options.auto_flush_interval > TimeSpan.Zero && DateTime.UtcNow - LastFlush >= Options.auto_flush_interval))
+        if (Options.auto_flush == AutoFlushType.on && !WithinTransaction &&
+        ((Options.auto_flush_rows > 0 && RowCount >= Options.auto_flush_rows) 
+         || (Options.auto_flush_bytes > 0 && Length >= Options.auto_flush_bytes)
+         || (Options.auto_flush_interval > TimeSpan.Zero && DateTime.UtcNow - LastFlush >= Options.auto_flush_interval)))
         {
             await SendAsync(ct);
         }

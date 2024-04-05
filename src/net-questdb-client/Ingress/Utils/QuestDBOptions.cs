@@ -34,7 +34,7 @@ using QuestDB.Ingress.Enums;
 // ReSharper disable InconsistentNaming
 // ReSharper disable PropertyCanBeMadeInitOnly.Global
 
-namespace QuestDB.Ingress.Misc;
+namespace QuestDB.Ingress.Utils;
 
 /// <summary>
 ///     Configuration class for the ILP sender.
@@ -42,8 +42,6 @@ namespace QuestDB.Ingress.Misc;
 public class QuestDBOptions
 {
     public const string QuestDB = "QuestDB";
-
-
     private string _addr = "localhost:9000";
     private TimeSpan _authTimeout = TimeSpan.FromMilliseconds(15000);
     private AutoFlushType _autoFlush = AutoFlushType.on;
@@ -57,7 +55,6 @@ public class QuestDBOptions
     private bool _ownSocket = true;
     private string? _password;
     private TimeSpan _poolTimeout = TimeSpan.FromMinutes(2);
-
     private ProtocolType _protocol = ProtocolType.http;
     private int _requestMinThroughput = 102400;
     private TimeSpan _requestTimeout = TimeSpan.FromMilliseconds(10000);
@@ -311,7 +308,7 @@ public class QuestDBOptions
     ///     To account for this, the user can specify the expected data transfer speed.
     ///     This is then used to calculate an appropriate timeout value with the following equation:
     ///     <para />
-    ///     <see cref="HttpClient.Timeout" /> = (<see cref="Buffer.Length" /> /
+    ///     <see cref="HttpClient.Timeout" /> = (<see cref="Buffers.Buffer.Length" /> /
     ///     <see cref="QuestDBOptions.request_min_throughput" />) + <see cref="QuestDBOptions.request_timeout" />
     /// </remarks>
     public int request_min_throughput
@@ -342,7 +339,7 @@ public class QuestDBOptions
     ///     The <see cref="retry_timeout" /> setting specifies the length of time retries can be made.
     ///     Retries are sent multiple times during this period, with some small jitter.
     /// </remarks>
-    /// <seealso cref="Sender.FinishOrRetryAsync" />
+    /// <seealso cref="SenderOld.FinishOrRetryAsync" />
     /// .
     public TimeSpan retry_timeout
     {

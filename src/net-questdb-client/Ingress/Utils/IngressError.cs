@@ -26,7 +26,7 @@
 
 using QuestDB.Ingress.Enums;
 
-namespace QuestDB.Ingress.Misc;
+namespace QuestDB.Ingress.Utils;
 
 /// <summary>
 ///     Custom exception for ILP-related errors.

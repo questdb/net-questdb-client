@@ -13,7 +13,7 @@ internal class Program
     private static async Task Main(string[] args)
     {
         using var sender =
-            new Sender(
+            new SenderOld(
                 "tcps::addr=localhost:9009;tls_verify=unsafe_off;username=admin;token=NgdiOWDoQNUP18WOnb1xkkEG5TzPYMda5SiUOvT1K0U=;");
         // See: https://questdb.io/docs/reference/api/ilp/authenticate
         sender.Table("trades")

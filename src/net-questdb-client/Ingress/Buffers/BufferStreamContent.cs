@@ -1,8 +1,8 @@
 using System.Net;
 using QuestDB.Ingress.Enums;
-using QuestDB.Ingress.Misc;
+using QuestDB.Ingress.Utils;
 
-namespace QuestDB.Ingress;
+namespace QuestDB.Ingress.Buffers;
 
 public class BufferStreamContent : HttpContent
 {

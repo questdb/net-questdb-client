@@ -36,8 +36,7 @@ public class DummyHttpServer : IDisposable
     public static string Username = "admin";
     public static string Password = "quest";
     private int _port = 29743;
-    public WebApplication app;
-    public CancellationToken ct;
+    private readonly WebApplication _app;
 
     public DummyHttpServer(bool withTokenAuth = false, bool withBasicAuth = false)
     {
@@ -72,27 +71,25 @@ public class DummyHttpServer : IDisposable
             o.ListenLocalhost(29473);
         });
 
-        app = bld.Build();
+        _app = bld.Build();
 
-        app.MapHealthChecks("/ping");
-        app.UseDefaultExceptionHandler();
+        _app.MapHealthChecks("/ping");
+        _app.UseDefaultExceptionHandler();
 
         if (withTokenAuth)
         {
-            app
+            _app
                 .UseAuthentication()
                 .UseAuthorization();
         }
 
-        app.UseFastEndpoints();
+        _app.UseFastEndpoints();
     }
-
-    public Task appTask { get; set; }
 
     public void Dispose()
     {
         Clear();
-        app.StopAsync().Wait();
+        _app.StopAsync().Wait();
     }
 
     public void Clear()
@@ -102,21 +99,21 @@ public class DummyHttpServer : IDisposable
         IlpEndpoint.LogMessages.Clear();
     }
 
-    public async Task StartAsync(int port = 29743)
+    public Task StartAsync(int port = 29743)
     {
         _port = port;
-        appTask = app.RunAsync($"http://localhost:{port}");
+        _app.RunAsync($"http://localhost:{port}");
+        return Task.CompletedTask;
     }
 
     public async Task RunAsync()
     {
-        await app.RunAsync($"http://localhost:{_port}");
+        await _app.RunAsync($"http://localhost:{_port}");
     }
-
 
     public async Task StopAsync()
     {
-        await app.StopAsync();
+        await _app.StopAsync();
     }
 
     public StringBuilder GetReceiveBuffer()

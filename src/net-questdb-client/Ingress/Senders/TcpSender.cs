@@ -15,12 +15,11 @@ using ProtocolType = QuestDB.Ingress.Enums.ProtocolType;
 
 namespace QuestDB.Ingress.Senders;
 
-public class TcpSender : ISender
+internal class TcpSender : ISender
 {
-    public QuestDBOptions Options { get; set; }
-    internal Buffer Buffer { get; set; }
-
-    private Socket _underlyingSocket;
+    public QuestDBOptions Options { get; private init; } = null!;
+    private Buffer Buffer { get; set; } = null!;
+    private Socket _underlyingSocket = null!;
     private Stream? _dataStream;
     private static readonly RemoteCertificateValidationCallback AllowAllCertCallback = (_, _, _, _) => true;
     private bool _authenticated;
@@ -30,11 +29,11 @@ public class TcpSender : ISender
     public int RowCount => Buffer.RowCount;
     public bool WithinTransaction => false;
 
-    public DateTime LastFlush { get; set; } = DateTime.MaxValue;
+    public DateTime LastFlush { get; private set; } = DateTime.MaxValue;
 
     public TcpSender() {}
 
-    public TcpSender(QuestDBOptions options)
+    private TcpSender(QuestDBOptions options)
     {
         Options = options;
         Build();
@@ -99,7 +98,7 @@ public class TcpSender : ISender
            throw;
        }
 
-        return this;
+       return this;
     }
     
     /// <summary>
@@ -108,7 +107,7 @@ public class TcpSender : ISender
     /// <remarks>
     ///     Uses <see cref="QuestDBOptions.username" /> and <see cref="QuestDBOptions.password" />.
     /// </remarks>
-    /// <param name="cancellationToken"></param>
+    /// <param name="ct"></param>
     /// <exception cref="IngressError"></exception>
     private async ValueTask AuthenticateAsync(CancellationToken ct = default)
     {
@@ -145,13 +144,13 @@ public class TcpSender : ISender
         ecdsa.Init(true, priKey);
 
 
-        ecdsa.BlockUpdate(Buffer._sendBuffer, 0, bufferLen);
+        ecdsa.BlockUpdate(Buffer.SendBuffer, 0, bufferLen);
         var signature = ecdsa.GenerateSignature();
 
-        Base64.EncodeToUtf8(signature, Buffer._sendBuffer, out _, out Buffer._position);
+        Base64.EncodeToUtf8(signature, Buffer.SendBuffer, out _, out Buffer.Position);
         Buffer.Put('\n');
 
-        await _dataStream!.WriteAsync(Buffer._sendBuffer, 0, Buffer._position, ct);
+        await _dataStream!.WriteAsync(Buffer.SendBuffer, 0, Buffer.Position, ct);
         Buffer.Clear();
     }
     
@@ -165,14 +164,14 @@ public class TcpSender : ISender
     private async ValueTask<int> ReceiveUntil(char endChar, CancellationToken cancellationToken)
     {
         var totalReceived = 0;
-        while (totalReceived < Buffer._sendBuffer.Length)
+        while (totalReceived < Buffer.SendBuffer.Length)
         {
-            var received = await _dataStream!.ReadAsync(Buffer._sendBuffer, totalReceived,
-                Buffer._sendBuffer.Length - totalReceived, cancellationToken);
+            var received = await _dataStream!.ReadAsync(Buffer.SendBuffer, totalReceived,
+                Buffer.SendBuffer.Length - totalReceived, cancellationToken);
             if (received > 0)
             {
                 totalReceived += received;
-                if (Buffer._sendBuffer[totalReceived - 1] == endChar)
+                if (Buffer.SendBuffer[totalReceived - 1] == endChar)
                 {
                     return totalReceived - 1;
                 }
@@ -213,9 +212,10 @@ public class TcpSender : ISender
         _underlyingSocket.DisposeNullable();
     }
     
-    public async ValueTask DisposeAsync()
+    public ValueTask DisposeAsync()
     {
         Dispose();
+        return ValueTask.CompletedTask;
     }
     
     /// <inheritdoc cref="ISender.Table(ReadOnlySpan&lt;char&gt;)"/>

@@ -22,15 +22,15 @@ public class BufferStreamContent : HttpContent
     /// <exception cref="IngressError">When writing to stream fails.</exception>
     protected override async Task SerializeToStreamAsync(Stream stream, TransportContext? context)
     {
-        for (var i = 0; i <= Buffer._currentBufferIndex; i++)
+        for (var i = 0; i <= Buffer.CurrentBufferIndex; i++)
         {
-            var length = i == Buffer._currentBufferIndex ? Buffer._position : Buffer._buffers[i].Length;
+            var length = i == Buffer.CurrentBufferIndex ? Buffer.Position : Buffer.Buffers[i].Length;
 
             try
             {
                 if (length > 0)
                 {
-                    await stream.WriteAsync(Buffer._buffers[i].Buffer, 0, length);
+                    await stream.WriteAsync(Buffer.Buffers[i].Buffer, 0, length);
                 }
             }
             catch (IOException iox)

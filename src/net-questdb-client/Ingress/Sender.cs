@@ -1,6 +1,7 @@
 using QuestDB.Ingress.Enums;
 using QuestDB.Ingress.Senders;
 using QuestDB.Ingress.Utils;
+// ReSharper disable MemberCanBePrivate.Global
 
 namespace QuestDB.Ingress;
 
@@ -10,7 +11,7 @@ public static class Sender
     {
         return Configure(confStr).Build();
     }
-
+    
     public static ISender Configure(string confStr)
     {
         var options = new QuestDBOptions(confStr);
@@ -24,7 +25,6 @@ public static class Sender
             case ProtocolType.tcps:
                 return new TcpSender().Configure(options);
             default:
-
                 throw new NotImplementedException();
         }
     }

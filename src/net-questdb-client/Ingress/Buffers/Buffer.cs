@@ -38,27 +38,27 @@ namespace QuestDB.Ingress.Buffers;
 public class Buffer
 {
     private static readonly long EpochTicks = new DateTime(1970, 1, 1).Ticks;
-    internal readonly List<(byte[] Buffer, int Length)> _buffers = new();
-    internal int _currentBufferIndex;
+    internal readonly List<(byte[] Buffer, int Length)> Buffers = new();
+    internal int CurrentBufferIndex;
     private string _currentTableName = null!;
     private bool _hasTable;
     private int _lineStartBufferIndex;
     private int _lineStartBufferPosition;
     private bool _noFields = true;
     private bool _noSymbols = true;
-    internal int _position;
+    internal int Position;
     private bool _quoted;
-    internal byte[] _sendBuffer;
+    internal byte[] SendBuffer;
     public bool WithinTransaction;
-    private int max_name_len;
-    private int max_buf_size;
+    private readonly int _maxNameLen;
+    private readonly int _maxBufSize;
 
     public Buffer(int bufferSize, int maxNameLen, int maxBufSize)
     {
-        _sendBuffer = new byte[bufferSize];
-        _buffers.Add((_sendBuffer, 0));
-        max_name_len = maxNameLen;
-        max_buf_size = maxBufSize;
+        SendBuffer = new byte[bufferSize];
+        Buffers.Add((SendBuffer, 0));
+        _maxNameLen = maxNameLen;
+        _maxBufSize = maxBufSize;
     }
 
     /// <summary>
@@ -71,7 +71,7 @@ public class Buffer
     /// </summary>
     public int RowCount { get; private set; }
 
-    /// <inheritdoc cref="SenderOld.Transaction" />
+    /// <inheritdoc cref="ISender.Transaction" />
     public Buffer Transaction(ReadOnlySpan<char> tableName)
     {
         if (WithinTransaction)
@@ -115,8 +115,8 @@ public class Buffer
         _quoted = false;
         _hasTable = true;
 
-        _lineStartBufferIndex = _currentBufferIndex;
-        _lineStartBufferPosition = _position;
+        _lineStartBufferIndex = CurrentBufferIndex;
+        _lineStartBufferPosition = Position;
 
         EncodeUtf8(name);
         return this;
@@ -316,14 +316,14 @@ public class Buffer
     /// </summary>
     public void Clear()
     {
-        _currentBufferIndex = 0;
-        _sendBuffer = _buffers[_currentBufferIndex].Buffer;
-        for (var i = 0; i < _buffers.Count; i++)
+        CurrentBufferIndex = 0;
+        SendBuffer = Buffers[CurrentBufferIndex].Buffer;
+        for (var i = 0; i < Buffers.Count; i++)
         {
-            _buffers[i] = (_buffers[i].Buffer, 0);
+            Buffers[i] = (Buffers[i].Buffer, 0);
         }
 
-        _position = 0;
+        Position = 0;
         RowCount = 0;
         Length = 0;
         WithinTransaction = false;
@@ -335,10 +335,10 @@ public class Buffer
     /// </summary>
     public void TrimExcessBuffers()
     {
-        var removeCount = _buffers.Count - _currentBufferIndex - 1;
+        var removeCount = Buffers.Count - CurrentBufferIndex - 1;
         if (removeCount > 0)
         {
-            _buffers.RemoveRange(_currentBufferIndex + 1, removeCount);
+            Buffers.RemoveRange(CurrentBufferIndex + 1, removeCount);
         }
     }
 
@@ -360,10 +360,10 @@ public class Buffer
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void GuardExceededMaxBufferSize()
     {
-        if (Length > max_buf_size)
+        if (Length > _maxBufSize)
         {
             throw new IngressError(ErrorCode.InvalidApiCall,
-                $"Exceeded maximum buffer size. Current: {Length} Maximum: {max_buf_size}");
+                $"Exceeded maximum buffer size. Current: {Length} Maximum: {_maxBufSize}");
         }
     }
 
@@ -410,13 +410,13 @@ public class Buffer
         }
 
         var len = num.Length - pos;
-        if (_position + len >= _sendBuffer.Length)
+        if (Position + len >= SendBuffer.Length)
         {
             NextBuffer();
         }
 
-        num.Slice(pos, len).CopyTo(_sendBuffer.AsSpan(_position));
-        _position += len;
+        num.Slice(pos, len).CopyTo(SendBuffer.AsSpan(Position));
+        Position += len;
         Length += len;
 
         return this;
@@ -441,14 +441,14 @@ public class Buffer
 
     private void PutUtf8(char c)
     {
-        if (_position + 4 >= _sendBuffer.Length)
+        if (Position + 4 >= SendBuffer.Length)
         {
             NextBuffer();
         }
 
-        var bytes = _sendBuffer.AsSpan(_position);
+        var bytes = SendBuffer.AsSpan(Position);
         Span<char> chars = stackalloc char[1] { c };
-        _position += Encoding.UTF8.GetBytes(chars, bytes);
+        Position += Encoding.UTF8.GetBytes(chars, bytes);
 
         Length += Encoding.UTF8.GetBytes(chars, bytes);
     }
@@ -499,38 +499,38 @@ public class Buffer
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal Buffer Put(char c)
     {
-        if (_position + 2 > _sendBuffer.Length)
+        if (Position + 2 > SendBuffer.Length)
         {
             NextBuffer();
         }
 
-        _sendBuffer[_position++] = (byte)c;
+        SendBuffer[Position++] = (byte)c;
         Length++;
         return this;
     }
 
     /// <summary>
-    ///     Swaps to the next buffer in <see cref="_buffers" />.
+    ///     Swaps to the next buffer in <see cref="Buffers" />.
     /// </summary>
     /// <remarks>
     ///     A new <c>byte[]</c> will be allocated if there is not already an overflow buffer.
     /// </remarks>
     private void NextBuffer()
     {
-        _buffers[_currentBufferIndex] = (_sendBuffer, _position);
-        _currentBufferIndex++;
+        Buffers[CurrentBufferIndex] = (SendBuffer, Position);
+        CurrentBufferIndex++;
 
-        if (_buffers.Count <= _currentBufferIndex)
+        if (Buffers.Count <= CurrentBufferIndex)
         {
-            _sendBuffer = new byte[_sendBuffer.Length];
-            _buffers.Add((_sendBuffer, 0));
+            SendBuffer = new byte[SendBuffer.Length];
+            Buffers.Add((SendBuffer, 0));
         }
         else
         {
-            _sendBuffer = _buffers[_currentBufferIndex].Buffer;
+            SendBuffer = Buffers[CurrentBufferIndex].Buffer;
         }
 
-        _position = 0;
+        Position = 0;
     }
 
     /// <summary>
@@ -583,9 +583,9 @@ public class Buffer
     /// <exception cref="InvalidOperationException"></exception>
     public void CancelRow()
     {
-        _currentBufferIndex = _lineStartBufferIndex;
-        Length -= _position - _lineStartBufferPosition;
-        _position = _lineStartBufferPosition;
+        CurrentBufferIndex = _lineStartBufferIndex;
+        Length -= Position - _lineStartBufferPosition;
+        Position = _lineStartBufferPosition;
         _hasTable = false;
     }
 
@@ -719,7 +719,7 @@ public class Buffer
 
     public ReadOnlySpan<byte> GetSendBuffer()
     {
-        return _sendBuffer;
+        return SendBuffer;
     }
     
     /// <summary>
@@ -729,10 +729,10 @@ public class Buffer
     /// <exception cref="IngressError"></exception>
     private void GuardFsFileNameLimit(ReadOnlySpan<char> name)
     {
-        if (Encoding.UTF8.GetBytes(name.ToString()).Length > max_name_len)
+        if (Encoding.UTF8.GetBytes(name.ToString()).Length > _maxNameLen)
         {
             throw new IngressError(ErrorCode.InvalidApiCall,
-                $"Name is too long, must be under {max_name_len} bytes.");
+                $"Name is too long, must be under {_maxNameLen} bytes.");
         }
     }
 }

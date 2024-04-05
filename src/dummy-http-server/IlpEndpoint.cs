@@ -1,3 +1,4 @@
+// ReSharper disable CommentTypo
 /*******************************************************************************
  *     ___                  _   ____  ____
  *    / _ \ _   _  ___  ___| |_|  _ \| __ )
@@ -25,6 +26,8 @@
 
 using System.Text;
 using FastEndpoints;
+// ReSharper disable ClassNeverInstantiated.Global
+#pragma warning disable CS8618 // Non-nullable field must contain a non-null value when exiting constructor. Consider declaring as nullable.
 
 namespace dummy_http_server;
 
@@ -37,11 +40,11 @@ public class IlpEndpoint : Endpoint<Request>
 {
     public static readonly StringBuilder ReceiveBuffer = new();
     public static readonly List<string> LogMessages = new();
-    public static Exception LastError = new();
+    public static Exception? LastError = new();
     public static bool WithTokenAuth = false;
     public static bool WithBasicAuth = false;
-    private static readonly string _username = "admin";
-    private static readonly string _password = "quest";
+    private const string Username = "admin";
+    private const string Password = "quest";
 
     public override void Configure()
     {
@@ -53,7 +56,7 @@ public class IlpEndpoint : Endpoint<Request>
 
         if (WithBasicAuth)
         {
-            PreProcessor<BasicAuther<Request>>();
+            PreProcessor<BasicAuther>();
         }
 
         Description(b => b.Accepts<Request>());
@@ -74,7 +77,8 @@ public class IlpEndpoint : Endpoint<Request>
         }
     }
 
-    public class BasicAuther<Request> : IPreProcessor<Request>
+    // ReSharper disable once IdentifierTypo
+    private class BasicAuther : IPreProcessor<Request>
     {
         public Task PreProcessAsync(IPreProcessorContext<Request> ctx, CancellationToken ct)
         {
@@ -83,7 +87,7 @@ public class IlpEndpoint : Endpoint<Request>
             if (header != null && header.StartsWith("Basic"))
             {
                 var splits = Encoding.ASCII.GetString(Convert.FromBase64String(header.Split(' ')[1])).Split(':');
-                if (splits[0] == _username && splits[1] == _password)
+                if (splits[0] == Username && splits[1] == Password)
                 {
                     return Task.CompletedTask;
                 }

@@ -9,6 +9,4 @@ public static class Extensions
             value.Dispose();
         }
     }
-
-    
 }

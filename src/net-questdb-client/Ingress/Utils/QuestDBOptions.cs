@@ -48,7 +48,7 @@ public class QuestDBOptions
     private int _autoFlushBytes = int.MaxValue;
     private TimeSpan _autoFlushInterval = TimeSpan.FromMilliseconds(1000);
     private int _autoFlushRows = 75000;
-    private DbConnectionStringBuilder _connectionStringBuilder;
+    private DbConnectionStringBuilder _connectionStringBuilder = null!;
     private int _initBufSize = 65536;
     private int _maxBufSize = 104857600;
     private int _maxNameLen = 127;
@@ -76,7 +76,7 @@ public class QuestDBOptions
     {
         ReadConfigStringIntoBuilder(confStr);
         ParseEnumWithDefault(nameof(protocol), "http", out _protocol);
-        ParseStringWithDefault(nameof(addr), "localhost:9000", out _addr);
+        ParseStringWithDefault(nameof(addr), "localhost:9000", out _addr!);
         ParseEnumWithDefault(nameof(auto_flush), "on", out _autoFlush);
         ParseIntWithDefault(nameof(auto_flush_rows), IsHttp() ? "75000" : "600", out _autoFlushRows);
         ParseIntWithDefault(nameof(auto_flush_bytes), int.MaxValue.ToString(), out _autoFlushBytes);
@@ -339,7 +339,7 @@ public class QuestDBOptions
     ///     The <see cref="retry_timeout" /> setting specifies the length of time retries can be made.
     ///     Retries are sent multiple times during this period, with some small jitter.
     /// </remarks>
-    /// <seealso cref="SenderOld.FinishOrRetryAsync" />
+    /// <seealso cref="QuestDB.Ingress.Senders.HttpSender.FinishOrRetryAsync" />
     /// .
     public TimeSpan retry_timeout
     {
@@ -466,7 +466,7 @@ public class QuestDBOptions
         }
     }
 
-    private void ParseStringWithDefault(string name, string defaultValue, out string? field)
+    private void ParseStringWithDefault(string name, string? defaultValue, out string? field)
     {
         field = ReadOptionFromBuilder(name) ?? defaultValue;
     }
@@ -497,9 +497,8 @@ public class QuestDBOptions
 
     private string? ReadOptionFromBuilder(string name)
     {
-        object? retval = null;
-        _connectionStringBuilder.TryGetValue(name, out retval);
-        return (string?)retval;
+        _connectionStringBuilder.TryGetValue(name, out var value);
+        return (string?)value;
     }
 
     internal bool IsHttp()

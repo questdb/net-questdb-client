@@ -24,6 +24,7 @@
  ******************************************************************************/
 
 
+// ReSharper disable InconsistentNaming
 namespace QuestDB.Ingress.Enums;
 
 /// <summary>

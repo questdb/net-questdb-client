@@ -13,22 +13,22 @@ using Buffer = QuestDB.Ingress.Buffers.Buffer;
 
 namespace QuestDB.Ingress.Senders;
 
-public class HttpSender : ISender
+internal class HttpSender : ISender
 {
-    public QuestDBOptions Options { get; set; }
-    private Buffer Buffer { get; set; }
+    public QuestDBOptions Options { get; private init; } = null!;
+    private Buffer Buffer { get; set; } = null!;
     private HttpClient? _client;
     private SocketsHttpHandler? _handler;
     
     public int Length => Buffer.Length;
     public int RowCount => Buffer.RowCount;
     public bool WithinTransaction => Buffer.WithinTransaction;
-    public bool CommittingTransaction { get; set; }
-    public DateTime LastFlush { get; set; } = DateTime.MaxValue;
+    private bool CommittingTransaction { get; set; }
+    public DateTime LastFlush { get; private set; } = DateTime.MaxValue;
 
     public HttpSender() {}
 
-    public HttpSender(QuestDBOptions options)
+    private HttpSender(QuestDBOptions options)
     {
         Options = options;
         Build();
@@ -292,9 +292,10 @@ public class HttpSender : ISender
         _handler.DisposeNullable();
     }
     
-    public async ValueTask DisposeAsync()
+    public ValueTask DisposeAsync()
     {
         Dispose();
+        return ValueTask.CompletedTask;
     }
     
     /// <inheritdoc cref="ISender.Table(ReadOnlySpan&lt;char&gt;)"/>

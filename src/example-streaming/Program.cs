@@ -3,7 +3,7 @@ using QuestDB.Ingress;
 
 var rowsToSend = 1e6;
 
-using var sender = Sender.New("http::addr=localhost:9000;auto_flush=on;auto_flush_rows=75000;");
+await using var sender = Sender.New("http::addr=localhost:9000;auto_flush=on;auto_flush_rows=75000;");
 
 var timer = new Stopwatch();
 timer.Start();

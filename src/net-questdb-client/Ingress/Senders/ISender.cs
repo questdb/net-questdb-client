@@ -1,21 +1,36 @@
-using System.Net.Http.Headers;
-using Org.BouncyCastle.Crmf;
 using QuestDB.Ingress.Enums;
 using QuestDB.Ingress.Utils;
+
 
 namespace QuestDB.Ingress.Senders;
 
 public interface ISender : IDisposable, IAsyncDisposable
 {
+    // Config
     public ISender Configure(QuestDBOptions options);
 
     public ISender Build();
+    
+    // Transaction
     public ISender Transaction(ReadOnlySpan<char> tableName) 
         => throw new IngressError(ErrorCode.InvalidApiCall, $"`{GetType().Name}` does not support transactions.");
     public Task CommitAsync(CancellationToken ct = default) 
         => throw new IngressError(ErrorCode.InvalidApiCall, $"`{GetType().Name}` does not support transactions.");
 
     public void Commit() => CommitAsync().Wait();
+    
+    //Transport
+    public Task SendAsync(CancellationToken ct = default);
+    public void Send() => SendAsync().Wait();
+    
+    
+    public int Length { get; }
+    public int RowCount { get; }
+    public bool WithinTransaction { get; }
+    public DateTime LastFlush { get; } 
+    public QuestDBOptions Options { get; }
+    
+    
     public ISender Table(ReadOnlySpan<char> name);
     public ISender Symbol(ReadOnlySpan<char> name, ReadOnlySpan<char> value);
     public ISender Column(ReadOnlySpan<char> name, ReadOnlySpan<char> value);
@@ -23,32 +38,15 @@ public interface ISender : IDisposable, IAsyncDisposable
     public ISender Column(ReadOnlySpan<char> name, bool value);
     public ISender Column(ReadOnlySpan<char> name, double value);
     public ISender Column(ReadOnlySpan<char> name, DateTime value);
-    public ISender Column(ReadOnlySpan<char> name, DateTimeOffset value) => Column(name, value.UtcDateTime);
+    public ISender Column(ReadOnlySpan<char> name, DateTimeOffset value);
     public Task At(DateTime value, CancellationToken ct = default);
-    public Task At(DateTimeOffset value, CancellationToken ct = default) => At(value.UtcDateTime, ct);
+    public Task At(DateTimeOffset value, CancellationToken ct = default);
     public Task At(long value, CancellationToken ct = default);
     public Task AtNow(CancellationToken ct = default);
-    public void Send() => SendAsync().Wait();
-    
-    // transport
-    public Task SendAsync(CancellationToken ct = default);
-    public int Length { get; }
-    public int RowCount { get; }
-    public bool WithinTransaction { get; }
-    public bool CommittingTransaction { get; }
-    public DateTime LastFlush { get; } 
-    public QuestDBOptions Options { get; }
-    
-    /// <summary>
-    ///     Trims buffer memory.
-    /// </summary>
+
     public void Truncate();
-    
-    /// <summary>
-    ///     Cancel the current row.
-    /// </summary>
+
     public void CancelRow();
-    
     internal async Task FlushIfNecessary(CancellationToken ct = default)
     {
         if (Options.auto_flush == AutoFlushType.on && !WithinTransaction &&

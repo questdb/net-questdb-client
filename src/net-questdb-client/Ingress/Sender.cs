@@ -10,7 +10,7 @@ public static class Sender
     {
         return Configure(confStr).Build();
     }
-    
+
     public static ISender Configure(string confStr)
     {
         var options = new QuestDBOptions(confStr);
@@ -18,12 +18,14 @@ public static class Sender
         switch (options.protocol)
         {
             case ProtocolType.http:
-                case ProtocolType.https:
-                    return new HttpSender().Configure(options);
+            case ProtocolType.https:
+                return new HttpSender().Configure(options);
             case ProtocolType.tcp:
-                case ProtocolType.tcps:
-                    default:
-                    throw new NotImplementedException();
+            case ProtocolType.tcps:
+                return new TcpSender().Configure(options);
+            default:
+
+                throw new NotImplementedException();
         }
     }
 }

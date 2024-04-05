@@ -68,12 +68,12 @@ public class BenchConnectionChurnVsServer
     public async Task HttpRandomTableEveryRow()
     {
         var sender =
-            new SenderOld(
+            Sender.New(
                 $"http::addr=localhost:{_httpPort};auto_flush=on;auto_flush_rows={BatchSize};auto_flush_interval=-1;pool_limit={ConnectionLimit};");
 
         for (var i = 0; i < RowsPerIteration; i++)
         {
-            sender.Table($"random_table_{Random.Shared.NextInt64(0, NumberOfTables - 1)}").Column("number", i)
+            await sender.Table($"random_table_{Random.Shared.NextInt64(0, NumberOfTables - 1)}").Column("number", i)
                 .AtNow();
         }
 
@@ -84,12 +84,12 @@ public class BenchConnectionChurnVsServer
     public async Task TcpRandomTableEveryRow()
     {
         var sender =
-            new SenderOld(
+            Sender.New(
                 $"tcp::addr=localhost:{_tcpPort};auto_flush=on;auto_flush_rows={BatchSize};auto_flush_interval=-1;");
 
         for (var i = 0; i < RowsPerIteration; i++)
         {
-            sender.Table($"random_table_{Random.Shared.NextInt64(0, NumberOfTables - 1)}").Column("number", i)
+            await sender.Table($"random_table_{Random.Shared.NextInt64(0, NumberOfTables - 1)}").Column("number", i)
                 .AtNow();
         }
 

@@ -3,14 +3,14 @@ using QuestDB.Ingress;
 
 var rowsToSend = 1e6;
 
-using var sender = new SenderOld("http::addr=localhost:9000;auto_flush=on;auto_flush_rows=75000;");
+using var sender = Sender.New("http::addr=localhost:9000;auto_flush=on;auto_flush_rows=75000;");
 
 var timer = new Stopwatch();
 timer.Start();
 
 for (var i = 0; i < rowsToSend; i++)
 {
-    sender.Table("trades")
+    await sender.Table("trades")
         .Symbol("pair", "USDGBP")
         .Symbol("type", "buy")
         .Column("traded_price", 0.83)

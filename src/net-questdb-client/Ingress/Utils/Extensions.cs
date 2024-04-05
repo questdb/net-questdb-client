@@ -1,5 +1,3 @@
-using QuestDB.Ingress.Senders;
-
 namespace QuestDB.Ingress.Utils;
 
 public static class Extensions

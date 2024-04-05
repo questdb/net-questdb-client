@@ -5,7 +5,6 @@ using System.Net.Security;
 using System.Security.Authentication;
 using System.Security.Cryptography.X509Certificates;
 using System.Text;
-using Microsoft.Extensions.Options;
 using QuestDB.Ingress.Buffers;
 using QuestDB.Ingress.Enums;
 using QuestDB.Ingress.Utils;
@@ -17,13 +16,13 @@ namespace QuestDB.Ingress.Senders;
 public class HttpSender : ISender
 {
     public QuestDBOptions Options { get; set; }
-    private Buffer _buffer = null!;
+    private Buffer Buffer { get; set; }
     private HttpClient? _client;
     private SocketsHttpHandler? _handler;
     
-    public int Length => _buffer.Length;
-    public int RowCount => _buffer.RowCount;
-    public bool WithinTransaction => _buffer.WithinTransaction;
+    public int Length => Buffer.Length;
+    public int RowCount => Buffer.RowCount;
+    public bool WithinTransaction => Buffer.WithinTransaction;
     public bool CommittingTransaction { get; set; }
     public DateTime LastFlush { get; set; } = DateTime.MaxValue;
 
@@ -46,7 +45,7 @@ public class HttpSender : ISender
     
     public ISender Build()
     {
-       _buffer = new Buffer(Options.init_buf_size, Options.max_name_len, Options.max_buf_size);
+       Buffer = new Buffer(Options.init_buf_size, Options.max_name_len, Options.max_buf_size);
 
         _handler = new SocketsHttpHandler
         {
@@ -120,9 +119,9 @@ public class HttpSender : ISender
     private (HttpRequestMessage, CancellationTokenSource?) GenerateRequest(CancellationToken ct = default)
     {
         var request = new HttpRequestMessage(HttpMethod.Post, "/write")
-            { Content = new BufferStreamContent(_buffer) };
+            { Content = new BufferStreamContent(Buffer) };
         request.Content.Headers.ContentType = new MediaTypeHeaderValue("text/plain") { CharSet = "utf-8" };
-        request.Content.Headers.ContentLength = _buffer.Length;
+        request.Content.Headers.ContentLength = Buffer.Length;
         var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         cts.CancelAfter(CalculateRequestTimeout());
         return (request, cts);
@@ -140,10 +139,10 @@ public class HttpSender : ISender
     private TimeSpan CalculateRequestTimeout()
     {
         return Options.request_timeout
-               + TimeSpan.FromSeconds(_buffer.Length / (double)Options.request_min_throughput);
+               + TimeSpan.FromSeconds(Buffer.Length / (double)Options.request_min_throughput);
     }
 
-    /// <inheritdoc cref="SenderOld.ISender.Transaction(ReadOnlySpan&lt;char&gt;)"/>
+    /// <inheritdoc cref="ISender.Transaction(ReadOnlySpan&lt;char&gt;)"/>
     public ISender Transaction(ReadOnlySpan<char> tableName)
     {
         if (WithinTransaction)
@@ -158,7 +157,7 @@ public class HttpSender : ISender
                 "Buffer must be clear before you can start a transaction.");
         }
 
-        _buffer.Transaction(tableName);
+        Buffer.Transaction(tableName);
         return this;
     }
 
@@ -175,97 +174,7 @@ public class HttpSender : ISender
         await SendAsync(ct);
 
         CommittingTransaction = false;
-        Debug.Assert(!_buffer.WithinTransaction);
-    }
-
-    /// <inheritdoc cref="ISender.Table(ReadOnlySpan&lt;char&gt;)"/>
-    public ISender Table(ReadOnlySpan<char> name)
-    {
-        _buffer.Table(name);
-        return this;
-    }
-   
-    /// <inheritdoc cref="ISender.Symbol(ReadOnlySpan&lt;char&gt;, ReadOnlySpan&lt;char&gt;)"/>
-    public ISender Symbol(ReadOnlySpan<char> name, ReadOnlySpan<char> value)
-    {
-        _buffer.Symbol(name, value);
-        return this;
-    }
-
-    /// <inheritdoc cref="ISender.Column(ReadOnlySpan&lt;char&gt;, ReadOnlySpan&lt;char&gt;)"/>
-    public ISender Column(ReadOnlySpan<char> name, ReadOnlySpan<char> value)
-    {
-        _buffer.Column(name, value);
-        return this;
-    }
-
-    /// <inheritdoc cref="ISender.Column(ReadOnlySpan&lt;char&gt;, long)"/>
-    public ISender Column(ReadOnlySpan<char> name, long value)
-    {
-        _buffer.Column(name, value);
-        return this;
-    }
-
-    /// <inheritdoc cref="ISender.Column(ReadOnlySpan&lt;char&gt;, bool)"/>
-    public ISender Column(ReadOnlySpan<char> name, bool value)
-    {
-        _buffer.Column(name, value);
-        return this;
-    }
-
-    /// <inheritdoc cref="ISender.Column(ReadOnlySpan&lt;char&gt;, double)"/>
-    public ISender Column(ReadOnlySpan<char> name, double value)
-    {
-        _buffer.Column(name, value);
-        return this;
-    }
-
-    /// <inheritdoc cref="ISender.Column(ReadOnlySpan&lt;char&gt;, DateTime)"/>
-    public ISender Column(ReadOnlySpan<char> name, DateTime value)
-    {
-        _buffer.Column(name, value);
-        return this;
-    }
-
-    /// <inheritdoc cref="ISender.Column(ReadOnlySpan&lt;char&gt;, DateTimeOffset)"/>
-    public ISender Column(ReadOnlySpan<char> name, DateTimeOffset value)
-    {
-        _buffer.Column(name, value);
-        return this;
-    }
-
-    /// <inheritdoc cref="ISender.At(DateTime, CancellationToken)"/>
-    public async Task At(DateTime value, CancellationToken ct = default)
-    {
-        _buffer.At(value); 
-        await (this as ISender).FlushIfNecessary(ct);
-    }
-        
-    /// <inheritdoc cref="ISender.At(DateTimeOffset, CancellationToken)"/>
-    public async Task At(DateTimeOffset value, CancellationToken ct = default)
-    {
-        _buffer.At(value);
-        await (this as ISender).FlushIfNecessary(ct);
-    }
-    
-    /// <inheritdoc cref="ISender.At(long, CancellationToken)"/>
-    public async Task At(long value, CancellationToken ct = default)
-    {
-        _buffer.At(value);
-        await (this as ISender).FlushIfNecessary(ct);
-    }
-        
-    /// <inheritdoc cref="ISender.AtNow"/>
-    public async Task AtNow(CancellationToken ct)
-    {
-        _buffer.AtNow();
-        await (this as ISender).FlushIfNecessary(ct);
-    }
-    
-    /// <inheritdoc cref="ISender.Send"/>
-    public void Send()
-    {
-        SendAsync().Wait();
+        Debug.Assert(!Buffer.WithinTransaction);
     }
         
     /// <inheritdoc cref="ISender.SendAsync"/>
@@ -276,7 +185,7 @@ public class HttpSender : ISender
             throw new IngressError(ErrorCode.InvalidApiCall, "Please `commit` to complete your transaction.");
         }
         
-        if (_buffer.Length == 0)
+        if (Buffer.Length == 0)
         {
             return;
         }
@@ -288,7 +197,6 @@ public class HttpSender : ISender
             await FinishOrRetryAsync(
                 response, cts
             );
-            return;
         }
         catch (Exception ex)
         {
@@ -374,7 +282,7 @@ public class HttpSender : ISender
 
         LastFlush = (lastResponse.Headers.Date ?? DateTimeOffset.UtcNow).UtcDateTime;
         cts!.Dispose();
-        _buffer.Clear();
+        Buffer.Clear();
     }
 
     
@@ -389,16 +297,97 @@ public class HttpSender : ISender
         Dispose();
     }
     
-    
-    /// <inheritdoc cref="SenderOld.ISender.Truncate"/>
-    public void Truncate()
+    /// <inheritdoc cref="ISender.Table(ReadOnlySpan&lt;char&gt;)"/>
+    public ISender Table(ReadOnlySpan<char> name)
     {
-        _buffer.TrimExcessBuffers();
+        Buffer.Table(name);
+        return this;
+    }
+   
+    /// <inheritdoc cref="ISender.Symbol(ReadOnlySpan&lt;char&gt;, ReadOnlySpan&lt;char&gt;)"/>
+    public ISender Symbol(ReadOnlySpan<char> name, ReadOnlySpan<char> value)
+    {
+        Buffer.Symbol(name, value);
+        return this;
     }
 
-    /// <inheritdoc cref="SenderOld.ISender.CancelRow"/>
+    /// <inheritdoc cref="ISender.Column(ReadOnlySpan&lt;char&gt;, ReadOnlySpan&lt;char&gt;)"/>
+    public ISender Column(ReadOnlySpan<char> name, ReadOnlySpan<char> value)
+    {
+        Buffer.Column(name, value);
+        return this;
+    }
+
+    /// <inheritdoc cref="ISender.Column(ReadOnlySpan&lt;char&gt;, long)"/>
+    public ISender Column(ReadOnlySpan<char> name, long value)
+    {
+        Buffer.Column(name, value);
+        return this;
+    }
+
+    /// <inheritdoc cref="ISender.Column(ReadOnlySpan&lt;char&gt;, bool)"/>
+    public ISender Column(ReadOnlySpan<char> name, bool value)
+    {
+        Buffer.Column(name, value);
+        return this;
+    }
+
+    /// <inheritdoc cref="ISender.Column(ReadOnlySpan&lt;char&gt;, double)"/>
+    public ISender Column(ReadOnlySpan<char> name, double value)
+    {
+        Buffer.Column(name, value);
+        return this;
+    }
+
+    /// <inheritdoc cref="ISender.Column(ReadOnlySpan&lt;char&gt;, DateTime)"/>
+    public ISender Column(ReadOnlySpan<char> name, DateTime value)
+    {
+        Buffer.Column(name, value);
+        return this;
+    }
+
+    /// <inheritdoc cref="ISender.Column(ReadOnlySpan&lt;char&gt;, DateTimeOffset)"/>
+    public ISender Column(ReadOnlySpan<char> name, DateTimeOffset value)
+    {
+        Buffer.Column(name, value);
+        return this;
+    }
+
+    /// <inheritdoc cref="ISender.At(DateTime, CancellationToken)"/>
+    public async Task At(DateTime value, CancellationToken ct = default)
+    {
+        Buffer.At(value); 
+        await (this as ISender).FlushIfNecessary(ct);
+    }
+        
+    /// <inheritdoc cref="ISender.At(DateTimeOffset, CancellationToken)"/>
+    public async Task At(DateTimeOffset value, CancellationToken ct = default)
+    {
+        Buffer.At(value);
+        await (this as ISender).FlushIfNecessary(ct);
+    }
+    
+    /// <inheritdoc cref="ISender.At(long, CancellationToken)"/>
+    public async Task At(long value, CancellationToken ct = default)
+    {
+        Buffer.At(value);
+        await (this as ISender).FlushIfNecessary(ct);
+    }
+        
+    /// <inheritdoc cref="ISender.AtNow"/>
+    public async Task AtNow(CancellationToken ct = default)
+    {
+        Buffer.AtNow();
+        await (this as ISender).FlushIfNecessary(ct);
+    }
+    
+    public void Truncate()
+    {
+        Buffer.TrimExcessBuffers();
+    }
+    
     public void CancelRow()
     {
-        _buffer.CancelRow();
+        Buffer.CancelRow();
     }
 }

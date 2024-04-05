@@ -751,14 +751,7 @@ public class HttpTests
             Throws.TypeOf<IngressError>().With.Message.Contains("refused")
         );
     }
-
-    [Test]
-    public async Task ConnectAsyncFunction()
-    {
-        Assert.AreEqual((await SenderOld.ConnectAsync("localhost", 9000)).Options.ToString(),
-            Sender.New("https::addr=localhost:9000;init_buf_size=4096;").Options.ToString());
-    }
-
+    
     [Test]
     public async Task BasicTransaction()
     {
@@ -878,7 +871,7 @@ public class HttpTests
         using var srv = new DummyHttpServer();
         await srv.StartAsync(HttpPort);
 
-        await using var sender = Sender.New($"http::addr={Host}:{HttpPort};auto_flush=on;auto_flush_rows=100;");
+        await using var sender = Sender.New($"http::addr={Host}:{HttpPort};auto_flush=on;auto_flush_rows=100;auto_flush_interval=-1;auto_flush_bytes=-1;");
 
         for (var i = 0; i < 100000; i++)
         {
@@ -896,7 +889,7 @@ public class HttpTests
     {
         using var srv = new DummyHttpServer();
         await srv.StartAsync(HttpPort);
-        await using var sender = Sender.New($"http::addr={Host}:{HttpPort};auto_flush=on;auto_flush_bytes=1200;");
+        await using var sender = Sender.New($"http::addr={Host}:{HttpPort};auto_flush=on;auto_flush_bytes=1200;auto_flush_interval=-1;auto_flush_rows=-1;");
         for (var i = 0; i < 100000; i++)
         {
             if (i % 100 == 0)
@@ -913,7 +906,7 @@ public class HttpTests
     {
         using var srv = new DummyHttpServer();
         await srv.StartAsync(HttpPort);
-        await using var sender = Sender.New($"http::addr={Host}:{HttpPort};auto_flush=on;auto_flush_interval=250;");
+        await using var sender = Sender.New($"http::addr={Host}:{HttpPort};auto_flush=on;auto_flush_interval=250;auto_flush_rows=-1;auto_flush_bytes=-1;");
 
         await sender.Table("foo").Symbol("bah", "baz").AtNow();
         await sender.SendAsync();

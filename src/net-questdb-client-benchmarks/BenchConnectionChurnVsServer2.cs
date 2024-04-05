@@ -68,7 +68,7 @@ public class BenchConnectionChurnVsServer2
     public async Task HttpRandomTableEveryRow()
     {
         var sender =
-            new SenderOld(
+           Sender.New(
                 $"http::addr=localhost:{_httpPort};auto_flush=on;auto_flush_rows={BatchSize};auto_flush_interval=-1;pool_limit={ConnectionLimit};");
 
         for (var i = 0; i < RowsPerIteration; i++)
@@ -84,7 +84,7 @@ public class BenchConnectionChurnVsServer2
     public async Task TcpRandomTableEveryRow()
     {
         var sender =
-            new SenderOld(
+            Sender.New(
                 $"tcp::addr=localhost:{_tcpPort};auto_flush=on;auto_flush_rows={BatchSize};auto_flush_interval=-1;");
 
         for (var i = 0; i < RowsPerIteration; i++)

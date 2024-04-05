@@ -27,4 +27,8 @@
         <PackageReference Include="System.Net.Http" Version="4.3.4"/>
     </ItemGroup>
 
+    <ItemGroup>
+      <Folder Include="Ingress\Contracts\" />
+    </ItemGroup>
+
 </Project>

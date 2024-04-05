@@ -24,25 +24,46 @@
  ******************************************************************************/
 
 
-namespace QuestDB.Ingress;
+namespace QuestDB.Ingress.Enums;
 
 /// <summary>
-///     Custom exception for ILP-related errors.
+///     Standard error codes for QuestDB ILP clients.
 /// </summary>
-public class IngressError : Exception
+public enum ErrorCode
 {
-    public IngressError(ErrorCode code, string? message)
-        : base($"{code.ToString()} : {message}")
-    {
-        Code = code;
-    }
+    /// The host, port, or interface was incorrect.
+    CouldNotResolveAddr,
 
-    public IngressError(ErrorCode code, string? message, Exception inner)
-        : base($"{code.ToString()} : {message}", inner)
-    {
-        Code = code;
-    }
+    /// Called methods in the wrong order. E.g. `symbol` after `column`.
+    InvalidApiCall,
 
-    // ReSharper disable once UnusedAutoPropertyAccessor.Global
-    public ErrorCode Code { get; }
+    /// A network error connecting or flushing data out.
+    SocketError,
+
+    /// The string or symbol field is not encoded in valid UTF-8.
+    /// 
+    /// *This error is reserved for the
+    /// [C and C++ API](https://github.com/questdb/c-questdb-client/).*
+    InvalidUtf8,
+
+    /// The table name or column name contains bad characters.
+    InvalidName,
+
+    /// The supplied timestamp is invalid.
+    InvalidTimestamp,
+
+    /// Error during the authentication process.
+    AuthError,
+
+    /// Error during TLS handshake.
+    TlsError,
+
+    /// The server does not support ILP-over-HTTP.
+    HttpNotSupported,
+
+    /// Error sent back from the server during flush.
+    ServerFlushError,
+
+    /// Bad configuration.
+    ConfigError
 }

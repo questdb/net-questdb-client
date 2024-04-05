@@ -27,6 +27,8 @@
 using System.Globalization;
 using System.Runtime.CompilerServices;
 using System.Text;
+using QuestDB.Ingress.Enums;
+using QuestDB.Ingress.Misc;
 
 namespace QuestDB.Ingress;
 
@@ -48,11 +50,15 @@ public class Buffer
     private bool _quoted;
     internal byte[] _sendBuffer;
     public bool WithinTransaction;
+    private int max_name_len;
+    private int max_buf_size;
 
-    public Buffer(int bufferSize)
+    public Buffer(int bufferSize, int maxNameLen, int maxBufSize)
     {
         _sendBuffer = new byte[bufferSize];
         _buffers.Add((_sendBuffer, 0));
+        max_name_len = maxNameLen;
+        max_buf_size = maxBufSize;
     }
 
     /// <summary>
@@ -96,6 +102,7 @@ public class Buffer
     /// <exception cref="ArgumentException">If table name empty or contains unsupported characters</exception>
     public Buffer Table(ReadOnlySpan<char> name)
     {
+        GuardFsFileNameLimit(name);
         if (WithinTransaction && name != _currentTableName)
         {
             throw new IngressError(ErrorCode.InvalidApiCall,
@@ -128,6 +135,7 @@ public class Buffer
     /// </exception>
     public Buffer Symbol(ReadOnlySpan<char> symbolName, ReadOnlySpan<char> value)
     {
+        GuardFsFileNameLimit(symbolName);
         if (WithinTransaction && !_hasTable)
         {
             Table(_currentTableName);
@@ -342,10 +350,26 @@ public class Buffer
         _hasTable = false;
         _noFields = true;
         _noSymbols = true;
+        GuardExceededMaxBufferSize();
+    }
+    
+    /// <summary>
+    ///     Throws <see cref="IngressError" /> if we have exceeded the specified limit for buffer size.
+    /// </summary>
+    /// <exception cref="IngressError"></exception>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private void GuardExceededMaxBufferSize()
+    {
+        if (Length > max_buf_size)
+        {
+            throw new IngressError(ErrorCode.InvalidApiCall,
+                $"Exceeded maximum buffer size. Current: {Length} Maximum: {max_buf_size}");
+        }
     }
 
     private Buffer Column(ReadOnlySpan<char> columnName)
     {
+        GuardFsFileNameLimit(columnName);
         GuardTableNotSet();
         GuardInvalidColumnName(columnName);
 
@@ -694,5 +718,19 @@ public class Buffer
     public ReadOnlySpan<byte> GetSendBuffer()
     {
         return _sendBuffer;
+    }
+    
+    /// <summary>
+    ///     Check that the file name is not too long.
+    /// </summary>
+    /// <param name="name"></param>
+    /// <exception cref="IngressError"></exception>
+    private void GuardFsFileNameLimit(ReadOnlySpan<char> name)
+    {
+        if (Encoding.UTF8.GetBytes(name.ToString()).Length > max_name_len)
+        {
+            throw new IngressError(ErrorCode.InvalidApiCall,
+                $"Name is too long, must be under {max_name_len} bytes.");
+        }
     }
 }

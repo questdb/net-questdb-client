@@ -24,18 +24,15 @@
  ******************************************************************************/
 
 
-// ReSharper disable InconsistentNaming
-// ReSharper disable IdentifierTypo
-
-namespace QuestDB.Ingress;
+namespace QuestDB.Ingress.Legacy;
 
 /// <summary>
-///     Enum for protocol type.
+///     Deprecated TLS selection class.
 /// </summary>
-public enum ProtocolType
+[Obsolete]
+public enum TlsMode
 {
-    tcp,
-    tcps,
-    http,
-    https
+    Enable,
+    AllowAnyServerCertificate,
+    Disable
 }

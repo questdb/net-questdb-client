@@ -35,6 +35,8 @@ using Org.BouncyCastle.Crypto.Parameters;
 using Org.BouncyCastle.Math;
 using Org.BouncyCastle.Security;
 using QuestDB.Ingress;
+using QuestDB.Ingress.Enums;
+using QuestDB.Ingress.Legacy;
 
 namespace tcp_client_test;
 

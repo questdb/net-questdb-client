@@ -29,11 +29,12 @@ using System.Data.Common;
 using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Text.Json.Serialization;
+using QuestDB.Ingress.Enums;
 
 // ReSharper disable InconsistentNaming
 // ReSharper disable PropertyCanBeMadeInitOnly.Global
 
-namespace QuestDB.Ingress;
+namespace QuestDB.Ingress.Misc;
 
 /// <summary>
 ///     Configuration class for the ILP sender.

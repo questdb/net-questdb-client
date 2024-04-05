@@ -24,14 +24,27 @@
  ******************************************************************************/
 
 
-namespace QuestDB.Ingress;
+using QuestDB.Ingress.Enums;
+
+namespace QuestDB.Ingress.Misc;
 
 /// <summary>
-///     Enum for auto_flush
-///     Defaults to 'on'.
+///     Custom exception for ILP-related errors.
 /// </summary>
-public enum AutoFlushType
+public class IngressError : Exception
 {
-    off,
-    on
+    public IngressError(ErrorCode code, string? message)
+        : base($"{code.ToString()} : {message}")
+    {
+        Code = code;
+    }
+
+    public IngressError(ErrorCode code, string? message, Exception inner)
+        : base($"{code.ToString()} : {message}", inner)
+    {
+        Code = code;
+    }
+
+    // ReSharper disable once UnusedAutoPropertyAccessor.Global
+    public ErrorCode Code { get; }
 }

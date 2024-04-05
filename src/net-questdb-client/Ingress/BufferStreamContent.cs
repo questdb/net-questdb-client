@@ -1,4 +1,6 @@
 using System.Net;
+using QuestDB.Ingress.Enums;
+using QuestDB.Ingress.Misc;
 
 namespace QuestDB.Ingress;
 

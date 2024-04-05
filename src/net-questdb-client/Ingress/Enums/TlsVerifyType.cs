@@ -1,4 +1,3 @@
-// ReSharper disable CommentTypo
 /*******************************************************************************
  *     ___                  _   ____  ____
  *    / _ \ _   _  ___  ___| |_|  _ \| __ )
@@ -24,15 +23,16 @@
  ******************************************************************************/
 
 
-namespace QuestDB.Ingress;
+// ReSharper disable InconsistentNaming
+
+namespace QuestDB.Ingress.Enums;
 
 /// <summary>
-///     Deprecated TLS selection class.
+///     Enum for tls_verify.
+///     Defaults to 'on'.
 /// </summary>
-[Obsolete]
-public enum TlsMode
+public enum TlsVerifyType
 {
-    Enable,
-    AllowAnyServerCertificate,
-    Disable
+    unsafe_off,
+    on
 }

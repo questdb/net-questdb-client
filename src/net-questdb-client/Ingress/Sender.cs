@@ -38,6 +38,10 @@ using Org.BouncyCastle.Asn1.Sec;
 using Org.BouncyCastle.Crypto.Parameters;
 using Org.BouncyCastle.Math;
 using Org.BouncyCastle.Security;
+using QuestDB.Ingress.Enums;
+using QuestDB.Ingress.Legacy;
+using QuestDB.Ingress.Misc;
+using ProtocolType = QuestDB.Ingress.Enums.ProtocolType;
 
 namespace QuestDB.Ingress;
 
@@ -121,7 +125,7 @@ public class Sender : IDisposable
     {
         Options = options;
         _intervalTimer = new Stopwatch();
-        _buffer = new Buffer(Options.init_buf_size);
+        _buffer = new Buffer(Options.init_buf_size, Options.max_name_len, Options.max_buf_size);
 
         if (options.IsHttp())
         {

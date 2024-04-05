@@ -28,6 +28,7 @@ using System.Text;
 using dummy_http_server;
 using NUnit.Framework;
 using QuestDB.Ingress;
+using QuestDB.Ingress.Misc;
 
 // ReSharper disable AsyncVoidLambda
 
@@ -224,19 +225,23 @@ public class HttpTests
         await using var sender =
             new Sender($"http::addr={Host}:{HttpPort};init_buf_size=1024;max_buf_size=2048;auto_flush=off;");
 
-        for (var i = 0; i < 500; i++)
-        {
-            await sender.Table("table name")
-                .Symbol("t a g", "v alu, e")
-                .Column("number", 10)
-                .Column("db l", 123.12)
-                .Column("string", " -=\"")
-                .Column("при вед", "медвед")
-                .At(new DateTime(1970, 01, 01, 0, 0, 1));
-        }
+        
 
-        Assert.That(async () => await sender.SendAsync(),
-            Throws.TypeOf<IngressError>().With.Message.Contains("maximum buffer size"));
+        Assert.That(() =>
+        {
+            for (var i = 0; i < 500; i++)
+            {
+                sender.Table("table name")
+                    .Symbol("t a g", "v alu, e")
+                    .Column("number", 10)
+                    .Column("db l", 123.12)
+                    .Column("string", " -=\"")
+                    .Column("при вед", "медвед")
+                    .At(new DateTime(1970, 01, 01, 0, 0, 1))
+                    .Wait();
+            }
+        },
+        Throws.Exception.With.Message.Contains("maximum buffer size"));
     }
 
     [Test]

@@ -23,14 +23,15 @@
  *
  ******************************************************************************/
 
-namespace QuestDB.Ingress;
+
+namespace QuestDB.Ingress.Enums;
 
 /// <summary>
-///     Deprecated enum. Always used in Extend mode in favour of new `auto_flush` functionality.
+///     Enum for auto_flush
+///     Defaults to 'on'.
 /// </summary>
-[Obsolete]
-public enum BufferOverflowHandling
+public enum AutoFlushType
 {
-    SendImmediately,
-    Extend
+    off,
+    on
 }

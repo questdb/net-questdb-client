@@ -26,6 +26,7 @@
 using Microsoft.Extensions.Configuration;
 using NUnit.Framework;
 using QuestDB.Ingress;
+using QuestDB.Ingress.Misc;
 
 namespace net_questdb_client_tests;
 

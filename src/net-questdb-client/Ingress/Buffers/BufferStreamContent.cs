@@ -4,6 +4,9 @@ using QuestDB.Ingress.Utils;
 
 namespace QuestDB.Ingress.Buffers;
 
+/// <summary>
+///     An adapter for <see cref="Buffer"/> that allows it to be sent in HTTP requests.
+/// </summary>
 public class BufferStreamContent : HttpContent
 {
     public BufferStreamContent(Buffer buffer)

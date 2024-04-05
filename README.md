@@ -39,7 +39,7 @@ to wait in parallel.
 ### Basic usage
 
 ```c#
-using var sender = new Sender("http::addr=localhost:9000;");
+using var sender = Sender.New("http::addr=localhost:9000;");
 sender.Table("metric_name")
     .Symbol("Symbol", "value")
     .Column("number", 10)
@@ -52,7 +52,7 @@ await sender.SendAsync();
 ### Multi-line send (sync)
 
 ```c#
-using var sender = new Sender("http::addr=localhost:9000;");
+using var sender = Sender.New("http::addr=localhost:9000;");
 for(int i = 0; i < 100; i++)
 {
     sender.Table("metric_name")
@@ -71,7 +71,7 @@ Alternatively, it will flush every 1000ms.
 This is equivalent to a config string of:
 
 ```c#
-using var sender = new Sender("http:addr=localhost:9000;auto_flush=on;auto_flush_rows=75000;auto_flush_interval=1000;");
+using var sender = Sender.New("http:addr=localhost:9000;auto_flush=on;auto_flush_rows=75000;auto_flush_interval=1000;");
 ```
 
 A final flush or send should always be used, as auto flush is not guaranteed to send all pending data before
@@ -80,25 +80,25 @@ the sender is disposed.
 #### Flush every 1000 rows or every 1 second
 
 ```c#
-using var sender = new Sender("http::addr=localhost:9000;auto_flush=on;auto_flush_rows=1000;");
+using var sender = Sender.New("http::addr=localhost:9000;auto_flush=on;auto_flush_rows=1000;");
 ```
 
 #### Flush every 5000 rows
 
 ```c#
-using var sender = new Sender("http::addr=localhost:9000;auto_flush=on;auto_flush_rows=1000;auto_flush_interval=-1;");
+using var sender = Sender.New("http::addr=localhost:9000;auto_flush=on;auto_flush_rows=1000;auto_flush_interval=-1;");
 ```
 
 #### Flush after 5 seconds
 
 ```c#
-using var sender = new Sender("http::addr=localhost:9000;auto_flush=on;auto_flush_interval=5000;");
+using var sender = Sender.New("http::addr=localhost:9000;auto_flush=on;auto_flush_interval=5000;");
 ```
 
 #### Flush only when buffer is 4kb
 
 ```c#
-using var sender = new Sender("http::addr=localhost:9000;auto_flush=on;auto_flush_bytes=4096;auto_flush_rows=-1;auto_flush_interval=-1");
+using var sender = Sender.New("http::addr=localhost:9000;auto_flush=on;auto_flush_bytes=4096;auto_flush_rows=-1;auto_flush_interval=-1");
 ```
 
 ### Authenticated
@@ -106,31 +106,19 @@ using var sender = new Sender("http::addr=localhost:9000;auto_flush=on;auto_flus
 #### HTTP Authentication (Basic)
 
 ```c#
-using var sender = new Sender("https::addr=localhost:9009;tls_verify=unsafe_off;username=admin;password=quest;");
-sender.Table("metric_name")
-.Column("counter", i)
-.AtNow();
-await sender.SendAsync();
+using var sender = Sender.New("https::addr=localhost:9009;tls_verify=unsafe_off;username=admin;password=quest;");;
 ```
 
 #### HTTP Authentication (Token)
 
 ```c#
-using var sender = new Sender("https::addr=localhost:9009;tls_verify=unsafe_off;username=admin;token=<bearer token>");
-sender.Table("metric_name")
-.Column("counter", i)
-.AtNow();
-await sender.SendAsync();
+using var sender = Sender.New("https::addr=localhost:9009;tls_verify=unsafe_off;username=admin;token=<bearer token>");;
 ```
 
 #### TCP Authentication
 
 ```c#
-using var sender = new Sender("tcps::addr=localhost:9009;tls_verify=unsafe_off;username=admin;token=NgdiOWDoQNUP18WOnb1xkkEG5TzPYMda5SiUOvT1K0U=;");
-sender.Table("metric_name")
-    .Column("counter", i)
-    .AtNow();
-await sender.SendAsync();
+using var sender = Sender.New("tcps::addr=localhost:9009;tls_verify=unsafe_off;username=admin;token=NgdiOWDoQNUP18WOnb1xkkEG5TzPYMda5SiUOvT1K0U=;");
 ```
 
 ## Configuration Parameters
@@ -173,28 +161,26 @@ The config string format is:
 | Name           | Default  | Description                                                                           |
 |----------------|----------|---------------------------------------------------------------------------------------|
 | `own_socket`   | `true`   | Specifies whether the internal TCP data stream will own the underlying socket or not. |
-| `pool_timeout` | `120000` | Sets the timeout for HTTP connections in SocketsHttpHandler.                          |
+| `pool_timeout` | `120000` | Sets the idle timeout for HTTP connections in SocketsHttpHandler.                     |
 
 ## Properties and methods
 
-| Name                                                                                                  | Returns                                     | Description                                                               |
-|-------------------------------------------------------------------------------------------------------|---------------------------------------------|---------------------------------------------------------------------------|
-| `Length`                                                                                              | `int`                                       | Current length in bytes of the buffer (not capacity!)                     |
-| `RowCount`                                                                                            | `int`                                       | Current row count of the buffer                                           |
-| `WithinTransaction`                                                                                   | `bool`                                      | Whether or not the Sender is currently in a transactional state.          |
-| `Transaction(ReadOnlySpan<char>)`                                                                     | `Sender`                                    | Starts a new transaction for the table.                                   |
-| `Commit() / CommitAsync()`                                                                            | `bool`                                      | Commits the current transaction.                                          |
-| `Table(ReadOnlySpan<char>)`                                                                           |                                             |                                                                           |
-| `Column(ReadOnlySpan<char>, ReadOnlySpan<char> / string / long / double / DateTime / DateTimeOffset)` | `Sender`                                    | Specify column name and value                                             |
-| `Column(ReadOnlySpan<char>, string? / long? / double? / DateTime? / DateTimeOffset?)`                 | `Sender`                                    |                                                                           |
-| `Symbol(ReadOnlySpan<char>, ReadOnlySpan<char> / string)`                                             | `Sender`                                    |                                                                           |
-| `At(DateTime / DateTimeOffset / long)`                                                                |                                             | Designated timestamp for the line. For long, this is in unix nanoseconds. |
-| `AtNow()`                                                                                             |                                             | Finishes line leaving QuestDB server to set the timestamp                 |
-| `Send() / SendAsync()`                                                                                | (HttpRequestMessage?, HttpResponseMessage?) | Send IO Buffers to QuestDB                                                |
-| `Flush() / FlushAsync()`                                                                              |                                             | Send IO Buffers to QuestDB like SendAsync, but without return value.      |
-| `CancelRow()`                                                                                         |                                             | Cancels current row.                                                      |
-| `Truncate()`                                                                                          |                                             | Trims empty buffers.                                                      |
-| `PingAsync()`                                                                                         | bool                                        | Calls the healthcheck endpoint.                                           |
+| Name                                                                                                  | Returns   | Description                                                               |
+|-------------------------------------------------------------------------------------------------------|-----------|---------------------------------------------------------------------------|
+| `Length`                                                                                              | `int`     | Current length in bytes of the buffer (not capacity!)                     |
+| `RowCount`                                                                                            | `int`     | Current row count of the buffer                                           |
+| `WithinTransaction`                                                                                   | `bool`    | Whether or not the Sender is currently in a transactional state.          |
+| `Transaction(ReadOnlySpan<char>)`                                                                     | `ISender` | Starts a new transaction for the table.                                   |
+| `Commit() / CommitAsync()`                                                                            | `Ibool`   | Commits the current transaction.                                          |
+| `Table(ReadOnlySpan<char>)`                                                                           |           |                                                                           |
+| `Column(ReadOnlySpan<char>, ReadOnlySpan<char> / string / long / double / DateTime / DateTimeOffset)` | `ISender` | Specify column name and value                                             |
+| `Column(ReadOnlySpan<char>, string? / long? / double? / DateTime? / DateTimeOffset?)`                 | `ISender` |                                                                           |
+| `Symbol(ReadOnlySpan<char>, ReadOnlySpan<char> / string)`                                             | `ISender` |                                                                           |
+| `At(DateTime / DateTimeOffset / long)`                                                                |           | Designated timestamp for the line. For long, this is in unix nanoseconds. |
+| `AtNow()`                                                                                             |           | Finishes line, leaving QuestDB server to set the timestamp                |
+| `Send() / SendAsync()`                                                                                |           | Send IO Buffers to QuestDB                                                |
+| `CancelRow()`                                                                                         |           | Cancels current row.                                                      |
+| `Truncate()`                                                                                          |           | Trims empty buffers.                                                      |
 
 ## Examples
 

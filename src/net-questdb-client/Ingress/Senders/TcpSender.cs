@@ -1,4 +1,3 @@
-
 using System.Buffers.Text;
 using System.Net.Security;
 using System.Net.Sockets;
@@ -15,6 +14,9 @@ using ProtocolType = QuestDB.Ingress.Enums.ProtocolType;
 
 namespace QuestDB.Ingress.Senders;
 
+/// <summary>
+///     An implementation of <see cref="ISender"/> for TCP transport.
+/// </summary>
 internal class TcpSender : ISender
 {
     public QuestDBOptions Options { get; private init; } = null!;
@@ -48,6 +50,7 @@ internal class TcpSender : ISender
         return new TcpSender() { Options = options };
     }
     
+    /// <inheritdoc />
     public ISender Build()
     {
        Buffer = new Buffer(Options.init_buf_size, Options.max_name_len, Options.max_buf_size);
@@ -198,7 +201,7 @@ internal class TcpSender : ISender
         return Convert.FromBase64String(urlUnsafe);
     }
         
-    /// <inheritdoc cref="ISender.SendAsync"/>
+    /// <inheritdoc />
     public async Task SendAsync(CancellationToken ct = default)
     {
         await new BufferStreamContent(Buffer).WriteToStreamAsync(_dataStream!);
@@ -206,107 +209,111 @@ internal class TcpSender : ISender
         Buffer.Clear();
     }
     
+    /// <inheritdoc />
     public void Dispose()
     {
         _dataStream.DisposeNullable();
         _underlyingSocket.DisposeNullable();
     }
     
+    /// <inheritdoc />
     public ValueTask DisposeAsync()
     {
         Dispose();
         return ValueTask.CompletedTask;
     }
     
-    /// <inheritdoc cref="ISender.Table(ReadOnlySpan&lt;char&gt;)"/>
+    /// <inheritdoc />
     public ISender Table(ReadOnlySpan<char> name)
     {
         Buffer.Table(name);
         return this;
     }
    
-    /// <inheritdoc cref="ISender.Symbol(ReadOnlySpan&lt;char&gt;, ReadOnlySpan&lt;char&gt;)"/>
+    /// <inheritdoc />
     public ISender Symbol(ReadOnlySpan<char> name, ReadOnlySpan<char> value)
     {
         Buffer.Symbol(name, value);
         return this;
     }
 
-    /// <inheritdoc cref="ISender.Column(ReadOnlySpan&lt;char&gt;, ReadOnlySpan&lt;char&gt;)"/>
+    /// <inheritdoc />
     public ISender Column(ReadOnlySpan<char> name, ReadOnlySpan<char> value)
     {
         Buffer.Column(name, value);
         return this;
     }
 
-    /// <inheritdoc cref="ISender.Column(ReadOnlySpan&lt;char&gt;, long)"/>
+    /// <inheritdoc />
     public ISender Column(ReadOnlySpan<char> name, long value)
     {
         Buffer.Column(name, value);
         return this;
     }
 
-    /// <inheritdoc cref="ISender.Column(ReadOnlySpan&lt;char&gt;, bool)"/>
+    /// <inheritdoc />
     public ISender Column(ReadOnlySpan<char> name, bool value)
     {
         Buffer.Column(name, value);
         return this;
     }
 
-    /// <inheritdoc cref="ISender.Column(ReadOnlySpan&lt;char&gt;, double)"/>
+    /// <inheritdoc />
     public ISender Column(ReadOnlySpan<char> name, double value)
     {
         Buffer.Column(name, value);
         return this;
     }
 
-    /// <inheritdoc cref="ISender.Column(ReadOnlySpan&lt;char&gt;, DateTime)"/>
+    /// <inheritdoc />
     public ISender Column(ReadOnlySpan<char> name, DateTime value)
     {
         Buffer.Column(name, value);
         return this;
     }
 
-    /// <inheritdoc cref="ISender.Column(ReadOnlySpan&lt;char&gt;, DateTimeOffset)"/>
+    /// <inheritdoc />
     public ISender Column(ReadOnlySpan<char> name, DateTimeOffset value)
     {
         Buffer.Column(name, value);
         return this;
     }
 
-    /// <inheritdoc cref="ISender.At(DateTime, CancellationToken)"/>
+    /// <inheritdoc />
     public async Task At(DateTime value, CancellationToken ct = default)
     {
         Buffer.At(value); 
         await (this as ISender).FlushIfNecessary(ct);
     }
         
-    /// <inheritdoc cref="ISender.At(DateTimeOffset, CancellationToken)"/>
+    /// <inheritdoc />
     public async Task At(DateTimeOffset value, CancellationToken ct = default)
     {
         Buffer.At(value);
         await (this as ISender).FlushIfNecessary(ct);
     }
     
-    /// <inheritdoc cref="ISender.At(long, CancellationToken)"/>
+    /// <inheritdoc />
     public async Task At(long value, CancellationToken ct = default)
     {
         Buffer.At(value);
         await (this as ISender).FlushIfNecessary(ct);
     }
         
-    /// <inheritdoc cref="ISender.AtNow"/>
+    /// <inheritdoc />
     public async Task AtNow(CancellationToken ct = default)
     {
         Buffer.AtNow();
         await (this as ISender).FlushIfNecessary(ct);
     }
     
+    /// <inheritdoc />
     public void Truncate()
     {
         Buffer.TrimExcessBuffers();
     }
     
+    /// <inheritdoc />
     public void CancelRow()
     {
         Buffer.CancelRow();

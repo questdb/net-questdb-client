@@ -71,7 +71,12 @@ public class Buffer
     /// </summary>
     public int RowCount { get; private set; }
 
-    /// <inheritdoc cref="ISender.Transaction" />
+    /// <summary>
+    ///     Begins a new transaction.
+    /// </summary>
+    /// <param name="tableName"></param>
+    /// <returns></returns>
+    /// <exception cref="IngressError"></exception>
     public Buffer Transaction(ReadOnlySpan<char> tableName)
     {
         if (WithinTransaction)

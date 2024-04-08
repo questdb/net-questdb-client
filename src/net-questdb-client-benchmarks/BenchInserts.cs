@@ -94,46 +94,5 @@ public class BenchInserts
         await sender.SendAsync();
     }
 
-    // [Benchmark]
-    // public async Task BasicInsertsTcp()
-    // {
-    //     var sender = new Sender($"tcp::addr=localhost:{TcpPort};auto_flush=off;");
-    //
-    //     for (int i = 0; i < rows_per_iteration; i++)
-    //     {
-    //         sender.Table("basic_inserts").Column("number", i).AtNow();
-    //     }
-    //
-    //     await sender.SendAsync();
-    // }
-    //
-    // [Benchmark]
-    // public async Task TinyInsertsTcp()
-    // {
-    //     var sender = new Sender($"tcp::addr=localhost:{TcpPort};auto_flush=on;auto_flush_rows={batch_size}");
-    //
-    //     for (int i = 0; i < rows_per_iteration; i++)
-    //     {
-    //         sender.Table("basic_inserts").Column("number", i).AtNow();
-    //         if (i % batch_size == 0)
-    //         {
-    //             _httpServer.Clear();
-    //         }
-    //     }
-    //
-    //     await sender.SendAsync();
-    // }
-    //
-    // [Benchmark]
-    // public async Task BasicInsertsDeprecatedTcp()
-    // {
-    //     var sender = await LineTcpSender.ConnectAsync("localhost", TcpPort, tlsMode: TlsMode.Disable);
-    //
-    //     for (int i = 0; i < rows_per_iteration; i++)
-    //     {
-    //         sender.Table("basic_inserts").Column("number", i).AtNow();
-    //     }
-    //
-    //     await sender.SendAsync();
-    // }
+   
 }

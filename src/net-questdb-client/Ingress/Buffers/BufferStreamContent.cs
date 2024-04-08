@@ -25,22 +25,7 @@ public class BufferStreamContent : HttpContent
     /// <exception cref="IngressError">When writing to stream fails.</exception>
     protected override async Task SerializeToStreamAsync(Stream stream, TransportContext? context)
     {
-        for (var i = 0; i <= Buffer.CurrentBufferIndex; i++)
-        {
-            var length = i == Buffer.CurrentBufferIndex ? Buffer.Position : Buffer.Buffers[i].Length;
-
-            try
-            {
-                if (length > 0)
-                {
-                    await stream.WriteAsync(Buffer.Buffers[i].Buffer, 0, length);
-                }
-            }
-            catch (IOException iox)
-            {
-                throw new IngressError(ErrorCode.SocketError, "Could not write data to server.", iox);
-            }
-        }
+        await Buffer.WriteToStreamAsync(stream);
     }
 
     /// <summary>
@@ -69,16 +54,8 @@ public class BufferStreamContent : HttpContent
     /// <exception cref="IngressError">When writing to stream fails.</exception>
     protected override void SerializeToStream(Stream stream, TransportContext? context, CancellationToken ct)
     {
-        SerializeToStreamAsync(stream, context, ct).Wait(ct);
+        Buffer.WriteToStream(stream);
     }
 
-    /// <summary>
-    ///     Writes the chunked buffer contents to a stream.
-    /// </summary>
-    /// <param name="stream"></param>
-    /// <exception cref="IngressError">When writing to stream fails.</exception>
-    public async Task WriteToStreamAsync(Stream stream)
-    {
-        await SerializeToStreamAsync(stream, null);
-    }
+   
 }

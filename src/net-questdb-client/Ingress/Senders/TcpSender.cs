@@ -1,4 +1,5 @@
 using System.Buffers.Text;
+using System.Diagnostics;
 using System.Net.Security;
 using System.Net.Sockets;
 using Org.BouncyCastle.Asn1.Sec;
@@ -20,22 +21,22 @@ namespace QuestDB.Ingress.Senders;
 internal class TcpSender : ISender
 {
     public QuestDBOptions Options { get; private init; } = null!;
-    private Buffer Buffer { get; set; } = null!;
+    private Buffer _buffer;
     private Socket _underlyingSocket = null!;
-    private Stream? _dataStream;
+    private Stream _dataStream;
     private static readonly RemoteCertificateValidationCallback AllowAllCertCallback = (_, _, _, _) => true;
     private bool _authenticated;
 
     
-    public int Length => Buffer.Length;
-    public int RowCount => Buffer.RowCount;
+    public int Length => _buffer.Length;
+    public int RowCount => _buffer.RowCount;
     public bool WithinTransaction => false;
 
     public DateTime LastFlush { get; private set; } = DateTime.MaxValue;
 
     public TcpSender() {}
 
-    private TcpSender(QuestDBOptions options)
+    public TcpSender(QuestDBOptions options)
     {
         Options = options;
         Build();
@@ -47,13 +48,13 @@ internal class TcpSender : ISender
 
     public ISender Configure(QuestDBOptions options)
     {
-        return new TcpSender() { Options = options };
+        return new TcpSender(options);
     }
     
     /// <inheritdoc />
     public ISender Build()
     {
-       Buffer = new Buffer(Options.init_buf_size, Options.max_name_len, Options.max_buf_size);
+       _buffer = new Buffer(Options.init_buf_size, Options.max_name_len, Options.max_buf_size);
 
        var socket = new Socket(AddressFamily.InterNetwork, SocketType.Stream, System.Net.Sockets.ProtocolType.Tcp);
        NetworkStream? networkStream = null;
@@ -120,9 +121,9 @@ internal class TcpSender : ISender
         }
 
         _authenticated = true;
-        Buffer.EncodeUtf8(Options.username); // key_id
+        _buffer.EncodeUtf8(Options.username); // key_id
 
-        Buffer.Put('\n');
+        _buffer.Put('\n');
         await SendAsync(ct);
 
         var bufferLen = await ReceiveUntil('\n', ct);
@@ -147,14 +148,14 @@ internal class TcpSender : ISender
         ecdsa.Init(true, priKey);
 
 
-        ecdsa.BlockUpdate(Buffer.SendBuffer, 0, bufferLen);
+        ecdsa.BlockUpdate(_buffer.SendBuffer, 0, bufferLen);
         var signature = ecdsa.GenerateSignature();
 
-        Base64.EncodeToUtf8(signature, Buffer.SendBuffer, out _, out Buffer.Position);
-        Buffer.Put('\n');
+        Base64.EncodeToUtf8(signature, _buffer.SendBuffer, out _, out _buffer.Position);
+        _buffer.Put('\n');
 
-        await _dataStream!.WriteAsync(Buffer.SendBuffer, 0, Buffer.Position, ct);
-        Buffer.Clear();
+        await _dataStream!.WriteAsync(_buffer.SendBuffer, 0, _buffer.Position, ct);
+        _buffer.Clear();
     }
     
     /// <summary>
@@ -167,14 +168,14 @@ internal class TcpSender : ISender
     private async ValueTask<int> ReceiveUntil(char endChar, CancellationToken cancellationToken)
     {
         var totalReceived = 0;
-        while (totalReceived < Buffer.SendBuffer.Length)
+        while (totalReceived < _buffer.SendBuffer.Length)
         {
-            var received = await _dataStream!.ReadAsync(Buffer.SendBuffer, totalReceived,
-                Buffer.SendBuffer.Length - totalReceived, cancellationToken);
+            var received = await _dataStream!.ReadAsync(_buffer.SendBuffer, totalReceived,
+                _buffer.SendBuffer.Length - totalReceived, cancellationToken);
             if (received > 0)
             {
                 totalReceived += received;
-                if (Buffer.SendBuffer[totalReceived - 1] == endChar)
+                if (_buffer.SendBuffer[totalReceived - 1] == endChar)
                 {
                     return totalReceived - 1;
                 }
@@ -200,20 +201,34 @@ internal class TcpSender : ISender
 
         return Convert.FromBase64String(urlUnsafe);
     }
+    
+    /// <inheritdoc cref="SendAsync"/>
+    public void Send()
+    {
+        if (_buffer.Length != 0)
+        {
+            _buffer.WriteToStream(_dataStream!);
+            LastFlush = DateTime.UtcNow;
+            _buffer.Clear();
+        }
+    }
         
     /// <inheritdoc />
     public async Task SendAsync(CancellationToken ct = default)
     {
-        await new BufferStreamContent(Buffer).WriteToStreamAsync(_dataStream!);
-        LastFlush = DateTime.UtcNow;
-        Buffer.Clear();
+        if (_buffer.Length != 0)
+        {
+            await _buffer.WriteToStreamAsync(_dataStream!);
+            LastFlush = DateTime.UtcNow;
+            _buffer.Clear();
+        }
     }
     
     /// <inheritdoc />
     public void Dispose()
     {
-        _dataStream.DisposeNullable();
-        _underlyingSocket.DisposeNullable();
+        _dataStream.Dispose();
+        _underlyingSocket.Dispose();
     }
     
     /// <inheritdoc />
@@ -226,96 +241,96 @@ internal class TcpSender : ISender
     /// <inheritdoc />
     public ISender Table(ReadOnlySpan<char> name)
     {
-        Buffer.Table(name);
+        _buffer.Table(name);
         return this;
     }
    
     /// <inheritdoc />
     public ISender Symbol(ReadOnlySpan<char> name, ReadOnlySpan<char> value)
     {
-        Buffer.Symbol(name, value);
+        _buffer.Symbol(name, value);
         return this;
     }
 
     /// <inheritdoc />
     public ISender Column(ReadOnlySpan<char> name, ReadOnlySpan<char> value)
     {
-        Buffer.Column(name, value);
+        _buffer.Column(name, value);
         return this;
     }
 
     /// <inheritdoc />
     public ISender Column(ReadOnlySpan<char> name, long value)
     {
-        Buffer.Column(name, value);
+        _buffer.Column(name, value);
         return this;
     }
 
     /// <inheritdoc />
     public ISender Column(ReadOnlySpan<char> name, bool value)
     {
-        Buffer.Column(name, value);
+        _buffer.Column(name, value);
         return this;
     }
 
     /// <inheritdoc />
     public ISender Column(ReadOnlySpan<char> name, double value)
     {
-        Buffer.Column(name, value);
+        _buffer.Column(name, value);
         return this;
     }
 
     /// <inheritdoc />
     public ISender Column(ReadOnlySpan<char> name, DateTime value)
     {
-        Buffer.Column(name, value);
+        _buffer.Column(name, value);
         return this;
     }
 
     /// <inheritdoc />
     public ISender Column(ReadOnlySpan<char> name, DateTimeOffset value)
     {
-        Buffer.Column(name, value);
+        _buffer.Column(name, value);
         return this;
     }
 
     /// <inheritdoc />
     public async Task At(DateTime value, CancellationToken ct = default)
     {
-        Buffer.At(value); 
+        _buffer.At(value); 
         await (this as ISender).FlushIfNecessary(ct);
     }
         
     /// <inheritdoc />
     public async Task At(DateTimeOffset value, CancellationToken ct = default)
     {
-        Buffer.At(value);
+        _buffer.At(value);
         await (this as ISender).FlushIfNecessary(ct);
     }
     
     /// <inheritdoc />
     public async Task At(long value, CancellationToken ct = default)
     {
-        Buffer.At(value);
+        _buffer.At(value);
         await (this as ISender).FlushIfNecessary(ct);
     }
         
     /// <inheritdoc />
     public async Task AtNow(CancellationToken ct = default)
     {
-        Buffer.AtNow();
+        _buffer.AtNow();
         await (this as ISender).FlushIfNecessary(ct);
     }
     
     /// <inheritdoc />
     public void Truncate()
     {
-        Buffer.TrimExcessBuffers();
+        _buffer.TrimExcessBuffers();
     }
     
     /// <inheritdoc />
     public void CancelRow()
     {
-        Buffer.CancelRow();
+        _buffer.CancelRow();
     }
 }

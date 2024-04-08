@@ -38,8 +38,8 @@ namespace QuestDB.Ingress.Buffers;
 public class Buffer
 {
     private static readonly long EpochTicks = new DateTime(1970, 1, 1).Ticks;
-    internal readonly List<(byte[] Buffer, int Length)> Buffers = new();
-    internal int CurrentBufferIndex;
+    private readonly List<(byte[] Buffer, int Length)> _buffers = new();
+    private int _currentBufferIndex;
     private string _currentTableName = null!;
     private bool _hasTable;
     private int _lineStartBufferIndex;
@@ -56,7 +56,7 @@ public class Buffer
     public Buffer(int bufferSize, int maxNameLen, int maxBufSize)
     {
         SendBuffer = new byte[bufferSize];
-        Buffers.Add((SendBuffer, 0));
+        _buffers.Add((SendBuffer, 0));
         _maxNameLen = maxNameLen;
         _maxBufSize = maxBufSize;
     }
@@ -120,7 +120,7 @@ public class Buffer
         _quoted = false;
         _hasTable = true;
 
-        _lineStartBufferIndex = CurrentBufferIndex;
+        _lineStartBufferIndex = _currentBufferIndex;
         _lineStartBufferPosition = Position;
 
         EncodeUtf8(name);
@@ -321,11 +321,11 @@ public class Buffer
     /// </summary>
     public void Clear()
     {
-        CurrentBufferIndex = 0;
-        SendBuffer = Buffers[CurrentBufferIndex].Buffer;
-        for (var i = 0; i < Buffers.Count; i++)
+        _currentBufferIndex = 0;
+        SendBuffer = _buffers[_currentBufferIndex].Buffer;
+        for (var i = 0; i < _buffers.Count; i++)
         {
-            Buffers[i] = (Buffers[i].Buffer, 0);
+            _buffers[i] = (_buffers[i].Buffer, 0);
         }
 
         Position = 0;
@@ -340,10 +340,10 @@ public class Buffer
     /// </summary>
     public void TrimExcessBuffers()
     {
-        var removeCount = Buffers.Count - CurrentBufferIndex - 1;
+        var removeCount = _buffers.Count - _currentBufferIndex - 1;
         if (removeCount > 0)
         {
-            Buffers.RemoveRange(CurrentBufferIndex + 1, removeCount);
+            _buffers.RemoveRange(_currentBufferIndex + 1, removeCount);
         }
     }
 
@@ -515,24 +515,24 @@ public class Buffer
     }
 
     /// <summary>
-    ///     Swaps to the next buffer in <see cref="Buffers" />.
+    ///     Swaps to the next buffer in <see cref="_buffers" />.
     /// </summary>
     /// <remarks>
     ///     A new <c>byte[]</c> will be allocated if there is not already an overflow buffer.
     /// </remarks>
     private void NextBuffer()
     {
-        Buffers[CurrentBufferIndex] = (SendBuffer, Position);
-        CurrentBufferIndex++;
+        _buffers[_currentBufferIndex] = (SendBuffer, Position);
+        _currentBufferIndex++;
 
-        if (Buffers.Count <= CurrentBufferIndex)
+        if (_buffers.Count <= _currentBufferIndex)
         {
             SendBuffer = new byte[SendBuffer.Length];
-            Buffers.Add((SendBuffer, 0));
+            _buffers.Add((SendBuffer, 0));
         }
         else
         {
-            SendBuffer = Buffers[CurrentBufferIndex].Buffer;
+            SendBuffer = _buffers[_currentBufferIndex].Buffer;
         }
 
         Position = 0;
@@ -588,7 +588,7 @@ public class Buffer
     /// <exception cref="InvalidOperationException"></exception>
     public void CancelRow()
     {
-        CurrentBufferIndex = _lineStartBufferIndex;
+        _currentBufferIndex = _lineStartBufferIndex;
         Length -= Position - _lineStartBufferPosition;
         Position = _lineStartBufferPosition;
         _hasTable = false;
@@ -738,6 +738,56 @@ public class Buffer
         {
             throw new IngressError(ErrorCode.InvalidApiCall,
                 $"Name is too long, must be under {_maxNameLen} bytes.");
+        }
+    }
+    
+    /// <summary>
+    ///     Writes the chunked buffer contents to a stream.
+    /// </summary>
+    /// <param name="stream"></param>
+    /// <exception cref="IngressError">When writing to stream fails.</exception>
+    public async Task WriteToStreamAsync(Stream stream)
+    {
+        for (var i = 0; i <= _currentBufferIndex; i++)
+        {
+            var length = i == _currentBufferIndex ? Position : _buffers[i].Length;
+
+            try
+            {
+                if (length > 0)
+                {
+                    await stream.WriteAsync(_buffers[i].Buffer, 0, length);
+                }
+            }
+            catch (IOException iox)
+            {
+                throw new IngressError(ErrorCode.SocketError, "Could not write data to server.", iox);
+            }
+        }
+    }
+    
+    /// <summary>
+    ///     Writes the chunked buffer contents to a stream.
+    /// </summary>
+    /// <param name="stream"></param>
+    /// <exception cref="IngressError">When writing to stream fails.</exception>
+    public void WriteToStream(Stream stream)
+    {
+        for (var i = 0; i <= _currentBufferIndex; i++)
+        {
+            var length = i == _currentBufferIndex ? Position : _buffers[i].Length;
+
+            try
+            {
+                if (length > 0)
+                {
+                    stream.Write(_buffers[i].Buffer, 0, length);
+                }
+            }
+            catch (IOException iox)
+            {
+                throw new IngressError(ErrorCode.SocketError, "Could not write data to server.", iox);
+            }
         }
     }
 }

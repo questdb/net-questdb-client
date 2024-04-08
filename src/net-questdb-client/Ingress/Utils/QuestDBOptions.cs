@@ -30,6 +30,7 @@ using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Text.Json.Serialization;
 using QuestDB.Ingress.Enums;
+using QuestDB.Ingress.Senders;
 
 // ReSharper disable InconsistentNaming
 // ReSharper disable PropertyCanBeMadeInitOnly.Global
@@ -39,7 +40,7 @@ namespace QuestDB.Ingress.Utils;
 /// <summary>
 ///     Configuration class for the ILP sender.
 /// </summary>
-public class QuestDBOptions
+public record QuestDBOptions
 {
     public const string QuestDB = "QuestDB";
     private string _addr = "localhost:9000";
@@ -72,15 +73,17 @@ public class QuestDBOptions
     {
     }
 
+   
+
     public QuestDBOptions(string confStr)
     {
         ReadConfigStringIntoBuilder(confStr);
         ParseEnumWithDefault(nameof(protocol), "http", out _protocol);
         ParseStringWithDefault(nameof(addr), "localhost:9000", out _addr!);
         ParseEnumWithDefault(nameof(auto_flush), "on", out _autoFlush);
-        ParseIntWithDefault(nameof(auto_flush_rows), IsHttp() ? "75000" : "600", out _autoFlushRows);
-        ParseIntWithDefault(nameof(auto_flush_bytes), int.MaxValue.ToString(), out _autoFlushBytes);
-        ParseMillisecondsWithDefault(nameof(auto_flush_interval), "1000", out _autoFlushInterval);
+        ParseIntThatMayBeOff(nameof(auto_flush_rows), IsHttp() ? "75000" : "600", out _autoFlushRows);
+        ParseIntThatMayBeOff(nameof(auto_flush_bytes), int.MaxValue.ToString(), out _autoFlushBytes);
+        ParseMillisecondsThatMayBeOff(nameof(auto_flush_interval), "1000", out _autoFlushInterval);
         ParseIntWithDefault(nameof(init_buf_size), "65536", out _initBufSize);
         ParseIntWithDefault(nameof(max_buf_size), "104857600", out _maxBufSize);
         ParseIntWithDefault(nameof(max_name_len), "127", out _maxNameLen);
@@ -470,6 +473,32 @@ public class QuestDBOptions
     {
         field = ReadOptionFromBuilder(name) ?? defaultValue;
     }
+    
+    private void ParseIntThatMayBeOff(string name, string? defaultValue, out int field)
+    {
+        var option = ReadOptionFromBuilder(name) ?? defaultValue;
+        if (option != null && option == "off")
+        {
+            field = -1;
+        }
+        else
+        { 
+            ParseIntWithDefault(name, defaultValue, out field);
+        }
+    }
+    
+    private void ParseMillisecondsThatMayBeOff(string name, string? defaultValue, out TimeSpan field)
+    {
+        var option = ReadOptionFromBuilder(name) ?? defaultValue;
+        if (option != null && option == "off")
+        {
+            field = TimeSpan.FromMilliseconds(-1);
+        }
+        else
+        { 
+            ParseMillisecondsWithDefault(name, defaultValue, out field);
+        }
+    }
 
     private void ReadConfigStringIntoBuilder(string confStr)
     {
@@ -540,7 +569,7 @@ public class QuestDBOptions
             {
                 value = prop.GetValue(this);
             }
-            catch
+            catch 
             {
                 continue;
             }
@@ -576,5 +605,10 @@ public class QuestDBOptions
                 throw new IngressError(ErrorCode.ConfigError, $"Invalid property: `{key}`");
             }
         }
+    }
+    
+    public ISender Build()
+    {
+        return Sender.New(this);
     }
 }

@@ -38,9 +38,26 @@ public class Program
             DefaultConfig.Instance.AddJob(Job.MediumRun.WithLaunchCount(1)
                     .WithToolchain(InProcessNoEmitToolchain.Instance))
                 .WithOptions(ConfigOptions.DisableOptimizationsValidator);
-        // var summary = BenchmarkRunner.Run<BenchInserts>(config);
-        //var summary = BenchmarkRunner.Run<BenchConnectionChurn>(config);
-        // var summary = BenchmarkRunner.Run<BenchConnectionChurnVsServer>(config);
-        var summary = BenchmarkRunner.Run<BenchConnectionChurnVsServer2>(config);
+        RunConnectionChurnVsServerBench2(config);
+    }
+
+    public static void RunInsertBench(ManualConfig config)
+    {
+        BenchmarkRunner.Run<BenchInserts>(config);
+    }
+
+    public static void RunConnectionChurnBench(ManualConfig config)
+    { 
+        BenchmarkRunner.Run<BenchConnectionChurn>(config);
+    }
+
+    public static void RunConnectionChurnVsServerBench(ManualConfig config)
+    { 
+        BenchmarkRunner.Run<BenchConnectionChurnVsServer>(config);
+    }
+    
+    public static void RunConnectionChurnVsServerBench2(ManualConfig config)
+    { 
+        BenchmarkRunner.Run<BenchConnectionChurnVsServer2>(config);
     }
 }

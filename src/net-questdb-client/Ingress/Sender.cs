@@ -1,4 +1,5 @@
 using Microsoft.Extensions.Options;
+using Org.BouncyCastle.Tls;
 using QuestDB.Ingress.Enums;
 using QuestDB.Ingress.Senders;
 using QuestDB.Ingress.Utils;
@@ -37,25 +38,24 @@ public static class Sender
     /// <param name="options"></param>
     /// <returns></returns>
     /// <exception cref="NotImplementedException"></exception>
-    public static ISender Configure(QuestDBOptions? options = null)
+    public static ISender New(QuestDBOptions? options = null)
     {
         switch (options.protocol)
         {
             case ProtocolType.http:
             case ProtocolType.https:
-                return new HttpSender().Configure(options);
+                return new HttpSender(options);
             case ProtocolType.tcp:
             case ProtocolType.tcps:
-                return new TcpSender().Configure(options);
+                return new TcpSender(options);
             default:
                 throw new NotImplementedException();
         }
     }
     
     /// <inheritdoc cref="Configure(QuestDB.Ingress.Utils.QuestDBOptions?)"/>
-    public static ISender Configure(string confStr)
+    public static QuestDBOptions Configure(string confStr)
     {
-        var options = new QuestDBOptions(confStr);
-        return Configure(options);
+        return new QuestDBOptions(confStr);
     }
 }

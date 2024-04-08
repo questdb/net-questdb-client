@@ -19,19 +19,19 @@ namespace QuestDB.Ingress.Senders;
 internal class HttpSender : ISender
 {
     public QuestDBOptions Options { get; private init; } = null!;
-    private Buffer Buffer { get; set; } = null!;
-    private HttpClient? _client;
-    private SocketsHttpHandler? _handler;
+    private Buffer _buffer;
+    private HttpClient _client;
+    private SocketsHttpHandler _handler;
     
-    public int Length => Buffer.Length;
-    public int RowCount => Buffer.RowCount;
-    public bool WithinTransaction => Buffer.WithinTransaction;
+    public int Length => _buffer.Length;
+    public int RowCount => _buffer.RowCount;
+    public bool WithinTransaction => _buffer.WithinTransaction;
     private bool CommittingTransaction { get; set; }
     public DateTime LastFlush { get; private set; } = DateTime.MaxValue;
 
     public HttpSender() {}
 
-    private HttpSender(QuestDBOptions options)
+    public HttpSender(QuestDBOptions options)
     {
         Options = options;
         Build();
@@ -50,7 +50,7 @@ internal class HttpSender : ISender
     /// <inheritdoc />
     public ISender Build()
     {
-       Buffer = new Buffer(Options.init_buf_size, Options.max_name_len, Options.max_buf_size);
+       _buffer = new Buffer(Options.init_buf_size, Options.max_name_len, Options.max_buf_size);
 
         _handler = new SocketsHttpHandler
         {
@@ -124,9 +124,9 @@ internal class HttpSender : ISender
     private (HttpRequestMessage, CancellationTokenSource?) GenerateRequest(CancellationToken ct = default)
     {
         var request = new HttpRequestMessage(HttpMethod.Post, "/write")
-            { Content = new BufferStreamContent(Buffer) };
+            { Content = new BufferStreamContent(_buffer) };
         request.Content.Headers.ContentType = new MediaTypeHeaderValue("text/plain") { CharSet = "utf-8" };
-        request.Content.Headers.ContentLength = Buffer.Length;
+        request.Content.Headers.ContentLength = _buffer.Length;
         var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         cts.CancelAfter(CalculateRequestTimeout());
         return (request, cts);
@@ -144,7 +144,7 @@ internal class HttpSender : ISender
     private TimeSpan CalculateRequestTimeout()
     {
         return Options.request_timeout
-               + TimeSpan.FromSeconds(Buffer.Length / (double)Options.request_min_throughput);
+               + TimeSpan.FromSeconds(_buffer.Length / (double)Options.request_min_throughput);
     }
 
     /// <inheritdoc />
@@ -162,14 +162,18 @@ internal class HttpSender : ISender
                 "Buffer must be clear before you can start a transaction.");
         }
 
-        Buffer.Transaction(tableName);
+        _buffer.Transaction(tableName);
         return this;
     }
 
-    /// <inheritdoc />
-    public void Commit()
+    /// <inheritdoc cref="CommitAsync"/> />
+    public void Commit(CancellationToken ct = default)
     {
-        CommitAsync().Wait();
+        CommittingTransaction = true;
+        Send(ct);
+
+        CommittingTransaction = false;
+        Debug.Assert(!_buffer.WithinTransaction);
     }
 
     /// <inheritdoc />
@@ -179,7 +183,34 @@ internal class HttpSender : ISender
         await SendAsync(ct);
 
         CommittingTransaction = false;
-        Debug.Assert(!Buffer.WithinTransaction);
+        Debug.Assert(!_buffer.WithinTransaction);
+    }
+    
+    /// <inheritdoc cref="SendAsync"/>
+    public void Send(CancellationToken ct = default)
+    {
+        if (WithinTransaction && !CommittingTransaction)
+        {
+            throw new IngressError(ErrorCode.InvalidApiCall, "Please `commit` to complete your transaction.");
+        }
+        
+        if (_buffer.Length == 0)
+        {
+            return;
+        }
+        
+        var (request, cts) = GenerateRequest(ct);
+        try
+        {
+            var response = _client!.Send(request, HttpCompletionOption.ResponseHeadersRead, cts!.Token);
+            FinishOrRetry(
+                response, cts
+            );
+        }
+        catch (Exception ex)
+        {
+            throw new IngressError(ErrorCode.ServerFlushError, ex.Message, ex);
+        }
     }
         
     /// <inheritdoc />
@@ -190,7 +221,7 @@ internal class HttpSender : ISender
             throw new IngressError(ErrorCode.InvalidApiCall, "Please `commit` to complete your transaction.");
         }
         
-        if (Buffer.Length == 0)
+        if (_buffer.Length == 0)
         {
             return;
         }
@@ -233,6 +264,51 @@ internal class HttpSender : ISender
                 return false;
         }
     }
+    
+    /// <inheritdoc cref="FinishOrRetryAsync(System.Net.Http.HttpResponseMessage,System.Threading.CancellationTokenSource?,int)"/>
+    private void FinishOrRetry(HttpResponseMessage response,
+        CancellationTokenSource? cts = default, int retryIntervalMs = 10)
+    {
+        var lastResponse = response;
+
+        if (!response.IsSuccessStatusCode)
+        {
+            if (!(IsRetriableError(response.StatusCode) && Options.retry_timeout > TimeSpan.Zero))
+            {
+                throw new IngressError(ErrorCode.ServerFlushError, response.ReasonPhrase);
+            }
+
+            var retryTimer = new Stopwatch();
+            retryTimer.Start();
+
+            var retryInterval = TimeSpan.FromMilliseconds(retryIntervalMs);
+
+            while (retryTimer.Elapsed < Options.retry_timeout)
+            {
+                var jitter = TimeSpan.FromMilliseconds(Random.Shared.Next(0, retryIntervalMs) - retryIntervalMs / 2.0);
+                Thread.Sleep(retryInterval + jitter);
+
+                var (nextRequest, nextToken) = GenerateRequest();
+                lastResponse = _client!.Send(nextRequest, nextToken!.Token);
+                if (!lastResponse.IsSuccessStatusCode)
+                {
+                    if (IsRetriableError(lastResponse.StatusCode) && Options.retry_timeout > TimeSpan.Zero)
+                    {
+                        cts!.Dispose();
+                    }
+                }
+            }
+        }
+
+        if (!lastResponse.IsSuccessStatusCode)
+        {
+            throw new IngressError(ErrorCode.ServerFlushError, lastResponse.ReasonPhrase);
+        }
+
+        LastFlush = (lastResponse.Headers.Date ?? DateTimeOffset.UtcNow).UtcDateTime;
+        cts!.Dispose();
+        _buffer.Clear();
+    }
 
     /// <summary>
     ///     Applies retry logic (if required).
@@ -269,7 +345,7 @@ internal class HttpSender : ISender
                 await Task.Delay(retryInterval + jitter);
 
                 var (nextRequest, nextToken) = GenerateRequest();
-                lastResponse = await _client!.SendAsync(nextRequest, nextToken!.Token);
+                lastResponse = await _client.SendAsync(nextRequest, nextToken!.Token);
                 if (!lastResponse.IsSuccessStatusCode)
                 {
                     if (IsRetriableError(lastResponse.StatusCode) && Options.retry_timeout > TimeSpan.Zero)
@@ -287,14 +363,15 @@ internal class HttpSender : ISender
 
         LastFlush = (lastResponse.Headers.Date ?? DateTimeOffset.UtcNow).UtcDateTime;
         cts!.Dispose();
-        Buffer.Clear();
+        _buffer.Clear();
     }
 
     /// <inheritdoc />
     public void Dispose()
     {
-        _client.DisposeNullable();
-        _handler.DisposeNullable();
+        _client.Dispose();
+        _handler.Dispose();
+
     }
     
     /// <inheritdoc />
@@ -307,96 +384,96 @@ internal class HttpSender : ISender
     /// <inheritdoc />
     public ISender Table(ReadOnlySpan<char> name)
     {
-        Buffer.Table(name);
+        _buffer.Table(name);
         return this;
     }
    
     /// <inheritdoc />
     public ISender Symbol(ReadOnlySpan<char> name, ReadOnlySpan<char> value)
     {
-        Buffer.Symbol(name, value);
+        _buffer.Symbol(name, value);
         return this;
     }
 
     /// <inheritdoc />
     public ISender Column(ReadOnlySpan<char> name, ReadOnlySpan<char> value)
     {
-        Buffer.Column(name, value);
+        _buffer.Column(name, value);
         return this;
     }
 
     /// <inheritdoc />
     public ISender Column(ReadOnlySpan<char> name, long value)
     {
-        Buffer.Column(name, value);
+        _buffer.Column(name, value);
         return this;
     }
 
     /// <inheritdoc />
     public ISender Column(ReadOnlySpan<char> name, bool value)
     {
-        Buffer.Column(name, value);
+        _buffer.Column(name, value);
         return this;
     }
 
     /// <inheritdoc />
     public ISender Column(ReadOnlySpan<char> name, double value)
     {
-        Buffer.Column(name, value);
+        _buffer.Column(name, value);
         return this;
     }
 
     /// <inheritdoc />
     public ISender Column(ReadOnlySpan<char> name, DateTime value)
     {
-        Buffer.Column(name, value);
+        _buffer.Column(name, value);
         return this;
     }
 
     /// <inheritdoc />
     public ISender Column(ReadOnlySpan<char> name, DateTimeOffset value)
     {
-        Buffer.Column(name, value);
+        _buffer.Column(name, value);
         return this;
     }
 
     /// <inheritdoc />
     public async Task At(DateTime value, CancellationToken ct = default)
     {
-        Buffer.At(value); 
+        _buffer.At(value); 
         await (this as ISender).FlushIfNecessary(ct);
     }
         
     /// <inheritdoc />
     public async Task At(DateTimeOffset value, CancellationToken ct = default)
     {
-        Buffer.At(value);
+        _buffer.At(value);
         await (this as ISender).FlushIfNecessary(ct);
     }
     
     /// <inheritdoc />
     public async Task At(long value, CancellationToken ct = default)
     {
-        Buffer.At(value);
+        _buffer.At(value);
         await (this as ISender).FlushIfNecessary(ct);
     }
         
     /// <inheritdoc />
     public async Task AtNow(CancellationToken ct = default)
     {
-        Buffer.AtNow();
+        _buffer.AtNow();
         await (this as ISender).FlushIfNecessary(ct);
     }
     
     /// <inheritdoc />
     public void Truncate()
     {
-        Buffer.TrimExcessBuffers();
+        _buffer.TrimExcessBuffers();
     }
     
     /// <inheritdoc />
     public void CancelRow()
     {
-        Buffer.CancelRow();
+        _buffer.CancelRow();
     }
 }

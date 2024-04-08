@@ -6,21 +6,6 @@ namespace QuestDB.Ingress.Senders;
 public interface ISender : IDisposable, IAsyncDisposable
 {
     /// <summary>
-    ///     Performs initial configuration of the sender.
-    ///     The sender can be modified programmatically afterwards.
-    ///     When complete, <see cref="Build"/> should be called to complete the setup.
-    /// </summary>
-    /// <param name="options"></param>
-    /// <returns></returns>
-    public ISender Configure(QuestDBOptions options);
-
-    /// <summary>
-    ///     Initialises the sender using the provided configuration options. Must be called after <see cref="Configure"/>.
-    /// </summary>
-    /// <returns></returns>
-    public ISender Build();
-
-    /// <summary>
     ///     Starts a new transaction.
     /// </summary>
     /// <remarks>

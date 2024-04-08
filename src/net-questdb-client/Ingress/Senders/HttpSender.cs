@@ -28,6 +28,8 @@ internal class HttpSender : ISender
     public bool WithinTransaction => _buffer.WithinTransaction;
     private bool CommittingTransaction { get; set; }
     public DateTime LastFlush { get; private set; } = DateTime.MaxValue;
+    
+    private bool inErrorState { get; set; }
 
     public HttpSender() {}
 
@@ -185,6 +187,17 @@ internal class HttpSender : ISender
         CommittingTransaction = false;
         Debug.Assert(!_buffer.WithinTransaction);
     }
+
+    /// <inheritdoc />
+    public void Rollback()
+    {
+        if (!WithinTransaction)
+        {
+            throw new IngressError(ErrorCode.InvalidApiCall, "Cannot rollback - no open transaction.");
+        }
+
+        _buffer.Clear();
+    }
     
     /// <inheritdoc cref="SendAsync"/>
     public void Send(CancellationToken ct = default)
@@ -209,6 +222,7 @@ internal class HttpSender : ISender
         }
         catch (Exception ex)
         {
+            inErrorState = true;
             throw new IngressError(ErrorCode.ServerFlushError, ex.Message, ex);
         }
     }
@@ -236,6 +250,7 @@ internal class HttpSender : ISender
         }
         catch (Exception ex)
         {
+            inErrorState = true;
             throw new IngressError(ErrorCode.ServerFlushError, ex.Message, ex);
         }
     }
@@ -329,6 +344,8 @@ internal class HttpSender : ISender
 
         if (!response.IsSuccessStatusCode)
         {
+            inErrorState = true;
+            
             if (!(IsRetriableError(response.StatusCode) && Options.retry_timeout > TimeSpan.Zero))
             {
                 throw new IngressError(ErrorCode.ServerFlushError, response.ReasonPhrase);
@@ -361,6 +378,7 @@ internal class HttpSender : ISender
             throw new IngressError(ErrorCode.ServerFlushError, lastResponse.ReasonPhrase);
         }
 
+        inErrorState = false;
         LastFlush = (lastResponse.Headers.Date ?? DateTimeOffset.UtcNow).UtcDateTime;
         cts!.Dispose();
         _buffer.Clear();
@@ -369,16 +387,28 @@ internal class HttpSender : ISender
     /// <inheritdoc />
     public void Dispose()
     {
+        // flush if safe to do so
+        if (!inErrorState)
+        {
+            Send();
+        }
         _client.Dispose();
         _handler.Dispose();
-
+        _buffer.Clear();
+        _buffer.TrimExcessBuffers();
     }
     
     /// <inheritdoc />
-    public ValueTask DisposeAsync()
+    public async ValueTask DisposeAsync()
     {
-        Dispose();
-        return ValueTask.CompletedTask;
+        if (!inErrorState)
+        {
+            await SendAsync();
+        }
+        _client.Dispose();
+        _handler.Dispose();
+        _buffer.Clear();
+        _buffer.TrimExcessBuffers();
     }
     
     /// <inheritdoc />

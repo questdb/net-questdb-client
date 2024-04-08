@@ -1,5 +1,6 @@
 using System.Buffers.Text;
 using System.Diagnostics;
+using System.Linq.Expressions;
 using System.Net.Security;
 using System.Net.Sockets;
 using Org.BouncyCastle.Asn1.Sec;
@@ -32,6 +33,8 @@ internal class TcpSender : ISender
     public int RowCount => _buffer.RowCount;
     public bool WithinTransaction => false;
 
+    private bool inErrorState;
+
     public DateTime LastFlush { get; private set; } = DateTime.MaxValue;
 
     public TcpSender() {}
@@ -51,7 +54,6 @@ internal class TcpSender : ISender
         return new TcpSender(options);
     }
     
-    /// <inheritdoc />
     public ISender Build()
     {
        _buffer = new Buffer(Options.init_buf_size, Options.max_name_len, Options.max_buf_size);
@@ -96,6 +98,7 @@ internal class TcpSender : ISender
        }
        catch
        {
+           inErrorState = true;
            socket.Dispose();
            networkStream?.Dispose();
            sslStream?.Dispose();
@@ -183,6 +186,7 @@ internal class TcpSender : ISender
             else
             {
                 // Disconnected
+                inErrorState = true;
                 throw new IngressError(ErrorCode.SocketError, "Authentication failed, or server disconnected.");
             }
         }
@@ -205,37 +209,66 @@ internal class TcpSender : ISender
     /// <inheritdoc cref="SendAsync"/>
     public void Send()
     {
-        if (_buffer.Length != 0)
+        try
         {
-            _buffer.WriteToStream(_dataStream!);
-            LastFlush = DateTime.UtcNow;
-            _buffer.Clear();
+            if (_buffer.Length != 0)
+            {
+                _buffer.WriteToStream(_dataStream!);
+                LastFlush = DateTime.UtcNow;
+                _buffer.Clear();
+            }
+        }
+        catch (Exception ex)
+        {
+            inErrorState = true;
+            throw new IngressError(ErrorCode.ServerFlushError, ex.Message, ex);
         }
     }
         
     /// <inheritdoc />
     public async Task SendAsync(CancellationToken ct = default)
     {
-        if (_buffer.Length != 0)
+        try
         {
-            await _buffer.WriteToStreamAsync(_dataStream!);
-            LastFlush = DateTime.UtcNow;
-            _buffer.Clear();
+            if (_buffer.Length != 0)
+            {
+                await _buffer.WriteToStreamAsync(_dataStream!);
+                LastFlush = DateTime.UtcNow;
+                _buffer.Clear();
+                inErrorState = false;
+            }
+        }
+        catch (Exception ex)
+        {
+            inErrorState = true;
+            throw new IngressError(ErrorCode.ServerFlushError, ex.Message, ex);
         }
     }
     
     /// <inheritdoc />
     public void Dispose()
     {
+        if (!inErrorState)
+        {
+            Send();
+        }
         _dataStream.Dispose();
         _underlyingSocket.Dispose();
+        _buffer.Clear();
+        _buffer.TrimExcessBuffers();
     }
     
     /// <inheritdoc />
-    public ValueTask DisposeAsync()
+    public async ValueTask DisposeAsync()
     {
-        Dispose();
-        return ValueTask.CompletedTask;
+        if (!inErrorState)
+        {
+            await SendAsync();
+        }
+        _dataStream.Dispose();
+        _underlyingSocket.Dispose();
+        _buffer.Clear();
+        _buffer.TrimExcessBuffers();
     }
     
     /// <inheritdoc />

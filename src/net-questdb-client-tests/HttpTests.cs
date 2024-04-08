@@ -787,6 +787,7 @@ public class HttpTests
 
         // check its fine after sending
         sender.Transaction("other table name");
+        sender.Rollback();
     }
 
     [Test]
@@ -808,6 +809,7 @@ public class HttpTests
 
         // check its fine after sending
         sender.Transaction("other table name");
+        sender.Rollback();
     }
 
     [Test]

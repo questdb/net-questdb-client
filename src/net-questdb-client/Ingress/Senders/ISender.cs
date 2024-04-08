@@ -17,6 +17,18 @@ public interface ISender : IDisposable, IAsyncDisposable
     /// <exception cref="IngressError"></exception>
     public ISender Transaction(ReadOnlySpan<char> tableName)
         => throw new IngressError(ErrorCode.InvalidApiCall, $"`{GetType().Name}` does not support transactions.");
+    
+    /// <summary>
+    ///     Clears the transaction.
+    /// </summary>
+    /// <remarks>
+    /// </remarks>
+    /// <param name="tableName"></param>
+    /// <returns></returns>
+    /// <exception cref="IngressError"></exception>
+    public void Rollback()
+        => throw new IngressError(ErrorCode.InvalidApiCall, $"`{GetType().Name}` does not support transactions.");
+
 
     /// <summary>
     ///     Commits the current transaction, sending the buffer contents to the database.

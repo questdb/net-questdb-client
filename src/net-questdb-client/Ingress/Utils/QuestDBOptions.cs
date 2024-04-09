@@ -509,11 +509,6 @@ public record QuestDBOptions
 
         var splits = confStr.Split("::");
 
-        if (splits[1].Last() != ';')
-        {
-            throw new IngressError(ErrorCode.ConfigError, "Config string must end with a semicolon.");
-        }
-
         _connectionStringBuilder = new DbConnectionStringBuilder
         {
             ConnectionString = splits[1]

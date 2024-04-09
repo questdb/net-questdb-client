@@ -93,15 +93,6 @@ public class QuestDBOptionsTests
                 .With.Message.Contains("Invalid property")
         );
     }
-
-    [Test]
-    public void RequireTrailingSemicolon()
-    {
-        Assert.That(
-            () => new QuestDBOptions("http::addr=localhost:9000"),
-            Throws.TypeOf<IngressError>().With.Message.Contains("semicolon")
-        );
-    }
     
     [Test]
     public void BindConfigFileToOptions()

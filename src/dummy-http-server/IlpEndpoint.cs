@@ -43,6 +43,7 @@ public class IlpEndpoint : Endpoint<Request>
     public static Exception? LastError = new();
     public static bool WithTokenAuth = false;
     public static bool WithBasicAuth = false;
+    public static bool WithRetriableError = false;
     private const string Username = "admin";
     private const string Password = "quest";
 
@@ -64,6 +65,11 @@ public class IlpEndpoint : Endpoint<Request>
 
     public override async Task HandleAsync(Request req, CancellationToken ct)
     {
+        if (WithRetriableError)
+        {
+            await SendAsync(null, 500, ct);
+            return;
+        }
         try
         {
             ReceiveBuffer.Append(req.Content);

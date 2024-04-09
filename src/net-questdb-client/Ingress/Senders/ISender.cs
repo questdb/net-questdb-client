@@ -39,7 +39,7 @@ public interface ISender : IDisposable, IAsyncDisposable
         => throw new IngressError(ErrorCode.InvalidApiCall, $"`{GetType().Name}` does not support transactions.");
 
     /// <inheritdoc cref="CommitAsync"/>
-    public void Commit() => CommitAsync().Wait();
+    public void Commit(CancellationToken ct = default)  => throw new IngressError(ErrorCode.InvalidApiCall, $"`{GetType().Name}` does not support transactions.");
 
     /// <summary>
     ///     Sends data to the QuestDB server.
@@ -55,10 +55,10 @@ public interface ISender : IDisposable, IAsyncDisposable
     public Task SendAsync(CancellationToken ct = default);
 
     /// <inheritdoc cref="SendAsync"/>
-    public void Send() => SendAsync().Wait();
+    public void Send(CancellationToken ct = default);
 
     /// <summary>
-    ///     Represents the current length of the buffer in UTF-8 byutes.
+    ///     Represents the current length of the buffer in UTF-8 bytes.
     /// </summary>
     public int Length { get; }
 
@@ -150,6 +150,11 @@ public interface ISender : IDisposable, IAsyncDisposable
     ///     Cancels the current, partially formed ILP row.
     /// </summary>
     public void CancelRow();
+
+    /// <summary>
+    ///     Clears the sender's buffer.
+    /// </summary>
+    public void Clear();
 
     /// <summary>
     ///     Handles auto-flushing logic.

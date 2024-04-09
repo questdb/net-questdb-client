@@ -739,21 +739,30 @@ public class HttpTests
     }
 
     [Test]
-    public void CannotConnect()
+    public async Task CannotConnect()
     {
+        var sender = Sender.New($"http::addr={Host}:{HttpPort};auto_flush=off;");
+        await sender.Table("foo").Symbol("a", "b").AtNow();
         Assert.That(
             async () =>
             {
-                var sender = Sender.New($"http::addr={Host}:{HttpPort};");
-                await sender.Table("foo").Symbol("a", "b").AtNow();
+                
                 await sender.SendAsync();
             },
-            Throws.TypeOf<IngressError>().With.Message.Contains("refused")
+            Throws.Exception.With.Message.Contains("refused")
+        );
+        
+        Assert.That(
+             () =>
+            {
+                sender.Send();
+            },
+            Throws.Exception.With.Message.Contains("refused")
         );
     }
     
     [Test]
-    public async Task BasicTransaction()
+    public async Task TransactionBasic()
     {
         using var srv = new DummyHttpServer();
         await srv.StartAsync(HttpPort);
@@ -863,8 +872,96 @@ public class HttpTests
             async () => await sender.SendAsync(),
             Throws.TypeOf<IngressError>().With.Message.Contains("commit")
         );
+        
+        Assert.That(
+             () => sender.Send(),
+            Throws.TypeOf<IngressError>().With.Message.Contains("commit")
+        );
 
         await sender.CommitAsync();
+        
+        sender.Transaction("tableName");
+        for (var i = 0; i < 100; i++)
+        {
+            await sender
+                .Symbol("foo", "bah")
+                .Column("num", i)
+                .AtNow();
+        }
+
+        sender.Commit();
+    }
+
+    [Test]
+    public async Task CannotCommitWithoutTransaction()
+    {
+        await using var sender =
+            Sender.New(
+                $"http::addr={Host}:{HttpPort};auto_flush=off;");
+        Assert.That(
+            () => sender.Commit(),
+            Throws.TypeOf<IngressError>().With.Message.Contains("No transaction")
+            );
+        
+        Assert.That(
+            async () => await sender.CommitAsync(),
+            Throws.TypeOf<IngressError>().With.Message.Contains("No transaction")
+        );
+    }
+    
+    [Test]
+    public async Task TransactionBufferMustBeClearBeforeStart()
+    {
+        await using var sender =
+            Sender.New(
+                $"http::addr={Host}:{HttpPort};auto_flush=off;");
+
+        sender.Table("foo").Symbol("bah", "baz");
+        
+        Assert.That(
+            () => sender.Transaction("tableName"),
+            Throws.TypeOf<IngressError>().With.Message.Contains("clear")
+            );
+
+        sender.Clear();
+    }
+
+    [Test]
+    public async Task TransactionCannotBeRolledBackIfItDoesNotExist()
+    {
+        await using var sender =
+            Sender.New(
+                $"http::addr={Host}:{HttpPort};auto_flush=off;");
+        
+        sender.Table("foo").Symbol("bah", "baz");
+        
+        Assert.That(
+                () => sender.Rollback(),
+                Throws.TypeOf<IngressError>().With.Message.Contains("no")
+                );
+        sender.Clear();
+    }
+
+    [Test]
+    public async Task TransactionDoesNotAllowSend()
+    {
+        await using var sender =
+            Sender.New(
+                $"http::addr={Host}:{HttpPort};auto_flush=off;");
+        
+        await sender.Transaction("foo").Symbol("bah", "baz").AtNow();
+        
+        Assert.That(
+            () => sender.Send(),
+            Throws.TypeOf<IngressError>().With.Message.Contains("commit")
+        );
+        
+        Assert.That(
+            async () => await sender.SendAsync(),
+            Throws.TypeOf<IngressError>().With.Message.Contains("commit")
+        );
+        
+        sender.Rollback();
     }
 
     [Test]
@@ -915,5 +1012,73 @@ public class HttpTests
         await Task.Delay(500);
         await sender.Table("foo").Symbol("bah", "baz").AtNow();
         Assert.That(sender.Length == 0);
+    }
+
+    [Test]
+    public async Task ShouldRetryOnInternalServerError()
+    {
+        using var srv = new DummyHttpServer(withRetriableError: true);
+        await srv.StartAsync(HttpPort);
+        
+        await using var sender = Sender.New($"http::addr={Host}:{HttpPort};auto_flush=off;");
+
+        await sender.Table("foo").Symbol("bah", "baz").AtNow();
+        Assert.That(
+            async () => await sender.SendAsync(), 
+            Throws.TypeOf<IngressError>());
+
+    }
+    
+    [Test]
+    public async Task SendTimestampColumns()
+    {
+        using var srv = new DummyHttpServer();
+        await srv.StartAsync(HttpPort);
+        
+        await using var sender = Sender.New($"http::addr={Host}:{HttpPort};auto_flush=off;");
+
+        sender.Table("foo")
+            .Symbol("bah", "baz")
+            .Column("ts1", DateTime.UtcNow).Column("ts2", DateTimeOffset.UtcNow);
+        await sender.SendAsync();
+    }
+    
+    [Test]
+    public async Task SendVariousAts()
+    {
+        using var srv = new DummyHttpServer();
+        await srv.StartAsync(HttpPort);
+        
+        await using var sender = Sender.New($"http::addr={Host}:{HttpPort};auto_flush=off;");
+
+        await sender.Table("foo")
+            .Symbol("bah", "baz")
+            .AtNow();
+        
+        await sender.Table("foo")
+            .Symbol("bah", "baz")
+            .At(DateTime.UtcNow);
+        
+        await sender.Table("foo")
+            .Symbol("bah", "baz")
+            .At(DateTimeOffset.UtcNow);
+        
+        await sender.Table("foo")
+            .Symbol("bah", "baz")
+            .At(DateTime.UtcNow.Ticks / 100);
+        
+        await sender.SendAsync();
+    }
+
+    [Test]
+    public async Task ClearSender()
+    {
+        await using var sender = Sender.New($"http::addr={Host}:{HttpPort};auto_flush=off;");
+        
+        await sender.Table("foo").Symbol("bah", "baz").AtNow();
+        Assert.That(sender.Length, Is.GreaterThan(0));
+
+        sender.Clear();
+        Assert.That(sender.Length, Is.EqualTo(0));
     }
 }

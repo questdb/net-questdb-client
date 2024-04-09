@@ -131,11 +131,6 @@ internal class TcpSender : ISender
 
         var bufferLen = await ReceiveUntil('\n', ct);
 
-        if (Options.token == null)
-        {
-            throw new IngressError(ErrorCode.AuthError, "Must provide a token for TCP auth.");
-        }
-
         var privateKey =
             FromBase64String(Options.token!);
 
@@ -207,7 +202,7 @@ internal class TcpSender : ISender
     }
     
     /// <inheritdoc cref="SendAsync"/>
-    public void Send()
+    public void Send(CancellationToken ct = default)
     {
         try
         {
@@ -365,5 +360,11 @@ internal class TcpSender : ISender
     public void CancelRow()
     {
         _buffer.CancelRow();
+    }
+    
+    /// <inheritdoc />
+    public void Clear()
+    {
+        _buffer.Clear();
     }
 }

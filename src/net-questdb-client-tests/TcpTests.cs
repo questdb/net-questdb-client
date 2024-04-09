@@ -791,6 +791,35 @@ public class TcpTests
         Assert.That(sender.Length == 0);
     }
 
+
+    [Test]
+    public async Task TcpSenderDoesNotSupportTransactions()
+    {
+        using var srv = CreateTcpListener(_port);
+        srv.AcceptAsync();
+        await using var sender = Sender.New($"tcp::addr={_host}:{_port};auto_flush=on;auto_flush_interval=250;auto_flush_rows=-1;auto_flush_bytes=-1;");
+        
+        Assert.That(
+            () => sender.Transaction("foo"),
+            Throws.TypeOf<IngressError>().With.Message.Contains("does not support")
+            );
+        
+        Assert.That(
+            () => sender.Rollback(),
+            Throws.TypeOf<IngressError>().With.Message.Contains("does not support")
+        );
+        
+        Assert.That(
+            () => sender.Commit(),
+            Throws.TypeOf<IngressError>().With.Message.Contains("does not support")
+        );
+        
+        Assert.That(
+            async () => await sender.CommitAsync(),
+            Throws.TypeOf<IngressError>().With.Message.Contains("does not support")
+        );
+    }
+    
     private static void WaitAssert(DummyIlpServer srv, string expected)
     {
         var expectedLen = Encoding.UTF8.GetBytes(expected).Length;

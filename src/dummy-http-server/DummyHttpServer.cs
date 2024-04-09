@@ -38,7 +38,7 @@ public class DummyHttpServer : IDisposable
     private int _port = 29743;
     private readonly WebApplication _app;
 
-    public DummyHttpServer(bool withTokenAuth = false, bool withBasicAuth = false)
+    public DummyHttpServer(bool withTokenAuth = false, bool withBasicAuth = false, bool withRetriableError=false)
     {
         var bld = WebApplication.CreateBuilder();
 
@@ -52,6 +52,7 @@ public class DummyHttpServer : IDisposable
 
         IlpEndpoint.WithTokenAuth = withTokenAuth;
         IlpEndpoint.WithBasicAuth = withBasicAuth;
+        IlpEndpoint.WithRetriableError = withRetriableError;
 
         if (withTokenAuth)
         {

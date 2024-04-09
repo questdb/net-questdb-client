@@ -171,6 +171,10 @@ internal class HttpSender : ISender
     /// <inheritdoc cref="CommitAsync"/> />
     public void Commit(CancellationToken ct = default)
     {
+        if (!WithinTransaction)
+        {
+            throw new IngressError(ErrorCode.InvalidApiCall, "No transaction to commit.");
+        }
         CommittingTransaction = true;
         Send(ct);
 
@@ -181,6 +185,10 @@ internal class HttpSender : ISender
     /// <inheritdoc />
     public async Task CommitAsync(CancellationToken ct = default)
     {
+        if (!WithinTransaction)
+        {
+            throw new IngressError(ErrorCode.InvalidApiCall, "No transaction to commit.");
+        }
         CommittingTransaction = true;
         await SendAsync(ct);
 
@@ -251,7 +259,12 @@ internal class HttpSender : ISender
         catch (Exception ex)
         {
             inErrorState = true;
-            throw new IngressError(ErrorCode.ServerFlushError, ex.Message, ex);
+            if (ex is not IngressError)
+            {
+                throw new IngressError(ErrorCode.ServerFlushError, ex.Message, ex);
+            } 
+            
+            throw;
         }
     }
     
@@ -342,7 +355,7 @@ internal class HttpSender : ISender
     {
         var lastResponse = response;
 
-        if (!response.IsSuccessStatusCode)
+        if (!lastResponse.IsSuccessStatusCode)
         {
             inErrorState = true;
             
@@ -505,5 +518,11 @@ internal class HttpSender : ISender
     public void CancelRow()
     {
         _buffer.CancelRow();
+    }
+
+    /// <inheritdoc />
+    public void Clear()
+    {
+        _buffer.Clear();
     }
 }

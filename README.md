@@ -8,7 +8,7 @@
 
 <p>&nbsp;</p>
 
-> A .NET client for high performance time-series writes into [QuestDB](https://www.elastic.co/products/app-search).
+> A .NET client for high performance time-series writes into [QuestDB](https://questdb.io).
 
 ## Contents
 
@@ -196,7 +196,7 @@ the [Query & SQL overview](https://questdb.io/docs/reference/sql/overview/)
 
 ### Where do I report issues with the client?
 
-If something is not working as expected, please open an [issue](https://github.com/questdb/c-questdb-client/issues/new).
+If something is not working as expected, please open an [issue](https://github.com/questdb/net-questdb-client/issues/new).
 
 ### Where can I learn more about QuestDB?
 
@@ -204,7 +204,7 @@ Your best bet is to read the [documentation](https://questdb.io/docs/).
 
 ### Where else can I go to get help?
 
-Come visit the [QuestDB community Slack]([https://discuss.elastic.co/c/app-search](https://slack.questdb.io)).
+Come visit the [QuestDB community Slack](https://slack.questdb.io).
 
 ## Contribute 🚀
 
@@ -212,10 +212,11 @@ We welcome contributors to the project. Before you begin, a couple notes...
 
 - Prior to opening a pull request, please create an issue
   to [discuss the scope of your proposal](https://github.com/questdb/c-questdb-client/issues).
+
 - Please write simple code and concise documentation, when appropriate.
 
 ## License 📗
 
 [Apache 2.0](https://github.com/questdb/net-questdb-client/tree/main?tab=Apache-2.0-1-ov-file)
 
-Thank you to all the [contributors](https://github.com/questdb/c-questdb-client/graphs/contributors)!
+Thank you to all the [contributors](https://github.com/questdb/net-questdb-client/graphs/contributors)!

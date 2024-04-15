@@ -28,8 +28,8 @@ internal class HttpSender : ISender
     public bool WithinTransaction => _buffer.WithinTransaction;
     private bool CommittingTransaction { get; set; }
     public DateTime LastFlush { get; private set; } = DateTime.MaxValue;
-    
-    private bool inErrorState { get; set; }
+
+    private bool inErrorState;
 
     public HttpSender() {}
 
@@ -231,7 +231,12 @@ internal class HttpSender : ISender
         catch (Exception ex)
         {
             inErrorState = true;
-            throw new IngressError(ErrorCode.ServerFlushError, ex.Message, ex);
+            if (ex is not IngressError)
+            {
+                throw new IngressError(ErrorCode.ServerFlushError, ex.Message, ex);
+            }
+
+            throw;
         }
     }
         

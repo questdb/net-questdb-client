@@ -211,12 +211,18 @@ internal class TcpSender : ISender
                 _buffer.WriteToStream(_dataStream!);
                 LastFlush = DateTime.UtcNow;
                 _buffer.Clear();
+                inErrorState = false;
             }
         }
         catch (Exception ex)
         {
             inErrorState = true;
-            throw new IngressError(ErrorCode.ServerFlushError, ex.Message, ex);
+            if (ex is not IngressError)
+            {
+                throw new IngressError(ErrorCode.ServerFlushError, ex.Message, ex);
+            }
+
+            throw;
         }
     }
         
@@ -227,7 +233,7 @@ internal class TcpSender : ISender
         {
             if (_buffer.Length != 0)
             {
-                await _buffer.WriteToStreamAsync(_dataStream!);
+                await _buffer.WriteToStreamAsync(_dataStream!, ct);
                 LastFlush = DateTime.UtcNow;
                 _buffer.Clear();
                 inErrorState = false;
@@ -236,7 +242,12 @@ internal class TcpSender : ISender
         catch (Exception ex)
         {
             inErrorState = true;
-            throw new IngressError(ErrorCode.ServerFlushError, ex.Message, ex);
+            if (ex is not IngressError)
+            {
+                throw new IngressError(ErrorCode.ServerFlushError, ex.Message, ex);
+            }
+
+            throw;
         }
     }
     
@@ -247,6 +258,8 @@ internal class TcpSender : ISender
         {
             Send();
         }
+
+        _dataStream.Close();
         _dataStream.Dispose();
         _underlyingSocket.Dispose();
         _buffer.Clear();
@@ -260,7 +273,9 @@ internal class TcpSender : ISender
         {
             await SendAsync();
         }
-        _dataStream.Dispose();
+
+        _dataStream.Close();
+        await _dataStream.DisposeAsync();
         _underlyingSocket.Dispose();
         _buffer.Clear();
         _buffer.TrimExcessBuffers();

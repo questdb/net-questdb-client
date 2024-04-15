@@ -585,8 +585,6 @@ public class HttpTests
             {
                 await sender.SendAsync();
             }
-
-            //srv.GetReceiveBuffer().Clear();
         }
 
         await sender.SendAsync();
@@ -1025,6 +1023,12 @@ public class HttpTests
         await sender.Table("foo").Symbol("bah", "baz").AtNow();
         Assert.That(
             async () => await sender.SendAsync(), 
+            Throws.TypeOf<IngressError>());
+        
+        
+        await sender.Table("foo").Symbol("bah", "baz").AtNow();
+        Assert.That(
+            () => sender.Send(),
             Throws.TypeOf<IngressError>());
 
     }

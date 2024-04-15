@@ -105,13 +105,13 @@ public class TcpTests
         srv.WithAuth("testUser1", "Vs4e-cOLsVCntsMrZiAGAZtrkPXO00uoRLuA3d7gEcI=",
             "ANhR2AZSs4ar9urE5AZrJqu469X0r7gZ1BBEdcrAuL_6");
         srv.AcceptAsync();
+        
+        await using var sender = Sender.New(
+            $"tcp::addr={_host}:{_port};username=testUser1;token=ZOvHHNQBGvZuiCLt7CmWt0tTlsnjm9F3O3C749wGT_M=;");
 
         Assert.That(
             async () =>
             {
-                await using var sender = Sender.New(
-                    $"tcp::addr={_host}:{_port};username=testUser1;token=ZOvHHNQBGvZuiCLt7CmWt0tTlsnjm9F3O3C749wGT_M=;");
-
                 for (var i = 0; i < 10; i++)
                 {
                     await sender.Table("metric name")
@@ -631,9 +631,10 @@ public class TcpTests
     public async Task CannotConnect()
     {
         Assert.That(
-            () => Sender.New($"tcp::addr={_host}:{_port};"),
+            () => Sender.New($"tcp::addr={_host}:{_port};auto_flush=off;"),
             Throws.TypeOf<AggregateException>()
         );
+        
     }
 
     [Test]
@@ -818,6 +819,48 @@ public class TcpTests
             async () => await sender.CommitAsync(),
             Throws.TypeOf<IngressError>().With.Message.Contains("does not support")
         );
+    }
+    
+    [Test]
+    public async Task SendVariousAts()
+    {
+        using var srv = CreateTcpListener(_port);
+        srv.AcceptAsync();
+        
+        await using var sender = Sender.New($"tcp::addr={_host}:{_port};auto_flush=off;");
+
+        await sender.Table("foo")
+            .Symbol("bah", "baz")
+            .AtNow();
+        
+        await sender.Table("foo")
+            .Symbol("bah", "baz")
+            .At(DateTime.UtcNow);
+        
+        await sender.Table("foo")
+            .Symbol("bah", "baz")
+            .At(DateTimeOffset.UtcNow);
+        
+        await sender.Table("foo")
+            .Symbol("bah", "baz")
+            .At(DateTime.UtcNow.Ticks / 100);
+        
+        await sender.SendAsync();
+    }
+    
+    [Test]
+    public async Task ClearSender()
+    {
+        using var srv = CreateTcpListener(_port);
+        srv.AcceptAsync();
+
+        await using var sender = Sender.New($"tcp::addr={_host}:{_port};auto_flush=off;");
+        
+        await sender.Table("foo").Symbol("bah", "baz").AtNow();
+        Assert.That(sender.Length, Is.GreaterThan(0));
+
+        sender.Clear();
+        Assert.That(sender.Length, Is.EqualTo(0));
     }
     
     private static void WaitAssert(DummyIlpServer srv, string expected)

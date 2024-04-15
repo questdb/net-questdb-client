@@ -394,7 +394,7 @@ public record QuestDBOptions
     }
 
     /// <summary>
-    ///     todo
+    ///     Specifies whether the TCP stream owns the underlying socket.
     /// </summary>
     [JsonIgnore]
     public bool own_socket

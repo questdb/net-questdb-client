@@ -745,8 +745,9 @@ public class Buffer
     ///     Writes the chunked buffer contents to a stream.
     /// </summary>
     /// <param name="stream"></param>
+    /// <param name="ct></param>
     /// <exception cref="IngressError">When writing to stream fails.</exception>
-    public async Task WriteToStreamAsync(Stream stream)
+    public async Task WriteToStreamAsync(Stream stream, CancellationToken ct = default)
     {
         for (var i = 0; i <= _currentBufferIndex; i++)
         {
@@ -764,6 +765,8 @@ public class Buffer
                 throw new IngressError(ErrorCode.SocketError, "Could not write data to server.", iox);
             }
         }
+
+        await stream.FlushAsync(ct);
     }
     
     /// <summary>
@@ -789,5 +792,6 @@ public class Buffer
                 throw new IngressError(ErrorCode.SocketError, "Could not write data to server.", iox);
             }
         }
+        stream.Flush();
     }
 }

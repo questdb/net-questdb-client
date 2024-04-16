@@ -406,7 +406,7 @@ internal class HttpSender : ISender
     public void Dispose()
     {
         // flush if safe to do so
-        if (!inErrorState)
+        if (Options.auto_flush == AutoFlushType.on && !inErrorState)
         {
             Send();
         }
@@ -419,7 +419,7 @@ internal class HttpSender : ISender
     /// <inheritdoc />
     public async ValueTask DisposeAsync()
     {
-        if (!inErrorState)
+        if (Options.auto_flush == AutoFlushType.on && !inErrorState)
         {
             await SendAsync();
         }

@@ -254,7 +254,7 @@ internal class TcpSender : ISender
     /// <inheritdoc />
     public void Dispose()
     {
-        if (!inErrorState)
+        if (Options.auto_flush == AutoFlushType.on && !inErrorState)
         {
             Send();
         }
@@ -269,7 +269,7 @@ internal class TcpSender : ISender
     /// <inheritdoc />
     public async ValueTask DisposeAsync()
     {
-        if (!inErrorState)
+        if (Options.auto_flush == AutoFlushType.on && !inErrorState)
         {
             await SendAsync();
         }

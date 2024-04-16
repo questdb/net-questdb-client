@@ -248,11 +248,12 @@ internal class HttpSender : ISender
         HttpRequestMessage? request = null;
         CancellationTokenSource? cts = null;
         HttpResponseMessage? response = null;
+        inErrorState = false;
         
         try
         {
             (request, cts) = GenerateRequest(ct);
-            response = _client!.Send(request, HttpCompletionOption.ResponseHeadersRead, cts!.Token);
+            response = _client.Send(request, HttpCompletionOption.ResponseHeadersRead, cts!.Token);
             
             // retry if appropriate - error that's retriable, and retries are enabled
             if (!response.IsSuccessStatusCode && IsRetriableError(response.StatusCode) && Options.retry_timeout > TimeSpan.Zero)
@@ -273,14 +274,13 @@ internal class HttpSender : ISender
                     Thread.Sleep(retryInterval + jitter);
                     
                     (request, cts) = GenerateRequest(ct);
-                    response = _client!.Send(request, cts!.Token);
+                    response = _client.Send(request, cts!.Token);
                 }
             }
             
             // return if ok
             if (response.IsSuccessStatusCode)
             {
-                _buffer.Clear();
                 return;
             }
 
@@ -300,6 +300,7 @@ internal class HttpSender : ISender
         finally
         {
             LastFlush = (response?.Headers.Date ?? DateTimeOffset.UtcNow).UtcDateTime;
+            _buffer.Clear();
             request?.Dispose();
             response?.Dispose();
             cts?.Dispose();
@@ -322,11 +323,12 @@ internal class HttpSender : ISender
         HttpRequestMessage? request = null;
         CancellationTokenSource? cts = null;
         HttpResponseMessage? response = null;
+        inErrorState = false;
         
         try
         {
             (request, cts) = GenerateRequest(ct);
-            response = await _client!.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cts!.Token);
+            response = await _client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cts!.Token);
             
             // retry if appropriate - error that's retriable, and retries are enabled
             if (!response.IsSuccessStatusCode && IsRetriableError(response.StatusCode) && Options.retry_timeout > TimeSpan.Zero)
@@ -347,14 +349,13 @@ internal class HttpSender : ISender
                     await Task.Delay(retryInterval + jitter);
                     
                     (request, cts) = GenerateRequest(ct);
-                    response = await _client!.SendAsync(request, cts!.Token);
+                    response = await _client.SendAsync(request, cts!.Token);
                 }
             }
             
             // return if ok
             if (response.IsSuccessStatusCode)
             {
-                _buffer.Clear();
                 return;
             }
 
@@ -373,6 +374,7 @@ internal class HttpSender : ISender
         }
         finally
         {
+            _buffer.Clear();
             LastFlush = (response?.Headers.Date ?? DateTimeOffset.UtcNow).UtcDateTime;
             request?.Dispose();
             response?.Dispose();

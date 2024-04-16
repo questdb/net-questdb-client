@@ -78,6 +78,7 @@ public class BufferStreamContent : HttpContent
     /// <exception cref="IngressError">When writing to stream fails.</exception>
     protected override void SerializeToStream(Stream stream, TransportContext? context, CancellationToken ct)
     {
+        ct.ThrowIfCancellationRequested();
         Buffer.WriteToStream(stream);
     }
 

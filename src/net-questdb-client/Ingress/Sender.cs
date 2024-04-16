@@ -72,7 +72,7 @@ public static class Sender
             case ProtocolType.tcps:
                 return new TcpSender(options);
             default:
-                throw new NotImplementedException();
+                throw new NotSupportedException();
         }
     }
     

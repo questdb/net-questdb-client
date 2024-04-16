@@ -33,7 +33,6 @@ using System.Threading.Tasks;
 using NUnit.Framework;
 using QuestDB.Ingress;
 using QuestDB.Ingress.Enums;
-using QuestDB.Ingress.Legacy;
 
 namespace tcp_client_test;
 

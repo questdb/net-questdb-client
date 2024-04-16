@@ -33,7 +33,7 @@ using Org.BouncyCastle.Crypto.Parameters;
 using Org.BouncyCastle.Math;
 using Org.BouncyCastle.Security;
 
-namespace QuestDB.Ingress.Legacy;
+namespace QuestDB.Ingress;
 
 [Obsolete("This has been superseded by ISender and the Sender factory.")]
 public class LineTcpSender : IDisposable

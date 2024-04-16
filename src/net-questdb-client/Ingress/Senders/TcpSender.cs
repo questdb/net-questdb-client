@@ -246,6 +246,11 @@ internal class TcpSender : ISender
 
             throw;
         }
+        finally
+        {
+            LastFlush = DateTime.UtcNow;
+            _buffer.Clear();
+        }
     }
         
     /// <inheritdoc />
@@ -256,8 +261,6 @@ internal class TcpSender : ISender
             if (_buffer.Length != 0)
             {
                 await _buffer.WriteToStreamAsync(_dataStream!, ct);
-                LastFlush = DateTime.UtcNow;
-                _buffer.Clear();
                 inErrorState = false;
             }
         }
@@ -270,6 +273,11 @@ internal class TcpSender : ISender
             }
 
             throw;
+        }
+        finally
+        {
+            LastFlush = DateTime.UtcNow;
+            _buffer.Clear();
         }
     }
     

@@ -24,7 +24,7 @@
  ******************************************************************************/
 
 
-namespace QuestDB.Ingress.Legacy;
+namespace QuestDB.Ingress;
 
 /// <summary>
 ///     Deprecated TLS selection class.

@@ -512,7 +512,16 @@ internal class HttpSender : ISender
         // flush if safe to do so
         if (Options.auto_flush == AutoFlushType.on && !inErrorState)
         {
-            Send();
+            try
+            {
+                Send();
+            }
+            catch (Exception ex)
+            {
+                inErrorState = true;
+                throw new IngressError(ErrorCode.ServerFlushError,
+                    $"Could not auto-flush when disposing sender: {ex.Message}");
+            }
         }
         _client.Dispose();
         _handler.Dispose();
@@ -525,7 +534,16 @@ internal class HttpSender : ISender
     {
         if (Options.auto_flush == AutoFlushType.on && !inErrorState)
         {
-            await SendAsync();
+            try
+            {
+                await SendAsync();
+            }
+            catch (Exception ex)
+            {
+                inErrorState = true;
+                throw new IngressError(ErrorCode.ServerFlushError,
+                    $"Could not auto-flush when disposing sender: {ex.Message}");
+            }
         }
         _client.Dispose();
         _handler.Dispose();

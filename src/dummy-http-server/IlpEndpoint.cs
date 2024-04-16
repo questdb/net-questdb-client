@@ -24,7 +24,12 @@
  ******************************************************************************/
 
 
+using System;
+using System.Collections.Generic;
+using System.Linq;
 using System.Text;
+using System.Threading;
+using System.Threading.Tasks;
 using FastEndpoints;
 // ReSharper disable ClassNeverInstantiated.Global
 #pragma warning disable CS8618 // Non-nullable field must contain a non-null value when exiting constructor. Consider declaring as nullable.
@@ -36,7 +41,20 @@ public record Request : IPlainTextRequest
     public string Content { get; set; }
 }
 
-public class IlpEndpoint : Endpoint<Request>
+public record JsonErrorResponse
+{
+    public string code { get; init; }
+    public string message { get; init; }
+    public int line { get; init; }
+    public string errorId { get; init; }
+    
+    public override string ToString()
+    {
+        return $"\nServer Response (\n\tCode: `{code}`\n\tMessage: `{message}`\n\tLine: `{line}`\n\tErrorId: `{errorId}` \n)";
+    }
+}
+
+public class IlpEndpoint : Endpoint<Request, JsonErrorResponse>
 {
     public static readonly StringBuilder ReceiveBuffer = new();
     public static readonly List<string> LogMessages = new();
@@ -44,6 +62,7 @@ public class IlpEndpoint : Endpoint<Request>
     public static bool WithTokenAuth = false;
     public static bool WithBasicAuth = false;
     public static bool WithRetriableError = false;
+    public static bool WithErrorMessage = false;
     private const string Username = "admin";
     private const string Password = "quest";
 
@@ -70,6 +89,14 @@ public class IlpEndpoint : Endpoint<Request>
             await SendAsync(null, 500, ct);
             return;
         }
+
+        if (WithErrorMessage)
+        {
+            await SendAsync(new JsonErrorResponse()
+                { code = "code", errorId = "errorid", line = 1, message = "message" }, 400, ct);
+            return;
+        }
+        
         try
         {
             ReceiveBuffer.Append(req.Content);

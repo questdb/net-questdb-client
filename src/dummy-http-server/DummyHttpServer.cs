@@ -23,9 +23,16 @@
  ******************************************************************************/
 
 
+using System;
+using System.Net.Http;
 using System.Text;
+using System.Threading.Tasks;
 using FastEndpoints;
 using FastEndpoints.Security;
+using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Hosting;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace dummy_http_server;
 
@@ -38,7 +45,7 @@ public class DummyHttpServer : IDisposable
     private int _port = 29743;
     private readonly WebApplication _app;
 
-    public DummyHttpServer(bool withTokenAuth = false, bool withBasicAuth = false, bool withRetriableError=false)
+    public DummyHttpServer(bool withTokenAuth = false, bool withBasicAuth = false, bool withRetriableError=false, bool withErrorMessage = false)
     {
         var bld = WebApplication.CreateBuilder();
 
@@ -53,6 +60,7 @@ public class DummyHttpServer : IDisposable
         IlpEndpoint.WithTokenAuth = withTokenAuth;
         IlpEndpoint.WithBasicAuth = withBasicAuth;
         IlpEndpoint.WithRetriableError = withRetriableError;
+        IlpEndpoint.WithErrorMessage = withErrorMessage;
 
         if (withTokenAuth)
         {

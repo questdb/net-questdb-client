@@ -270,7 +270,7 @@ internal class HttpSender : ISender
             // retry if appropriate - error that's retriable, and retries are enabled
             if (cannotConnect != null // if it was a cannot correct error
                 || (!response!.IsSuccessStatusCode // or some other http error
-                    && IsRetriableError(response!.StatusCode)
+                    && IsRetriableError(response.StatusCode)
                     && Options.retry_timeout > TimeSpan.Zero))
             {
                 var retryTimer = new Stopwatch();
@@ -394,7 +394,7 @@ internal class HttpSender : ISender
             // retry if appropriate - error that's retriable, and retries are enabled
             if (cannotConnect != null // if it was a cannot correct error
                      || (!response!.IsSuccessStatusCode // or some other http error
-                         && IsRetriableError(response!.StatusCode)
+                         && IsRetriableError(response.StatusCode)
                          && Options.retry_timeout > TimeSpan.Zero))
             {
                 var retryTimer = new Stopwatch();
@@ -417,6 +417,7 @@ internal class HttpSender : ISender
                     await Task.Delay(retryInterval + jitter);
                     
                     (request, cts) = GenerateRequest(ct);
+                    
                     try
                     {
                         response = await _client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cts!.Token);
@@ -541,6 +542,7 @@ internal class HttpSender : ISender
             catch (Exception ex)
             {
                 inErrorState = true;
+                if (ex is not IngressError) {}
                 throw new IngressError(ErrorCode.ServerFlushError,
                     $"Could not auto-flush when disposing sender: {ex.Message}");
             }

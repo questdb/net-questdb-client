@@ -1087,5 +1087,46 @@ public class HttpTests
         sender.Clear();
         Assert.That(sender.Length, Is.EqualTo(0));
     }
+
+    [Test]
+    public async Task CheckHandlingErrorResponse()
+    {
+        using var srv = new DummyHttpServer(withErrorMessage: true);
+        await srv.StartAsync(HttpPort);
+        
+        await using var sender = Sender.New($"http::addr={Host}:{HttpPort};auto_flush=off;");
+
+        await sender.Table("foo").Symbol("bah", "baz").AtNow();
+
+        Assert.That(
+            async () => await sender.SendAsync(),
+            Throws.TypeOf<IngressError>().With.Message.Contains("Server Response (\n\tCode: `code`\n\tMessage: `message`\n\tLine: `1`\n\tErrorId: `errorid` \n)")
+            );
+ 
+        await sender.Table("foo").Symbol("bah", "baz").AtNow();
+
+        
+        Assert.That(
+            () => sender.Send(),
+            Throws.TypeOf<IngressError>().With.Message.Contains("Server Response (\n\tCode: `code`\n\tMessage: `message`\n\tLine: `1`\n\tErrorId: `errorid` \n)")
+        );
+        
+        sender.Clear();
+    }
+    
+    [Test]
+    public async Task CheckDisposingThrowsException()
+    {
+        using var srv = new DummyHttpServer(withErrorMessage: true);
+        await srv.StartAsync(HttpPort);
+        
+        await using var sender = Sender.New($"http::addr={Host}:{HttpPort};auto_flush=on;auto_flush_interval=off;");
+        await sender.Table("foo").Symbol("bah", "baz").AtNow();
+        
+        Assert.That(
+            async () => await sender.DisposeAsync(),
+            Throws.TypeOf<IngressError>().With.Message.Contains("Server Response (\n\tCode: `code`\n\tMessage: `message`\n\tLine: `1`\n\tErrorId: `errorid` \n)")
+        );
+    }
     
 }

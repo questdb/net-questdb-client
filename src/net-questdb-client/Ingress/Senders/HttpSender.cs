@@ -30,7 +30,6 @@ using System.Net.Security;
 using System.Security.Authentication;
 using System.Security.Cryptography.X509Certificates;
 using System.Text;
-using Org.BouncyCastle.Asn1.X509;
 using QuestDB.Ingress.Buffers;
 using QuestDB.Ingress.Enums;
 using QuestDB.Ingress.Utils;

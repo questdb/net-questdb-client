@@ -280,10 +280,10 @@ internal class HttpSender : ISender
                     response?.Dispose();
                     cts?.Dispose();
 
+                    (request, cts) = GenerateRequest(ct);
+                    
                     var jitter = TimeSpan.FromMilliseconds(Random.Shared.Next(0, 10) - 10 / 2.0);
                     Thread.Sleep(retryInterval + jitter);
-
-                    (request, cts) = GenerateRequest(ct);
                     
                     try
                     {
@@ -404,10 +404,11 @@ internal class HttpSender : ISender
                     response?.Dispose();
                     cts?.Dispose();
                     
+                    (request, cts) = GenerateRequest(ct);
+                    
                     var jitter = TimeSpan.FromMilliseconds(Random.Shared.Next(0, 10) - 10 / 2.0);
                     await Task.Delay(retryInterval + jitter, cts?.Token ?? default);
                     
-                    (request, cts) = GenerateRequest(ct);
                     
                     try
                     {

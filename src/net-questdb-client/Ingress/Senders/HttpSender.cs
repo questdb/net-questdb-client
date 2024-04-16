@@ -31,6 +31,7 @@ using System.Net.Security;
 using System.Security.Authentication;
 using System.Security.Cryptography.X509Certificates;
 using System.Text;
+using System.Text.Json;
 using QuestDB.Ingress.Buffers;
 using QuestDB.Ingress.Enums;
 using QuestDB.Ingress.Utils;
@@ -250,14 +251,15 @@ internal class HttpSender : ISender
         CancellationTokenSource? cts = null;
         HttpResponseMessage? response = null;
         inErrorState = false;
-        
+
         try
         {
             (request, cts) = GenerateRequest(ct);
             response = _client.Send(request, HttpCompletionOption.ResponseHeadersRead, cts!.Token);
-            
+
             // retry if appropriate - error that's retriable, and retries are enabled
-            if (!response.IsSuccessStatusCode && IsRetriableError(response.StatusCode) && Options.retry_timeout > TimeSpan.Zero)
+            if (!response.IsSuccessStatusCode && IsRetriableError(response.StatusCode) &&
+                Options.retry_timeout > TimeSpan.Zero)
             {
                 var retryTimer = new Stopwatch();
                 retryTimer.Start();
@@ -270,15 +272,15 @@ internal class HttpSender : ISender
                     request?.Dispose();
                     response?.Dispose();
                     cts?.Dispose();
-                    
+
                     var jitter = TimeSpan.FromMilliseconds(Random.Shared.Next(0, 10) - 10 / 2.0);
                     Thread.Sleep(retryInterval + jitter);
-                    
+
                     (request, cts) = GenerateRequest(ct);
                     response = _client.Send(request, cts!.Token);
                 }
             }
-            
+
             // return if ok
             if (response.IsSuccessStatusCode)
             {
@@ -288,12 +290,21 @@ internal class HttpSender : ISender
             // unwrap json error if present
             if (response?.Content?.Headers?.ContentType?.MediaType == "application/json")
             {
-                var err = response?.Content?.ReadFromJsonAsync<JsonErrorResponse>(
-                    cancellationToken: cts?.Token ?? default)!.Result;
-                throw new IngressError(ErrorCode.ServerFlushError,
-                    $"{response?.ReasonPhrase}. {err?.ToString() ?? ""}");
+                try
+                {
+                    var jsonErr = response?.Content?.ReadFromJsonAsync<JsonErrorResponse>(
+                        cancellationToken: cts?.Token ?? default)!.Result;
+                    throw new IngressError(ErrorCode.ServerFlushError,
+                        $"{response?.ReasonPhrase}. {jsonErr?.ToString() ?? ""}");
+                }
+                catch (JsonException)
+                {
+                    var strErr = response?.Content?.ReadAsStringAsync(cts.Token)!.Result;
+                    throw new IngressError(ErrorCode.ServerFlushError, $"{response?.ReasonPhrase}. {strErr}");
+                }
             }
-       
+
+            // fallback to basic error
             throw new IngressError(ErrorCode.ServerFlushError, response?.ReasonPhrase);
         }
         catch (Exception ex)
@@ -371,12 +382,21 @@ internal class HttpSender : ISender
             // unwrap json error if present
             if (response?.Content?.Headers?.ContentType?.MediaType == "application/json")
             {
-                var err = response?.Content?.ReadFromJsonAsync<JsonErrorResponse>(
-                    cancellationToken: cts?.Token ?? default)!.Result;
-                throw new IngressError(ErrorCode.ServerFlushError,
-                    $"{response?.ReasonPhrase}. {err?.ToString() ?? ""}");
+                try
+                {
+                    var jsonErr = await response?.Content?.ReadFromJsonAsync<JsonErrorResponse>(
+                        cancellationToken: cts?.Token ?? default)!;
+                    throw new IngressError(ErrorCode.ServerFlushError,
+                        $"{response?.ReasonPhrase}. {jsonErr?.ToString() ?? ""}");
+                }
+                catch (JsonException)
+                {
+                    var strErr = await response?.Content?.ReadAsStringAsync(cts.Token)!;
+                    throw new IngressError(ErrorCode.ServerFlushError, $"{response?.ReasonPhrase}. {strErr}");
+                }
             }
        
+            // fallback to basic error
             throw new IngressError(ErrorCode.ServerFlushError, response?.ReasonPhrase);
         }
         catch (Exception ex)

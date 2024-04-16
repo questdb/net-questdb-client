@@ -30,6 +30,7 @@ using System.Net.Security;
 using System.Security.Authentication;
 using System.Security.Cryptography.X509Certificates;
 using System.Text;
+using Org.BouncyCastle.Asn1.X509;
 using QuestDB.Ingress.Buffers;
 using QuestDB.Ingress.Enums;
 using QuestDB.Ingress.Utils;
@@ -52,7 +53,7 @@ internal class HttpSender : ISender
     public int RowCount => _buffer.RowCount;
     public bool WithinTransaction => _buffer.WithinTransaction;
     private bool CommittingTransaction { get; set; }
-    public DateTime LastFlush { get; private set; } = DateTime.MaxValue;
+    public DateTime LastFlush { get; private set; } = DateTime.MinValue;
 
     private bool inErrorState;
 
@@ -244,14 +245,48 @@ internal class HttpSender : ISender
         {
             return;
         }
+
+        HttpRequestMessage? request = null;
+        CancellationTokenSource? cts = null;
+        HttpResponseMessage? response = null;
         
-        var (request, cts) = GenerateRequest(ct);
         try
         {
-            var response = _client!.Send(request, HttpCompletionOption.ResponseHeadersRead, cts!.Token);
-            FinishOrRetry(
-                response, cts
-            );
+            (request, cts) = GenerateRequest(ct);
+            response = _client!.Send(request, HttpCompletionOption.ResponseHeadersRead, cts!.Token);
+            
+            // retry if appropriate - error that's retriable, and retries are enabled
+            if (!response.IsSuccessStatusCode && IsRetriableError(response.StatusCode) && Options.retry_timeout > TimeSpan.Zero)
+            {
+                var retryTimer = new Stopwatch();
+                retryTimer.Start();
+                var retryInterval = TimeSpan.FromMilliseconds(10);
+
+                while (retryTimer.Elapsed < Options.retry_timeout && !response.IsSuccessStatusCode &&
+                       IsRetriableError(response.StatusCode))
+                {
+                    // cleanup last run
+                    request?.Dispose();
+                    response?.Dispose();
+                    cts?.Dispose();
+                    
+                    var jitter = TimeSpan.FromMilliseconds(Random.Shared.Next(0, 10) - 10 / 2.0);
+                    Thread.Sleep(retryInterval + jitter);
+                    
+                    (request, cts) = GenerateRequest(ct);
+                    response = _client!.Send(request, cts!.Token);
+                }
+            }
+            
+            // return if ok
+            if (response.IsSuccessStatusCode)
+            {
+                _buffer.Clear();
+                return;
+            }
+
+            // otherwise, throw exception
+            throw new IngressError(ErrorCode.ServerFlushError, response.ReasonPhrase);
         }
         catch (Exception ex)
         {
@@ -262,6 +297,13 @@ internal class HttpSender : ISender
             }
 
             throw;
+        }
+        finally
+        {
+            LastFlush = (response?.Headers.Date ?? DateTimeOffset.UtcNow).UtcDateTime;
+            request?.Dispose();
+            response?.Dispose();
+            cts?.Dispose();
         }
     }
         
@@ -277,14 +319,48 @@ internal class HttpSender : ISender
         {
             return;
         }
+
+        HttpRequestMessage? request = null;
+        CancellationTokenSource? cts = null;
+        HttpResponseMessage? response = null;
         
-        var (request, cts) = GenerateRequest(ct);
         try
         {
-            var response = await _client!.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cts!.Token);
-            await FinishOrRetryAsync(
-                response, cts
-            );
+            (request, cts) = GenerateRequest(ct);
+            response = await _client!.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cts!.Token);
+            
+            // retry if appropriate - error that's retriable, and retries are enabled
+            if (!response.IsSuccessStatusCode && IsRetriableError(response.StatusCode) && Options.retry_timeout > TimeSpan.Zero)
+            {
+                var retryTimer = new Stopwatch();
+                retryTimer.Start();
+                var retryInterval = TimeSpan.FromMilliseconds(10);
+
+                while (retryTimer.Elapsed < Options.retry_timeout && !response.IsSuccessStatusCode &&
+                       IsRetriableError(response.StatusCode))
+                {
+                    // cleanup last run
+                    request?.Dispose();
+                    response?.Dispose();
+                    cts?.Dispose();
+                    
+                    var jitter = TimeSpan.FromMilliseconds(Random.Shared.Next(0, 10) - 10 / 2.0);
+                    await Task.Delay(retryInterval + jitter);
+                    
+                    (request, cts) = GenerateRequest(ct);
+                    response = await _client!.SendAsync(request, cts!.Token);
+                }
+            }
+            
+            // return if ok
+            if (response.IsSuccessStatusCode)
+            {
+                _buffer.Clear();
+                return;
+            }
+
+            // otherwise, throw exception
+            throw new IngressError(ErrorCode.ServerFlushError, response.ReasonPhrase);
         }
         catch (Exception ex)
         {
@@ -292,9 +368,16 @@ internal class HttpSender : ISender
             if (ex is not IngressError)
             {
                 throw new IngressError(ErrorCode.ServerFlushError, ex.Message, ex);
-            } 
-            
+            }
+
             throw;
+        }
+        finally
+        {
+            LastFlush = (response?.Headers.Date ?? DateTimeOffset.UtcNow).UtcDateTime;
+            request?.Dispose();
+            response?.Dispose();
+            cts?.Dispose();
         }
     }
     
@@ -321,110 +404,6 @@ internal class HttpSender : ISender
             default:
                 return false;
         }
-    }
-    
-    /// <inheritdoc cref="FinishOrRetryAsync(System.Net.Http.HttpResponseMessage,System.Threading.CancellationTokenSource?,int)"/>
-    private void FinishOrRetry(HttpResponseMessage response,
-        CancellationTokenSource? cts = default, int retryIntervalMs = 10)
-    {
-        var lastResponse = response;
-
-        if (!response.IsSuccessStatusCode)
-        {
-            if (!(IsRetriableError(response.StatusCode) && Options.retry_timeout > TimeSpan.Zero))
-            {
-                throw new IngressError(ErrorCode.ServerFlushError, response.ReasonPhrase);
-            }
-
-            var retryTimer = new Stopwatch();
-            retryTimer.Start();
-
-            var retryInterval = TimeSpan.FromMilliseconds(retryIntervalMs);
-
-            while (retryTimer.Elapsed < Options.retry_timeout)
-            {
-                var jitter = TimeSpan.FromMilliseconds(Random.Shared.Next(0, retryIntervalMs) - retryIntervalMs / 2.0);
-                Thread.Sleep(retryInterval + jitter);
-
-                var (nextRequest, nextToken) = GenerateRequest();
-                lastResponse = _client!.Send(nextRequest, nextToken!.Token);
-                if (!lastResponse.IsSuccessStatusCode)
-                {
-                    if (IsRetriableError(lastResponse.StatusCode) && Options.retry_timeout > TimeSpan.Zero)
-                    {
-                        cts!.Dispose();
-                    }
-                }
-            }
-        }
-
-        if (!lastResponse.IsSuccessStatusCode)
-        {
-            throw new IngressError(ErrorCode.ServerFlushError, lastResponse.ReasonPhrase);
-        }
-
-        LastFlush = (lastResponse.Headers.Date ?? DateTimeOffset.UtcNow).UtcDateTime;
-        cts!.Dispose();
-        _buffer.Clear();
-    }
-
-    /// <summary>
-    ///     Applies retry logic (if required).
-    /// </summary>
-    /// <remarks>
-    ///     Until <see cref="QuestDBOptions.retry_timeout" /> has elapsed, the request will be retried
-    ///     with a small jitter.
-    /// </remarks>
-    /// <param name="response">The response triggering the retry.</param>
-    /// <param name="cts">The cancellation token source.</param>
-    /// <param name="retryIntervalMs">The base interval between retries.</param>
-    /// <returns></returns>
-    /// <exception cref="IngressError"></exception>
-    private async Task FinishOrRetryAsync(HttpResponseMessage response,
-        CancellationTokenSource? cts = default, int retryIntervalMs = 10)
-    {
-        var lastResponse = response;
-
-        if (!lastResponse.IsSuccessStatusCode)
-        {
-            inErrorState = true;
-            
-            if (!(IsRetriableError(response.StatusCode) && Options.retry_timeout > TimeSpan.Zero))
-            {
-                throw new IngressError(ErrorCode.ServerFlushError, response.ReasonPhrase);
-            }
-
-            var retryTimer = new Stopwatch();
-            retryTimer.Start();
-
-            var retryInterval = TimeSpan.FromMilliseconds(retryIntervalMs);
-
-            while (retryTimer.Elapsed < Options.retry_timeout)
-            {
-                var jitter = TimeSpan.FromMilliseconds(Random.Shared.Next(0, retryIntervalMs) - retryIntervalMs / 2.0);
-                await Task.Delay(retryInterval + jitter);
-
-                var (nextRequest, nextToken) = GenerateRequest();
-                lastResponse = await _client.SendAsync(nextRequest, nextToken!.Token);
-                if (!lastResponse.IsSuccessStatusCode)
-                {
-                    if (IsRetriableError(lastResponse.StatusCode) && Options.retry_timeout > TimeSpan.Zero)
-                    {
-                        cts!.Dispose();
-                    }
-                }
-            }
-        }
-
-        if (!lastResponse.IsSuccessStatusCode)
-        {
-            throw new IngressError(ErrorCode.ServerFlushError, lastResponse.ReasonPhrase);
-        }
-
-        inErrorState = false;
-        LastFlush = (lastResponse.Headers.Date ?? DateTimeOffset.UtcNow).UtcDateTime;
-        cts!.Dispose();
-        _buffer.Clear();
     }
 
     /// <inheritdoc />

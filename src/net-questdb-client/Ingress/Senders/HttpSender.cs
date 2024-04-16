@@ -285,9 +285,16 @@ internal class HttpSender : ISender
                 return;
             }
 
-            // otherwise, throw exception
-            var err = response?.Content?.ReadFromJsonAsync<JsonErrorResponse>(cancellationToken: cts?.Token ?? default)!.Result;
-            throw new IngressError(ErrorCode.ServerFlushError, $@"{response?.ReasonPhrase}. {err?.ToString() ?? ""}");
+            // unwrap json error if present
+            if (response?.Content?.Headers?.ContentType?.MediaType == "application/json")
+            {
+                var err = response?.Content?.ReadFromJsonAsync<JsonErrorResponse>(
+                    cancellationToken: cts?.Token ?? default)!.Result;
+                throw new IngressError(ErrorCode.ServerFlushError,
+                    $"{response?.ReasonPhrase}. {err?.ToString() ?? ""}");
+            }
+       
+            throw new IngressError(ErrorCode.ServerFlushError, response?.ReasonPhrase);
         }
         catch (Exception ex)
         {
@@ -360,9 +367,17 @@ internal class HttpSender : ISender
             {
                 return;
             }
-            
-            var err = response?.Content?.ReadFromJsonAsync<JsonErrorResponse>(cancellationToken: cts?.Token ?? default)!.Result;
-            throw new IngressError(ErrorCode.ServerFlushError, $"{response?.ReasonPhrase}. {err?.ToString() ?? ""}");
+
+            // unwrap json error if present
+            if (response?.Content?.Headers?.ContentType?.MediaType == "application/json")
+            {
+                var err = response?.Content?.ReadFromJsonAsync<JsonErrorResponse>(
+                    cancellationToken: cts?.Token ?? default)!.Result;
+                throw new IngressError(ErrorCode.ServerFlushError,
+                    $"{response?.ReasonPhrase}. {err?.ToString() ?? ""}");
+            }
+       
+            throw new IngressError(ErrorCode.ServerFlushError, response?.ReasonPhrase);
         }
         catch (Exception ex)
         {

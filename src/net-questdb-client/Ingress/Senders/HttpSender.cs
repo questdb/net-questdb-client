@@ -26,6 +26,7 @@
 using System.Diagnostics;
 using System.Net;
 using System.Net.Http.Headers;
+using System.Net.Http.Json;
 using System.Net.Security;
 using System.Security.Authentication;
 using System.Security.Cryptography.X509Certificates;
@@ -285,14 +286,15 @@ internal class HttpSender : ISender
             }
 
             // otherwise, throw exception
-            throw new IngressError(ErrorCode.ServerFlushError, response.ReasonPhrase);
+            var err = response?.Content?.ReadFromJsonAsync<JsonErrorResponse>(cancellationToken: cts?.Token ?? default)!.Result;
+            throw new IngressError(ErrorCode.ServerFlushError, $@"{response?.ReasonPhrase}. {err?.ToString() ?? ""}");
         }
         catch (Exception ex)
         {
             inErrorState = true;
             if (ex is not IngressError)
             {
-                throw new IngressError(ErrorCode.ServerFlushError, ex.Message, ex);
+                throw new IngressError(ErrorCode.ServerFlushError, ex.ToString(), ex);
             }
 
             throw;
@@ -358,16 +360,16 @@ internal class HttpSender : ISender
             {
                 return;
             }
-
-            // otherwise, throw exception
-            throw new IngressError(ErrorCode.ServerFlushError, response.ReasonPhrase);
+            
+            var err = response?.Content?.ReadFromJsonAsync<JsonErrorResponse>(cancellationToken: cts?.Token ?? default)!.Result;
+            throw new IngressError(ErrorCode.ServerFlushError, $"{response?.ReasonPhrase}. {err?.ToString() ?? ""}");
         }
         catch (Exception ex)
         {
             inErrorState = true;
             if (ex is not IngressError)
             {
-                throw new IngressError(ErrorCode.ServerFlushError, ex.Message, ex);
+                throw new IngressError(ErrorCode.ServerFlushError, ex.ToString(), ex);
             }
 
             throw;

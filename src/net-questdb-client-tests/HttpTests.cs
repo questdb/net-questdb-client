@@ -741,21 +741,23 @@ public class HttpTests
     {
         var sender = Sender.New($"http::addr={Host}:{HttpPort};auto_flush=off;");
         await sender.Table("foo").Symbol("a", "b").AtNow();
+
         Assert.That(
             async () =>
             {
-                
                 await sender.SendAsync();
             },
-            Throws.Exception.With.Message.Contains("refused")
+            Throws.TypeOf<IngressError>().With.Message.Contains("Cannot connect")
         );
+        
+        await sender.Table("foo").Symbol("a", "b").AtNow();
         
         Assert.That(
              () =>
             {
                 sender.Send();
             },
-            Throws.Exception.With.Message.Contains("refused")
+             Throws.TypeOf<IngressError>().With.Message.Contains("Cannot connect")
         );
     }
     
@@ -1085,4 +1087,5 @@ public class HttpTests
         sender.Clear();
         Assert.That(sender.Length, Is.EqualTo(0));
     }
+    
 }

@@ -251,25 +251,41 @@ internal class HttpSender : ISender
         CancellationTokenSource? cts = null;
         HttpResponseMessage? response = null;
         inErrorState = false;
-
+        HttpRequestException? cannotConnect = null;
+        
         try
         {
             (request, cts) = GenerateRequest(ct);
-            response = _client.Send(request, HttpCompletionOption.ResponseHeadersRead, cts!.Token);
-
+            
+            try
+            {
+                response = _client.Send(request, HttpCompletionOption.ResponseHeadersRead, cts!.Token);
+            }
+            catch (HttpRequestException hre)
+            {
+                Debug.Assert(hre.Message.Contains("refused"));
+                cannotConnect = hre;
+            }
+            
             // retry if appropriate - error that's retriable, and retries are enabled
-            if (!response.IsSuccessStatusCode && IsRetriableError(response.StatusCode) &&
-                Options.retry_timeout > TimeSpan.Zero)
+            if (cannotConnect != null // if it was a cannot correct error
+                || (!response!.IsSuccessStatusCode // or some other http error
+                    && IsRetriableError(response!.StatusCode)
+                    && Options.retry_timeout > TimeSpan.Zero))
             {
                 var retryTimer = new Stopwatch();
                 retryTimer.Start();
                 var retryInterval = TimeSpan.FromMilliseconds(10);
 
-                while (retryTimer.Elapsed < Options.retry_timeout && !response.IsSuccessStatusCode &&
-                       IsRetriableError(response.StatusCode))
+                while (retryTimer.Elapsed < Options.retry_timeout // whilst we can still retry
+                       && (
+                           cannotConnect != null || // either we can't connect
+                           (retryTimer.Elapsed < Options.retry_timeout // or we have another http error
+                            && !response!.IsSuccessStatusCode &&
+                            IsRetriableError(response.StatusCode))))
                 {
                     // cleanup last run
-                    request?.Dispose();
+                    request.Dispose();
                     response?.Dispose();
                     cts?.Dispose();
 
@@ -277,12 +293,27 @@ internal class HttpSender : ISender
                     Thread.Sleep(retryInterval + jitter);
 
                     (request, cts) = GenerateRequest(ct);
-                    response = _client.Send(request, cts!.Token);
+                    
+                    try
+                    {
+                        response = _client.Send(request, HttpCompletionOption.ResponseHeadersRead, cts!.Token);
+                    }
+                    catch (HttpRequestException hre)
+                    {
+                        Debug.Assert(hre.Message.Contains("refused"));
+                        cannotConnect = hre;
+                    }
                 }
+            }
+            
+            // check for cannot connect error
+            if (cannotConnect != null && response == null)
+            {
+                throw new IngressError(ErrorCode.ServerFlushError, $"Cannot connect to `{Options.Host}:{Options.Port}`");
             }
 
             // return if ok
-            if (response.IsSuccessStatusCode)
+            if (response!.IsSuccessStatusCode)
             {
                 return;
             }
@@ -319,8 +350,8 @@ internal class HttpSender : ISender
         }
         finally
         {
-            LastFlush = (response?.Headers.Date ?? DateTimeOffset.UtcNow).UtcDateTime;
             _buffer.Clear();
+            LastFlush = (response?.Headers.Date ?? DateTimeOffset.UtcNow).UtcDateTime;
             request?.Dispose();
             response?.Dispose();
             cts?.Dispose();
@@ -344,24 +375,41 @@ internal class HttpSender : ISender
         CancellationTokenSource? cts = null;
         HttpResponseMessage? response = null;
         inErrorState = false;
+        HttpRequestException? cannotConnect = null;
         
         try
         {
             (request, cts) = GenerateRequest(ct);
-            response = await _client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cts!.Token);
+            
+            try
+            {
+                response = await _client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cts!.Token);
+            }
+            catch (HttpRequestException hre)
+            {
+                Debug.Assert(hre.Message.Contains("refused"));
+                cannotConnect = hre;
+            }
             
             // retry if appropriate - error that's retriable, and retries are enabled
-            if (!response.IsSuccessStatusCode && IsRetriableError(response.StatusCode) && Options.retry_timeout > TimeSpan.Zero)
+            if (cannotConnect != null // if it was a cannot correct error
+                     || (!response!.IsSuccessStatusCode // or some other http error
+                         && IsRetriableError(response!.StatusCode)
+                         && Options.retry_timeout > TimeSpan.Zero))
             {
                 var retryTimer = new Stopwatch();
                 retryTimer.Start();
                 var retryInterval = TimeSpan.FromMilliseconds(10);
 
-                while (retryTimer.Elapsed < Options.retry_timeout && !response.IsSuccessStatusCode &&
-                       IsRetriableError(response.StatusCode))
+                while (retryTimer.Elapsed < Options.retry_timeout // whilst we can still retry
+                       && (
+                    cannotConnect != null || // either we can't connect
+                       (retryTimer.Elapsed < Options.retry_timeout // or we have another http error
+                        && !response!.IsSuccessStatusCode &&
+                        IsRetriableError(response.StatusCode))))
                 {
                     // cleanup last run
-                    request?.Dispose();
+                    request.Dispose();
                     response?.Dispose();
                     cts?.Dispose();
                     
@@ -369,18 +417,32 @@ internal class HttpSender : ISender
                     await Task.Delay(retryInterval + jitter);
                     
                     (request, cts) = GenerateRequest(ct);
-                    response = await _client.SendAsync(request, cts!.Token);
+                    try
+                    {
+                        response = await _client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cts!.Token);
+                    }
+                    catch (HttpRequestException hre)
+                    {
+                        Debug.Assert(hre.Message.Contains("refused"));
+                        cannotConnect = hre;
+                    }
                 }
             }
             
+            // check for cannot connect error
+            if (cannotConnect != null && response == null)
+            {
+                throw new IngressError(ErrorCode.ServerFlushError, $"Cannot connect to `{Options.Host}:{Options.Port}`");
+            }
+            
             // return if ok
-            if (response.IsSuccessStatusCode)
+            if (response!.IsSuccessStatusCode)
             {
                 return;
             }
 
             // unwrap json error if present
-            if (response?.Content?.Headers?.ContentType?.MediaType == "application/json")
+            if (response.Content.Headers.ContentType?.MediaType == "application/json")
             {
                 try
                 {

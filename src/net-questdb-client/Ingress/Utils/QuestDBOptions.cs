@@ -342,7 +342,7 @@ public record QuestDBOptions
     ///     The <see cref="retry_timeout" /> setting specifies the length of time retries can be made.
     ///     Retries are sent multiple times during this period, with some small jitter.
     /// </remarks>
-    /// <seealso cref="QuestDB.Ingress.Senders.HttpSender.FinishOrRetryAsync" />
+    /// <seealso cref="QuestDB.Ingress.Senders.HttpSender.SendAsync" />
     /// .
     public TimeSpan retry_timeout
     {
@@ -477,26 +477,26 @@ public record QuestDBOptions
     private void ParseIntThatMayBeOff(string name, string? defaultValue, out int field)
     {
         var option = ReadOptionFromBuilder(name) ?? defaultValue;
-        if (option != null && option == "off")
+        if (option is "off")
         {
             field = -1;
         }
         else
         { 
-            ParseIntWithDefault(name, defaultValue, out field);
+            ParseIntWithDefault(name, defaultValue!, out field);
         }
     }
     
     private void ParseMillisecondsThatMayBeOff(string name, string? defaultValue, out TimeSpan field)
     {
         var option = ReadOptionFromBuilder(name) ?? defaultValue;
-        if (option != null && option == "off")
+        if (option is "off")
         {
             field = TimeSpan.FromMilliseconds(-1);
         }
         else
         { 
-            ParseMillisecondsWithDefault(name, defaultValue, out field);
+            ParseMillisecondsWithDefault(name, defaultValue!, out field);
         }
     }
 

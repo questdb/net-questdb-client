@@ -29,16 +29,16 @@ using QuestDB.Ingress.Utils;
 namespace QuestDB.Ingress.Buffers;
 
 /// <summary>
-///     An adapter for <see cref="Buffer"/> that allows it to be sent in HTTP requests.
+///     An adapter for <see cref="buffer"/> that allows it to be sent in HTTP requests.
 /// </summary>
 public class BufferStreamContent : HttpContent
 {
     public BufferStreamContent(Buffer buffer)
     {
-        Buffer = buffer;
+        this.buffer = buffer;
     }
 
-    private Buffer Buffer { get; }
+    private Buffer buffer { get; }
 
     /// <summary>
     ///     Writes the chunked buffer contents to a stream.
@@ -49,7 +49,7 @@ public class BufferStreamContent : HttpContent
     /// <exception cref="IngressError">When writing to stream fails.</exception>
     protected override async Task SerializeToStreamAsync(Stream stream, TransportContext? context)
     {
-        await Buffer.WriteToStreamAsync(stream);
+        await buffer.WriteToStreamAsync(stream);
     }
 
     /// <summary>
@@ -57,7 +57,7 @@ public class BufferStreamContent : HttpContent
     /// </summary>
     protected override bool TryComputeLength(out long length)
     {
-        length = Buffer.Length;
+        length = buffer.Length;
         return true;
     }
 
@@ -79,7 +79,7 @@ public class BufferStreamContent : HttpContent
     protected override void SerializeToStream(Stream stream, TransportContext? context, CancellationToken ct)
     {
         ct.ThrowIfCancellationRequested();
-        Buffer.WriteToStream(stream);
+        buffer.WriteToStream(stream);
     }
 
    

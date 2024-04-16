@@ -64,11 +64,13 @@ public class Buffer
     /// <summary>
     ///     The length of the buffered content in bytes.
     /// </summary>
+    // ReSharper disable once InconsistentNaming
     public int Length { get; private set; }
 
     /// <summary>
     ///     The number of buffered ILP rows.
     /// </summary>
+    // ReSharper disable once InconsistentNaming
     public int RowCount { get; private set; }
 
     /// <summary>
@@ -745,7 +747,7 @@ public class Buffer
     ///     Writes the chunked buffer contents to a stream.
     /// </summary>
     /// <param name="stream"></param>
-    /// <param name="ct></param>
+    /// <param name="ct"></param>
     /// <exception cref="IngressError">When writing to stream fails.</exception>
     public async Task WriteToStreamAsync(Stream stream, CancellationToken ct = default)
     {
@@ -757,7 +759,7 @@ public class Buffer
             {
                 if (length > 0)
                 {
-                    await stream.WriteAsync(_buffers[i].Buffer, 0, length);
+                    await stream.WriteAsync(_buffers[i].Buffer, 0, length, ct);
                 }
             }
             catch (IOException iox)

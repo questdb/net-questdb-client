@@ -38,10 +38,9 @@ namespace dummy_http_server;
 
 public class DummyHttpServer : IDisposable
 {
-    public static string SigningKey = Guid.NewGuid().ToString("N") + Guid.NewGuid().ToString("N");
-
-    public static string Username = "admin";
-    public static string Password = "quest";
+    private static readonly string SigningKey = Guid.NewGuid().ToString("N") + Guid.NewGuid().ToString("N");
+    private static readonly string Username = "admin";
+    private static readonly string Password = "quest";
     private int _port = 29743;
     private readonly WebApplication _app;
 
@@ -105,7 +104,6 @@ public class DummyHttpServer : IDisposable
     {
         IlpEndpoint.ReceiveBuffer.Clear();
         IlpEndpoint.LastError = null;
-        IlpEndpoint.LogMessages.Clear();
     }
 
     public Task StartAsync(int port = 29743)
@@ -130,7 +128,7 @@ public class DummyHttpServer : IDisposable
         return IlpEndpoint.ReceiveBuffer;
     }
 
-    public Exception GetLastError()
+    public Exception? GetLastError()
     {
         return IlpEndpoint.LastError;
     }

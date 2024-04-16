@@ -36,15 +36,15 @@ public class IngressError : Exception
     public IngressError(ErrorCode code, string? message)
         : base($"{code.ToString()} : {message}")
     {
-        Code = code;
+        this.code = code;
     }
 
     public IngressError(ErrorCode code, string? message, Exception inner)
         : base($"{code.ToString()} : {message}", inner)
     {
-        Code = code;
+        this.code = code;
     }
 
     // ReSharper disable once UnusedAutoPropertyAccessor.Global
-    public ErrorCode Code { get; }
+    public ErrorCode code { get; }
 }

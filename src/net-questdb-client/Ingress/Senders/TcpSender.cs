@@ -44,9 +44,9 @@ namespace QuestDB.Ingress.Senders;
 internal class TcpSender : ISender
 {
     public QuestDBOptions Options { get; private init; } = null!;
-    private Buffer _buffer;
+    private Buffer _buffer = null!;
     private Socket _underlyingSocket = null!;
-    private Stream _dataStream;
+    private Stream _dataStream = null!;
     private static readonly RemoteCertificateValidationCallback AllowAllCertCallback = (_, _, _, _) => true;
     private bool _authenticated;
 
@@ -55,7 +55,7 @@ internal class TcpSender : ISender
     public int RowCount => _buffer.RowCount;
     public bool WithinTransaction => false;
 
-    private bool inErrorState;
+    private bool _inErrorState;
 
     public DateTime LastFlush { get; private set; } = DateTime.MaxValue;
 
@@ -70,13 +70,8 @@ internal class TcpSender : ISender
     public TcpSender(string confStr) : this(new QuestDBOptions(confStr))
     {
     }
-
-    public ISender Configure(QuestDBOptions options)
-    {
-        return new TcpSender(options);
-    }
     
-    public ISender Build()
+    private void Build()
     {
        _buffer = new Buffer(Options.init_buf_size, Options.max_name_len, Options.max_buf_size);
 
@@ -120,14 +115,12 @@ internal class TcpSender : ISender
        }
        catch
        {
-           inErrorState = true;
+           _inErrorState = true;
            socket.Dispose();
            networkStream?.Dispose();
            sslStream?.Dispose();
            throw;
        }
-
-       return this;
     }
     
     /// <summary>
@@ -174,7 +167,7 @@ internal class TcpSender : ISender
         Base64.EncodeToUtf8(signature, _buffer.SendBuffer, out _, out _buffer.Position);
         _buffer.Put('\n');
 
-        await _dataStream!.WriteAsync(_buffer.SendBuffer, 0, _buffer.Position, ct);
+        await _dataStream.WriteAsync(_buffer.SendBuffer, 0, _buffer.Position, ct);
         _buffer.Clear();
     }
     
@@ -190,7 +183,7 @@ internal class TcpSender : ISender
         var totalReceived = 0;
         while (totalReceived < _buffer.SendBuffer.Length)
         {
-            var received = await _dataStream!.ReadAsync(_buffer.SendBuffer, totalReceived,
+            var received = await _dataStream.ReadAsync(_buffer.SendBuffer, totalReceived,
                 _buffer.SendBuffer.Length - totalReceived, cancellationToken);
             if (received > 0)
             {
@@ -203,7 +196,7 @@ internal class TcpSender : ISender
             else
             {
                 // Disconnected
-                inErrorState = true;
+                _inErrorState = true;
                 throw new IngressError(ErrorCode.SocketError, "Authentication failed, or server disconnected.");
             }
         }
@@ -230,15 +223,15 @@ internal class TcpSender : ISender
         {
             if (_buffer.Length != 0)
             {
-                _buffer.WriteToStream(_dataStream!);
+                _buffer.WriteToStream(_dataStream);
                 LastFlush = DateTime.UtcNow;
                 _buffer.Clear();
-                inErrorState = false;
+                _inErrorState = false;
             }
         }
         catch (Exception ex)
         {
-            inErrorState = true;
+            _inErrorState = true;
             if (ex is not IngressError)
             {
                 throw new IngressError(ErrorCode.ServerFlushError, ex.Message, ex);
@@ -260,13 +253,13 @@ internal class TcpSender : ISender
         {
             if (_buffer.Length != 0)
             {
-                await _buffer.WriteToStreamAsync(_dataStream!, ct);
-                inErrorState = false;
+                await _buffer.WriteToStreamAsync(_dataStream, ct);
+                _inErrorState = false;
             }
         }
         catch (Exception ex)
         {
-            inErrorState = true;
+            _inErrorState = true;
             if (ex is not IngressError)
             {
                 throw new IngressError(ErrorCode.ServerFlushError, ex.Message, ex);
@@ -284,7 +277,7 @@ internal class TcpSender : ISender
     /// <inheritdoc />
     public void Dispose()
     {
-        if (Options.auto_flush == AutoFlushType.on && !inErrorState)
+        if (Options.auto_flush == AutoFlushType.on && !_inErrorState)
         {
             Send();
         }
@@ -299,7 +292,7 @@ internal class TcpSender : ISender
     /// <inheritdoc />
     public async ValueTask DisposeAsync()
     {
-        if (Options.auto_flush == AutoFlushType.on && !inErrorState)
+        if (Options.auto_flush == AutoFlushType.on && !_inErrorState)
         {
             await SendAsync();
         }

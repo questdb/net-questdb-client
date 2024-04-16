@@ -25,6 +25,7 @@
 
 using QuestDB.Ingress.Enums;
 using QuestDB.Ingress.Utils;
+// ReSharper disable InconsistentNaming
 
 namespace QuestDB.Ingress.Senders;
 
@@ -46,9 +47,6 @@ public interface ISender : IDisposable, IAsyncDisposable
     /// <summary>
     ///     Clears the transaction.
     /// </summary>
-    /// <remarks>
-    /// </remarks>
-    /// <param name="tableName"></param>
     /// <returns></returns>
     /// <exception cref="IngressError"></exception>
     public void Rollback()

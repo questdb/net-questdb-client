@@ -25,7 +25,6 @@
 
 
 using System;
-using System.Collections.Generic;
 using System.Linq;
 using System.Text;
 using System.Threading;
@@ -54,10 +53,9 @@ public record JsonErrorResponse
     }
 }
 
-public class IlpEndpoint : Endpoint<Request, JsonErrorResponse>
+public class IlpEndpoint : Endpoint<Request, JsonErrorResponse?>
 {
     public static readonly StringBuilder ReceiveBuffer = new();
-    public static readonly List<string> LogMessages = new();
     public static Exception? LastError = new();
     public static bool WithTokenAuth = false;
     public static bool WithBasicAuth = false;
@@ -100,7 +98,6 @@ public class IlpEndpoint : Endpoint<Request, JsonErrorResponse>
         try
         {
             ReceiveBuffer.Append(req.Content);
-            LogMessages.Add("Received: " + req.Content);
             await SendNoContentAsync(ct);
         }
         catch (Exception ex)

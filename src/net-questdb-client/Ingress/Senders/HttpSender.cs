@@ -46,17 +46,17 @@ namespace QuestDB.Ingress.Senders;
 internal class HttpSender : ISender
 {
     public QuestDBOptions Options { get; private init; } = null!;
-    private Buffer _buffer;
-    private HttpClient _client;
-    private SocketsHttpHandler _handler;
+    private Buffer _buffer = null!;
+    private HttpClient _client = null!;
+    private SocketsHttpHandler _handler = null!;
     
     public int Length => _buffer.Length;
     public int RowCount => _buffer.RowCount;
     public bool WithinTransaction => _buffer.WithinTransaction;
-    private bool CommittingTransaction { get; set; }
+    private bool committingTransaction { get; set; }
     public DateTime LastFlush { get; private set; } = DateTime.MinValue;
 
-    private bool inErrorState;
+    private bool _inErrorState;
 
     public HttpSender() {}
 
@@ -69,15 +69,8 @@ internal class HttpSender : ISender
     public HttpSender(string confStr) : this(new QuestDBOptions(confStr))
     {
     }
-
-    /// <inheritdoc />
-    public ISender Configure(QuestDBOptions options)
-    {
-        return new HttpSender() { Options = options };
-    }
     
-    /// <inheritdoc />
-    public ISender Build()
+    private void Build()
     {
        _buffer = new Buffer(Options.init_buf_size, Options.max_name_len, Options.max_buf_size);
 
@@ -142,8 +135,6 @@ internal class HttpSender : ISender
         {
             _client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", Options.token);
         }
-
-        return this;
     }
 
     /// <summary>
@@ -202,10 +193,10 @@ internal class HttpSender : ISender
         {
             throw new IngressError(ErrorCode.InvalidApiCall, "No transaction to commit.");
         }
-        CommittingTransaction = true;
+        committingTransaction = true;
         Send(ct);
 
-        CommittingTransaction = false;
+        committingTransaction = false;
         Debug.Assert(!_buffer.WithinTransaction);
     }
 
@@ -216,10 +207,10 @@ internal class HttpSender : ISender
         {
             throw new IngressError(ErrorCode.InvalidApiCall, "No transaction to commit.");
         }
-        CommittingTransaction = true;
+        committingTransaction = true;
         await SendAsync(ct);
 
-        CommittingTransaction = false;
+        committingTransaction = false;
         Debug.Assert(!_buffer.WithinTransaction);
     }
 
@@ -237,7 +228,7 @@ internal class HttpSender : ISender
     /// <inheritdoc cref="SendAsync"/>
     public void Send(CancellationToken ct = default)
     {
-        if (WithinTransaction && !CommittingTransaction)
+        if (WithinTransaction && !committingTransaction)
         {
             throw new IngressError(ErrorCode.InvalidApiCall, "Please `commit` to complete your transaction.");
         }
@@ -250,7 +241,7 @@ internal class HttpSender : ISender
         HttpRequestMessage? request = null;
         CancellationTokenSource? cts = null;
         HttpResponseMessage? response = null;
-        inErrorState = false;
+        _inErrorState = false;
         HttpRequestException? cannotConnect = null;
         
         try
@@ -319,28 +310,28 @@ internal class HttpSender : ISender
             }
 
             // unwrap json error if present
-            if (response?.Content?.Headers?.ContentType?.MediaType == "application/json")
+            if (response.Content.Headers.ContentType?.MediaType == "application/json")
             {
                 try
                 {
-                    var jsonErr = response?.Content?.ReadFromJsonAsync<JsonErrorResponse>(
-                        cancellationToken: cts?.Token ?? default)!.Result;
+                    var jsonErr = response.Content.ReadFromJsonAsync<JsonErrorResponse>(
+                        cancellationToken: cts?.Token ?? default).Result;
                     throw new IngressError(ErrorCode.ServerFlushError,
-                        $"{response?.ReasonPhrase}. {jsonErr?.ToString() ?? ""}");
+                        $"{response.ReasonPhrase}. {jsonErr?.ToString() ?? ""}");
                 }
                 catch (JsonException)
                 {
-                    var strErr = response?.Content?.ReadAsStringAsync(cts.Token)!.Result;
-                    throw new IngressError(ErrorCode.ServerFlushError, $"{response?.ReasonPhrase}. {strErr}");
+                    var strErr = response.Content.ReadAsStringAsync(cts?.Token ?? default).Result;
+                    throw new IngressError(ErrorCode.ServerFlushError, $"{response.ReasonPhrase}. {strErr}");
                 }
             }
 
             // fallback to basic error
-            throw new IngressError(ErrorCode.ServerFlushError, response?.ReasonPhrase);
+            throw new IngressError(ErrorCode.ServerFlushError, response.ReasonPhrase);
         }
         catch (Exception ex)
         {
-            inErrorState = true;
+            _inErrorState = true;
             if (ex is not IngressError)
             {
                 throw new IngressError(ErrorCode.ServerFlushError, ex.ToString(), ex);
@@ -361,7 +352,7 @@ internal class HttpSender : ISender
     /// <inheritdoc />
     public async Task SendAsync(CancellationToken ct = default)
     {
-        if (WithinTransaction && !CommittingTransaction)
+        if (WithinTransaction && !committingTransaction)
         {
             throw new IngressError(ErrorCode.InvalidApiCall, "Please `commit` to complete your transaction.");
         }
@@ -374,7 +365,7 @@ internal class HttpSender : ISender
         HttpRequestMessage? request = null;
         CancellationTokenSource? cts = null;
         HttpResponseMessage? response = null;
-        inErrorState = false;
+        _inErrorState = false;
         HttpRequestException? cannotConnect = null;
         
         try
@@ -414,7 +405,7 @@ internal class HttpSender : ISender
                     cts?.Dispose();
                     
                     var jitter = TimeSpan.FromMilliseconds(Random.Shared.Next(0, 10) - 10 / 2.0);
-                    await Task.Delay(retryInterval + jitter);
+                    await Task.Delay(retryInterval + jitter, cts?.Token ?? default);
                     
                     (request, cts) = GenerateRequest(ct);
                     
@@ -447,24 +438,24 @@ internal class HttpSender : ISender
             {
                 try
                 {
-                    var jsonErr = await response?.Content?.ReadFromJsonAsync<JsonErrorResponse>(
-                        cancellationToken: cts?.Token ?? default)!;
+                    var jsonErr = await response.Content.ReadFromJsonAsync<JsonErrorResponse>(
+                        cancellationToken: cts?.Token ?? default);
                     throw new IngressError(ErrorCode.ServerFlushError,
-                        $"{response?.ReasonPhrase}. {jsonErr?.ToString() ?? ""}");
+                        $"{response.ReasonPhrase}. {jsonErr?.ToString() ?? ""}");
                 }
                 catch (JsonException)
                 {
-                    var strErr = await response?.Content?.ReadAsStringAsync(cts.Token)!;
-                    throw new IngressError(ErrorCode.ServerFlushError, $"{response?.ReasonPhrase}. {strErr}");
+                    var strErr = await response.Content.ReadAsStringAsync(cts?.Token ?? default);
+                    throw new IngressError(ErrorCode.ServerFlushError, $"{response.ReasonPhrase}. {strErr}");
                 }
             }
        
             // fallback to basic error
-            throw new IngressError(ErrorCode.ServerFlushError, response?.ReasonPhrase);
+            throw new IngressError(ErrorCode.ServerFlushError, response.ReasonPhrase);
         }
         catch (Exception ex)
         {
-            inErrorState = true;
+            _inErrorState = true;
             if (ex is not IngressError)
             {
                 throw new IngressError(ErrorCode.ServerFlushError, ex.ToString(), ex);
@@ -511,7 +502,7 @@ internal class HttpSender : ISender
     public void Dispose()
     {
         // flush if safe to do so
-        if (Options.auto_flush == AutoFlushType.on && !inErrorState)
+        if (Options.auto_flush == AutoFlushType.on && !_inErrorState)
         {
             try
             {
@@ -519,7 +510,7 @@ internal class HttpSender : ISender
             }
             catch (Exception ex)
             {
-                inErrorState = true;
+                _inErrorState = true;
                 throw new IngressError(ErrorCode.ServerFlushError,
                     $"Could not auto-flush when disposing sender: {ex.Message}");
             }
@@ -533,7 +524,7 @@ internal class HttpSender : ISender
     /// <inheritdoc />
     public async ValueTask DisposeAsync()
     {
-        if (Options.auto_flush == AutoFlushType.on && !inErrorState)
+        if (Options.auto_flush == AutoFlushType.on && !_inErrorState)
         {
             try
             {
@@ -541,7 +532,7 @@ internal class HttpSender : ISender
             }
             catch (Exception ex)
             {
-                inErrorState = true;
+                _inErrorState = true;
                 if (ex is not IngressError) {}
                 throw new IngressError(ErrorCode.ServerFlushError,
                     $"Could not auto-flush when disposing sender: {ex.Message}");

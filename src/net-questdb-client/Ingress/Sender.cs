@@ -34,13 +34,12 @@ namespace QuestDB.Ingress;
 ///     A factory for creating new instances of <see cref="ISender"/>
 /// </summary>
 /// <remarks>
-///     For sole initialisation via config string, please use <see cref="New"/>. This does not require a call to <see cref="ISender.Build"/>.
+///     For sole initialisation via config string, please use <see cref="New(string)"/>. This does not require a call to <see cref="QuestDBOptions.Build"/>.
 ///     <para />
-///     If you wish set initial options via config string, and then modify others, please use <see cref="Configure(QuestDB.Ingress.Utils.QuestDBOptions?)"/>,
-///     followed by record syntax, followed by <see cref="ISender.Build"/>.
+///     If you wish set initial options via config string, and then modify others, please use <see cref="Configure(string)"/>,
+///     followed by record syntax, followed by <see cref="QuestDBOptions.Build"/>.
 ///     <para />
-///     If you wish to configure entirely programmatically, please use <see cref="Configure(QuestDB.Ingress.Utils.QuestDBOptions?)"/>,
-///     and configure the options directly. Ensure that <see cref="ISender.Build"/> is called after configuration is complete.
+///     If you wish to configure entirely programmatically, please use <see cref="New(QuestDBOptions)"/>.
 /// </remarks>
 public static class Sender
 {
@@ -48,7 +47,7 @@ public static class Sender
     ///     Creates and initialises a new instance of <see cref="ISender"/> from a configuration string.
     /// </summary>
     /// <param name="confStr"></param>
-    /// <returns>An intialised <see cref="ISender"/></returns>
+    /// <returns>An initialised <see cref="ISender"/></returns>
     public static ISender New(string confStr)
     {
         return Configure(confStr).Build();
@@ -56,13 +55,18 @@ public static class Sender
     
     /// <summary>
     ///     Performs initial configuration of <see cref="ISender"/>.
-    ///     Must be followed by <see cref="ISender.Build"/> prior to use.
+    ///     Must be followed by <see cref="QuestDBOptions.Build"/> prior to use.
     /// </summary>
     /// <param name="options"></param>
     /// <returns></returns>
-    /// <exception cref="NotImplementedException"></exception>
+    /// <exception cref="NotSupportedException"></exception>
     public static ISender New(QuestDBOptions? options = null)
     {
+        if (options is null)
+        {
+            return new HttpSender("http::addr=localhost:9000;");
+        }
+        
         switch (options.protocol)
         {
             case ProtocolType.http:
@@ -76,7 +80,11 @@ public static class Sender
         }
     }
     
-    /// <inheritdoc cref="Configure(QuestDB.Ingress.Utils.QuestDBOptions?)"/>
+    /// <summary>
+    ///     Begins configuring a sender. Must be followed by <see cref="QuestDBOptions.Build"/>.
+    /// </summary>
+    /// <param name="confStr"></param>
+    /// <returns></returns>
     public static QuestDBOptions Configure(string confStr)
     {
         return new QuestDBOptions(confStr);

@@ -1,5 +1,5 @@
 ﻿using System.Diagnostics;
-using QuestDB.Ingress;
+using QuestDB;
 
 var rowsToSend = 1e6;
 

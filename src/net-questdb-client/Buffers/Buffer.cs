@@ -27,10 +27,10 @@
 using System.Globalization;
 using System.Runtime.CompilerServices;
 using System.Text;
-using QuestDB.Ingress.Enums;
-using QuestDB.Ingress.Utils;
+using QuestDB.Enums;
+using QuestDB.Utils;
 
-namespace QuestDB.Ingress.Buffers;
+namespace QuestDB.Buffers;
 
 /// <summary>
 ///     Buffer for building up batches of ILP rows.

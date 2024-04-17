@@ -25,7 +25,7 @@
 
 using BenchmarkDotNet.Attributes;
 using dummy_http_server;
-using QuestDB.Ingress;
+using QuestDB;
 using tcp_client_test;
 
 namespace net_questdb_client_benchmarks;

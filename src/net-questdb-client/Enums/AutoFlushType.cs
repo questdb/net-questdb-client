@@ -25,7 +25,7 @@
 
 
 // ReSharper disable InconsistentNaming
-namespace QuestDB.Ingress.Enums;
+namespace QuestDB.Enums;
 
 /// <summary>
 ///     Enum for auto_flush

@@ -32,13 +32,13 @@ using System.Security.Authentication;
 using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using System.Text.Json;
-using QuestDB.Ingress.Buffers;
-using QuestDB.Ingress.Enums;
-using QuestDB.Ingress.Utils;
-using Buffer = QuestDB.Ingress.Buffers.Buffer;
+using QuestDB.Buffers;
+using QuestDB.Enums;
+using QuestDB.Utils;
+using Buffer = QuestDB.Buffers.Buffer;
 
 
-namespace QuestDB.Ingress.Senders;
+namespace QuestDB.Senders;
 
 /// <summary>
 ///     An implementation of <see cref="ISender"/> for HTTP transport.

@@ -23,12 +23,13 @@
  *
  ******************************************************************************/
 
-using QuestDB.Ingress.Enums;
-using QuestDB.Ingress.Senders;
-using QuestDB.Ingress.Utils;
+using QuestDB.Enums;
+using QuestDB.Senders;
+using QuestDB.Utils;
+
 // ReSharper disable MemberCanBePrivate.Global
 
-namespace QuestDB.Ingress;
+namespace QuestDB;
 
 /// <summary>
 ///     A factory for creating new instances of <see cref="ISender"/>

@@ -23,28 +23,14 @@
  *
  ******************************************************************************/
 
-
-using QuestDB.Ingress.Enums;
-
-namespace QuestDB.Ingress.Utils;
+namespace QuestDB;
 
 /// <summary>
-///     Custom exception for ILP-related errors.
+///     Deprecated enum. 
 /// </summary>
-public class IngressError : Exception
+[Obsolete]
+public enum BufferOverflowHandling
 {
-    public IngressError(ErrorCode code, string? message)
-        : base($"{code.ToString()} : {message}")
-    {
-        this.code = code;
-    }
-
-    public IngressError(ErrorCode code, string? message, Exception inner)
-        : base($"{code.ToString()} : {message}", inner)
-    {
-        this.code = code;
-    }
-
-    // ReSharper disable once UnusedAutoPropertyAccessor.Global
-    public ErrorCode code { get; }
+    SendImmediately,
+    Extend
 }

@@ -25,15 +25,17 @@
 
 
 // ReSharper disable InconsistentNaming
+// ReSharper disable IdentifierTypo
 
-namespace QuestDB.Ingress.Enums;
+namespace QuestDB.Enums;
 
 /// <summary>
-///     Enum for tls_verify.
-///     Defaults to 'on'.
+///     Enum for protocol type.
 /// </summary>
-public enum TlsVerifyType
+public enum ProtocolType
 {
-    unsafe_off,
-    on
+    tcp,
+    tcps,
+    http,
+    https
 }

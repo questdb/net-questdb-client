@@ -24,7 +24,7 @@
 
 
 using BenchmarkDotNet.Attributes;
-using QuestDB.Ingress;
+using QuestDB;
 
 namespace net_questdb_client_benchmarks;
 

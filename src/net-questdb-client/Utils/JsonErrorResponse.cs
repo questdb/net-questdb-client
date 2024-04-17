@@ -23,16 +23,20 @@
  *
  ******************************************************************************/
 
+// ReSharper disable UnusedAutoPropertyAccessor.Global
+#pragma warning disable CS8618 // Non-nullable field must contain a non-null value when exiting constructor. Consider declaring as nullable.
+namespace QuestDB.Utils;
 
-namespace QuestDB.Ingress;
-
-/// <summary>
-///     Deprecated TLS selection class.
-/// </summary>
-[Obsolete]
-public enum TlsMode
+// ReSharper disable once ClassNeverInstantiated.Global
+public record JsonErrorResponse
 {
-    Enable,
-    AllowAnyServerCertificate,
-    Disable
+    public string code { get; init; }
+    public string message { get; init; }
+    public int line { get; init; }
+    public string errorId { get; init; }
+    
+    public override string ToString()
+    {
+        return $"\nServer Response (\n\tCode: `{code}`\n\tMessage: `{message}`\n\tLine: `{line}`\n\tErrorId: `{errorId}` \n)";
+    }
 }

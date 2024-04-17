@@ -24,9 +24,9 @@
  ******************************************************************************/
 
 using System.Net;
-using QuestDB.Ingress.Utils;
+using QuestDB.Utils;
 
-namespace QuestDB.Ingress.Buffers;
+namespace QuestDB.Buffers;
 
 /// <summary>
 ///     An adapter for <see cref="buffer"/> that allows it to be sent in HTTP requests.

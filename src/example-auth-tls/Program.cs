@@ -1,6 +1,5 @@
 ﻿using System;
-using QuestDB.Ingress;
-
+using QuestDB;
 
 
 //    Demonstrates TCPS connection against QuestDB Enterprise

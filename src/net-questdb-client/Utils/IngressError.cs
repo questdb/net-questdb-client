@@ -24,18 +24,27 @@
  ******************************************************************************/
 
 
-// ReSharper disable InconsistentNaming
-// ReSharper disable IdentifierTypo
+using QuestDB.Enums;
 
-namespace QuestDB.Ingress.Enums;
+namespace QuestDB.Utils;
 
 /// <summary>
-///     Enum for protocol type.
+///     Custom exception for ILP-related errors.
 /// </summary>
-public enum ProtocolType
+public class IngressError : Exception
 {
-    tcp,
-    tcps,
-    http,
-    https
+    public IngressError(ErrorCode code, string? message)
+        : base($"{code.ToString()} : {message}")
+    {
+        this.code = code;
+    }
+
+    public IngressError(ErrorCode code, string? message, Exception inner)
+        : base($"{code.ToString()} : {message}", inner)
+    {
+        this.code = code;
+    }
+
+    // ReSharper disable once UnusedAutoPropertyAccessor.Global
+    public ErrorCode code { get; }
 }

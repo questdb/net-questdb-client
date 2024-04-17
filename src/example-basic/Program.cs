@@ -1,5 +1,5 @@
 ﻿using System;
-using QuestDB.Ingress;
+using QuestDB;
 
 using var sender =  Sender.New("http::addr=localhost:9000;");
 await sender.Table("trades")

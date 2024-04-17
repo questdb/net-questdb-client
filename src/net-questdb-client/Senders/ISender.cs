@@ -23,11 +23,12 @@
  *
  ******************************************************************************/
 
-using QuestDB.Ingress.Enums;
-using QuestDB.Ingress.Utils;
+using QuestDB.Enums;
+using QuestDB.Utils;
+
 // ReSharper disable InconsistentNaming
 
-namespace QuestDB.Ingress.Senders;
+namespace QuestDB.Senders;
 
 public interface ISender : IDisposable, IAsyncDisposable
 {

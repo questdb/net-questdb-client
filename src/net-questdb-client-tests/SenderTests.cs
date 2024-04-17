@@ -1,7 +1,7 @@
 using NUnit.Framework;
-using QuestDB.Ingress;
-using QuestDB.Ingress.Enums;
-using QuestDB.Ingress.Utils;
+using QuestDB;
+using QuestDB.Enums;
+using QuestDB.Utils;
 
 namespace net_questdb_client_tests;
 

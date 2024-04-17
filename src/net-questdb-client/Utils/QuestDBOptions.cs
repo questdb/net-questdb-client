@@ -29,13 +29,13 @@ using System.Data.Common;
 using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Text.Json.Serialization;
-using QuestDB.Ingress.Enums;
-using QuestDB.Ingress.Senders;
+using QuestDB.Enums;
+using QuestDB.Senders;
 
 // ReSharper disable InconsistentNaming
 // ReSharper disable PropertyCanBeMadeInitOnly.Global
 
-namespace QuestDB.Ingress.Utils;
+namespace QuestDB.Utils;
 
 /// <summary>
 ///     Configuration class for the ILP sender.
@@ -342,7 +342,7 @@ public record QuestDBOptions
     ///     The <see cref="retry_timeout" /> setting specifies the length of time retries can be made.
     ///     Retries are sent multiple times during this period, with some small jitter.
     /// </remarks>
-    /// <seealso cref="QuestDB.Ingress.Senders.HttpSender.SendAsync" />
+    /// <seealso cref="HttpSender.SendAsync" />
     /// .
     public TimeSpan retry_timeout
     {

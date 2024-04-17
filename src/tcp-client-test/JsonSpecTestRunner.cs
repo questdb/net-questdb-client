@@ -31,8 +31,7 @@ using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using NUnit.Framework;
-using QuestDB.Ingress;
-using QuestDB.Ingress.Enums;
+using QuestDB;
 
 namespace tcp_client_test;
 

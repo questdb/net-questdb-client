@@ -28,7 +28,7 @@ using System.Text;
 using System.Text.Json;
 using dummy_http_server;
 using NUnit.Framework;
-using QuestDB.Ingress;
+using QuestDB;
 
 namespace net_questdb_client_tests;
 

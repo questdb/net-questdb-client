@@ -27,8 +27,8 @@
 using System.Text;
 using dummy_http_server;
 using NUnit.Framework;
-using QuestDB.Ingress;
-using QuestDB.Ingress.Utils;
+using QuestDB;
+using QuestDB.Utils;
 
 // ReSharper disable AsyncVoidLambda
 

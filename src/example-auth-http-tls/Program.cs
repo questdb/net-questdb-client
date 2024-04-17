@@ -1,4 +1,4 @@
-﻿using QuestDB.Ingress;
+﻿using QuestDB;
 
 
 // Runs against QuestDB Enterprise, demonstrating HTTPS and Basic Authentication support.

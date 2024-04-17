@@ -54,9 +54,7 @@ internal class TcpSender : ISender
     public int Length => _buffer.Length;
     public int RowCount => _buffer.RowCount;
     public bool WithinTransaction => false;
-
-    private bool _inErrorState;
-
+    
     public DateTime LastFlush { get; private set; } = DateTime.MaxValue;
 
     public TcpSender() {}
@@ -115,7 +113,6 @@ internal class TcpSender : ISender
        }
        catch
        {
-           _inErrorState = true;
            socket.Dispose();
            networkStream?.Dispose();
            sslStream?.Dispose();
@@ -196,7 +193,6 @@ internal class TcpSender : ISender
             else
             {
                 // Disconnected
-                _inErrorState = true;
                 throw new IngressError(ErrorCode.SocketError, "Authentication failed, or server disconnected.");
             }
         }
@@ -226,12 +222,10 @@ internal class TcpSender : ISender
                 _buffer.WriteToStream(_dataStream);
                 LastFlush = DateTime.UtcNow;
                 _buffer.Clear();
-                _inErrorState = false;
             }
         }
         catch (Exception ex)
         {
-            _inErrorState = true;
             if (ex is not IngressError)
             {
                 throw new IngressError(ErrorCode.ServerFlushError, ex.Message, ex);
@@ -254,12 +248,10 @@ internal class TcpSender : ISender
             if (_buffer.Length != 0)
             {
                 await _buffer.WriteToStreamAsync(_dataStream, ct);
-                _inErrorState = false;
             }
         }
         catch (Exception ex)
         {
-            _inErrorState = true;
             if (ex is not IngressError)
             {
                 throw new IngressError(ErrorCode.ServerFlushError, ex.Message, ex);
@@ -277,11 +269,6 @@ internal class TcpSender : ISender
     /// <inheritdoc />
     public void Dispose()
     {
-        if (Options.auto_flush == AutoFlushType.on && !_inErrorState)
-        {
-            Send();
-        }
-
         _dataStream.Close();
         _dataStream.Dispose();
         _underlyingSocket.Dispose();
@@ -292,11 +279,6 @@ internal class TcpSender : ISender
     /// <inheritdoc />
     public async ValueTask DisposeAsync()
     {
-        if (Options.auto_flush == AutoFlushType.on && !_inErrorState)
-        {
-            await SendAsync();
-        }
-
         _dataStream.Close();
         await _dataStream.DisposeAsync();
         _underlyingSocket.Dispose();

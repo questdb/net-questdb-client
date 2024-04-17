@@ -55,9 +55,7 @@ internal class HttpSender : ISender
     public bool WithinTransaction => _buffer.WithinTransaction;
     private bool committingTransaction { get; set; }
     public DateTime LastFlush { get; private set; } = DateTime.MinValue;
-
-    private bool _inErrorState;
-
+    
     public HttpSender() {}
 
     public HttpSender(QuestDBOptions options)
@@ -241,7 +239,6 @@ internal class HttpSender : ISender
         HttpRequestMessage? request = null;
         CancellationTokenSource? cts = null;
         HttpResponseMessage? response = null;
-        _inErrorState = false;
         HttpRequestException? cannotConnect = null;
         
         try
@@ -332,7 +329,6 @@ internal class HttpSender : ISender
         }
         catch (Exception ex)
         {
-            _inErrorState = true;
             if (ex is not IngressError)
             {
                 throw new IngressError(ErrorCode.ServerFlushError, ex.ToString(), ex);
@@ -366,7 +362,6 @@ internal class HttpSender : ISender
         HttpRequestMessage? request = null;
         CancellationTokenSource? cts = null;
         HttpResponseMessage? response = null;
-        _inErrorState = false;
         HttpRequestException? cannotConnect = null;
         
         try
@@ -458,7 +453,6 @@ internal class HttpSender : ISender
         }
         catch (Exception ex)
         {
-            _inErrorState = true;
             if (ex is not IngressError)
             {
                 throw new IngressError(ErrorCode.ServerFlushError, ex.ToString(), ex);
@@ -504,20 +498,6 @@ internal class HttpSender : ISender
     /// <inheritdoc />
     public void Dispose()
     {
-        // flush if safe to do so
-        if (Options.auto_flush == AutoFlushType.on && !_inErrorState)
-        {
-            try
-            {
-                Send();
-            }
-            catch (Exception ex)
-            {
-                _inErrorState = true;
-                throw new IngressError(ErrorCode.ServerFlushError,
-                    $"Could not auto-flush when disposing sender: {ex.Message}");
-            }
-        }
         _client.Dispose();
         _handler.Dispose();
         _buffer.Clear();
@@ -527,20 +507,6 @@ internal class HttpSender : ISender
     /// <inheritdoc />
     public async ValueTask DisposeAsync()
     {
-        if (Options.auto_flush == AutoFlushType.on && !_inErrorState)
-        {
-            try
-            {
-                await SendAsync();
-            }
-            catch (Exception ex)
-            {
-                _inErrorState = true;
-                if (ex is not IngressError) {}
-                throw new IngressError(ErrorCode.ServerFlushError,
-                    $"Could not auto-flush when disposing sender: {ex.Message}");
-            }
-        }
         _client.Dispose();
         _handler.Dispose();
         _buffer.Clear();

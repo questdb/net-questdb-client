@@ -775,11 +775,13 @@ public class Buffer
     ///     Writes the chunked buffer contents to a stream.
     /// </summary>
     /// <param name="stream"></param>
+    /// <param name="ct"></param>
     /// <exception cref="IngressError">When writing to stream fails.</exception>
-    public void WriteToStream(Stream stream)
+    public void WriteToStream(Stream stream, CancellationToken ct = default)
     {
         for (var i = 0; i <= _currentBufferIndex; i++)
         {
+            ct.ThrowIfCancellationRequested();
             var length = i == _currentBufferIndex ? Position : _buffers[i].Length;
 
             try

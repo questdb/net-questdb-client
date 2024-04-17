@@ -28,6 +28,7 @@ using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Net.Security;
+using System.Reflection.Metadata;
 using System.Security.Authentication;
 using System.Security.Cryptography.X509Certificates;
 using System.Text;
@@ -310,18 +311,7 @@ internal class HttpSender : ISender
             // unwrap json error if present
             if (response.Content.Headers.ContentType?.MediaType == "application/json")
             {
-                try
-                {
-                    var jsonErr = response.Content.ReadFromJsonAsync<JsonErrorResponse>(
-                        cancellationToken: cts?.Token ?? default).Result;
-                    throw new IngressError(ErrorCode.ServerFlushError,
-                        $"{response.ReasonPhrase}. {jsonErr?.ToString() ?? ""}");
-                }
-                catch (JsonException)
-                {
-                    var strErr = response.Content.ReadAsStringAsync(cts?.Token ?? default).Result;
-                    throw new IngressError(ErrorCode.ServerFlushError, $"{response.ReasonPhrase}. {strErr}");
-                }
+                HandleErrorJsonAsync(response, cts).Wait();
             }
 
             // fallback to basic error
@@ -343,6 +333,22 @@ internal class HttpSender : ISender
             request?.Dispose();
             response?.Dispose();
             cts?.Dispose();
+        }
+    }
+
+    private Task HandleErrorJsonAsync(HttpResponseMessage response, CancellationTokenSource? cts)
+    {
+        try
+        {
+            var jsonErr = response.Content.ReadFromJsonAsync<JsonErrorResponse>(
+                cancellationToken: cts?.Token ?? default).Result;
+            throw new IngressError(ErrorCode.ServerFlushError,
+                $"{response.ReasonPhrase}. {jsonErr?.ToString() ?? ""}");
+        }
+        catch (JsonException)
+        {
+            var strErr = response.Content.ReadAsStringAsync(cts?.Token ?? default).Result;
+            throw new IngressError(ErrorCode.ServerFlushError, $"{response.ReasonPhrase}. {strErr}");
         }
     }
         
@@ -434,18 +440,7 @@ internal class HttpSender : ISender
             // unwrap json error if present
             if (response.Content.Headers.ContentType?.MediaType == "application/json")
             {
-                try
-                {
-                    var jsonErr = await response.Content.ReadFromJsonAsync<JsonErrorResponse>(
-                        cancellationToken: cts?.Token ?? default);
-                    throw new IngressError(ErrorCode.ServerFlushError,
-                        $"{response.ReasonPhrase}. {jsonErr?.ToString() ?? ""}");
-                }
-                catch (JsonException)
-                {
-                    var strErr = await response.Content.ReadAsStringAsync(cts?.Token ?? default);
-                    throw new IngressError(ErrorCode.ServerFlushError, $"{response.ReasonPhrase}. {strErr}");
-                }
+                await HandleErrorJsonAsync(response, cts);
             }
        
             // fallback to basic error

@@ -95,7 +95,7 @@ internal class TcpSender : ISender
                sslStream.AuthenticateAsClient(sslOptions);
                if (!sslStream.IsEncrypted)
                {
-                   throw new IngressError(ErrorCode.TlsError, "Could not established encrypted connection.");
+                   throw new IngressError(ErrorCode.TlsError, "Could not establish encrypted connection.");
                }
 
                dataStream = sslStream;

@@ -188,29 +188,41 @@ internal class HttpSender : ISender
     /// <inheritdoc cref="CommitAsync"/> />
     public void Commit(CancellationToken ct = default)
     {
-        if (!WithinTransaction)
+        try
         {
-            throw new IngressError(ErrorCode.InvalidApiCall, "No transaction to commit.");
-        }
-        committingTransaction = true;
-        Send(ct);
+            if (!WithinTransaction)
+            {
+                throw new IngressError(ErrorCode.InvalidApiCall, "No transaction to commit.");
+            }
 
-        committingTransaction = false;
-        Debug.Assert(!_buffer.WithinTransaction);
+            committingTransaction = true;
+            Send(ct);
+        }
+        finally
+        {
+            committingTransaction = false;
+            Debug.Assert(!_buffer.WithinTransaction);
+        }
     }
 
     /// <inheritdoc />
     public async Task CommitAsync(CancellationToken ct = default)
     {
-        if (!WithinTransaction)
+        try
         {
-            throw new IngressError(ErrorCode.InvalidApiCall, "No transaction to commit.");
-        }
-        committingTransaction = true;
-        await SendAsync(ct);
+            if (!WithinTransaction)
+            {
+                throw new IngressError(ErrorCode.InvalidApiCall, "No transaction to commit.");
+            }
 
-        committingTransaction = false;
-        Debug.Assert(!_buffer.WithinTransaction);
+            committingTransaction = true;
+            await SendAsync(ct);
+        }
+        finally
+        {
+            committingTransaction = false;
+            Debug.Assert(!_buffer.WithinTransaction);
+        }
     }
 
     /// <inheritdoc />

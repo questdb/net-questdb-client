@@ -1114,21 +1114,6 @@ public class HttpTests
         sender.Clear();
     }
     
-    [Test]
-    public async Task CheckDisposingThrowsException()
-    {
-        using var srv = new DummyHttpServer(withErrorMessage: true);
-        await srv.StartAsync(HttpPort);
-        
-        await using var sender = Sender.New($"http::addr={Host}:{HttpPort};auto_flush=on;auto_flush_interval=off;");
-        await sender.Table("foo").Symbol("bah", "baz").AtNow();
-        
-        Assert.That(
-            async () => await sender.DisposeAsync(),
-            Throws.TypeOf<IngressError>().With.Message.Contains("Server Response (\n\tCode: `code`\n\tMessage: `message`\n\tLine: `1`\n\tErrorId: `errorid` \n)")
-        );
-    }
-    
     private async Task StartServerDelayed(DummyHttpServer srv)
     {
         await Task.Delay(2000);

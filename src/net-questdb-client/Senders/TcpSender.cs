@@ -43,22 +43,19 @@ namespace QuestDB.Senders;
 /// </summary>
 internal class TcpSender : ISender
 {
-    public QuestDBOptions Options { get; private init; } = null!;
+    public QuestDBOptions Options { get; private init; }
     private Buffer _buffer = null!;
     private Socket _underlyingSocket = null!;
     private Stream _dataStream = null!;
     private static readonly RemoteCertificateValidationCallback AllowAllCertCallback = (_, _, _, _) => true;
     private bool _authenticated;
-
     
     public int Length => _buffer.Length;
     public int RowCount => _buffer.RowCount;
     public bool WithinTransaction => false;
     
     public DateTime LastFlush { get; private set; } = DateTime.MaxValue;
-
-    public TcpSender() {}
-
+    
     public TcpSender(QuestDBOptions options)
     {
         Options = options;

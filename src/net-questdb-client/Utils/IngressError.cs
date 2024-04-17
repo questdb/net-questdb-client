@@ -46,5 +46,6 @@ public class IngressError : Exception
     }
 
     // ReSharper disable once UnusedAutoPropertyAccessor.Global
+    // ReSharper disable once InconsistentNaming
     public ErrorCode code { get; }
 }

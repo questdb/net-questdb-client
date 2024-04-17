@@ -28,7 +28,6 @@ using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Net.Security;
-using System.Reflection.Metadata;
 using System.Security.Authentication;
 using System.Security.Cryptography.X509Certificates;
 using System.Text;
@@ -38,7 +37,6 @@ using QuestDB.Enums;
 using QuestDB.Utils;
 using Buffer = QuestDB.Buffers.Buffer;
 
-
 namespace QuestDB.Senders;
 
 /// <summary>
@@ -46,7 +44,7 @@ namespace QuestDB.Senders;
 /// </summary>
 internal class HttpSender : ISender
 {
-    public QuestDBOptions Options { get; private init; } = null!;
+    public QuestDBOptions Options { get; private init; } 
     private Buffer _buffer = null!;
     private HttpClient _client = null!;
     private SocketsHttpHandler _handler = null!;
@@ -54,10 +52,8 @@ internal class HttpSender : ISender
     public int Length => _buffer.Length;
     public int RowCount => _buffer.RowCount;
     public bool WithinTransaction => _buffer.WithinTransaction;
-    private bool committingTransaction { get; set; }
+    private bool CommittingTransaction { get; set; }
     public DateTime LastFlush { get; private set; } = DateTime.MinValue;
-    
-    public HttpSender() {}
 
     public HttpSender(QuestDBOptions options)
     {
@@ -195,12 +191,12 @@ internal class HttpSender : ISender
                 throw new IngressError(ErrorCode.InvalidApiCall, "No transaction to commit.");
             }
 
-            committingTransaction = true;
+            CommittingTransaction = true;
             Send(ct);
         }
         finally
         {
-            committingTransaction = false;
+            CommittingTransaction = false;
             Debug.Assert(!_buffer.WithinTransaction);
         }
     }
@@ -215,12 +211,12 @@ internal class HttpSender : ISender
                 throw new IngressError(ErrorCode.InvalidApiCall, "No transaction to commit.");
             }
 
-            committingTransaction = true;
+            CommittingTransaction = true;
             await SendAsync(ct);
         }
         finally
         {
-            committingTransaction = false;
+            CommittingTransaction = false;
             Debug.Assert(!_buffer.WithinTransaction);
         }
     }
@@ -239,7 +235,7 @@ internal class HttpSender : ISender
     /// <inheritdoc cref="SendAsync"/>
     public void Send(CancellationToken ct = default)
     {
-        if (WithinTransaction && !committingTransaction)
+        if (WithinTransaction && !CommittingTransaction)
         {
             throw new IngressError(ErrorCode.InvalidApiCall, "Please `commit` to complete your transaction.");
         }
@@ -369,7 +365,7 @@ internal class HttpSender : ISender
     /// <inheritdoc />
     public async Task SendAsync(CancellationToken ct = default)
     {
-        if (WithinTransaction && !committingTransaction)
+        if (WithinTransaction && !CommittingTransaction)
         {
             throw new IngressError(ErrorCode.InvalidApiCall, "Please `commit` to complete your transaction.");
         }

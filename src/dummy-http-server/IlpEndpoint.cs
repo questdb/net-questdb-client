@@ -63,6 +63,7 @@ public class IlpEndpoint : Endpoint<Request, JsonErrorResponse?>
     public static bool WithErrorMessage = false;
     private const string Username = "admin";
     private const string Password = "quest";
+    public static int Counter = 0;
 
     public override void Configure()
     {
@@ -82,6 +83,7 @@ public class IlpEndpoint : Endpoint<Request, JsonErrorResponse?>
 
     public override async Task HandleAsync(Request req, CancellationToken ct)
     {
+        Counter++;
         if (WithRetriableError)
         {
             await SendAsync(null, 500, ct);

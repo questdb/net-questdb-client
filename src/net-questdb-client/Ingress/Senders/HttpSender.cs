@@ -288,6 +288,7 @@ internal class HttpSender : ISender
                     try
                     {
                         response = _client.Send(request, HttpCompletionOption.ResponseHeadersRead, cts!.Token);
+                        cannotConnect = null;
                     }
                     catch (HttpRequestException hre)
                     {
@@ -413,6 +414,7 @@ internal class HttpSender : ISender
                     try
                     {
                         response = await _client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cts!.Token);
+                        cannotConnect = null;
                     }
                     catch (HttpRequestException hre)
                     {

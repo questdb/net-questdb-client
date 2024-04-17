@@ -154,4 +154,9 @@ public class DummyHttpServer : IDisposable
 
         return null;
     }
+
+    public int GetCounter()
+    {
+        return IlpEndpoint.Counter;
+    }
 }

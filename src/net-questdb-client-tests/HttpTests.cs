@@ -1129,4 +1129,30 @@ public class HttpTests
         );
     }
     
+    private async Task StartServerDelayed(DummyHttpServer srv)
+    {
+        await Task.Delay(2000);
+        await srv.StartAsync(HttpPort);
+    }
+
+    [Test]
+    public async Task TestCannotConnectBehaviour()
+    {
+        using var srv = new DummyHttpServer();
+        StartServerDelayed(srv);
+     
+        await using var sender = Sender.New($"http::addr={Host}:{9000};auto_flush=off;;");
+
+        for (int i = 0; i < 10000; i++)
+        {
+            await sender.Table("foo").Column("n", i).AtNow();
+            await sender.SendAsync();
+            if (i < 3)
+            {
+                Console.WriteLine(srv.GetReceiveBuffer().ToString());
+            }
+            Console.WriteLine($"Counter: {srv.GetCounter()} Lines: {srv.GetReceiveBuffer().ToString().Split('\n').Length}");
+        }
+    }
+    
 }

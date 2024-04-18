@@ -579,6 +579,10 @@ internal class HttpSender : ISender
     /// <inheritdoc />
     public async Task At(DateTime value, CancellationToken ct = default)
     {
+        if (LastFlush == DateTime.MinValue)
+        {
+            LastFlush = DateTime.UtcNow;
+        }
         _buffer.At(value); 
         await (this as ISender).FlushIfNecessary(ct);
     }
@@ -586,6 +590,10 @@ internal class HttpSender : ISender
     /// <inheritdoc />
     public async Task At(DateTimeOffset value, CancellationToken ct = default)
     {
+        if (LastFlush == DateTime.MinValue)
+        {
+            LastFlush = DateTime.UtcNow;
+        }
         _buffer.At(value);
         await (this as ISender).FlushIfNecessary(ct);
     }
@@ -593,6 +601,10 @@ internal class HttpSender : ISender
     /// <inheritdoc />
     public async Task At(long value, CancellationToken ct = default)
     {
+        if (LastFlush == DateTime.MinValue)
+        {
+            LastFlush = DateTime.UtcNow;
+        }
         _buffer.At(value);
         await (this as ISender).FlushIfNecessary(ct);
     }
@@ -600,6 +612,10 @@ internal class HttpSender : ISender
     /// <inheritdoc />
     public async Task AtNow(CancellationToken ct = default)
     {
+        if (LastFlush == DateTime.MinValue)
+        {
+            LastFlush = DateTime.UtcNow;
+        }
         _buffer.AtNow();
         await (this as ISender).FlushIfNecessary(ct);
     }

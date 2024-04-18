@@ -1140,4 +1140,37 @@ public class HttpTests
         }
     }
     
+    [Test]
+    public async Task SendManyRequests()
+    {
+        using var srv = new DummyHttpServer();
+        
+        await using var sender =
+            Sender.New($"http::addr=localhost:{HttpPort};");
+        var lineCount = 10000;
+        for (var i = 0; i < lineCount; i++)
+        {
+            await sender.Table("table name")
+                .Symbol("t a g", "v alu, e")
+                .Column("number", i)
+                .Column("db l", 123.12)
+                .Column("string", " -=\"")
+                .Column("при вед", "медвед")
+                .AtNow();
+
+            var request = sender.SendAsync();
+
+            if (i == 0)
+            {
+                await Task.Delay(100);
+                await srv.StartAsync(HttpPort);
+            }
+
+            await request;
+        }
+
+        Assert.That(srv?.GetCounter(), Is.EqualTo(lineCount));
+        srv?.Dispose();
+    }
+    
 }

@@ -83,7 +83,7 @@ public class JsonSpecTestRunner
                 }
             }
 
-            await sender.AtNow();
+            await sender.AtNowAsync();
             await sender.SendAsync();
         }
         catch (Exception? ex)
@@ -162,7 +162,7 @@ public class JsonSpecTestRunner
                 }
             }
 
-            await sender.AtNow();
+            await sender.AtNowAsync();
             await sender.SendAsync();
         }
         catch (Exception? ex)

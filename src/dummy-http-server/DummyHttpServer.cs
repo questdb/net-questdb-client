@@ -104,6 +104,7 @@ public class DummyHttpServer : IDisposable
     {
         IlpEndpoint.ReceiveBuffer.Clear();
         IlpEndpoint.LastError = null;
+        IlpEndpoint.Counter = 0;
     }
 
     public Task StartAsync(int port = 29743)

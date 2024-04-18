@@ -42,25 +42,21 @@ public interface ISender : IDisposable, IAsyncDisposable
     /// <param name="tableName"></param>
     /// <returns></returns>
     /// <exception cref="IngressError"></exception>
-    public ISender Transaction(ReadOnlySpan<char> tableName)
-        => throw new IngressError(ErrorCode.InvalidApiCall, $"`{GetType().Name}` does not support transactions.");
-    
+    public ISender Transaction(ReadOnlySpan<char> tableName);
+
     /// <summary>
     ///     Clears the transaction.
     /// </summary>
     /// <returns></returns>
     /// <exception cref="IngressError"></exception>
-    public void Rollback()
-        => throw new IngressError(ErrorCode.InvalidApiCall, $"`{GetType().Name}` does not support transactions.");
-
-
+    public void Rollback();
+    
     /// <summary>
     ///     Commits the current transaction, sending the buffer contents to the database.
     /// </summary>
     /// <returns></returns>
     /// <exception cref="IngressError">Thrown by <see cref="SendAsync"/></exception>
-    public Task CommitAsync(CancellationToken ct = default)
-        => throw new IngressError(ErrorCode.InvalidApiCall, $"`{GetType().Name}` does not support transactions.");
+    public Task CommitAsync(CancellationToken ct = default);
 
     /// <inheritdoc cref="CommitAsync"/>
     public void Commit(CancellationToken ct = default)  => throw new IngressError(ErrorCode.InvalidApiCall, $"`{GetType().Name}` does not support transactions.");
@@ -150,21 +146,42 @@ public interface ISender : IDisposable, IAsyncDisposable
     /// <param name="value">A timestamp</param>
     /// <param name="ct">A user-provided cancellation token</param>
     /// <returns></returns>
-    public Task At(DateTime value, CancellationToken ct = default);
+    public ValueTask AtAsync(DateTime value, CancellationToken ct = default);
 
-    /// <inheritdoc cref="At(System.DateTime,System.Threading.CancellationToken)"/>
-    public Task At(DateTimeOffset value, CancellationToken ct = default);
+    /// <inheritdoc cref="AtAsync"/>
+    public ValueTask AtAsync(DateTimeOffset value, CancellationToken ct = default);
 
-    /// <inheritdoc cref="At(System.DateTime,System.Threading.CancellationToken)"/>
-    public Task At(long value, CancellationToken ct = default);
-
+    /// <inheritdoc cref="AtAsync"/>
+    public ValueTask AtAsync(long value, CancellationToken ct = default);
+    
     /// <summary>
     ///     Allow the server to set a designated timestamp value.
     /// </summary>
     /// <param name="ct"></param>
     /// <returns></returns>
-    public Task AtNow(CancellationToken ct = default);
+    public ValueTask AtNowAsync(CancellationToken ct = default);
+    
+    /// <summary>
+    ///     Adds a value for the designated timestamp column.
+    /// </summary>
+    /// <param name="value">A timestamp</param>
+    /// <param name="ct">A user-provided cancellation token</param>
+    /// <returns></returns>
+    public void At(DateTime value, CancellationToken ct = default);
 
+    /// <inheritdoc cref="AtAsync"/>
+    public void At(DateTimeOffset value, CancellationToken ct = default);
+
+    /// <inheritdoc cref="AtAsync"/>
+    public void At(long value, CancellationToken ct = default);
+    
+    /// <summary>
+    ///     Allow the server to set a designated timestamp value.
+    /// </summary>
+    /// <param name="ct"></param>
+    /// <returns></returns>
+    public void AtNow(CancellationToken ct = default);
+    
     /// <summary>
     ///     Removes unused extra buffer space.
     /// </summary>
@@ -179,33 +196,5 @@ public interface ISender : IDisposable, IAsyncDisposable
     ///     Clears the sender's buffer.
     /// </summary>
     public void Clear();
-
-    /// <summary>
-    ///     Handles auto-flushing logic.
-    /// </summary>
-    /// <remarks>
-    ///     Auto-flushing is a feature which triggers the submission of data to the database
-    ///     based upon certain thresholds.
-    ///     <para />
-    ///     <see cref="QuestDBOptions.auto_flush_rows"/> - the number of buffered ILP rows.
-    ///     <para />
-    ///     <see cref="QuestDBOptions.auto_flush_bytes"/> - the current length of the buffer in UTF-8 bytes.
-    ///     <para />
-    ///     <see cref="QuestDBOptions.auto_flush_interval"/> - the elapsed time interval since the last flush.
-    ///     <para />
-    ///     These functionalities can be disabled entirely by setting <see cref="QuestDBOptions.auto_flush"/>
-    ///     to <see cref="AutoFlushType.off"/>, or individually by setting their values to `-1`.
-    /// </remarks>
-    /// <param name="ct">A user-provided cancellation token.</param>
-    internal async Task FlushIfNecessary(CancellationToken ct = default)
-    {
-        if (Options.auto_flush == AutoFlushType.on && !WithinTransaction &&
-            ((Options.auto_flush_rows > 0 && RowCount >= Options.auto_flush_rows)
-             || (Options.auto_flush_bytes > 0 && Length >= Options.auto_flush_bytes)
-             || (Options.auto_flush_interval > TimeSpan.Zero &&
-                 DateTime.UtcNow - LastFlush >= Options.auto_flush_interval)))
-        {
-            await SendAsync(ct);
-        }
-    }
+    
 }

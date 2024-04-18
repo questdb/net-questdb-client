@@ -18,7 +18,7 @@ for (var i = 0; i < rowsToSend; i++)
         .Column("qty", 100)
         .Column("traded_ts", new DateTime(
             2022, 8, 6, 7, 35, 23, 189, DateTimeKind.Utc))
-        .At(DateTime.UtcNow);
+        .AtAsync(DateTime.UtcNow);
 }
 
 // Ensure no pending rows.

@@ -74,7 +74,7 @@ public class BenchConnectionChurnVsServer2
         for (var i = 0; i < RowsPerIteration; i++)
         {
             await sender.Table($"random_table_{Random.Shared.NextInt64(0, NumberOfTables - 1)}").Column("number", i)
-                .AtNow();
+                .AtNowAsync();
         }
 
         await sender.SendAsync();
@@ -90,7 +90,7 @@ public class BenchConnectionChurnVsServer2
         for (var i = 0; i < RowsPerIteration; i++)
         {
             await sender.Table($"random_table_{Random.Shared.NextInt64(0, NumberOfTables - 1)}").Column("number", i)
-                .AtNow();
+                .AtNowAsync();
         }
 
         await sender.SendAsync();

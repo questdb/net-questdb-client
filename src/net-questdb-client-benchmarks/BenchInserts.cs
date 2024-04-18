@@ -84,7 +84,7 @@ public class BenchInserts
 
         for (var i = 0; i < RowsPerIteration; i++)
         {
-            await sender.Table("basic_inserts").Column("number", i).AtNow();
+            await sender.Table("basic_inserts").Column("number", i).AtNowAsync();
             if (i % BatchSize == 0)
             {
                 _httpServer.Clear();

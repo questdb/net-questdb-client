@@ -78,7 +78,7 @@ public class BenchConnectionChurn
         for (var i = 0; i < RowsPerIteration; i++)
         {
             await sender.Table($"random_table_{Random.Shared.NextInt64(0, NumberOfTables - 1)}").Column("number", i)
-                .AtNow();
+                .AtNowAsync();
             if (i % BatchSize == 0)
             {
                 _httpServer.Clear();

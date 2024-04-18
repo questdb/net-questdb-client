@@ -1,0 +1,231 @@
+using System.Runtime.CompilerServices;
+using QuestDB.Enums;
+using QuestDB.Utils;
+using Buffer = QuestDB.Buffers.Buffer;
+
+namespace QuestDB.Senders;
+
+public abstract class AbstractSender : ISender
+{
+    public QuestDBOptions Options { get; protected init; } 
+    protected Buffer _buffer = null!;
+    
+    public int Length => _buffer.Length;
+    public int RowCount => _buffer.RowCount;
+    public bool WithinTransaction => _buffer.WithinTransaction;
+    protected bool CommittingTransaction { get; set; }
+    public DateTime LastFlush { get; protected set; } = DateTime.MinValue;
+    
+    public virtual ISender Transaction(ReadOnlySpan<char> tableName)
+        => throw new IngressError(ErrorCode.InvalidApiCall, $"`{GetType().Name}` does not support transactions.");
+
+    public virtual void Rollback()
+        => throw new IngressError(ErrorCode.InvalidApiCall, $"`{GetType().Name}` does not support transactions.");
+    
+    public virtual Task CommitAsync(CancellationToken ct = default)
+        => throw new IngressError(ErrorCode.InvalidApiCall, $"`{GetType().Name}` does not support transactions.");
+    
+    public virtual void Commit(CancellationToken ct = default) 
+        => throw new IngressError(ErrorCode.InvalidApiCall, $"`{GetType().Name}` does not support transactions.");
+    
+    /// <inheritdoc />
+    public ISender Table(ReadOnlySpan<char> name)
+    {
+        _buffer.Table(name);
+        return this;
+    }
+   
+    /// <inheritdoc />
+    public ISender Symbol(ReadOnlySpan<char> name, ReadOnlySpan<char> value)
+    {
+        _buffer.Symbol(name, value);
+        return this;
+    }
+
+    /// <inheritdoc />
+    public ISender Column(ReadOnlySpan<char> name, ReadOnlySpan<char> value)
+    {
+        _buffer.Column(name, value);
+        return this;
+    }
+
+    /// <inheritdoc />
+    public ISender Column(ReadOnlySpan<char> name, long value)
+    {
+        _buffer.Column(name, value);
+        return this;
+    }
+
+    /// <inheritdoc />
+    public ISender Column(ReadOnlySpan<char> name, bool value)
+    {
+        _buffer.Column(name, value);
+        return this;
+    }
+
+    /// <inheritdoc />
+    public ISender Column(ReadOnlySpan<char> name, double value)
+    {
+        _buffer.Column(name, value);
+        return this;
+    }
+
+    /// <inheritdoc />
+    public ISender Column(ReadOnlySpan<char> name, DateTime value)
+    {
+        _buffer.Column(name, value);
+        return this;
+    }
+
+    /// <inheritdoc />
+    public ISender Column(ReadOnlySpan<char> name, DateTimeOffset value)
+    {
+        _buffer.Column(name, value);
+        return this;
+    }
+
+    /// <inheritdoc />
+    public async ValueTask AtAsync(DateTime value, CancellationToken ct = default)
+    {
+        GuardLastFlushNotSet();
+        _buffer.At(value); 
+        await FlushIfNecessaryAsync(ct);
+    }
+        
+    /// <inheritdoc />
+    public async ValueTask AtAsync(DateTimeOffset value, CancellationToken ct = default)
+    {
+        GuardLastFlushNotSet();
+        _buffer.At(value);
+        await FlushIfNecessaryAsync(ct);
+    }
+    
+    /// <inheritdoc />
+    public async ValueTask AtAsync(long value, CancellationToken ct = default)
+    {
+        GuardLastFlushNotSet();
+        _buffer.At(value);
+        await FlushIfNecessaryAsync(ct);
+    }
+
+    /// <inheritdoc />
+    public async ValueTask AtNowAsync(CancellationToken ct = default)
+    {
+        GuardLastFlushNotSet();
+        _buffer.AtNow();
+        await FlushIfNecessaryAsync(ct);
+    }
+
+    /// <inheritdoc />
+    public void At(DateTime value, CancellationToken ct = default)
+    {
+        GuardLastFlushNotSet();
+        _buffer.At(value); 
+        FlushIfNecessary(ct);
+    }
+
+    /// <inheritdoc />
+    public void At(DateTimeOffset value, CancellationToken ct = default)
+    {
+        GuardLastFlushNotSet();
+        _buffer.At(value); 
+        FlushIfNecessary(ct);
+    }
+
+    /// <inheritdoc />
+    public void At(long value, CancellationToken ct = default)
+    {
+        GuardLastFlushNotSet();
+        _buffer.At(value); 
+        FlushIfNecessary(ct);
+    }
+
+    /// <inheritdoc />
+    public void AtNow(CancellationToken ct = default)
+    {
+        GuardLastFlushNotSet();
+        _buffer.AtNow();
+        FlushIfNecessary(ct);
+    }
+
+    /// <summary>
+    ///     Handles auto-flushing logic.
+    /// </summary>
+    /// <remarks>
+    ///     Auto-flushing is a feature which triggers the submission of data to the database
+    ///     based upon certain thresholds.
+    ///     <para />
+    ///     <see cref="QuestDBOptions.auto_flush_rows"/> - the number of buffered ILP rows.
+    ///     <para />
+    ///     <see cref="QuestDBOptions.auto_flush_bytes"/> - the current length of the buffer in UTF-8 bytes.
+    ///     <para />
+    ///     <see cref="QuestDBOptions.auto_flush_interval"/> - the elapsed time interval since the last flush.
+    ///     <para />
+    ///     These functionalities can be disabled entirely by setting <see cref="QuestDBOptions.auto_flush"/>
+    ///     to <see cref="AutoFlushType.off"/>, or individually by setting their values to `-1`.
+    /// </remarks>
+    /// <param name="ct">A user-provided cancellation token.</param>
+    public async ValueTask FlushIfNecessaryAsync(CancellationToken ct = default)
+    {
+        if (Options.auto_flush == AutoFlushType.on && !WithinTransaction &&
+            ((Options.auto_flush_rows > 0 && RowCount >= Options.auto_flush_rows)
+             || (Options.auto_flush_bytes > 0 && Length >= Options.auto_flush_bytes)
+             || (Options.auto_flush_interval > TimeSpan.Zero &&
+                 DateTime.UtcNow - LastFlush >= Options.auto_flush_interval)))
+        {
+            await SendAsync(ct);
+        }
+    }
+    
+    /// <inheritdoc cref="FlushIfNecessaryAsync"/>
+    public void FlushIfNecessary(CancellationToken ct = default)
+    {
+        if (Options.auto_flush == AutoFlushType.on && !WithinTransaction &&
+            ((Options.auto_flush_rows > 0 && RowCount >= Options.auto_flush_rows)
+             || (Options.auto_flush_bytes > 0 && Length >= Options.auto_flush_bytes)
+             || (Options.auto_flush_interval > TimeSpan.Zero &&
+                 DateTime.UtcNow - LastFlush >= Options.auto_flush_interval)))
+        {
+            Send(ct);
+        }
+    }
+    
+    /// <inheritdoc />
+    public void Truncate()
+    {
+        _buffer.TrimExcessBuffers();
+    }
+    
+    /// <inheritdoc />
+    public void CancelRow()
+    {
+        _buffer.CancelRow();
+    }
+
+    /// <inheritdoc />
+    public void Clear()
+    {
+        _buffer.Clear();
+    }
+    
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private void GuardLastFlushNotSet()
+    {
+        if (LastFlush == DateTime.MinValue)
+        {
+            LastFlush = DateTime.UtcNow;
+        }
+    }
+
+    /// <inheritdoc />
+    public abstract void Dispose();
+
+    /// <inheritdoc />
+    public abstract ValueTask DisposeAsync();
+    
+    /// <inheritdoc />
+    public abstract Task SendAsync(CancellationToken ct = default);
+
+    /// <inheritdoc />
+    public abstract void Send(CancellationToken ct = default);
+}

@@ -13,10 +13,10 @@ await sender.Table("trades")
     .Column("qty", 100)
     .Column("traded_ts", new DateTime(
         2022, 8, 6, 7, 35, 23, 189, DateTimeKind.Utc))
-    .At(DateTime.UtcNow);
+    .AtAsync(DateTime.UtcNow);
 await sender.Table("trades")
     .Symbol("pair", "GBPJPY")
     .Column("traded_price", 135.97)
     .Column("qty", 400)
-    .At(DateTime.UtcNow);
+    .AtAsync(DateTime.UtcNow);
 await sender.SendAsync();

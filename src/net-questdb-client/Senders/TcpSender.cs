@@ -41,20 +41,12 @@ namespace QuestDB.Senders;
 /// <summary>
 ///     An implementation of <see cref="ISender"/> for TCP transport.
 /// </summary>
-internal class TcpSender : ISender
+internal class TcpSender : AbstractSender
 {
-    public QuestDBOptions Options { get; private init; }
-    private Buffer _buffer = null!;
     private Socket _underlyingSocket = null!;
     private Stream _dataStream = null!;
     private static readonly RemoteCertificateValidationCallback AllowAllCertCallback = (_, _, _, _) => true;
     private bool _authenticated;
-    
-    public int Length => _buffer.Length;
-    public int RowCount => _buffer.RowCount;
-    public bool WithinTransaction => false;
-    
-    public DateTime LastFlush { get; private set; } = DateTime.MaxValue;
     
     public TcpSender(QuestDBOptions options)
     {
@@ -210,7 +202,7 @@ internal class TcpSender : ISender
     }
     
     /// <inheritdoc cref="SendAsync"/>
-    public void Send(CancellationToken ct = default)
+    public override void Send(CancellationToken ct = default)
     {
         try
         {
@@ -238,7 +230,7 @@ internal class TcpSender : ISender
     }
         
     /// <inheritdoc />
-    public async Task SendAsync(CancellationToken ct = default)
+    public override async Task SendAsync(CancellationToken ct = default)
     {
         try
         {
@@ -264,7 +256,7 @@ internal class TcpSender : ISender
     }
     
     /// <inheritdoc />
-    public void Dispose()
+    public override void Dispose()
     {
         _dataStream.Close();
         _dataStream.Dispose();
@@ -274,114 +266,12 @@ internal class TcpSender : ISender
     }
     
     /// <inheritdoc />
-    public async ValueTask DisposeAsync()
+    public override async ValueTask DisposeAsync()
     {
         _dataStream.Close();
         await _dataStream.DisposeAsync();
         _underlyingSocket.Dispose();
         _buffer.Clear();
         _buffer.TrimExcessBuffers();
-    }
-    
-    /// <inheritdoc />
-    public ISender Table(ReadOnlySpan<char> name)
-    {
-        _buffer.Table(name);
-        return this;
-    }
-   
-    /// <inheritdoc />
-    public ISender Symbol(ReadOnlySpan<char> name, ReadOnlySpan<char> value)
-    {
-        _buffer.Symbol(name, value);
-        return this;
-    }
-
-    /// <inheritdoc />
-    public ISender Column(ReadOnlySpan<char> name, ReadOnlySpan<char> value)
-    {
-        _buffer.Column(name, value);
-        return this;
-    }
-
-    /// <inheritdoc />
-    public ISender Column(ReadOnlySpan<char> name, long value)
-    {
-        _buffer.Column(name, value);
-        return this;
-    }
-
-    /// <inheritdoc />
-    public ISender Column(ReadOnlySpan<char> name, bool value)
-    {
-        _buffer.Column(name, value);
-        return this;
-    }
-
-    /// <inheritdoc />
-    public ISender Column(ReadOnlySpan<char> name, double value)
-    {
-        _buffer.Column(name, value);
-        return this;
-    }
-
-    /// <inheritdoc />
-    public ISender Column(ReadOnlySpan<char> name, DateTime value)
-    {
-        _buffer.Column(name, value);
-        return this;
-    }
-
-    /// <inheritdoc />
-    public ISender Column(ReadOnlySpan<char> name, DateTimeOffset value)
-    {
-        _buffer.Column(name, value);
-        return this;
-    }
-
-    /// <inheritdoc />
-    public async Task At(DateTime value, CancellationToken ct = default)
-    {
-        _buffer.At(value); 
-        await (this as ISender).FlushIfNecessary(ct);
-    }
-        
-    /// <inheritdoc />
-    public async Task At(DateTimeOffset value, CancellationToken ct = default)
-    {
-        _buffer.At(value);
-        await (this as ISender).FlushIfNecessary(ct);
-    }
-    
-    /// <inheritdoc />
-    public async Task At(long value, CancellationToken ct = default)
-    {
-        _buffer.At(value);
-        await (this as ISender).FlushIfNecessary(ct);
-    }
-        
-    /// <inheritdoc />
-    public async Task AtNow(CancellationToken ct = default)
-    {
-        _buffer.AtNow();
-        await (this as ISender).FlushIfNecessary(ct);
-    }
-    
-    /// <inheritdoc />
-    public void Truncate()
-    {
-        _buffer.TrimExcessBuffers();
-    }
-    
-    /// <inheritdoc />
-    public void CancelRow()
-    {
-        _buffer.CancelRow();
-    }
-    
-    /// <inheritdoc />
-    public void Clear()
-    {
-        _buffer.Clear();
     }
 }

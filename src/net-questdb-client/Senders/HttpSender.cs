@@ -42,19 +42,11 @@ namespace QuestDB.Senders;
 /// <summary>
 ///     An implementation of <see cref="ISender"/> for HTTP transport.
 /// </summary>
-internal class HttpSender : ISender
+internal class HttpSender : AbstractSender
 {
-    public QuestDBOptions Options { get; private init; } 
-    private Buffer _buffer = null!;
     private HttpClient _client = null!;
     private SocketsHttpHandler _handler = null!;
     
-    public int Length => _buffer.Length;
-    public int RowCount => _buffer.RowCount;
-    public bool WithinTransaction => _buffer.WithinTransaction;
-    private bool CommittingTransaction { get; set; }
-    public DateTime LastFlush { get; private set; } = DateTime.MinValue;
-
     public HttpSender(QuestDBOptions options)
     {
         Options = options;
@@ -163,7 +155,7 @@ internal class HttpSender : ISender
     }
 
     /// <inheritdoc />
-    public ISender Transaction(ReadOnlySpan<char> tableName)
+    public override ISender Transaction(ReadOnlySpan<char> tableName)
     {
         if (WithinTransaction)
         {
@@ -182,7 +174,7 @@ internal class HttpSender : ISender
     }
 
     /// <inheritdoc cref="CommitAsync"/> />
-    public void Commit(CancellationToken ct = default)
+    public override void Commit(CancellationToken ct = default)
     {
         try
         {
@@ -202,7 +194,7 @@ internal class HttpSender : ISender
     }
 
     /// <inheritdoc />
-    public async Task CommitAsync(CancellationToken ct = default)
+    public override async Task CommitAsync(CancellationToken ct = default)
     {
         try
         {
@@ -222,7 +214,7 @@ internal class HttpSender : ISender
     }
 
     /// <inheritdoc />
-    public void Rollback()
+    public override void Rollback()
     {
         if (!WithinTransaction)
         {
@@ -233,7 +225,7 @@ internal class HttpSender : ISender
     }
     
     /// <inheritdoc cref="SendAsync"/>
-    public void Send(CancellationToken ct = default)
+    public override void Send(CancellationToken ct = default)
     {
         if (WithinTransaction && !CommittingTransaction)
         {
@@ -363,7 +355,7 @@ internal class HttpSender : ISender
     }
         
     /// <inheritdoc />
-    public async Task SendAsync(CancellationToken ct = default)
+    public override async Task SendAsync(CancellationToken ct = default)
     {
         if (WithinTransaction && !CommittingTransaction)
         {
@@ -503,7 +495,7 @@ internal class HttpSender : ISender
     }
 
     /// <inheritdoc />
-    public void Dispose()
+    public override void Dispose()
     {
         _client.Dispose();
         _handler.Dispose();
@@ -512,129 +504,12 @@ internal class HttpSender : ISender
     }
     
     /// <inheritdoc />
-    public async ValueTask DisposeAsync()
+    public override ValueTask DisposeAsync()
     {
         _client.Dispose();
         _handler.Dispose();
         _buffer.Clear();
         _buffer.TrimExcessBuffers();
-    }
-    
-    /// <inheritdoc />
-    public ISender Table(ReadOnlySpan<char> name)
-    {
-        _buffer.Table(name);
-        return this;
-    }
-   
-    /// <inheritdoc />
-    public ISender Symbol(ReadOnlySpan<char> name, ReadOnlySpan<char> value)
-    {
-        _buffer.Symbol(name, value);
-        return this;
-    }
-
-    /// <inheritdoc />
-    public ISender Column(ReadOnlySpan<char> name, ReadOnlySpan<char> value)
-    {
-        _buffer.Column(name, value);
-        return this;
-    }
-
-    /// <inheritdoc />
-    public ISender Column(ReadOnlySpan<char> name, long value)
-    {
-        _buffer.Column(name, value);
-        return this;
-    }
-
-    /// <inheritdoc />
-    public ISender Column(ReadOnlySpan<char> name, bool value)
-    {
-        _buffer.Column(name, value);
-        return this;
-    }
-
-    /// <inheritdoc />
-    public ISender Column(ReadOnlySpan<char> name, double value)
-    {
-        _buffer.Column(name, value);
-        return this;
-    }
-
-    /// <inheritdoc />
-    public ISender Column(ReadOnlySpan<char> name, DateTime value)
-    {
-        _buffer.Column(name, value);
-        return this;
-    }
-
-    /// <inheritdoc />
-    public ISender Column(ReadOnlySpan<char> name, DateTimeOffset value)
-    {
-        _buffer.Column(name, value);
-        return this;
-    }
-
-    /// <inheritdoc />
-    public async Task At(DateTime value, CancellationToken ct = default)
-    {
-        if (LastFlush == DateTime.MinValue)
-        {
-            LastFlush = DateTime.UtcNow;
-        }
-        _buffer.At(value); 
-        await (this as ISender).FlushIfNecessary(ct);
-    }
-        
-    /// <inheritdoc />
-    public async Task At(DateTimeOffset value, CancellationToken ct = default)
-    {
-        if (LastFlush == DateTime.MinValue)
-        {
-            LastFlush = DateTime.UtcNow;
-        }
-        _buffer.At(value);
-        await (this as ISender).FlushIfNecessary(ct);
-    }
-    
-    /// <inheritdoc />
-    public async Task At(long value, CancellationToken ct = default)
-    {
-        if (LastFlush == DateTime.MinValue)
-        {
-            LastFlush = DateTime.UtcNow;
-        }
-        _buffer.At(value);
-        await (this as ISender).FlushIfNecessary(ct);
-    }
-        
-    /// <inheritdoc />
-    public async Task AtNow(CancellationToken ct = default)
-    {
-        if (LastFlush == DateTime.MinValue)
-        {
-            LastFlush = DateTime.UtcNow;
-        }
-        _buffer.AtNow();
-        await (this as ISender).FlushIfNecessary(ct);
-    }
-    
-    /// <inheritdoc />
-    public void Truncate()
-    {
-        _buffer.TrimExcessBuffers();
-    }
-    
-    /// <inheritdoc />
-    public void CancelRow()
-    {
-        _buffer.CancelRow();
-    }
-
-    /// <inheritdoc />
-    public void Clear()
-    {
-        _buffer.Clear();
+        return ValueTask.CompletedTask;
     }
 }

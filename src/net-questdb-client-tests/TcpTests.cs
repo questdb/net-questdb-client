@@ -51,7 +51,7 @@ public class TcpTests
             .Symbol("t a g", "v alu, e")
             .Column("number", 10)
             .Column("string", " -=\"")
-            .At(new DateTime(1970, 01, 01, 0, 0, 1));
+            .AtAsync(new DateTime(1970, 01, 01, 0, 0, 1));
         await sender.SendAsync();
 
 
@@ -75,7 +75,7 @@ public class TcpTests
             .Symbol("t a g", "v alu, e")
             .Column("number", 10)
             .Column("string", " -=\"")
-            .At(new DateTime(1970, 01, 01, 0, 0, 1));
+            .AtAsync(new DateTime(1970, 01, 01, 0, 0, 1));
         await sender.SendAsync();
 
         var expected = "metric\\ name,t\\ a\\ g=v\\ alu\\,\\ e number=10i,string=\" -=\\\"\" 1000000000\n";
@@ -118,7 +118,7 @@ public class TcpTests
                         .Symbol("t a g", "v alu, e")
                         .Column("number", 10)
                         .Column("string", " -=\"")
-                        .At(new DateTime(1970, 01, 01, 0, 0, 1));
+                        .AtAsync(new DateTime(1970, 01, 01, 0, 0, 1));
                     await sender.SendAsync();
                     Thread.Sleep(10);
                 }
@@ -185,7 +185,7 @@ public class TcpTests
                 .Column("db l", 123.12)
                 .Column("string", " -=\"")
                 .Column("при вед", "медвед")
-                .At(new DateTime(1970, 01, 01, 0, 0, 1));
+                .AtAsync(new DateTime(1970, 01, 01, 0, 0, 1));
             totalExpectedSb.Append(expected);
         }
 
@@ -215,7 +215,7 @@ public class TcpTests
                 .Column("db l", 123.12)
                 .Column("string", " -=\"")
                 .Column("при вед", "медвед")
-                .At(new DateTime(1970, 01, 01, 0, 0, 1));
+                .AtAsync(new DateTime(1970, 01, 01, 0, 0, 1));
             totalExpectedSb.Append(expected);
         }
 
@@ -229,7 +229,7 @@ public class TcpTests
                 .Column("db l", 123.12)
                 .Column("string", " -=\"")
                 .Column("при вед", "медвед")
-                .At(new DateTime(1970, 01, 01, 0, 0, 1));
+                .AtAsync(new DateTime(1970, 01, 01, 0, 0, 1));
             totalExpectedSb.Append(expected);
         }
 
@@ -259,7 +259,7 @@ public class TcpTests
                 .Column("db l", 123.12)
                 .Column("string", " -=\"")
                 .Column("при вед", "медвед")
-                .At(new DateTime(1970, 01, 01, 0, 0, 1));
+                .AtAsync(new DateTime(1970, 01, 01, 0, 0, 1));
             totalExpectedSb.Append(expected);
         }
 
@@ -274,7 +274,7 @@ public class TcpTests
                 .Column("db l", 123.12)
                 .Column("string", " -=\"")
                 .Column("при вед", "медвед")
-                .At(new DateTime(1970, 01, 01, 0, 0, 1));
+                .AtAsync(new DateTime(1970, 01, 01, 0, 0, 1));
             totalExpectedSb.Append(expected);
         }
 
@@ -305,7 +305,7 @@ public class TcpTests
                 .Column("db l", 123.12)
                 .Column("string", " -=\"")
                 .Column("при вед", "медвед")
-                .At(new DateTime(1970, 01, 01, 0, 0, 1));
+                .AtAsync(new DateTime(1970, 01, 01, 0, 0, 1));
             totalExpectedSb.Append(expected);
             try
             {
@@ -337,7 +337,7 @@ public class TcpTests
             .Column("number2", long.MaxValue)
             .Column("number3", double.MinValue)
             .Column("number4", double.MaxValue)
-            .AtNow();
+            .AtNowAsync();
         await sender.SendAsync();
 
         var expected =
@@ -362,7 +362,7 @@ public class TcpTests
             .Column("dNaN", double.NaN)
             .Column("dInf", double.PositiveInfinity)
             .Column("dNInf", double.NegativeInfinity)
-            .AtNow();
+            .AtNowAsync();
         await sender.SendAsync();
 
         var expected =
@@ -381,7 +381,7 @@ public class TcpTests
         var ts = new DateTime(2022, 2, 24);
         await sender.Table("name")
             .Column("ts", ts)
-            .At(ts);
+            .AtAsync(ts);
 
         await sender.SendAsync();
 
@@ -408,7 +408,7 @@ public class TcpTests
             .Column("number2", long.MaxValue)
             .Column("number3", double.MinValue)
             .Column("number4", double.MaxValue)
-            .AtNow();
+            .AtNowAsync();
 
         await sender.SendAsync();
 
@@ -513,7 +513,7 @@ public class TcpTests
         Assert.Throws<IngressError>(() => senderLim4.Symbol("b    c", "12"));
 
         senderLim127.Symbol("b    c", "12");
-        await senderLim127.At(new DateTime(1970, 1, 1));
+        await senderLim127.AtAsync(new DateTime(1970, 1, 1));
         await senderLim127.SendAsync();
 
         var expected = "abcd.csv,b\\ \\ \\ \\ c=12 000\n";
@@ -555,16 +555,16 @@ public class TcpTests
         sender.Table("good");
         sender.Symbol("asdf", "sdfad");
         sender.Column("ddd", 123);
-        await sender.AtNow();
+        await sender.AtNowAsync();
 
         sender.Table("bad");
         sender.Symbol("asdf", "sdfad");
         sender.Column("asdf", 123);
-        await sender.AtNow();
+        await sender.AtNowAsync();
         sender.CancelRow();
 
         sender.Table("good");
-        await sender.At(new DateTime(1970, 1, 2));
+        await sender.AtAsync(new DateTime(1970, 1, 2));
         await sender.SendAsync();
 
         var expected = "good,asdf=sdfad ddd=123i\n" +
@@ -590,7 +590,7 @@ public class TcpTests
                 .Column("counter", i * 1111.1)
                 .Column("int", i)
                 .Column("привед", "мед вед")
-                .At(new DateTime(2021, 1, 1, i / 360 / 1000 % 60, i / 60 / 1000 % 60, i / 1000 % 60, i % 1000));
+                .AtAsync(new DateTime(2021, 1, 1, i / 360 / 1000 % 60, i / 60 / 1000 % 60, i / 1000 % 60, i % 1000));
 
             if (i % 100 == 0)
             {
@@ -621,7 +621,7 @@ public class TcpTests
                 .Column("counter", i * 1111.1)
                 .Column("int", i)
                 .Column("привед", "мед вед")
-                .At(new DateTime(2021, 1, 1, i / 360 / 1000 % 60, i / 60 / 1000 % 60, i / 1000 % 60, i % 1000));
+                .AtAsync(new DateTime(2021, 1, 1, i / 360 / 1000 % 60, i / 60 / 1000 % 60, i / 1000 % 60, i % 1000));
         }
 
         await sender.SendAsync();
@@ -665,7 +665,7 @@ public class TcpTests
         Assert.That(
             () => sender.Table("name")
                 .Column("number1", long.MinValue)
-                .AtNow(),
+                .AtNowAsync(),
             Throws.TypeOf<IngressError>().With.Message.Contains("Special case")
         );
     }
@@ -681,7 +681,7 @@ public class TcpTests
                 $"tcp::addr={_host}:{_port};");
         await sender.Table("neg name")
             .Column("привед", " мед\rве\n д")
-            .AtNow();
+            .AtNowAsync();
         await sender.SendAsync();
 
         var expected = "neg\\ name привед=\" мед\\\rве\\\n д\"\n";
@@ -697,11 +697,13 @@ public class TcpTests
         await using var sender =
             Sender.New(
                 $"tcp::addr={_host}:{_port};");
-        Assert.Throws<IngressError>(
-            () => sender.Table("name")
+        
+        Assert.That(
+            async () => await  sender.Table("name")
                 .Column("number1", 123)
                 .Symbol("nand", "asdfa")
-                .AtNow().Wait()
+                .AtNowAsync(),
+            Throws.TypeOf<IngressError>()
         );
     }
 
@@ -714,11 +716,13 @@ public class TcpTests
         await using var sender =
             Sender.New(
                 $"tcp::addr={_host}:{_port};");
-        Assert.Throws<IngressError>(
-            () => sender.Table("name")
+        
+        Assert.That(
+            async () => await sender.Table("name")
                 .Column("number1", 123)
                 .Table("nand")
-                .AtNow().Wait()
+                .AtNowAsync(),
+            Throws.TypeOf<IngressError>()
         );
     }
 
@@ -731,14 +735,17 @@ public class TcpTests
         await using var sender =
             Sender.New(
                 $"tcp::addr={_host}:{_port};");
-        Assert.Throws<IngressError>(
-            () => sender.Column("number1", 123)
-                .AtNow().Wait()
+        
+        Assert.That(
+            async() => await sender.Column("number1", 123)
+                .AtNowAsync(),
+            Throws.TypeOf<IngressError>()
         );
-
-        Assert.Throws<IngressError>(
-            () => sender.Symbol("number1", "1234")
-                .AtNow().Wait()
+        
+        Assert.That(
+            async() => await sender.Symbol("number1", "1234")
+                .AtNowAsync(),
+            Throws.TypeOf<IngressError>()
         );
     }
     
@@ -757,7 +764,7 @@ public class TcpTests
                 Assert.That(sender.Length == 12);
             }
 
-            await sender.Table("foo").Symbol("bah", "baz").AtNow();
+            await sender.Table("foo").Symbol("bah", "baz").AtNowAsync();
         }
     }
 
@@ -774,7 +781,7 @@ public class TcpTests
                 Assert.That(sender.Length == 0);
             }
 
-            await sender.Table("foo").Symbol("bah", "baz").AtNow();
+            await sender.Table("foo").Symbol("bah", "baz").AtNowAsync();
         }
     }
 
@@ -785,10 +792,10 @@ public class TcpTests
         srv.AcceptAsync();
         await using var sender = Sender.New($"tcp::addr={_host}:{_port};auto_flush=on;auto_flush_interval=250;auto_flush_rows=-1;auto_flush_bytes=-1;");
 
-        await sender.Table("foo").Symbol("bah", "baz").AtNow();
+        await sender.Table("foo").Symbol("bah", "baz").AtNowAsync();
         await sender.SendAsync();
         await Task.Delay(500);
-        await sender.Table("foo").Symbol("bah", "baz").AtNow();
+        await sender.Table("foo").Symbol("bah", "baz").AtNowAsync();
         Assert.That(sender.Length == 0);
     }
 
@@ -831,19 +838,19 @@ public class TcpTests
 
         await sender.Table("foo")
             .Symbol("bah", "baz")
-            .AtNow();
+            .AtNowAsync();
         
         await sender.Table("foo")
             .Symbol("bah", "baz")
-            .At(DateTime.UtcNow);
+            .AtAsync(DateTime.UtcNow);
         
         await sender.Table("foo")
             .Symbol("bah", "baz")
-            .At(DateTimeOffset.UtcNow);
+            .AtAsync(DateTimeOffset.UtcNow);
         
         await sender.Table("foo")
             .Symbol("bah", "baz")
-            .At(DateTime.UtcNow.Ticks / 100);
+            .AtAsync(DateTime.UtcNow.Ticks / 100);
         
         await sender.SendAsync();
     }
@@ -856,7 +863,7 @@ public class TcpTests
 
         await using var sender = Sender.New($"tcp::addr={_host}:{_port};auto_flush=off;");
         
-        await sender.Table("foo").Symbol("bah", "baz").AtNow();
+        await sender.Table("foo").Symbol("bah", "baz").AtNowAsync();
         Assert.That(sender.Length, Is.GreaterThan(0));
 
         sender.Clear();

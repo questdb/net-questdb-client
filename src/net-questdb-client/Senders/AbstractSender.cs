@@ -85,35 +85,35 @@ public abstract class AbstractSender : ISender
     }
 
     /// <inheritdoc />
-    public async ValueTask AtAsync(DateTime value, CancellationToken ct = default)
+    public ValueTask AtAsync(DateTime value, CancellationToken ct = default)
     {
         GuardLastFlushNotSet();
         _buffer.At(value); 
-        await FlushIfNecessaryAsync(ct);
+        return FlushIfNecessaryAsync(ct);
     }
         
     /// <inheritdoc />
-    public async ValueTask AtAsync(DateTimeOffset value, CancellationToken ct = default)
+    public ValueTask AtAsync(DateTimeOffset value, CancellationToken ct = default)
     {
         GuardLastFlushNotSet();
         _buffer.At(value);
-        await FlushIfNecessaryAsync(ct);
+        return FlushIfNecessaryAsync(ct);
     }
     
     /// <inheritdoc />
-    public async ValueTask AtAsync(long value, CancellationToken ct = default)
+    public ValueTask AtAsync(long value, CancellationToken ct = default)
     {
         GuardLastFlushNotSet();
         _buffer.At(value);
-        await FlushIfNecessaryAsync(ct);
+        return FlushIfNecessaryAsync(ct);
     }
 
     /// <inheritdoc />
-    public async ValueTask AtNowAsync(CancellationToken ct = default)
+    public ValueTask AtNowAsync(CancellationToken ct = default)
     {
         GuardLastFlushNotSet();
         _buffer.AtNow();
-        await FlushIfNecessaryAsync(ct);
+        return FlushIfNecessaryAsync(ct);
     }
 
     /// <inheritdoc />

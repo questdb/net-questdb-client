@@ -165,7 +165,7 @@ public abstract class AbstractSender : ISender
     ///     to <see cref="AutoFlushType.off"/>, or individually by setting their values to `-1`.
     /// </remarks>
     /// <param name="ct">A user-provided cancellation token.</param>
-    public async ValueTask FlushIfNecessaryAsync(CancellationToken ct = default)
+    public ValueTask FlushIfNecessaryAsync(CancellationToken ct = default)
     {
         if (Options.auto_flush == AutoFlushType.on && !WithinTransaction &&
             ((Options.auto_flush_rows > 0 && RowCount >= Options.auto_flush_rows)
@@ -173,8 +173,10 @@ public abstract class AbstractSender : ISender
              || (Options.auto_flush_interval > TimeSpan.Zero &&
                  DateTime.UtcNow - LastFlush >= Options.auto_flush_interval)))
         {
-            await SendAsync(ct);
+            return new ValueTask(SendAsync(ct));
         }
+
+        return ValueTask.CompletedTask;
     }
     
     /// <inheritdoc cref="FlushIfNecessaryAsync"/>

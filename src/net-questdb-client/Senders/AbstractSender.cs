@@ -221,9 +221,6 @@ public abstract class AbstractSender : ISender
 
     /// <inheritdoc />
     public abstract void Dispose();
-
-    /// <inheritdoc />
-    public abstract ValueTask DisposeAsync();
     
     /// <inheritdoc />
     public abstract Task SendAsync(CancellationToken ct = default);

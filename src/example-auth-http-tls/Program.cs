@@ -3,7 +3,7 @@
 
 // Runs against QuestDB Enterprise, demonstrating HTTPS and Basic Authentication support.
 
-await using var sender =
+using var sender =
     Sender.New("https::addr=localhost:9000;tls_verify=unsafe_off;username=admin;password=quest;");
 await sender.Table("trades")
     .Symbol("pair", "USDGBP")

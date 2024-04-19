@@ -30,7 +30,7 @@ using QuestDB.Utils;
 
 namespace QuestDB.Senders;
 
-public interface ISender : IDisposable, IAsyncDisposable
+public interface ISender : IDisposable
 {
     /// <summary>
     ///     Starts a new transaction.

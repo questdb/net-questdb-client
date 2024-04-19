@@ -46,7 +46,7 @@ public class TcpTests
         using var srv = CreateTcpListener(_port);
         srv.AcceptAsync();
 
-        await using var sender = Sender.New($"tcp::addr={_host}:{_port};");
+        using var sender = Sender.New($"tcp::addr={_host}:{_port};");
         sender.Table("metric name")
             .Symbol("t a g", "v alu, e")
             .Column("number", 10)
@@ -67,7 +67,7 @@ public class TcpTests
             "ANhR2AZSs4ar9urE5AZrJqu469X0r7gZ1BBEdcrAuL_6");
         srv.AcceptAsync();
 
-        await using var sender =
+        using var sender =
             Sender.New(
                 $"tcp::addr={_host}:{_port};username=testUser1;token=NgdiOWDoQNUP18WOnb1xkkEG5TzPYMda5SiUOvT1K0U=;");
 
@@ -106,7 +106,7 @@ public class TcpTests
             "ANhR2AZSs4ar9urE5AZrJqu469X0r7gZ1BBEdcrAuL_6");
         srv.AcceptAsync();
         
-        await using var sender = Sender.New(
+        using var sender = Sender.New(
             $"tcp::addr={_host}:{_port};username=testUser1;token=ZOvHHNQBGvZuiCLt7CmWt0tTlsnjm9F3O3C749wGT_M=;");
 
         Assert.That(
@@ -171,7 +171,7 @@ public class TcpTests
         using var srv = CreateTcpListener(_port);
         srv.AcceptAsync();
 
-        await using var sender =
+        using var sender =
             Sender.New($"tcp::addr={_host}:{_port};init_buf_size=2048;");
         var lineCount = 500;
         var expected =
@@ -201,7 +201,7 @@ public class TcpTests
         using var srv = CreateTcpListener(_port);
         srv.AcceptAsync();
 
-        await using var sender =
+        using var sender =
             Sender.New($"tcp::addr={_host}:{_port};init_buf_size=2048;");
         var lineCount = 500;
         var expected =
@@ -245,7 +245,7 @@ public class TcpTests
         using var srv = CreateTcpListener(_port);
         srv.AcceptAsync();
 
-        await using var sender =
+        using var sender =
             Sender.New($"tcp::addr={_host}:{_port};init_buf_size=2048;");
         var lineCount = 500;
         var expected =
@@ -290,7 +290,7 @@ public class TcpTests
         using var srv = CreateTcpListener(_port);
         srv.AcceptAsync();
 
-        await using var sender =
+        using var sender =
             Sender.New($"tcp::addr={_host}:{_port};init_buf_size=2048;tls_verify=unsafe_off;");
 
         var lineCount = 500;
@@ -330,7 +330,7 @@ public class TcpTests
         using var srv = CreateTcpListener(_port);
         srv.AcceptAsync();
 
-        await using var sender = Sender.New($"tcp::addr={_host}:{_port};");
+        using var sender = Sender.New($"tcp::addr={_host}:{_port};");
 
         await sender.Table("neg name")
             .Column("number1", long.MinValue + 1)
@@ -351,7 +351,7 @@ public class TcpTests
         using var srv = CreateTcpListener(_port);
         srv.AcceptAsync();
 
-        await using var sender = Sender.New($"tcp::addr={_host}:{_port};");
+        using var sender = Sender.New($"tcp::addr={_host}:{_port};");
 
         await sender.Table("doubles")
             .Column("d0", 0.0)
@@ -376,7 +376,7 @@ public class TcpTests
         using var srv = CreateTcpListener(_port);
         srv.AcceptAsync();
 
-        await using var sender = Sender.New($"tcp::addr={_host}:{_port};");
+        using var sender = Sender.New($"tcp::addr={_host}:{_port};");
 
         var ts = new DateTime(2022, 2, 24);
         await sender.Table("name")
@@ -399,7 +399,7 @@ public class TcpTests
             "ANhR2AZSs4ar9urE5AZrJqu469X0r7gZ1BBEdcrAuL_6");
         srv.AcceptAsync();
 
-        await using var sender =
+        using var sender =
             Sender.New(
                 $"tcps::addr={_host}:{_port};username=testUser1;token=NgdiOWDoQNUP18WOnb1xkkEG5TzPYMda5SiUOvT1K0U=;tls_verify=unsafe_off;");
 
@@ -424,7 +424,7 @@ public class TcpTests
         using var srv = CreateTcpListener(_port);
         srv.AcceptAsync();
 
-        await using var sender = Sender.New($"tcp::addr={_host}:{_port};");
+        using var sender = Sender.New($"tcp::addr={_host}:{_port};");
         string? nullString = null;
 
         Assert.That(
@@ -477,7 +477,7 @@ public class TcpTests
         using var srv = CreateTcpListener(_port);
         srv.AcceptAsync();
 
-        await using var senderLim127 = Sender.New($"tcp::addr={_host}:{_port};");
+        using var senderLim127 = Sender.New($"tcp::addr={_host}:{_port};");
 
         Assert.Throws<IngressError>(() => senderLim127.Table("abc\\slash"));
         Assert.Throws<IngressError>(() => senderLim127.Table("abc/slash"));
@@ -488,7 +488,7 @@ public class TcpTests
         Assert.Throws<IngressError>(() => senderLim127.Table("asdf\rsdf"));
         Assert.Throws<IngressError>(() => senderLim127.Table("asdfsdf."));
 
-        await using var senderLim4 = Sender.New($"tcp::addr={_host}:{_port};max_name_len=4;");
+        using var senderLim4 = Sender.New($"tcp::addr={_host}:{_port};max_name_len=4;");
         Assert.Throws<IngressError>(() => senderLim4.Table("asffdfasdf"));
 
         senderLim127.Table("abcd.csv");
@@ -526,7 +526,7 @@ public class TcpTests
         using var srv = CreateTcpListener(_port);
         srv.AcceptAsync();
 
-        await using var sender = Sender.New($"tcp::addr={_host}:{_port};");
+        using var sender = Sender.New($"tcp::addr={_host}:{_port};");
         string? nullString = null;
 
         Assert.Throws<IngressError>(() => sender.Table(nullString));
@@ -550,7 +550,7 @@ public class TcpTests
         using var srv = CreateTcpListener(_port);
         srv.AcceptAsync();
 
-        await using var sender = Sender.New($"tcp::addr={_host}:{_port};");
+        using var sender = Sender.New($"tcp::addr={_host}:{_port};");
 
         sender.Table("good");
         sender.Symbol("asdf", "sdfad");
@@ -581,7 +581,7 @@ public class TcpTests
         var nowMillisecond = DateTime.Now.Millisecond;
         var metric = "metric_name" + nowMillisecond;
 
-        await using var sender = Sender.New($"tcp::addr={_host}:{_port};init_buf_size={256 * 1024};");
+        using var sender = Sender.New($"tcp::addr={_host}:{_port};init_buf_size={256 * 1024};");
 
         for (var i = 0; i < 1E6; i++)
         {
@@ -610,7 +610,7 @@ public class TcpTests
         var nowMillisecond = DateTime.Now.Millisecond;
         var metric = "metric_name" + nowMillisecond;
 
-        await using var sender =
+        using var sender =
             Sender.New(
                 $"tcp::addr={_host}:{_port};init_buf_size={64 * 1024};auto_flush=on;auto_flush_bytes={64 * 1024};");
 
@@ -659,7 +659,7 @@ public class TcpTests
         using var srv = CreateTcpListener(_port);
         srv.AcceptAsync();
 
-        await using var sender =
+        using var sender =
             Sender.New(
                 $"tcp::addr={_host}:{_port};");
         Assert.That(
@@ -676,7 +676,7 @@ public class TcpTests
         using var srv = CreateTcpListener(_port);
         srv.AcceptAsync();
 
-        await using var sender =
+        using var sender =
             Sender.New(
                 $"tcp::addr={_host}:{_port};");
         await sender.Table("neg name")
@@ -694,7 +694,7 @@ public class TcpTests
         using var srv = CreateTcpListener(_port);
         srv.AcceptAsync();
 
-        await using var sender =
+        using var sender =
             Sender.New(
                 $"tcp::addr={_host}:{_port};");
         
@@ -713,7 +713,7 @@ public class TcpTests
         using var srv = CreateTcpListener(_port);
         srv.AcceptAsync();
 
-        await using var sender =
+        using var sender =
             Sender.New(
                 $"tcp::addr={_host}:{_port};");
         
@@ -732,7 +732,7 @@ public class TcpTests
         using var srv = CreateTcpListener(_port);
         srv.AcceptAsync();
 
-        await using var sender =
+        using var sender =
             Sender.New(
                 $"tcp::addr={_host}:{_port};");
         
@@ -755,7 +755,7 @@ public class TcpTests
         using var srv = CreateTcpListener(_port);
         srv.AcceptAsync();
 
-        await using var sender = Sender.New($"tcp::addr={_host}:{_port};auto_flush=on;auto_flush_rows=100;auto_flush_interval=-1;auto_flush_bytes=-1;");
+        using var sender = Sender.New($"tcp::addr={_host}:{_port};auto_flush=on;auto_flush_rows=100;auto_flush_interval=-1;auto_flush_bytes=-1;");
 
         for (var i = 0; i < 100000; i++)
         {
@@ -773,7 +773,7 @@ public class TcpTests
     {
         using var srv = CreateTcpListener(_port);
         srv.AcceptAsync();
-        await using var sender = Sender.New($"tcp::addr={_host}:{_port};auto_flush=on;auto_flush_bytes=1200;auto_flush_interval=-1;auto_flush_rows=-1;");
+        using var sender = Sender.New($"tcp::addr={_host}:{_port};auto_flush=on;auto_flush_bytes=1200;auto_flush_interval=-1;auto_flush_rows=-1;");
         for (var i = 0; i < 100000; i++)
         {
             if (i % 100 == 0)
@@ -790,7 +790,7 @@ public class TcpTests
     {
         using var srv = CreateTcpListener(_port);
         srv.AcceptAsync();
-        await using var sender = Sender.New($"tcp::addr={_host}:{_port};auto_flush=on;auto_flush_interval=250;auto_flush_rows=-1;auto_flush_bytes=-1;");
+        using var sender = Sender.New($"tcp::addr={_host}:{_port};auto_flush=on;auto_flush_interval=250;auto_flush_rows=-1;auto_flush_bytes=-1;");
 
         await sender.Table("foo").Symbol("bah", "baz").AtNowAsync();
         await sender.SendAsync();
@@ -805,7 +805,7 @@ public class TcpTests
     {
         using var srv = CreateTcpListener(_port);
         srv.AcceptAsync();
-        await using var sender = Sender.New($"tcp::addr={_host}:{_port};auto_flush=on;auto_flush_interval=250;auto_flush_rows=-1;auto_flush_bytes=-1;");
+        using var sender = Sender.New($"tcp::addr={_host}:{_port};auto_flush=on;auto_flush_interval=250;auto_flush_rows=-1;auto_flush_bytes=-1;");
         
         Assert.That(
             () => sender.Transaction("foo"),
@@ -834,7 +834,7 @@ public class TcpTests
         using var srv = CreateTcpListener(_port);
         srv.AcceptAsync();
         
-        await using var sender = Sender.New($"tcp::addr={_host}:{_port};auto_flush=off;");
+        using var sender = Sender.New($"tcp::addr={_host}:{_port};auto_flush=off;");
 
         await sender.Table("foo")
             .Symbol("bah", "baz")
@@ -861,7 +861,7 @@ public class TcpTests
         using var srv = CreateTcpListener(_port);
         srv.AcceptAsync();
 
-        await using var sender = Sender.New($"tcp::addr={_host}:{_port};auto_flush=off;");
+        using var sender = Sender.New($"tcp::addr={_host}:{_port};auto_flush=off;");
         
         await sender.Table("foo").Symbol("bah", "baz").AtNowAsync();
         Assert.That(sender.Length, Is.GreaterThan(0));

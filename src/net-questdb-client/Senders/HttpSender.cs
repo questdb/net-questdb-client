@@ -503,14 +503,4 @@ internal class HttpSender : AbstractSender
         _buffer.Clear();
         _buffer.TrimExcessBuffers();
     }
-    
-    /// <inheritdoc />
-    public override ValueTask DisposeAsync()
-    {
-        _client.Dispose();
-        _handler.Dispose();
-        _buffer.Clear();
-        _buffer.TrimExcessBuffers();
-        return ValueTask.CompletedTask;
-    }
 }

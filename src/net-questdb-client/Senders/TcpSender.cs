@@ -264,14 +264,4 @@ internal class TcpSender : AbstractSender
         _buffer.Clear();
         _buffer.TrimExcessBuffers();
     }
-    
-    /// <inheritdoc />
-    public override async ValueTask DisposeAsync()
-    {
-        _dataStream.Close();
-        await _dataStream.DisposeAsync();
-        _underlyingSocket.Dispose();
-        _buffer.Clear();
-        _buffer.TrimExcessBuffers();
-    }
 }

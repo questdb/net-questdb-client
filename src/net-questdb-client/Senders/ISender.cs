@@ -67,9 +67,9 @@ public interface ISender : IDisposable, IAsyncDisposable
     /// <remarks>
     ///     Only usable outside of a transaction. If there are no pending rows, then this is a no-op.
     ///     <para />
-    ///     If the <see cref="QuestDBOptions.protocol" /> is HTTP, this will return request and response information.
+    ///     If the <see cref="SenderOptions.protocol" /> is HTTP, this will return request and response information.
     ///     <para />
-    ///     If the <see cref="QuestDBOptions.protocol" /> is TCP, this will return nulls.
+    ///     If the <see cref="SenderOptions.protocol" /> is TCP, this will return nulls.
     /// </remarks>
     /// <exception cref="IngressError">When the request fails.</exception>
     public Task SendAsync(CancellationToken ct = default);
@@ -97,8 +97,8 @@ public interface ISender : IDisposable, IAsyncDisposable
     /// </summary>
     public DateTime LastFlush { get; }
 
-    /// <inheritdoc cref="QuestDBOptions"/>
-    public QuestDBOptions Options { get; }
+    /// <inheritdoc cref="SenderOptions"/>
+    public SenderOptions Options { get; }
 
     /// <summary>
     ///     Set table (measurement) name for the next row.

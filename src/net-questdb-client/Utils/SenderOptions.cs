@@ -40,7 +40,7 @@ namespace QuestDB.Utils;
 /// <summary>
 ///     Configuration class for the ILP sender.
 /// </summary>
-public record QuestDBOptions
+public record SenderOptions
 {
     public const string QuestDB = "QuestDB";
     private string _addr = "localhost:9000";
@@ -69,13 +69,13 @@ public record QuestDBOptions
     private string? _tokenY;
     private string? _username;
 
-    public QuestDBOptions()
+    public SenderOptions()
     {
     }
 
    
 
-    public QuestDBOptions(string confStr)
+    public SenderOptions(string confStr)
     {
         ReadConfigStringIntoBuilder(confStr);
         ParseEnumWithDefault(nameof(protocol), "http", out _protocol);
@@ -312,7 +312,7 @@ public record QuestDBOptions
     ///     This is then used to calculate an appropriate timeout value with the following equation:
     ///     <para />
     ///     <see cref="HttpClient.Timeout" /> = (<see cref="Buffers.Buffer.Length" /> /
-    ///     <see cref="QuestDBOptions.request_min_throughput" />) + <see cref="QuestDBOptions.request_timeout" />
+    ///     <see cref="SenderOptions.request_min_throughput" />) + <see cref="SenderOptions.request_timeout" />
     /// </remarks>
     public int request_min_throughput
     {

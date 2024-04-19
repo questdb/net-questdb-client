@@ -35,12 +35,12 @@ namespace QuestDB;
 ///     A factory for creating new instances of <see cref="ISender"/>
 /// </summary>
 /// <remarks>
-///     For sole initialisation via config string, please use <see cref="New(string)"/>. This does not require a call to <see cref="QuestDBOptions.Build"/>.
+///     For sole initialisation via config string, please use <see cref="New(string)"/>. This does not require a call to <see cref="SenderOptions.Build"/>.
 ///     <para />
 ///     If you wish set initial options via config string, and then modify others, please use <see cref="Configure(string)"/>,
-///     followed by record syntax, followed by <see cref="QuestDBOptions.Build"/>.
+///     followed by record syntax, followed by <see cref="SenderOptions.Build"/>.
 ///     <para />
-///     If you wish to configure entirely programmatically, please use <see cref="New(QuestDBOptions)"/>.
+///     If you wish to configure entirely programmatically, please use <see cref="New(SenderOptions)"/>.
 /// </remarks>
 public static class Sender
 {
@@ -56,12 +56,12 @@ public static class Sender
     
     /// <summary>
     ///     Performs initial configuration of <see cref="ISender"/>.
-    ///     Must be followed by <see cref="QuestDBOptions.Build"/> prior to use.
+    ///     Must be followed by <see cref="SenderOptions.Build"/> prior to use.
     /// </summary>
     /// <param name="options"></param>
     /// <returns></returns>
     /// <exception cref="NotSupportedException"></exception>
-    public static ISender New(QuestDBOptions? options = null)
+    public static ISender New(SenderOptions? options = null)
     {
         if (options is null)
         {
@@ -82,12 +82,12 @@ public static class Sender
     }
     
     /// <summary>
-    ///     Begins configuring a sender. Must be followed by <see cref="QuestDBOptions.Build"/>.
+    ///     Begins configuring a sender. Must be followed by <see cref="SenderOptions.Build"/>.
     /// </summary>
     /// <param name="confStr"></param>
     /// <returns></returns>
-    public static QuestDBOptions Configure(string confStr)
+    public static SenderOptions Configure(string confStr)
     {
-        return new QuestDBOptions(confStr);
+        return new SenderOptions(confStr);
     }
 }

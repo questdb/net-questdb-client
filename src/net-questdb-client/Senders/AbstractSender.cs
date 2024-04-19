@@ -7,7 +7,7 @@ namespace QuestDB.Senders;
 
 public abstract class AbstractSender : ISender
 {
-    public QuestDBOptions Options { get; protected init; } 
+    public SenderOptions Options { get; protected init; } 
     protected Buffer _buffer = null!;
     
     public int Length => _buffer.Length;
@@ -155,13 +155,13 @@ public abstract class AbstractSender : ISender
     ///     Auto-flushing is a feature which triggers the submission of data to the database
     ///     based upon certain thresholds.
     ///     <para />
-    ///     <see cref="QuestDBOptions.auto_flush_rows"/> - the number of buffered ILP rows.
+    ///     <see cref="SenderOptions.auto_flush_rows"/> - the number of buffered ILP rows.
     ///     <para />
-    ///     <see cref="QuestDBOptions.auto_flush_bytes"/> - the current length of the buffer in UTF-8 bytes.
+    ///     <see cref="SenderOptions.auto_flush_bytes"/> - the current length of the buffer in UTF-8 bytes.
     ///     <para />
-    ///     <see cref="QuestDBOptions.auto_flush_interval"/> - the elapsed time interval since the last flush.
+    ///     <see cref="SenderOptions.auto_flush_interval"/> - the elapsed time interval since the last flush.
     ///     <para />
-    ///     These functionalities can be disabled entirely by setting <see cref="QuestDBOptions.auto_flush"/>
+    ///     These functionalities can be disabled entirely by setting <see cref="SenderOptions.auto_flush"/>
     ///     to <see cref="AutoFlushType.off"/>, or individually by setting their values to `-1`.
     /// </remarks>
     /// <param name="ct">A user-provided cancellation token.</param>

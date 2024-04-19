@@ -48,13 +48,13 @@ internal class TcpSender : AbstractSender
     private static readonly RemoteCertificateValidationCallback AllowAllCertCallback = (_, _, _, _) => true;
     private bool _authenticated;
     
-    public TcpSender(QuestDBOptions options)
+    public TcpSender(SenderOptions options)
     {
         Options = options;
         Build();
     }
 
-    public TcpSender(string confStr) : this(new QuestDBOptions(confStr))
+    public TcpSender(string confStr) : this(new SenderOptions(confStr))
     {
     }
     
@@ -113,7 +113,7 @@ internal class TcpSender : AbstractSender
     ///     Performs Key based Authentication with QuestDB.
     /// </summary>
     /// <remarks>
-    ///     Uses <see cref="QuestDBOptions.username" /> and <see cref="QuestDBOptions.password" />.
+    ///     Uses <see cref="SenderOptions.username" /> and <see cref="SenderOptions.password" />.
     /// </remarks>
     /// <param name="ct"></param>
     /// <exception cref="IngressError"></exception>

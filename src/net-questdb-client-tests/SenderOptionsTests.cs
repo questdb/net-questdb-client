@@ -30,13 +30,13 @@ using QuestDB.Utils;
 
 namespace net_questdb_client_tests;
 
-public class QuestDBOptionsTests
+public class SenderOptionsTests
 {
     [Test]
     public void BasicParse()
     {
         Assert.That(
-            new QuestDBOptions("http::addr=localhost:9000;").addr,
+            new SenderOptions("http::addr=localhost:9000;").addr,
             Is.EqualTo("localhost:9000"));
     }
 
@@ -44,7 +44,7 @@ public class QuestDBOptionsTests
     public void CapitalCaseInValues()
     {
         Assert.That(
-            new QuestDBOptions("http::aDdR=locALhOSt:9000;").addr,
+            new SenderOptions("http::aDdR=locALhOSt:9000;").addr,
             Is.EqualTo("locALhOSt:9000"));
     }
 
@@ -52,7 +52,7 @@ public class QuestDBOptionsTests
     public void CaseSensitivityForSchema()
     {
         Assert.That(
-            () => new QuestDBOptions("hTTp::aDdR=locALhOSt:9000;"),
+            () => new SenderOptions("hTTp::aDdR=locALhOSt:9000;"),
             Throws.TypeOf<IngressError>()
         );
     }
@@ -62,7 +62,7 @@ public class QuestDBOptionsTests
     {
         // duplicate keys are 'last writer wins'
         Assert.That(
-            new QuestDBOptions("http::addr=localhost:9000;addr=localhost:9009;").addr,
+            new SenderOptions("http::addr=localhost:9000;addr=localhost:9009;").addr,
             Is.EqualTo("localhost:9009"));
     }
 
@@ -71,7 +71,7 @@ public class QuestDBOptionsTests
     {
         // invalid property
         Assert.That(
-            () => new QuestDBOptions("https::123=456;"),
+            () => new SenderOptions("https::123=456;"),
             Throws.TypeOf<IngressError>().With.Message.Contains("Invalid property")
         );
     }
@@ -80,7 +80,7 @@ public class QuestDBOptionsTests
     public void DefaultConfig()
     {
         Assert.That(
-            new QuestDBOptions("http::addr=localhost:9000;").ToString()
+            new SenderOptions("http::addr=localhost:9000;").ToString()
             , Is.EqualTo("http::addr=localhost:9000;auth_timeout=15000;auto_flush=on;auto_flush_bytes=2147483647;auto_flush_interval=1000;auto_flush_rows=75000;init_buf_size=65536;max_buf_size=104857600;max_name_len=127;pool_timeout=120000;request_min_throughput=102400;request_timeout=10000;retry_timeout=10000;tls_verify=on;"));
     }
 
@@ -88,7 +88,7 @@ public class QuestDBOptionsTests
     public void InvalidProperty()
     {
         Assert.That(
-            () => new QuestDBOptions("http::asdada=localhost:9000;"),
+            () => new SenderOptions("http::asdada=localhost:9000;"),
             Throws.TypeOf<IngressError>()
                 .With.Message.Contains("Invalid property")
         );
@@ -98,8 +98,8 @@ public class QuestDBOptionsTests
     public void BindConfigFileToOptions()
     {
         var fromFileOptions = new ConfigurationBuilder().AddJsonFile("config.json").Build().GetSection("QuestDB")
-            .Get<QuestDBOptions>();
-        var defaultOptions = new QuestDBOptions("http::addr=localhost:9000;tls_verify=unsafe_off;");
+            .Get<SenderOptions>();
+        var defaultOptions = new SenderOptions("http::addr=localhost:9000;tls_verify=unsafe_off;");
         Assert.That(fromFileOptions.ToString(), Is.EqualTo(defaultOptions.ToString()));
     }
     

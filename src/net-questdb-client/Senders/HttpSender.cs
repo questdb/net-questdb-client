@@ -47,13 +47,13 @@ internal class HttpSender : AbstractSender
     private HttpClient _client = null!;
     private SocketsHttpHandler _handler = null!;
     
-    public HttpSender(QuestDBOptions options)
+    public HttpSender(SenderOptions options)
     {
         Options = options;
         Build();
     }
 
-    public HttpSender(string confStr) : this(new QuestDBOptions(confStr))
+    public HttpSender(string confStr) : this(new SenderOptions(confStr))
     {
     }
     
@@ -144,8 +144,8 @@ internal class HttpSender : AbstractSender
     /// </summary>
     /// <remarks>
     ///     Large requests may need more time to transfer the data.
-    ///     This calculation uses a base timeout (<see cref="QuestDBOptions.request_timeout" />), and adds on
-    ///     extra time corresponding to the expected transfer rate (<see cref="QuestDBOptions.request_min_throughput" />)
+    ///     This calculation uses a base timeout (<see cref="SenderOptions.request_timeout" />), and adds on
+    ///     extra time corresponding to the expected transfer rate (<see cref="SenderOptions.request_min_throughput" />)
     /// </remarks>
     /// <returns></returns>
     private TimeSpan CalculateRequestTimeout()
@@ -265,7 +265,7 @@ internal class HttpSender : AbstractSender
                 {
                     var retryTimer = new Stopwatch();
                     retryTimer.Start();
-                    var retryInterval = TimeSpan.FromMilliseconds(10);
+                    var retryInterval = TimeSpan.FromMilliseconds(5); // it'll get doubled
 
                     while (retryTimer.Elapsed < Options.retry_timeout // whilst we can still retry
                            && (
@@ -274,6 +274,7 @@ internal class HttpSender : AbstractSender
                                 && !response!.IsSuccessStatusCode &&
                                 IsRetriableError(response.StatusCode))))
                     {
+                        retryInterval = TimeSpan.FromMilliseconds(Math.Min(retryInterval.TotalMilliseconds * 2, 1000));
                         // cleanup last run
                         request.Dispose();
                         response?.Dispose();
@@ -395,7 +396,7 @@ internal class HttpSender : AbstractSender
                 {
                     var retryTimer = new Stopwatch();
                     retryTimer.Start();
-                    var retryInterval = TimeSpan.FromMilliseconds(10);
+                    var retryInterval = TimeSpan.FromMilliseconds(5); // it'll get doubled
 
                     while (retryTimer.Elapsed < Options.retry_timeout // whilst we can still retry
                            && (
@@ -404,6 +405,7 @@ internal class HttpSender : AbstractSender
                                 && !response!.IsSuccessStatusCode &&
                                 IsRetriableError(response.StatusCode))))
                     {
+                        retryInterval = TimeSpan.FromMilliseconds(Math.Min(retryInterval.TotalMilliseconds * 2, 1000));
                         // cleanup last run
                         request.Dispose();
                         response?.Dispose();
@@ -413,8 +415,7 @@ internal class HttpSender : AbstractSender
                     
                         var jitter = TimeSpan.FromMilliseconds(Random.Shared.Next(0, 10) - 10 / 2.0);
                         await Task.Delay(retryInterval + jitter, cts?.Token ?? default);
-                    
-                    
+                        
                         try
                         {
                             response = await _client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cts!.Token);

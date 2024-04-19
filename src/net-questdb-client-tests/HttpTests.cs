@@ -1077,6 +1077,22 @@ public class HttpTests
             .Symbol("bah", "baz")
             .AtAsync(DateTime.UtcNow.Ticks / 100);
         
+        sender.Table("foo")
+            .Symbol("bah", "baz")
+            .AtNow();
+        
+        sender.Table("foo")
+            .Symbol("bah", "baz")
+            .At(DateTime.UtcNow);
+        
+        sender.Table("foo")
+            .Symbol("bah", "baz")
+            .At(DateTimeOffset.UtcNow);
+        
+        sender.Table("foo")
+            .Symbol("bah", "baz")
+            .At(DateTime.UtcNow.Ticks / 100);
+        
         await sender.SendAsync();
     }
 

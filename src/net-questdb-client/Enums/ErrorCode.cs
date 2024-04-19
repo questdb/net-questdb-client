@@ -31,39 +31,61 @@ namespace QuestDB.Enums;
 /// </summary>
 public enum ErrorCode
 {
-    /// The host, port, or interface was incorrect.
+    /// <summary>
+    ///     The host, port, or interface was incorrect.
+    /// </summary>
     CouldNotResolveAddr,
 
-    /// Called methods in the wrong order. E.g. `symbol` after `column`.
+    /// <summary>
+    ///     Called methods in the wrong order. E.g. `symbol` after `column`.
+    /// </summary>
     InvalidApiCall,
 
-    /// A network error connecting or flushing data out.
+    /// <summary>
+    ///     A network error connecting or flushing data out.
+    /// </summary>
     SocketError,
 
-    /// The string or symbol field is not encoded in valid UTF-8.
-    /// 
-    /// *This error is reserved for the
-    /// [C and C++ API](https://github.com/questdb/c-questdb-client/).*
+    /// <summary>
+    ///     The string or symbol field is not encoded in valid UTF-8.
+    ///     <br />
+    ///     *This error is reserved for the
+    ///     C and C++ API.
+    /// </summary>
     InvalidUtf8,
 
-    /// The table name or column name contains bad characters.
+    /// <summary>
+    ///     The table name or column name contains bad characters.
+    /// </summary>
     InvalidName,
 
-    /// The supplied timestamp is invalid.
+    /// <summary>
+    ///     The supplied timestamp is invalid.
+    /// </summary>
     InvalidTimestamp,
 
-    /// Error during the authentication process.
+    /// <summary>
+    ///     Error during the authentication process.
+    /// </summary>
     AuthError,
 
-    /// Error during TLS handshake.
+    /// <summary>
+    ///     Error during TLS handshake.
+    /// </summary>
     TlsError,
 
-    /// The server does not support ILP-over-HTTP.
+    /// <summary>
+    ///     The server does not support ILP-over-HTTP.
+    /// </summary>
     HttpNotSupported,
 
-    /// Error sent back from the server during flush.
+    /// <summary>
+    ///     Error sent back from the server during flush.
+    /// </summary>
     ServerFlushError,
 
-    /// Bad configuration.
+    /// <summary>
+    ///     Bad configuration.
+    /// </summary>
     ConfigError
 }

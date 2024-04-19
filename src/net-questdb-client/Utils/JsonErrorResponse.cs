@@ -25,19 +25,39 @@
 
 // ReSharper disable UnusedAutoPropertyAccessor.Global
 // ReSharper disable InconsistentNaming
+
 #pragma warning disable CS8618 // Non-nullable field must contain a non-null value when exiting constructor. Consider declaring as nullable.
 namespace QuestDB.Utils;
 
 // ReSharper disable once ClassNeverInstantiated.Global
+/// <summary>
+///     Represents the JSON error information returned when an ILP/HTTP send fails.
+/// </summary>
 public record JsonErrorResponse
 {
+    /// <summary>
+    ///     An error code.
+    /// </summary>
     public string code { get; init; }
+
+    /// <summary>
+    ///     An error message.
+    /// </summary>
     public string message { get; init; }
+
+    /// <summary>
+    ///     The ILP line number related to the error.
+    /// </summary>
     public int line { get; init; }
+
+    /// <summary>
+    ///     The error id.
+    /// </summary>
     public string errorId { get; init; }
-    
+
     public override string ToString()
     {
-        return $"\nServer Response (\n\tCode: `{code}`\n\tMessage: `{message}`\n\tLine: `{line}`\n\tErrorId: `{errorId}` \n)";
+        return
+            $"\nServer Response (\n\tCode: `{code}`\n\tMessage: `{message}`\n\tLine: `{line}`\n\tErrorId: `{errorId}` \n)";
     }
 }

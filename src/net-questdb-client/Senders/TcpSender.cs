@@ -208,7 +208,7 @@ internal class TcpSender : AbstractSender
         {
             if (_buffer.Length != 0)
             {
-                _buffer.WriteToStream(_dataStream);
+                _buffer.WriteToStream(_dataStream, ct);
                 LastFlush = DateTime.UtcNow;
                 _buffer.Clear();
             }

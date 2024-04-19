@@ -34,6 +34,13 @@ namespace QuestDB.Enums;
 /// </summary>
 public enum TlsVerifyType
 {
+    /// <summary>
+    ///     Disable verification of TLS certificates.
+    /// </summary>
     unsafe_off,
+
+    /// <summary>
+    ///     Enable verification of TLS certificates. (default)
+    /// </summary>
     on
 }

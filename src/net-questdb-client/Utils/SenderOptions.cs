@@ -42,7 +42,6 @@ namespace QuestDB.Utils;
 /// </summary>
 public record SenderOptions
 {
-    public const string QuestDB = "QuestDB";
     private string _addr = "localhost:9000";
     private TimeSpan _authTimeout = TimeSpan.FromMilliseconds(15000);
     private AutoFlushType _autoFlush = AutoFlushType.on;
@@ -69,12 +68,18 @@ public record SenderOptions
     private string? _tokenY;
     private string? _username;
 
+    /// <summary>
+    ///     Construct a <see cref="SenderOptions" /> object with default values.
+    /// </summary>
     public SenderOptions()
     {
     }
 
-   
 
+    /// <summary>
+    ///     Construct a <see cref="SenderOptions" /> object from a config string.
+    /// </summary>
+    /// <param name="confStr">A configuration string.</param>
     public SenderOptions(string confStr)
     {
         ReadConfigStringIntoBuilder(confStr);
@@ -412,17 +417,21 @@ public record SenderOptions
         set => _poolTimeout = value;
     }
 
-    [JsonIgnore] internal string Host => addr.Contains(':') ? addr.Split(':')[0] : addr;
-
+    /// <summary>
+    ///     Wrapper to extract the Host from <see cref="addr" />.
+    /// </summary>
     [JsonIgnore]
-    internal int Port
+    public string Host => addr.Contains(':') ? addr.Split(':')[0] : addr;
+
+    /// <summary>
+    ///     Wrapper to extract the Port from <see cref="addr" />.
+    /// </summary>
+    [JsonIgnore]
+    public int Port
     {
         get
         {
-            if (addr.Contains(':'))
-            {
-                return int.Parse(addr.Split(':')[1]);
-            }
+            if (addr.Contains(':')) return int.Parse(addr.Split(':')[1]);
 
             switch (protocol)
             {
@@ -441,9 +450,7 @@ public record SenderOptions
     private void ParseIntWithDefault(string name, string defaultValue, out int field)
     {
         if (!int.TryParse(ReadOptionFromBuilder(name) ?? defaultValue, out field))
-        {
             throw new IngressError(ErrorCode.ConfigError, $"`{name}` should be convertible to an int.");
-        }
     }
 
     private void ParseMillisecondsWithDefault(string name, string defaultValue, out TimeSpan field)
@@ -455,57 +462,43 @@ public record SenderOptions
     private void ParseEnumWithDefault<T>(string name, string defaultValue, out T field) where T : struct, Enum
     {
         if (!Enum.TryParse(ReadOptionFromBuilder(name) ?? defaultValue, false, out field))
-        {
             throw new IngressError(ErrorCode.ConfigError,
                 $"`{name}` must be one of: " + string.Join(", ", typeof(T).GetEnumNames()));
-        }
     }
 
     private void ParseBoolWithDefault(string name, string defaultValue, out bool field)
     {
         if (!bool.TryParse(ReadOptionFromBuilder(name) ?? defaultValue, out field))
-        {
             throw new IngressError(ErrorCode.ConfigError, $"`{name}` should be convertible to an bool.");
-        }
     }
 
     private void ParseStringWithDefault(string name, string? defaultValue, out string? field)
     {
         field = ReadOptionFromBuilder(name) ?? defaultValue;
     }
-    
+
     private void ParseIntThatMayBeOff(string name, string? defaultValue, out int field)
     {
         var option = ReadOptionFromBuilder(name) ?? defaultValue;
         if (option is "off")
-        {
             field = -1;
-        }
         else
-        { 
             ParseIntWithDefault(name, defaultValue!, out field);
-        }
     }
-    
+
     private void ParseMillisecondsThatMayBeOff(string name, string? defaultValue, out TimeSpan field)
     {
         var option = ReadOptionFromBuilder(name) ?? defaultValue;
         if (option is "off")
-        {
             field = TimeSpan.FromMilliseconds(-1);
-        }
         else
-        { 
             ParseMillisecondsWithDefault(name, defaultValue!, out field);
-        }
     }
 
     private void ReadConfigStringIntoBuilder(string confStr)
     {
         if (!confStr.Contains("::"))
-        {
             throw new IngressError(ErrorCode.ConfigError, "Config string must contain a protocol, separated by `::`");
-        }
 
         var splits = confStr.Split("::");
 
@@ -542,6 +535,9 @@ public record SenderOptions
         return !IsHttp();
     }
 
+    /// <summary>
+    ///     Serialises the <see cref="SenderOptions" /> object into a config string, minus secrets.
+    /// </summary>
     public override string ToString()
     {
         var builder = new DbConnectionStringBuilder();
@@ -549,22 +545,16 @@ public record SenderOptions
         foreach (var prop in GetType().GetProperties(BindingFlags.Instance | BindingFlags.Public).OrderBy(x => x.Name))
         {
             // exclude properties
-            if (prop.IsDefined(typeof(CompilerGeneratedAttribute), false))
-            {
-                continue;
-            }
+            if (prop.IsDefined(typeof(CompilerGeneratedAttribute), false)) continue;
 
-            if (prop.IsDefined(typeof(JsonIgnoreAttribute), false))
-            {
-                continue;
-            }
+            if (prop.IsDefined(typeof(JsonIgnoreAttribute), false)) continue;
 
             object? value;
             try
             {
                 value = prop.GetValue(this);
             }
-            catch 
+            catch
             {
                 continue;
             }
@@ -572,36 +562,32 @@ public record SenderOptions
             if (value != null)
             {
                 if (value is TimeSpan span)
-                {
                     builder.Add(prop.Name, span.TotalMilliseconds);
-                }
                 else if (value is string str && !string.IsNullOrEmpty(str))
-                {
                     builder.Add(prop.Name, value);
-                }
                 else
-                {
                     builder.Add(prop.Name, value);
-                }
             }
         }
 
         return $"{protocol.ToString()}::{builder.ConnectionString};";
     }
 
-    public void VerifyCorrectKeysInConfigString()
+    private void VerifyCorrectKeysInConfigString()
     {
         var props = GetType().GetProperties(BindingFlags.Instance | BindingFlags.Public).Select(x => x.Name)
             .ToImmutableHashSet();
         foreach (string key in _connectionStringBuilder.Keys)
-        {
             if (!props.Contains(key))
-            {
                 throw new IngressError(ErrorCode.ConfigError, $"Invalid property: `{key}`");
-            }
-        }
     }
-    
+
+    /// <summary>
+    ///     Construct a new <see cref="ISender" /> from the current options.
+    /// </summary>
+    /// <returns>
+    ///     <see cref="ISender" />
+    /// </returns>
     public ISender Build()
     {
         return Sender.New(this);

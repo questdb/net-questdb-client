@@ -35,10 +35,12 @@ namespace QuestDB.Buffers;
 /// <summary>
 ///     Buffer for building up batches of ILP rows.
 /// </summary>
-public class Buffer
+internal class Buffer
 {
     private static readonly long EpochTicks = new DateTime(1970, 1, 1).Ticks;
     private readonly List<(byte[] Buffer, int Length)> _buffers = new();
+    private readonly int _maxBufSize;
+    private readonly int _maxNameLen;
     private int _currentBufferIndex;
     private string _currentTableName = null!;
     private bool _hasTable;
@@ -46,12 +48,10 @@ public class Buffer
     private int _lineStartBufferPosition;
     private bool _noFields = true;
     private bool _noSymbols = true;
-    internal int Position;
     private bool _quoted;
+    internal int Position;
     internal byte[] SendBuffer;
     public bool WithinTransaction;
-    private readonly int _maxNameLen;
-    private readonly int _maxBufSize;
 
     public Buffer(int bufferSize, int maxNameLen, int maxBufSize)
     {
@@ -82,16 +82,12 @@ public class Buffer
     public Buffer Transaction(ReadOnlySpan<char> tableName)
     {
         if (WithinTransaction)
-        {
             throw new IngressError(ErrorCode.InvalidApiCall,
                 "Cannot start another transaction - only one allowed at a time.");
-        }
 
         if (Length > 0)
-        {
             throw new IngressError(ErrorCode.InvalidApiCall,
                 "Buffer must be clear before you can start a transaction.");
-        }
 
         GuardInvalidTableName(tableName);
         _currentTableName = tableName.ToString();
@@ -111,10 +107,8 @@ public class Buffer
     {
         GuardFsFileNameLimit(name);
         if (WithinTransaction && name != _currentTableName)
-        {
             throw new IngressError(ErrorCode.InvalidApiCall,
                 "Transactions can only be for one table.");
-        }
 
         GuardTableAlreadySet();
         GuardInvalidTableName(name);
@@ -143,20 +137,11 @@ public class Buffer
     public Buffer Symbol(ReadOnlySpan<char> symbolName, ReadOnlySpan<char> value)
     {
         GuardFsFileNameLimit(symbolName);
-        if (WithinTransaction && !_hasTable)
-        {
-            Table(_currentTableName);
-        }
+        if (WithinTransaction && !_hasTable) Table(_currentTableName);
 
-        if (!_hasTable)
-        {
-            throw new IngressError(ErrorCode.InvalidApiCall, "Table must be specified first.");
-        }
+        if (!_hasTable) throw new IngressError(ErrorCode.InvalidApiCall, "Table must be specified first.");
 
-        if (!_noFields)
-        {
-            throw new IngressError(ErrorCode.InvalidApiCall, "Cannot write symbols after fields.");
-        }
+        if (!_noFields) throw new IngressError(ErrorCode.InvalidApiCall, "Cannot write symbols after fields.");
 
         GuardInvalidColumnName(symbolName);
 
@@ -173,10 +158,7 @@ public class Buffer
     /// <returns>Itself</returns>
     public Buffer Column(ReadOnlySpan<char> name, ReadOnlySpan<char> value)
     {
-        if (WithinTransaction && !_hasTable)
-        {
-            Table(_currentTableName);
-        }
+        if (WithinTransaction && !_hasTable) Table(_currentTableName);
 
         Column(name).Put('\"');
         _quoted = true;
@@ -194,10 +176,7 @@ public class Buffer
     /// <returns>Itself</returns>
     public Buffer Column(ReadOnlySpan<char> name, long value)
     {
-        if (WithinTransaction && !_hasTable)
-        {
-            Table(_currentTableName);
-        }
+        if (WithinTransaction && !_hasTable) Table(_currentTableName);
 
         Column(name).Put(value).Put('i');
         return this;
@@ -211,10 +190,7 @@ public class Buffer
     /// <returns>Itself</returns>
     public Buffer Column(ReadOnlySpan<char> name, bool value)
     {
-        if (WithinTransaction && !_hasTable)
-        {
-            Table(_currentTableName);
-        }
+        if (WithinTransaction && !_hasTable) Table(_currentTableName);
 
         Column(name).Put(value ? 't' : 'f');
         return this;
@@ -228,10 +204,7 @@ public class Buffer
     /// <returns>Itself</returns>
     public Buffer Column(ReadOnlySpan<char> name, double value)
     {
-        if (WithinTransaction && !_hasTable)
-        {
-            Table(_currentTableName);
-        }
+        if (WithinTransaction && !_hasTable) Table(_currentTableName);
 
         Column(name).Put(value.ToString(CultureInfo.InvariantCulture));
         return this;
@@ -245,10 +218,7 @@ public class Buffer
     /// <returns>Itself</returns>
     public Buffer Column(ReadOnlySpan<char> name, DateTime timestamp)
     {
-        if (WithinTransaction && !_hasTable)
-        {
-            Table(_currentTableName);
-        }
+        if (WithinTransaction && !_hasTable) Table(_currentTableName);
 
         var epoch = timestamp.Ticks - EpochTicks;
         Column(name).Put(epoch / 10).Put('t');
@@ -263,10 +233,7 @@ public class Buffer
     /// <returns>Itself</returns>
     public Buffer Column(ReadOnlySpan<char> name, DateTimeOffset timestamp)
     {
-        if (WithinTransaction && !_hasTable)
-        {
-            Table(_currentTableName);
-        }
+        if (WithinTransaction && !_hasTable) Table(_currentTableName);
 
         Column(name, timestamp.UtcDateTime);
         return this;
@@ -281,9 +248,7 @@ public class Buffer
         GuardTableNotSet();
 
         if (_noFields && _noSymbols)
-        {
             throw new IngressError(ErrorCode.InvalidApiCall, "Did not specify any symbols or columns.");
-        }
 
         FinishLine();
     }
@@ -325,10 +290,7 @@ public class Buffer
     {
         _currentBufferIndex = 0;
         SendBuffer = _buffers[_currentBufferIndex].Buffer;
-        for (var i = 0; i < _buffers.Count; i++)
-        {
-            _buffers[i] = (_buffers[i].Buffer, 0);
-        }
+        for (var i = 0; i < _buffers.Count; i++) _buffers[i] = (_buffers[i].Buffer, 0);
 
         Position = 0;
         RowCount = 0;
@@ -343,10 +305,7 @@ public class Buffer
     public void TrimExcessBuffers()
     {
         var removeCount = _buffers.Count - _currentBufferIndex - 1;
-        if (removeCount > 0)
-        {
-            _buffers.RemoveRange(_currentBufferIndex + 1, removeCount);
-        }
+        if (removeCount > 0) _buffers.RemoveRange(_currentBufferIndex + 1, removeCount);
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -359,7 +318,7 @@ public class Buffer
         _noSymbols = true;
         GuardExceededMaxBufferSize();
     }
-    
+
     /// <summary>
     ///     Throws <see cref="IngressError" /> if we have exceeded the specified limit for buffer size.
     /// </summary>
@@ -368,10 +327,8 @@ public class Buffer
     private void GuardExceededMaxBufferSize()
     {
         if (Length > _maxBufSize)
-        {
             throw new IngressError(ErrorCode.InvalidApiCall,
                 $"Exceeded maximum buffer size. Current: {Length} Maximum: {_maxBufSize}");
-        }
     }
 
     private Buffer Column(ReadOnlySpan<char> columnName)
@@ -396,10 +353,8 @@ public class Buffer
     private Buffer Put(long value)
     {
         if (value == long.MinValue)
-        {
             throw new IngressError(ErrorCode.InvalidApiCall, "Special case, long.MinValue cannot be handled by QuestDB",
                 new ArgumentOutOfRangeException());
-        }
 
         Span<byte> num = stackalloc byte[20];
         var pos = num.Length;
@@ -411,16 +366,10 @@ public class Buffer
             remaining /= 10;
         } while (remaining != 0);
 
-        if (value < 0)
-        {
-            num[--pos] = (byte)'-';
-        }
+        if (value < 0) num[--pos] = (byte)'-';
 
         var len = num.Length - pos;
-        if (Position + len >= SendBuffer.Length)
-        {
-            NextBuffer();
-        }
+        if (Position + len >= SendBuffer.Length) NextBuffer();
 
         num.Slice(pos, len).CopyTo(SendBuffer.AsSpan(Position));
         Position += len;
@@ -432,26 +381,17 @@ public class Buffer
     public Buffer EncodeUtf8(ReadOnlySpan<char> name)
     {
         foreach (var c in name)
-        {
             if (c < 128)
-            {
                 PutSpecial(c);
-            }
             else
-            {
                 PutUtf8(c);
-            }
-        }
 
         return this;
     }
 
     private void PutUtf8(char c)
     {
-        if (Position + 4 >= SendBuffer.Length)
-        {
-            NextBuffer();
-        }
+        if (Position + 4 >= SendBuffer.Length) NextBuffer();
 
         var bytes = SendBuffer.AsSpan(Position);
         Span<char> chars = stackalloc char[1] { c };
@@ -467,10 +407,7 @@ public class Buffer
             case ' ':
             case ',':
             case '=':
-                if (!_quoted)
-                {
-                    Put('\\');
-                }
+                if (!_quoted) Put('\\');
 
                 goto default;
             default:
@@ -481,10 +418,7 @@ public class Buffer
                 Put('\\').Put(c);
                 break;
             case '"':
-                if (_quoted)
-                {
-                    Put('\\');
-                }
+                if (_quoted) Put('\\');
 
                 Put(c);
                 break;
@@ -497,19 +431,13 @@ public class Buffer
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void Put(ReadOnlySpan<char> chars)
     {
-        foreach (var c in chars)
-        {
-            Put(c);
-        }
+        foreach (var c in chars) Put(c);
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal Buffer Put(char c)
     {
-        if (Position + 2 > SendBuffer.Length)
-        {
-            NextBuffer();
-        }
+        if (Position + 2 > SendBuffer.Length) NextBuffer();
 
         SendBuffer[Position++] = (byte)c;
         Length++;
@@ -556,10 +484,7 @@ public class Buffer
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void GuardTableAlreadySet()
     {
-        if (_hasTable)
-        {
-            throw new IngressError(ErrorCode.InvalidApiCall, "Table has already been specified.");
-        }
+        if (_hasTable) throw new IngressError(ErrorCode.InvalidApiCall, "Table has already been specified.");
     }
 
     /// <summary>
@@ -578,10 +503,7 @@ public class Buffer
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void GuardTableNotSet()
     {
-        if (!_hasTable)
-        {
-            throw new IngressError(ErrorCode.InvalidApiCall, "Table must be specified first.");
-        }
+        if (!_hasTable) throw new IngressError(ErrorCode.InvalidApiCall, "Table must be specified first.");
     }
 
     /// <summary>
@@ -596,7 +518,7 @@ public class Buffer
         _hasTable = false;
     }
 
-    
+
     /// <summary>
     ///     Guards against invalid table names.
     /// </summary>
@@ -605,10 +527,8 @@ public class Buffer
     private static void GuardInvalidTableName(ReadOnlySpan<char> tableName)
     {
         if (tableName.IsEmpty)
-        {
             throw new IngressError(ErrorCode.InvalidName,
                 "Table names must have a non-zero length.");
-        }
 
         var prev = '\0';
         for (var i = 0; i < tableName.Length; i++)
@@ -618,10 +538,8 @@ public class Buffer
             {
                 case '.':
                     if (i == 0 || i == tableName.Length - 1 || prev == '.')
-                    {
                         throw new IngressError(ErrorCode.InvalidName,
                             $"Bad string {tableName}. Found invalid dot `.` at position {i}.");
-                    }
 
                     break;
                 case '?':
@@ -673,10 +591,8 @@ public class Buffer
     private static void GuardInvalidColumnName(ReadOnlySpan<char> columnName)
     {
         if (columnName.IsEmpty)
-        {
             throw new IngressError(ErrorCode.InvalidName,
                 "Column names must have a non-zero length.");
-        }
 
         for (var i = 0; i < columnName.Length; i++)
         {
@@ -728,7 +644,7 @@ public class Buffer
     {
         return SendBuffer;
     }
-    
+
     /// <summary>
     ///     Check that the file name is not too long.
     /// </summary>
@@ -737,12 +653,10 @@ public class Buffer
     private void GuardFsFileNameLimit(ReadOnlySpan<char> name)
     {
         if (Encoding.UTF8.GetBytes(name.ToString()).Length > _maxNameLen)
-        {
             throw new IngressError(ErrorCode.InvalidApiCall,
                 $"Name is too long, must be under {_maxNameLen} bytes.");
-        }
     }
-    
+
     /// <summary>
     ///     Writes the chunked buffer contents to a stream.
     /// </summary>
@@ -757,10 +671,7 @@ public class Buffer
 
             try
             {
-                if (length > 0)
-                {
-                    await stream.WriteAsync(_buffers[i].Buffer, 0, length, ct);
-                }
+                if (length > 0) await stream.WriteAsync(_buffers[i].Buffer, 0, length, ct);
             }
             catch (IOException iox)
             {
@@ -770,7 +681,7 @@ public class Buffer
 
         await stream.FlushAsync(ct);
     }
-    
+
     /// <summary>
     ///     Writes the chunked buffer contents to a stream.
     /// </summary>
@@ -786,16 +697,14 @@ public class Buffer
 
             try
             {
-                if (length > 0)
-                {
-                    stream.Write(_buffers[i].Buffer, 0, length);
-                }
+                if (length > 0) stream.Write(_buffers[i].Buffer, 0, length);
             }
             catch (IOException iox)
             {
                 throw new IngressError(ErrorCode.SocketError, "Could not write data to server.", iox);
             }
         }
+
         stream.Flush();
     }
 }

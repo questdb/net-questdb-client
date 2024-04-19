@@ -33,12 +33,23 @@ namespace QuestDB.Utils;
 /// </summary>
 public class IngressError : Exception
 {
+    /// <summary>
+    ///     Constructs <see cref="IngressError" /> from a code and message.
+    /// </summary>
+    /// <param name="code">The error code</param>
+    /// <param name="message">The error message</param>
     public IngressError(ErrorCode code, string? message)
         : base($"{code.ToString()} : {message}")
     {
         this.code = code;
     }
 
+    /// <summary>
+    ///     Constructs <see cref="IngressError" /> from a code, message and inner exception.
+    /// </summary>
+    /// <param name="code">The error ode</param>
+    /// <param name="message">The error message</param>
+    /// <param name="inner">The inner exception</param>
     public IngressError(ErrorCode code, string? message, Exception inner)
         : base($"{code.ToString()} : {message}", inner)
     {
@@ -47,5 +58,8 @@ public class IngressError : Exception
 
     // ReSharper disable once UnusedAutoPropertyAccessor.Global
     // ReSharper disable once InconsistentNaming
+    /// <summary>
+    ///     The custom error code.
+    /// </summary>
     public ErrorCode code { get; }
 }

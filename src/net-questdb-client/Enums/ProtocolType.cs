@@ -34,8 +34,23 @@ namespace QuestDB.Enums;
 /// </summary>
 public enum ProtocolType
 {
+    /// <summary>
+    ///     TCP transport.
+    /// </summary>
     tcp,
+
+    /// <summary>
+    ///     TCP transport with TLS.
+    /// </summary>
     tcps,
+
+    /// <summary>
+    ///     HTTP transport.
+    /// </summary>
     http,
+
+    /// <summary>
+    ///     HTTP transport with TLS.
+    /// </summary>
     https
 }

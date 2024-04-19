@@ -25,6 +25,7 @@
 
 
 // ReSharper disable InconsistentNaming
+
 namespace QuestDB.Enums;
 
 /// <summary>
@@ -33,6 +34,13 @@ namespace QuestDB.Enums;
 /// </summary>
 public enum AutoFlushType
 {
+    /// <summary>
+    ///     Disable auto-flushing
+    /// </summary>
     off,
+
+    /// <summary>
+    ///     Enable auto-flushing. (default)
+    /// </summary>
     on
 }

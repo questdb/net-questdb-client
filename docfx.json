@@ -6,7 +6,7 @@
         {
           "src": "src",
           "files": [
-            "**/*.csproj"
+            "**/net-questdb-client.csproj"
           ]
         }
       ],
@@ -34,13 +34,21 @@
     "output": "_site",
     "templates": [
       "default",
-      "modern"
+      "modern",
+      "~/templates/questdb"
     ],
     "globalMetadata": {
       "_appName": "net-questdb-client",
       "_appTitle": "net-questdb-client",
+      "_appLogoPath": "images/logo.png",
+      "_appFaviconPath": "images/favicon.ico",
       "_enableSearch": true,
       "pdf": false
+    },
+    "markdownEngineProperties": {
+      "markdigExtensions": [
+        "attributes"
+      ]
     }
   }
 }

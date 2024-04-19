@@ -23,60 +23,17 @@
  *
  ******************************************************************************/
 
-using QuestDB.Enums;
 using QuestDB.Utils;
 
 // ReSharper disable InconsistentNaming
 
 namespace QuestDB.Senders;
 
+/// <summary>
+///     Interface representing <see cref="Sender" /> implementations.
+/// </summary>
 public interface ISender : IDisposable
 {
-    /// <summary>
-    ///     Starts a new transaction.
-    /// </summary>
-    /// <remarks>
-    ///     This function starts a transaction. Within a transaction, only one table can be specified, which
-    ///     applies to all ILP rows in the batch. The batch will not be sent until explicitly committed.
-    /// </remarks>
-    /// <param name="tableName"></param>
-    /// <returns></returns>
-    /// <exception cref="IngressError"></exception>
-    public ISender Transaction(ReadOnlySpan<char> tableName);
-
-    /// <summary>
-    ///     Clears the transaction.
-    /// </summary>
-    /// <returns></returns>
-    /// <exception cref="IngressError"></exception>
-    public void Rollback();
-    
-    /// <summary>
-    ///     Commits the current transaction, sending the buffer contents to the database.
-    /// </summary>
-    /// <returns></returns>
-    /// <exception cref="IngressError">Thrown by <see cref="SendAsync"/></exception>
-    public Task CommitAsync(CancellationToken ct = default);
-
-    /// <inheritdoc cref="CommitAsync"/>
-    public void Commit(CancellationToken ct = default)  => throw new IngressError(ErrorCode.InvalidApiCall, $"`{GetType().Name}` does not support transactions.");
-
-    /// <summary>
-    ///     Sends data to the QuestDB server.
-    /// </summary>
-    /// <remarks>
-    ///     Only usable outside of a transaction. If there are no pending rows, then this is a no-op.
-    ///     <para />
-    ///     If the <see cref="SenderOptions.protocol" /> is HTTP, this will return request and response information.
-    ///     <para />
-    ///     If the <see cref="SenderOptions.protocol" /> is TCP, this will return nulls.
-    /// </remarks>
-    /// <exception cref="IngressError">When the request fails.</exception>
-    public Task SendAsync(CancellationToken ct = default);
-
-    /// <inheritdoc cref="SendAsync"/>
-    public void Send(CancellationToken ct = default);
-
     /// <summary>
     ///     Represents the current length of the buffer in UTF-8 bytes.
     /// </summary>
@@ -97,8 +54,52 @@ public interface ISender : IDisposable
     /// </summary>
     public DateTime LastFlush { get; }
 
-    /// <inheritdoc cref="SenderOptions"/>
+    /// <inheritdoc cref="SenderOptions" />
     public SenderOptions Options { get; }
+
+    /// <summary>
+    ///     Starts a new transaction.
+    /// </summary>
+    /// <remarks>
+    ///     This function starts a transaction. Within a transaction, only one table can be specified, which
+    ///     applies to all ILP rows in the batch. The batch will not be sent until explicitly committed.
+    /// </remarks>
+    /// <param name="tableName">The name of the table for all the rows in this transaction.</param>
+    /// <returns>Itself</returns>
+    /// <exception cref="IngressError">When transactions are unsupported, or invalid name is provided.</exception>
+    public ISender Transaction(ReadOnlySpan<char> tableName);
+
+    /// <summary>
+    ///     Clears the transaction.
+    /// </summary>
+    /// <exception cref="IngressError">When transactioned are unsupported.</exception>
+    public void Rollback();
+
+    /// <summary>
+    ///     Commits the current transaction, sending the buffer contents to the database.
+    /// </summary>
+    /// <returns></returns>
+    /// <exception cref="IngressError">Thrown by <see cref="SendAsync" />, or when transactions are unsupported.</exception>
+    public Task CommitAsync(CancellationToken ct = default);
+
+    /// <inheritdoc cref="CommitAsync" />
+    public void Commit(CancellationToken ct = default);
+
+    /// <summary>
+    ///     Sends data to the QuestDB server.
+    /// </summary>
+    /// <remarks>
+    ///     Only usable outside of a transaction. If there are no pending rows, then this is a no-op.
+    ///     <br />
+    ///     If the <see cref="SenderOptions.protocol" /> is HTTP, this will return request and response information.
+    ///     <br />
+    ///     If the <see cref="SenderOptions.protocol" /> is TCP, this will return nulls.
+    /// </remarks>
+    /// <exception cref="IngressError">When the request fails.</exception>
+    public Task SendAsync(CancellationToken ct = default);
+
+    /// <inheritdoc cref="SendAsync" />
+    public void Send(CancellationToken ct = default);
 
     /// <summary>
     ///     Set table (measurement) name for the next row.
@@ -125,63 +126,54 @@ public interface ISender : IDisposable
     /// <returns>Itself</returns>
     public ISender Column(ReadOnlySpan<char> name, ReadOnlySpan<char> value);
 
-    /// <inheritdoc cref="Column(System.ReadOnlySpan{char},System.ReadOnlySpan{char})"/>
+    /// <inheritdoc cref="Column(System.ReadOnlySpan{char},System.ReadOnlySpan{char})" />
     public ISender Column(ReadOnlySpan<char> name, long value);
 
-    /// <inheritdoc cref="Column(System.ReadOnlySpan{char},System.ReadOnlySpan{char})"/>
+    /// <inheritdoc cref="Column(System.ReadOnlySpan{char},System.ReadOnlySpan{char})" />
     public ISender Column(ReadOnlySpan<char> name, bool value);
 
-    /// <inheritdoc cref="Column(System.ReadOnlySpan{char},System.ReadOnlySpan{char})"/>
+    /// <inheritdoc cref="Column(System.ReadOnlySpan{char},System.ReadOnlySpan{char})" />
     public ISender Column(ReadOnlySpan<char> name, double value);
 
-    /// <inheritdoc cref="Column(System.ReadOnlySpan{char},System.ReadOnlySpan{char})"/>
+    /// <inheritdoc cref="Column(System.ReadOnlySpan{char},System.ReadOnlySpan{char})" />
     public ISender Column(ReadOnlySpan<char> name, DateTime value);
 
-    /// <inheritdoc cref="Column(System.ReadOnlySpan{char},System.ReadOnlySpan{char})"/>
+    /// <inheritdoc cref="Column(System.ReadOnlySpan{char},System.ReadOnlySpan{char})" />
     public ISender Column(ReadOnlySpan<char> name, DateTimeOffset value);
 
     /// <summary>
     ///     Adds a value for the designated timestamp column.
     /// </summary>
     /// <param name="value">A timestamp</param>
-    /// <param name="ct">A user-provided cancellation token</param>
+    /// <param name="ct">A cancellation token applied requests caused by auto-flushing</param>
     /// <returns></returns>
     public ValueTask AtAsync(DateTime value, CancellationToken ct = default);
 
-    /// <inheritdoc cref="AtAsync"/>
+    /// <inheritdoc cref="AtAsync(DateTime, CancellationToken)" />
     public ValueTask AtAsync(DateTimeOffset value, CancellationToken ct = default);
 
-    /// <inheritdoc cref="AtAsync"/>
+    /// <inheritdoc cref="AtAsync(DateTime, CancellationToken)" />
     public ValueTask AtAsync(long value, CancellationToken ct = default);
-    
+
     /// <summary>
     ///     Allow the server to set a designated timestamp value.
     /// </summary>
-    /// <param name="ct"></param>
+    /// <param name="ct">A cancellation token applied requests caused by auto-flushing</param>
     /// <returns></returns>
     public ValueTask AtNowAsync(CancellationToken ct = default);
-    
-    /// <summary>
-    ///     Adds a value for the designated timestamp column.
-    /// </summary>
-    /// <param name="value">A timestamp</param>
-    /// <param name="ct">A user-provided cancellation token</param>
-    /// <returns></returns>
+
+    /// <inheritdoc cref="AtAsync(DateTime, CancellationToken)" />
     public void At(DateTime value, CancellationToken ct = default);
 
-    /// <inheritdoc cref="AtAsync"/>
+    /// <inheritdoc cref="AtAsync(DateTime, CancellationToken)" />
     public void At(DateTimeOffset value, CancellationToken ct = default);
 
-    /// <inheritdoc cref="AtAsync"/>
+    /// <inheritdoc cref="AtAsync(DateTime, CancellationToken)" />
     public void At(long value, CancellationToken ct = default);
-    
-    /// <summary>
-    ///     Allow the server to set a designated timestamp value.
-    /// </summary>
-    /// <param name="ct"></param>
-    /// <returns></returns>
+
+    /// <inheritdoc cref="AtNowAsync" />
     public void AtNow(CancellationToken ct = default);
-    
+
     /// <summary>
     ///     Removes unused extra buffer space.
     /// </summary>
@@ -196,5 +188,4 @@ public interface ISender : IDisposable
     ///     Clears the sender's buffer.
     /// </summary>
     public void Clear();
-    
 }

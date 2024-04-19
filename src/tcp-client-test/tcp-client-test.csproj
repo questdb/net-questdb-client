@@ -3,11 +3,8 @@
     <PropertyGroup>
         <RootNamespace>tcp_client_test</RootNamespace>
         <Nullable>enable</Nullable>
-
         <IsPackable>false</IsPackable>
-
         <TargetFramework>net6.0</TargetFramework>
-
         <OutputType>Library</OutputType>
     </PropertyGroup>
 

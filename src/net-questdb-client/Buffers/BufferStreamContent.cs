@@ -28,18 +28,18 @@ using System.Net;
 namespace QuestDB.Buffers;
 
 /// <summary>
-///     An adapter for <see cref="Buffer"/> that allows it to be sent in HTTP requests.
+///     An adapter for <see cref="Buffer" /> that allows it to be sent in HTTP requests.
 /// </summary>
-public class BufferStreamContent : HttpContent
+internal class BufferStreamContent : HttpContent
 {
     public BufferStreamContent(Buffer buffer)
     {
-        this.Buffer = buffer;
+        Buffer = buffer;
     }
 
     private Buffer Buffer { get; }
-    
-    
+
+
     /// <inheritdoc />
     protected override async Task SerializeToStreamAsync(Stream stream, TransportContext? context)
     {
@@ -66,6 +66,7 @@ public class BufferStreamContent : HttpContent
         await SerializeToStreamAsync(stream, null, default);
         return stream;
     }
+
     /// <inheritdoc />
     protected override void SerializeToStream(Stream stream, TransportContext? context, CancellationToken ct)
     {

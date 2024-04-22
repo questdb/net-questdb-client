@@ -1,4 +1,11 @@
 - name: Introduction
   href: introduction.md
-- name: Getting Started
-  href: getting-started.md
+- name: Ingestion
+  href: ingestion.md
+  items:
+    - name: Initialisation
+      href: ingestion.md#Initialisation
+  
+  expanded: true
+- name: Reference
+  href: api/

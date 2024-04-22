@@ -33,8 +33,7 @@ See: [https://www.nuget.org/packages/net-questdb-client/](https://www.nuget.org/
 
 `Sender` is single-threaded, and uses a single connection to the database.
 
-If you want to send in parallel, you can use multiple senders and standard async functionality
-to wait in parallel.
+If you want to send in parallel, you can use multiple senders and standard async tasking.
 
 ### Basic usage
 
@@ -52,7 +51,7 @@ await sender.SendAsync();
 ### Multi-line send (sync)
 
 ```c#
-using var sender = Sender.New("http::addr=localhost:9000;");
+using var sender = Sender.New("http::addr=localhost:9000;auto_flush=off;");
 for(int i = 0; i < 100; i++)
 {
     sender.Table("metric_name")

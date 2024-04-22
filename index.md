@@ -1,5 +1,7 @@
 ---
 _layout: landing
+redirect_url: docs/introduction.html
 ---
 
-[!INCLUDE [<README>](<README.md>)]
+Redirecting to introduction...
+

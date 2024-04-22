@@ -165,27 +165,27 @@ The config string format is:
 
 ## Properties and methods
 
-| Name                                                                                                  | Returns       | Description                                                                |
-|-------------------------------------------------------------------------------------------------------|---------------|----------------------------------------------------------------------------|
-| `Length`                                                                                              | `int`         | Current length in bytes of the buffer (not capacity!)                      |
-| `RowCount`                                                                                            | `int`         | Current row count of the buffer                                            |
-| `LastFlush`                                                                                           | `DateTime`    | Returns the UTC DateTime of the last flush sending data to the server.     |
-| `WithinTransaction`                                                                                   | `bool`        | Whether or not the Sender is currently in a transactional state.           |
-| `Transaction(ReadOnlySpan<char>)`                                                                     | `ISender`     | Starts a new transaction for the table.                                    |
-| `Commit() / CommitAsync()`                                                                            | `void`/`Task` | Commits the current transaction.                                           |
-| `Rollback()`                                                                                          | `void`        | Rolls back the current unsent transaction.                                 |
-| `Table(ReadOnlySpan<char>)`                                                                           | `ISender`     | Sets the table name for the next row.                                      |
-| `Column(ReadOnlySpan<char>, ReadOnlySpan<char> / string / long / double / DateTime / DateTimeOffset)` | `ISender`     | Specify column name and value                                              |
-| `Column(ReadOnlySpan<char>, string? / long? / double? / DateTime? / DateTimeOffset?)`                 | `ISender`     | Specify column name and value                                              |
-| `Symbol(ReadOnlySpan<char>, ReadOnlySpan<char> / string)`                                             | `ISender`     | Specify a symbol column name and value                                     |
-| `At(DateTime / DateTimeOffset / long, CancellationToken)`                                             | `void`        | Designated timestamp for the line. May flush data according to auto-flush. |
-| `AtAsync(DateTime / DateTimeOffset / long, CancellationToken)`                                        | `ValueTask`   | Designated timestamp for the line. May flush data according to auto-flush. |
-| `AtNow(CancellationToken)`                                                                            | `void`        | Finishes line, leaving the QuestDB server to set the timestamp             |
-| `AtNowAsync(CancellationToken)`                                                                       | `ValueTask`   | Finishes line, leaving the QuestDB server to set the timestamp             |
-| `Send() / SendAsync()`                                                                                | `void`/`Task` | Send IO Buffers to QuestDB                                                 |
-| `CancelRow()`                                                                                         | `void`        | Cancels current row.                                                       |
-| `Truncate()`                                                                                          | `void`        | Trims empty buffers.                                                       |
-| `Clear()`                                                                                             | `void`        | Clears the sender's buffer.                                                |
+| Name                                                                                                  | Returns         | Description                                                                |
+|-------------------------------------------------------------------------------------------------------|-----------------|----------------------------------------------------------------------------|
+| `Length`                                                                                              | `int`           | Current length in bytes of the buffer (not capacity!)                      |
+| `RowCount`                                                                                            | `int`           | Current row count of the buffer                                            |
+| `LastFlush`                                                                                           | `DateTime`      | Returns the UTC DateTime of the last flush sending data to the server.     |
+| `WithinTransaction`                                                                                   | `bool`          | Whether or not the Sender is currently in a transactional state.           |
+| `Transaction(ReadOnlySpan<char>)`                                                                     | `ISender`       | Starts a new transaction for the table.                                    |
+| `Commit() / CommitAsync()`                                                                            | `void` / `Task` | Commits the current transaction.                                           |
+| `Rollback()`                                                                                          | `void`          | Rolls back the current unsent transaction.                                 |
+| `Table(ReadOnlySpan<char>)`                                                                           | `ISender`       | Sets the table name for the next row.                                      |
+| `Column(ReadOnlySpan<char>, ReadOnlySpan<char> / string / long / double / DateTime / DateTimeOffset)` | `ISender`       | Specify column name and value                                              |
+| `Column(ReadOnlySpan<char>, string? / long? / double? / DateTime? / DateTimeOffset?)`                 | `ISender`       | Specify column name and value                                              |
+| `Symbol(ReadOnlySpan<char>, ReadOnlySpan<char> / string)`                                             | `ISender`       | Specify a symbol column name and value                                     |
+| `At(DateTime / DateTimeOffset / long, CancellationToken)`                                             | `void`          | Designated timestamp for the line. May flush data according to auto-flush. |
+| `AtAsync(DateTime / DateTimeOffset / long, CancellationToken)`                                        | `ValueTask`     | Designated timestamp for the line. May flush data according to auto-flush. |
+| `AtNow(CancellationToken)`                                                                            | `void`          | Finishes line, leaving the QuestDB server to set the timestamp             |
+| `AtNowAsync(CancellationToken)`                                                                       | `ValueTask`     | Finishes line, leaving the QuestDB server to set the timestamp             |
+| `Send() / SendAsync()`                                                                                | `void` / `Task` | Send IO Buffers to QuestDB                                                 |
+| `CancelRow()`                                                                                         | `void`          | Cancels current row.                                                       |
+| `Truncate()`                                                                                          | `void`          | Trims empty buffers.                                                       |
+| `Clear()`                                                                                             | `void`          | Clears the sender's buffer.                                                |
 
 ## Examples
 
@@ -201,7 +201,8 @@ the [Query & SQL overview](https://questdb.io/docs/reference/sql/overview/)
 
 ### Where do I report issues with the client?
 
-If something is not working as expected, please open an [issue](https://github.com/questdb/net-questdb-client/issues/new).
+If something is not working as expected, please open
+an [issue](https://github.com/questdb/net-questdb-client/issues/new).
 
 ### Where can I learn more about QuestDB?
 

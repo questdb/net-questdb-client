@@ -22,7 +22,7 @@ Configuration strings provide a convenient shorthand for defining client propert
 construction of the [Sender](xref:QuestDB.Senders.ISender).
 
 ```c#
-await using var sender = Sender.New("http::addr=localhost:9000;");
+using var sender = Sender.New("http::addr=localhost:9000;");
 ```
 
 If you want to initialise some properties programmatically after the initial config string, you can
@@ -121,10 +121,71 @@ When the [At](xref:QuestDB.Senders.ISender.At*) functions are called, the auto-f
 if it is appropriate
 to flush the buffer. If an auto-flush is triggered, data will be sent to QuestDB.
 
+```c#
+sender.At(new DateTime(0,0,1));
+```
+
 To avoid blocking the calling thread, one can use the Async overloads of the [At](xref:QuestDB.Senders.ISender.At*)
 functions
 i.e [AtAsync](xref:QuestDB.Senders.ISender.AtAsync*) and [AtNowAsync](xref:QuestDB.Senders.ISender.AtNowAsync*).
 
+```c#
+await sender.AtNowAsync();
+```
 
+> [!CAUTION]
+> Using a server generated timestamp via AtNow/AtNowAsync is not compatible with QuestDB's deduplication feature, and
+> should be avoided where possible.
 
+Auto-flushing can be enabled or disabled:
 
+```c#
+using var sender = Sender.New("http::localhost:9000;auto_flush=off"); // or `on`, defaults to `on`
+```
+
+#### Flush by rows
+
+Users can specify a threshold of rows to flush. This is effectively a submission batch size by number of rows.
+
+```c#
+using var sender = Sender.New("http::localhost:9000;auto_flush=on;auto_flush_rows=5000;"); 
+```
+
+By default, HTTP senders will send after `75,000` rows, and TCP after `600` rows.
+
+> [!NOTE]
+> `auto_flush_rows` and `auto_flush_interval` are both enabled by default. If you wish to only auto-flush based on
+> one of these properties, you can disable the other using `off` or `-1`.
+
+#### Flush by interval
+
+Users can specify a time interval between batches. This is the elapsed time from the last flush, and is checked
+when the `At` functions are called.
+
+```c#
+using var sender = Sender.New("http::localhost:9000;auto_flush=on;auto_flush_interval=5000;"); 
+```
+
+By default, `auto_flush_interval` is set to `1000` ms.
+
+#### Flush by bytes
+
+Users can specify a buffer length after which to flush, effectively a batch size in UTF-8 bytes. This should be set
+according to `init_buf_size` < `auto_flush_bytes` <= `max_buf_size`.
+
+This can be useful if a user has variety in their row sizes and wants to limit the request sizes.
+
+```c#
+using var sender = Sender.New("http::localhost:9000;auto_flush=on;auto_flush_bytes=65536;"); 
+```
+
+By default, this is disabled, but set to `100 KiB`.
+
+### Explicit flushing
+
+Users can manually flush the buffer using [Send](xref:QuestDB.Senders.ISender.Send*)
+and [SendAsync](xref:QuestDB.Senders.ISender.SendAsync*). This will send any outstanding data to the QuestDB server.
+
+> [!TIP]
+> It is recommended to always end your submission code with a manual flush. This will ensure that all data has been sent
+> before disposing of the Sender.

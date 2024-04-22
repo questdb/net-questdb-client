@@ -11,6 +11,16 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "example-basic", "src\exampl
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "example-auth-tls", "src\example-auth-tls\example-auth-tls.csproj", "{FBB8181C-6BAB-46C2-A47A-D3566A3997FE}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "net-questdb-client-tests", "src\net-questdb-client-tests\net-questdb-client-tests.csproj", "{7F3564FE-78CC-487A-BA1C-019D2BE07B02}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "net-questdb-client-benchmarks", "src\net-questdb-client-benchmarks\net-questdb-client-benchmarks.csproj", "{6C336385-5451-4AEF-9C8D-BA252BF0A1DE}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "dummy-http-server", "src\dummy-http-server\dummy-http-server.csproj", "{348E00C0-0ED0-4932-A0CE-EC80379E843A}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "example-streaming", "src\example-streaming\example-streaming.csproj", "{467D00AD-EFEE-4915-AB09-FCA4EF589286}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "example-auth-http-tls", "src\example-auth-http-tls\example-auth-http-tls.csproj", "{24D93DBB-3783-423F-81CC-6B9BFD33F6CD}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -36,5 +46,25 @@ Global
 		{FBB8181C-6BAB-46C2-A47A-D3566A3997FE}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{FBB8181C-6BAB-46C2-A47A-D3566A3997FE}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{FBB8181C-6BAB-46C2-A47A-D3566A3997FE}.Release|Any CPU.Build.0 = Release|Any CPU
+		{7F3564FE-78CC-487A-BA1C-019D2BE07B02}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{7F3564FE-78CC-487A-BA1C-019D2BE07B02}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{7F3564FE-78CC-487A-BA1C-019D2BE07B02}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{7F3564FE-78CC-487A-BA1C-019D2BE07B02}.Release|Any CPU.Build.0 = Release|Any CPU
+		{6C336385-5451-4AEF-9C8D-BA252BF0A1DE}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{6C336385-5451-4AEF-9C8D-BA252BF0A1DE}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{6C336385-5451-4AEF-9C8D-BA252BF0A1DE}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{6C336385-5451-4AEF-9C8D-BA252BF0A1DE}.Release|Any CPU.Build.0 = Release|Any CPU
+		{348E00C0-0ED0-4932-A0CE-EC80379E843A}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{348E00C0-0ED0-4932-A0CE-EC80379E843A}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{348E00C0-0ED0-4932-A0CE-EC80379E843A}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{348E00C0-0ED0-4932-A0CE-EC80379E843A}.Release|Any CPU.Build.0 = Release|Any CPU
+		{467D00AD-EFEE-4915-AB09-FCA4EF589286}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{467D00AD-EFEE-4915-AB09-FCA4EF589286}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{467D00AD-EFEE-4915-AB09-FCA4EF589286}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{467D00AD-EFEE-4915-AB09-FCA4EF589286}.Release|Any CPU.Build.0 = Release|Any CPU
+		{24D93DBB-3783-423F-81CC-6B9BFD33F6CD}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{24D93DBB-3783-423F-81CC-6B9BFD33F6CD}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{24D93DBB-3783-423F-81CC-6B9BFD33F6CD}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{24D93DBB-3783-423F-81CC-6B9BFD33F6CD}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 EndGlobal

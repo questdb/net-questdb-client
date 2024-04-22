@@ -1,3 +1,28 @@
+/*******************************************************************************
+ *     ___                  _   ____  ____
+ *    / _ \ _   _  ___  ___| |_|  _ \| __ )
+ *   | | | | | | |/ _ \/ __| __| | | |  _ \
+ *   | |_| | |_| |  __/\__ \ |_| |_| | |_) |
+ *    \__\_\\__,_|\___||___/\__|____/|____/
+ *
+ *  Copyright (c) 2014-2019 Appsicle
+ *  Copyright (c) 2019-2024 QuestDB
+ *
+ *  Licensed under the Apache License, Version 2.0 (the "License");
+ *  you may not use this file except in compliance with the License.
+ *  You may obtain a copy of the License at
+ *
+ *  http://www.apache.org/licenses/LICENSE-2.0
+ *
+ *  Unless required by applicable law or agreed to in writing, software
+ *  distributed under the License is distributed on an "AS IS" BASIS,
+ *  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ *  See the License for the specific language governing permissions and
+ *  limitations under the License.
+ *
+ ******************************************************************************/
+
+
 using System;
 using System.IO;
 using System.Net;
@@ -62,7 +87,11 @@ public class DummyIlpServer : IDisposable
                 await sslStream.AuthenticateAsServerAsync(GetCertificate());
             }
 
-            if (_keyId != null) await RunServerAuth(dataStream);
+            if (_keyId != null)
+            {
+                await RunServerAuth(dataStream);
+            }
+
             await SaveData(dataStream, socket);
         }
         catch (SocketException ex)
@@ -102,7 +131,11 @@ public class DummyIlpServer : IDisposable
         Console.WriteLine(signatureRaw);
         var signature = Convert.FromBase64String(Pad(signatureRaw));
 
-        if (_publicKeyX == null || _publicKeyY == null) throw new InvalidOperationException("public key not set");
+        if (_publicKeyX == null || _publicKeyY == null)
+        {
+            throw new InvalidOperationException("public key not set");
+        }
+
         var pubKey1 = FromBase64String(_publicKeyX);
         var pubKey2 = FromBase64String(_publicKeyY);
 
@@ -117,13 +150,20 @@ public class DummyIlpServer : IDisposable
         var ecdsa = SignerUtilities.GetSigner("SHA-256withECDSA");
         ecdsa.Init(false, pubKey);
         ecdsa.BlockUpdate(challenge, 0, challenge.Length);
-        if (!ecdsa.VerifySignature(signature)) connection.Close();
+        if (!ecdsa.VerifySignature(signature))
+        {
+            connection.Close();
+        }
     }
 
     private static string Pad(string text)
     {
         var padding = 3 - (text.Length + 3) % 4;
-        if (padding == 0) return text;
+        if (padding == 0)
+        {
+            return text;
+        }
+
         return text + new string('=', padding);
     }
 
@@ -143,6 +183,7 @@ public class DummyIlpServer : IDisposable
             var n = await connection.ReadAsync(_buffer.AsMemory(len));
             var inBuffer = len + n;
             for (var i = len; i < inBuffer; i++)
+            {
                 if (_buffer[i] == '\n')
                 {
                     if (i + 1 < inBuffer)
@@ -153,6 +194,7 @@ public class DummyIlpServer : IDisposable
 
                     return i;
                 }
+            }
 
             len += n;
         }

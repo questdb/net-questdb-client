@@ -1,7 +1,7 @@
   <a href="https://slack.questdb.io">
     <img src="https://slack.questdb.io/badge.svg" alt="QuestDB community Slack channel"/>
   </a>
-  
+
 <div align="center">
   <a href="https://questdb.io/" target="blank"><img alt="QuestDB Logo" src="https://questdb.io/img/questdb-logo-themed.svg" width="305px"/></a>
 </div>
@@ -25,85 +25,162 @@
 
 ## Getting started
 
-Use NuGet to add a depency on this library.
+Use NuGet to add a dependency on this library.
 
 See: [https://www.nuget.org/packages/net-questdb-client/](https://www.nuget.org/packages/net-questdb-client/)
 
 ## Usage
 
+`Sender` is single-threaded, and uses a single connection to the database.
+
+If you want to send in parallel, you can use multiple senders and standard async functionality
+to wait in parallel.
+
 ### Basic usage
 
 ```c#
-using var ls = await LineTcpSender.ConnectAsync("localhost", 9009, tlsMode: TlsMode.Disable);
-ls.Table("metric_name")
+using var sender = Sender.New("http::addr=localhost:9000;");
+sender.Table("metric_name")
     .Symbol("Symbol", "value")
     .Column("number", 10)
     .Column("double", 12.23)
     .Column("string", "born to shine")
     .At(new DateTime(2021, 11, 25, 0, 46, 26));
-await ls.SendAsync();
+await sender.SendAsync();
 ```
 
-### Multi-line send
+### Multi-line send (sync)
 
 ```c#
-using var ls = await LineTcpSender.ConnectAsync("localhost", 9009, tlsMode: TlsMode.Disable);
-for(int i = 0; i < 1E6; i++)
+using var sender = Sender.New("http::addr=localhost:9000;");
+for(int i = 0; i < 100; i++)
 {
-    ls.Table("metric_name")
+    sender.Table("metric_name")
         .Column("counter", i)
         .AtNow();
 }
-ls.Send();
+sender.Send();
+```
+
+### Auto-Flush
+
+By default, the client will flush every 75,000 rows (HTTP) or 600 rows (TCP).
+
+Alternatively, it will flush every 1000ms.
+
+This is equivalent to a config string of:
+
+```c#
+using var sender = Sender.New("http:addr=localhost:9000;auto_flush=on;auto_flush_rows=75000;auto_flush_interval=1000;");
+```
+
+A final flush or send should always be used, as auto flush is not guaranteed to send all pending data before
+the sender is disposed.
+
+#### Flush every 1000 rows or every 1 second
+
+```c#
+using var sender = Sender.New("http::addr=localhost:9000;auto_flush=on;auto_flush_rows=1000;");
+```
+
+#### Flush every 5000 rows
+
+```c#
+using var sender = Sender.New("http::addr=localhost:9000;auto_flush=on;auto_flush_rows=1000;auto_flush_interval=-1;");
+```
+
+#### Flush after 5 seconds
+
+```c#
+using var sender = Sender.New("http::addr=localhost:9000;auto_flush=on;auto_flush_interval=5000;");
+```
+
+#### Flush only when buffer is 4kb
+
+```c#
+using var sender = Sender.New("http::addr=localhost:9000;auto_flush=on;auto_flush_bytes=4096;auto_flush_rows=-1;auto_flush_interval=-1");
 ```
 
 ### Authenticated
 
-```c#
- using var ls = await LineTcpSender.ConnectAsync("localhost", 9009);
- await ls.Authenticate("admin", "NgdiOWDoQNUP18WOnb1xkkEG5TzPYMda5SiUOvT1K0U=");
- ls.Table("metric_name")
-    .Column("counter", i)
-    .AtNow();
-await ls.SendAsync();
-```
-
-### Fixed IO Buffer size
+#### HTTP Authentication (Basic)
 
 ```c#
-using var ls = await LineTcpSender.ConnectAsync("localhost", 9009, bufferOverflowHandling: BufferOverflowHandling.SendImmediately);
-await ls.Authenticate("admin", "NgdiOWDoQNUP18WOnb1xkkEG5TzPYMda5SiUOvT1K0U=");
-ls.Table("metric_name")
-    .Column("counter", i)
-    .AtNow();
-await ls.SendAsync();
+using var sender = Sender.New("https::addr=localhost:9009;tls_verify=unsafe_off;username=admin;password=quest;");;
 ```
 
-## Construction parameters
+#### HTTP Authentication (Token)
 
-| Name                     | Default  | Description                                                                                                                                                                                                                            |
-| ------------------------ | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `host`                   |          | Host or IP address of QuestDB server.                                                                                                                                                                                                   |
-| `port`                   |          | QuestDB Port. Default ILP port is 9009                                                                                                                                                                                                 |
-| `bufferSize`             | 4096     | Default send buffer size                                                                                                                                                                                                               |
-| `bufferOverflowHandling` | `Extend` | There are 2 modes: <br/> - `Extend` will grow input buffer until `Send()` or `SendAsync()` method called<br/> - `SendImmediately` will no extend the IO Buffer and automatically executes `Send()` immediatly when IO Buffer overflown |
-| `tslMode`                | `Enable` | There are 3 TSL modes:<br/>- `Enable`. TLS is enabled, server certificate is checked<br/> - `AllowAnyServerCertificate`. TLS enabled, server certificate is not checked<br/>- `Disable`                                                |
+```c#
+using var sender = Sender.New("https::addr=localhost:9009;tls_verify=unsafe_off;username=admin;token=<bearer token>");;
+```
+
+#### TCP Authentication
+
+```c#
+using var sender = Sender.New("tcps::addr=localhost:9009;tls_verify=unsafe_off;username=admin;token=NgdiOWDoQNUP18WOnb1xkkEG5TzPYMda5SiUOvT1K0U=;");
+```
+
+## Configuration Parameters
+
+These options are set either using a config string, or by initialising QuestDBOptions.
+
+The config string format is:
+
+```
+{http/https/tcp/tcps}::addr={host}:{port};key1=val1;key2=val2;keyN=valN;
+```
+
+| Name                     | Default                    | Description                                                                                                                                                     |
+|--------------------------|----------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `protocol` (schema)      | `http`                     | The transport protocol to use. Options are http(s)/tcp(s).                                                                                                      |
+| `addr`                   | `localhost:9000`           | The {host}:{port} pair denoting the QuestDB server. By default, port 9000 for HTTP, port 9009 for TCP.                                                          |
+| `auto_flush`             | `on`                       | Enables or disables auto-flushing functionality. By default, the buffer will be flushed every 75,000 rows, or every 1000ms, whichever comes first.              |
+| `auto_flush_rows`        | `75000 (HTTP)` `600 (TCP)` | The row count after which the buffer will be flushed. Effectively a batch size.                                                                                 |
+| `auto_flush_bytes`       | `Int.MaxValue`             | The byte buffer length which when exceeded, will trigger a flush.                                                                                               |
+| `auto_flush_interval`    | `1000`                     | The millisecond interval, which once has elapsed, the next row triggers a flush.                                                                                |
+| `init_buf_size`          | `65536`                    | The starting byte buffer length. Overflowing this buffer will cause the allocation `init_buf_size` bytes (an additional buffer).                                |
+| `max_buf_size`           | `104857600`                | Maximum size of the byte buffer in bytes. If exceeded, an exception will be thrown.                                                                             |
+| `username`               |                            | The username for authentication. Used for Basic Authentication and TCP JWK Authentication.                                                                      |
+| `password`               |                            | The password for authentication. Used for Basic Authentication.                                                                                                 |
+| `token`                  |                            | The token for authentication. Used for Token Authentication and TCP JWK Authentication.                                                                         |
+| `token_x`                |                            | Un-used.                                                                                                                                                        |
+| `token_y`                |                            | Un-used.                                                                                                                                                        |
+| `tls_verify`             | `on`                       | Denotes whether TLS certificates should or should not be verifed. Options are on/unsafe_off.                                                                    |
+| `tls_ca`                 |                            | Un-used.                                                                                                                                                        |
+| `tls_roots`              |                            | Used to specify the filepath for a custom .pem certificate.                                                                                                     |
+| `tls_roots_password`     |                            | Used to specify the filepath for the private key/password corresponding to the `tls_roots` certificate.                                                         |
+| `auth_timeout`           | `15000`                    | The time period to wait for authenticating requests, in milliseconds.                                                                                           |
+| `request_timeout`        | `10000`                    | Base timeout for HTTP requests before any additional time is added.                                                                                             |
+| `request_min_throughput` | `102400`                   | Expected minimum throughput of requests in bytes per second. Used to add additional time to `request_timeout` to prevent large requests timing out prematurely. |
+| `retry_timeout`          | `10000`                    | The time period during which retries will be attempted, in milliseconds.                                                                                        |
+| `max_name_len`           | `127`                      | The maximum allowed bytes, in UTF-8 format, for column and table names.                                                                                         |
+
+### net-questdb-client specific parameters
+
+| Name           | Default  | Description                                                                           |
+|----------------|----------|---------------------------------------------------------------------------------------|
+| `own_socket`   | `true`   | Specifies whether the internal TCP data stream will own the underlying socket or not. |
+| `pool_timeout` | `120000` | Sets the idle timeout for HTTP connections in SocketsHttpHandler.                     |
 
 ## Properties and methods
-d
-| Name                                                                 | Description                                                                                                    |
-| -------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
-| `AuthenticateAsync(string keyId, string privateKey)`                 | Authenticates with QuestDB certificates                                                                        |
-| `Table(string name)`                                                 | Starts new line from table name                                                                                |
-| `Symbol(string sybolName, string value)`                             | Symbol column value                                                                                            |
-| `Column(string columnName, string / long / double / DateTime value)` | Column name and value                                                                                          |
-| `At(DateTime / long timestamp)`                                      | Designated timestamp for the line                                                                              |
-| `AtNow()`                                                            | Finishes line leaving QuestDB server to set the timestamp                                                      |
-| `Send() / SendAsync() `                                              | Send IO Buffers to QuestDB                                                                                     |
-| `CancelLine()`                                                       | Cancels current line. Works only when `bufferOverflowHandling` set to `Extend`                                 |
-| `TrimExcessBuffers()`                                                | Trims empty buffers used to grow IO Buffer. Only useful when `bufferOverflowHandling` set to `Extend`          |
-| int `WriteTimeout`                                                   | Value, in milliseconds, that determines how long the underlying stream will attempt to write before timing out |
-| `IsConnected`                                                        | Indicates if the connection to QuestDB open                                                                    |
+
+| Name                                                                                                  | Returns   | Description                                                               |
+|-------------------------------------------------------------------------------------------------------|-----------|---------------------------------------------------------------------------|
+| `Length`                                                                                              | `int`     | Current length in bytes of the buffer (not capacity!)                     |
+| `RowCount`                                                                                            | `int`     | Current row count of the buffer                                           |
+| `WithinTransaction`                                                                                   | `bool`    | Whether or not the Sender is currently in a transactional state.          |
+| `Transaction(ReadOnlySpan<char>)`                                                                     | `ISender` | Starts a new transaction for the table.                                   |
+| `Commit() / CommitAsync()`                                                                            | `Ibool`   | Commits the current transaction.                                          |
+| `Table(ReadOnlySpan<char>)`                                                                           |           |                                                                           |
+| `Column(ReadOnlySpan<char>, ReadOnlySpan<char> / string / long / double / DateTime / DateTimeOffset)` | `ISender` | Specify column name and value                                             |
+| `Column(ReadOnlySpan<char>, string? / long? / double? / DateTime? / DateTimeOffset?)`                 | `ISender` |                                                                           |
+| `Symbol(ReadOnlySpan<char>, ReadOnlySpan<char> / string)`                                             | `ISender` |                                                                           |
+| `At(DateTime / DateTimeOffset / long)`                                                                |           | Designated timestamp for the line. For long, this is in unix nanoseconds. |
+| `AtNow()`                                                                                             |           | Finishes line, leaving QuestDB server to set the timestamp                |
+| `Send() / SendAsync()`                                                                                |           | Send IO Buffers to QuestDB                                                |
+| `CancelRow()`                                                                                         |           | Cancels current row.                                                      |
+| `Truncate()`                                                                                          |           | Trims empty buffers.                                                      |
 
 ## Examples
 
@@ -114,7 +191,8 @@ d
 
 ### Does this client perform both read and write operations?
 
-No. This client is for write only. For querying, see the [Query & SQL overview](https://questdb.io/docs/reference/sql/overview/)
+No. This client is for write only. For querying, see
+the [Query & SQL overview](https://questdb.io/docs/reference/sql/overview/)
 
 ### Where do I report issues with the client?
 
@@ -132,7 +210,9 @@ Come visit the [QuestDB community Slack](https://slack.questdb.io).
 
 We welcome contributors to the project. Before you begin, a couple notes...
 
-- Prior to opening a pull request, please create an issue to [discuss the scope of your proposal](https://github.com/questdb/net-questdb-client/issues).
+- Prior to opening a pull request, please create an issue
+  to [discuss the scope of your proposal](https://github.com/questdb/c-questdb-client/issues).
+
 - Please write simple code and concise documentation, when appropriate.
 
 ## License 📗

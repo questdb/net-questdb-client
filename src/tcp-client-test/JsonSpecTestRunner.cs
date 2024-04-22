@@ -1,3 +1,28 @@
+/*******************************************************************************
+ *     ___                  _   ____  ____
+ *    / _ \ _   _  ___  ___| |_|  _ \| __ )
+ *   | | | | | | |/ _ \/ __| __| | | |  _ \
+ *   | |_| | |_| |  __/\__ \ |_| |_| | |_) |
+ *    \__\_\\__,_|\___||___/\__|____/|____/
+ *
+ *  Copyright (c) 2014-2019 Appsicle
+ *  Copyright (c) 2019-2024 QuestDB
+ *
+ *  Licensed under the Apache License, Version 2.0 (the "License");
+ *  you may not use this file except in compliance with the License.
+ *  You may obtain a copy of the License at
+ *
+ *  http://www.apache.org/licenses/LICENSE-2.0
+ *
+ *  Unless required by applicable law or agreed to in writing, software
+ *  distributed under the License is distributed on an "AS IS" BASIS,
+ *  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ *  See the License for the specific language governing permissions and
+ *  limitations under the License.
+ *
+ ******************************************************************************/
+
+
 using System;
 using System.IO;
 using System.Net;
@@ -15,24 +40,24 @@ public class JsonSpecTestRunner
 {
     private const int Port = 29472;
     private static readonly TestCase[]? TestCases = ReadTestCases();
-    
+
     [TestCaseSource(nameof(TestCases))]
     public async Task Run(TestCase testCase)
     {
         using var srv = CreateTcpListener(Port);
         srv.AcceptAsync();
-        
+
         using var ls = await LineTcpSender.ConnectAsync(IPAddress.Loopback.ToString(), Port, tlsMode: TlsMode.Disable);
         Exception? exception = null;
 
         try
-        {            
+        {
             ls.Table(testCase.table);
             foreach (var symbol in testCase.symbols)
             {
                 ls.Symbol(symbol.name, symbol.value);
             }
-            
+
             foreach (var column in testCase.columns)
             {
                 switch (column.type)
@@ -48,16 +73,16 @@ public class JsonSpecTestRunner
                     case "BOOLEAN":
                         ls.Column(column.name, ((JsonElement)column.value).GetBoolean());
                         break;
-                    
+
                     case "LONG":
                         ls.Column(column.name, (long)((JsonElement)column.value).GetDouble());
                         break;
-                    
+
                     default:
                         throw new NotSupportedException("Column type not supported: " + column.type);
                 }
             }
-            
+
             ls.AtNow();
             ls.Send();
         }
@@ -67,8 +92,10 @@ public class JsonSpecTestRunner
             {
                 throw;
             }
+
             exception = ex;
         }
+
         ls.Dispose();
 
         if (testCase.result.status == "SUCCESS")
@@ -88,11 +115,15 @@ public class JsonSpecTestRunner
             Assert.Fail("Unsupported test case result status: " + testCase.result.status);
         }
     }
-    
+
     private static void WaitAssert(DummyIlpServer srv, string expected)
     {
         var expectedLen = Encoding.UTF8.GetBytes(expected).Length;
-        for (var i = 0; i < 500 && srv.TotalReceived < expectedLen; i++) Thread.Sleep(10);
+        for (var i = 0; i < 500 && srv.TotalReceived < expectedLen; i++)
+        {
+            Thread.Sleep(10);
+        }
+
         Assert.AreEqual(expected, srv.GetTextReceived());
     }
 
@@ -100,7 +131,7 @@ public class JsonSpecTestRunner
     {
         return new DummyIlpServer(port, tls);
     }
-    
+
     private static TestCase[]? ReadTestCases()
     {
         using var jsonFile = File.OpenRead("ilp-client-interop-test.json");
@@ -126,7 +157,7 @@ public class JsonSpecTestRunner
         public string name { get; set; }
         public string value { get; set; }
     }
-    
+
     public class TestCaseColumn
     {
         public string type { get; set; }

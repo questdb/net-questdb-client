@@ -6,7 +6,7 @@
  *    \__\_\\__,_|\___||___/\__|____/|____/
  *
  *  Copyright (c) 2014-2019 Appsicle
- *  Copyright (c) 2019-2022 QuestDB
+ *  Copyright (c) 2019-2024 QuestDB
  *
  *  Licensed under the Apache License, Version 2.0 (the "License");
  *  you may not use this file except in compliance with the License.
@@ -49,7 +49,7 @@ public class LineTcpSenderTests
         using var srv = CreateTcpListener(_port);
         srv.AcceptAsync();
 
-        using var ls = await LineTcpSender.ConnectAsync(IPAddress.Loopback .ToString(), _port, tlsMode: TlsMode.Disable);
+        using var ls = await LineTcpSender.ConnectAsync(IPAddress.Loopback.ToString(), _port, tlsMode: TlsMode.Disable);
 
         ls.Table("metric name")
             .Symbol("t a g", "v alu, e")
@@ -93,7 +93,7 @@ public class LineTcpSenderTests
             "ANhR2AZSs4ar9urE5AZrJqu469X0r7gZ1BBEdcrAuL_6");
         srv.AcceptAsync();
 
-        using var ls = await LineTcpSender.ConnectAsync(IPAddress.Loopback.ToString(),  _port, tlsMode: TlsMode.Disable);
+        using var ls = await LineTcpSender.ConnectAsync(IPAddress.Loopback.ToString(), _port, tlsMode: TlsMode.Disable);
         try
         {
             await ls.AuthenticateAsync("invalid", "", CancellationToken.None);
@@ -113,7 +113,7 @@ public class LineTcpSenderTests
             "ANhR2AZSs4ar9urE5AZrJqu469X0r7gZ1BBEdcrAuL_6");
         srv.AcceptAsync();
 
-        using var ls = await LineTcpSender.ConnectAsync(IPAddress.Loopback.ToString(),  _port, tlsMode: TlsMode.Disable);
+        using var ls = await LineTcpSender.ConnectAsync(IPAddress.Loopback.ToString(), _port, tlsMode: TlsMode.Disable);
         try
         {
             await ls.AuthenticateAsync("testUser1", "ZOvHHNQBGvZuiCLt7CmWt0tTlsnjm9F3O3C749wGT_M=");
@@ -132,7 +132,8 @@ public class LineTcpSenderTests
         }
         catch (IOException ex)
         {
-            StringAssert.StartsWith("Unable to write data to the transport connection: ", ex.Message, "Bad exception message");
+            StringAssert.StartsWith("Unable to write data to the transport connection: ", ex.Message,
+                "Bad exception message");
         }
     }
 
@@ -148,7 +149,10 @@ public class LineTcpSenderTests
             parameters);
 
         var m = new byte[512];
-        for (var i = 0; i < m.Length; i++) m[i] = (byte)i;
+        for (var i = 0; i < m.Length; i++)
+        {
+            m[i] = (byte)i;
+        }
 
         var ecdsa = SignerUtilities.GetSigner("SHA-256withECDSA");
         ecdsa.Init(true, priKey);
@@ -179,7 +183,8 @@ public class LineTcpSenderTests
         using var srv = CreateTcpListener(_port);
         srv.AcceptAsync();
 
-        using var ls = await LineTcpSender.ConnectAsync(IPAddress.Loopback.ToString(), _port, 2048, tlsMode: TlsMode.Disable);
+        using var ls =
+            await LineTcpSender.ConnectAsync(IPAddress.Loopback.ToString(), _port, 2048, tlsMode: TlsMode.Disable);
         var lineCount = 500;
         var expected =
             "table\\ name,t\\ a\\ g=v\\ alu\\,\\ e number=10i,db\\ l=123.12,string=\" -=\\\"\",при\\ вед=\"медвед\" 1000000000\n";
@@ -209,7 +214,8 @@ public class LineTcpSenderTests
         using var srv = CreateTcpListener(_port);
         srv.AcceptAsync();
 
-        using var ls = await LineTcpSender.ConnectAsync(IPAddress.Loopback.ToString(), _port, 2048, tlsMode: TlsMode.Disable, bufferOverflowHandling: BufferOverflowHandling.Extend);
+        using var ls = await LineTcpSender.ConnectAsync(IPAddress.Loopback.ToString(), _port, 2048,
+            tlsMode: TlsMode.Disable, bufferOverflowHandling: BufferOverflowHandling.Extend);
         var lineCount = 500;
         var expected =
             "table\\ name,t\\ a\\ g=v\\ alu\\,\\ e number=10i,db\\ l=123.12,string=\" -=\\\"\",при\\ вед=\"медвед\" 1000000000\n";
@@ -245,14 +251,15 @@ public class LineTcpSenderTests
         var totalExpected = totalExpectedSb.ToString();
         WaitAssert(srv, totalExpected);
     }
-    
+
     [Test]
-    public async Task SendLineTrimssBuffers()
+    public async Task SendLineTrimsBuffers()
     {
         using var srv = CreateTcpListener(_port);
         srv.AcceptAsync();
 
-        using var ls = await LineTcpSender.ConnectAsync(IPAddress.Loopback.ToString(), _port, 2048, BufferOverflowHandling.Extend, tlsMode: TlsMode.Disable);
+        using var ls =
+            await LineTcpSender.ConnectAsync(IPAddress.Loopback.ToString(), _port, 2048, tlsMode: TlsMode.Disable);
         var lineCount = 500;
         var expected =
             "table\\ name,t\\ a\\ g=v\\ alu\\,\\ e number=10i,db\\ l=123.12,string=\" -=\\\"\",при\\ вед=\"медвед\" 1000000000\n";
@@ -296,14 +303,14 @@ public class LineTcpSenderTests
         using var srv = CreateTcpListener(_port, true);
         srv.AcceptAsync();
 
-        using var ls = 
+        using var ls =
             await LineTcpSender.ConnectAsync(
                 IPAddress.Loopback.ToString(),
-                _port, 
-                2048, 
-                bufferOverflowHandling: BufferOverflowHandling.Extend,
-                tlsMode: TlsMode.AllowAnyServerCertificate);
-        
+                _port,
+                2048,
+                BufferOverflowHandling.Extend,
+                TlsMode.AllowAnyServerCertificate);
+
         var lineCount = 500;
         var expected =
             "table\\ name,t\\ a\\ g=v\\ alu\\,\\ e number=10i,db\\ l=123.12,string=\" -=\\\"\",при\\ вед=\"медвед\" 1000000000\n";
@@ -324,22 +331,23 @@ public class LineTcpSenderTests
             }
             catch (IOException ex)
             {
-                Assert.That(ex.Message.StartsWith("Unable to write data to the transport connection:"), Is.True);   
+                Assert.That(ex.Message.StartsWith("Unable to write data to the transport connection:"), Is.True);
             }
+
             if (i == 1)
             {
                 srv.Dispose();
             }
         }
     }
-    
+
     [Test]
     public async Task SendNegativeLongAndDouble()
     {
         using var srv = CreateTcpListener(_port);
         srv.AcceptAsync();
 
-        using var ls = await LineTcpSender.ConnectAsync(IPAddress.Loopback.ToString(),  _port, tlsMode: TlsMode.Disable);
+        using var ls = await LineTcpSender.ConnectAsync(IPAddress.Loopback.ToString(), _port, tlsMode: TlsMode.Disable);
 
         ls.Table("neg name")
             .Column("number1", long.MinValue + 1)
@@ -353,14 +361,14 @@ public class LineTcpSenderTests
             "neg\\ name number1=-9223372036854775807i,number2=9223372036854775807i,number3=-1.7976931348623157E+308,number4=1.7976931348623157E+308\n";
         WaitAssert(srv, expected);
     }
-    
+
     [Test]
     public async Task DoubleSerializationTest()
     {
         using var srv = CreateTcpListener(_port);
         srv.AcceptAsync();
 
-        using var ls = await LineTcpSender.ConnectAsync(IPAddress.Loopback.ToString(),  _port, tlsMode: TlsMode.Disable);
+        using var ls = await LineTcpSender.ConnectAsync(IPAddress.Loopback.ToString(), _port, tlsMode: TlsMode.Disable);
 
         ls.Table("doubles")
             .Column("d0", 0.0)
@@ -368,9 +376,9 @@ public class LineTcpSenderTests
             .Column("d1", 1.0)
             .Column("dE100", 1E100)
             .Column("d0000001", 0.000001)
-            .Column("dNaN", Double.NaN)
-            .Column("dInf", Double.PositiveInfinity)
-            .Column("dNInf", Double.NegativeInfinity)
+            .Column("dNaN", double.NaN)
+            .Column("dInf", double.PositiveInfinity)
+            .Column("dNInf", double.NegativeInfinity)
             .AtNow();
         ls.Send();
 
@@ -385,20 +393,20 @@ public class LineTcpSenderTests
         using var srv = CreateTcpListener(_port);
         srv.AcceptAsync();
 
-        using var ls = await LineTcpSender.ConnectAsync("localhost",  _port, tlsMode: TlsMode.Disable);
+        using var ls = await LineTcpSender.ConnectAsync("localhost", _port, tlsMode: TlsMode.Disable);
 
-        DateTime ts = new DateTime(2022, 2, 24);
+        var ts = new DateTime(2022, 2, 24);
         ls.Table("name")
             .Column("ts", ts)
             .At(ts);
-        
+
         ls.Send();
 
         var expected =
             "name ts=1645660800000000t 1645660800000000000\n";
         WaitAssert(srv, expected);
     }
-    
+
     [Test]
     public async Task WithTls()
     {
@@ -430,7 +438,7 @@ public class LineTcpSenderTests
         using var srv = CreateTcpListener(_port);
         srv.AcceptAsync();
 
-        using var ls = await LineTcpSender.ConnectAsync(IPAddress.Loopback.ToString(),  _port, tlsMode: TlsMode.Disable);
+        using var ls = await LineTcpSender.ConnectAsync(IPAddress.Loopback.ToString(), _port, tlsMode: TlsMode.Disable);
         string? nullString = null;
 
         Assert.Throws<ArgumentException>(() => ls.Table(nullString));
@@ -447,14 +455,14 @@ public class LineTcpSenderTests
 
         Assert.Throws<InvalidOperationException>(() => ls.Symbol("asdf", "asdf"));
     }
-    
+
     [Test]
     public async Task InvalidNames()
     {
         using var srv = CreateTcpListener(_port);
         srv.AcceptAsync();
 
-        using var ls = await LineTcpSender.ConnectAsync(IPAddress.Loopback.ToString(),  _port, tlsMode: TlsMode.Disable);
+        using var ls = await LineTcpSender.ConnectAsync(IPAddress.Loopback.ToString(), _port, tlsMode: TlsMode.Disable);
         string? nullString = null;
 
         Assert.Throws<ArgumentException>(() => ls.Table("abc\\slash"));
@@ -468,10 +476,10 @@ public class LineTcpSenderTests
 
         ls.QuestDbFsFileNameLimit = 4;
         Assert.Throws<ArgumentException>(() => ls.Table("asffdfasdf"));
-        
+
         ls.QuestDbFsFileNameLimit = LineTcpSender.DefaultQuestDbFsFileNameLimit;
         ls.Table("abcd.csv");
-        
+
         Assert.Throws<ArgumentException>(() => ls.Column("abc\\slash", 13));
         Assert.Throws<ArgumentException>(() => ls.Column("abc/slash", 12));
         Assert.Throws<ArgumentException>(() => ls.Column(".", 12));
@@ -488,11 +496,11 @@ public class LineTcpSenderTests
         Assert.Throws<ArgumentException>(() => ls.Column("b?c", 12));
         Assert.Throws<ArgumentException>(() => ls.Symbol("b:c", "12"));
         Assert.Throws<ArgumentException>(() => ls.Symbol("b)c", "12"));
-        
+
         ls.QuestDbFsFileNameLimit = 4;
         Assert.Throws<ArgumentException>(() => ls.Symbol("b    c", "12"));
         ls.QuestDbFsFileNameLimit = LineTcpSender.DefaultQuestDbFsFileNameLimit;
-        
+
         ls.Symbol("b    c", "12");
         ls.At(new DateTime(1970, 1, 1));
         await ls.SendAsync();
@@ -507,7 +515,7 @@ public class LineTcpSenderTests
         using var srv = CreateTcpListener(_port);
         srv.AcceptAsync();
 
-        using var ls = await LineTcpSender.ConnectAsync(IPAddress.Loopback.ToString(),  _port, tlsMode: TlsMode.Disable);
+        using var ls = await LineTcpSender.ConnectAsync(IPAddress.Loopback.ToString(), _port, tlsMode: TlsMode.Disable);
         string? nullString = null;
 
         Assert.Throws<ArgumentException>(() => ls.Table(nullString));
@@ -524,20 +532,20 @@ public class LineTcpSenderTests
 
         Assert.Throws<InvalidOperationException>(() => ls.Symbol("asdf", "asdf"));
     }
-    
+
     [Test]
     public async Task CancelLine()
     {
         using var srv = CreateTcpListener(_port);
         srv.AcceptAsync();
 
-        using var ls = await LineTcpSender.ConnectAsync(IPAddress.Loopback.ToString(),  _port, tlsMode: TlsMode.Disable);
+        using var ls = await LineTcpSender.ConnectAsync(IPAddress.Loopback.ToString(), _port, tlsMode: TlsMode.Disable);
 
         ls.Table("good");
         ls.Symbol("asdf", "sdfad");
         ls.Column("ddd", 123);
         ls.AtNow();
-        
+
         ls.Table("bad");
         ls.Symbol("asdf", "sdfad");
         ls.Column("asdf", 123);
@@ -552,7 +560,7 @@ public class LineTcpSenderTests
                        "good 86400000000000\n";
         WaitAssert(srv, expected);
     }
-    
+
     [Test]
     public async Task SendMillionAsyncExplicit()
     {
@@ -562,7 +570,8 @@ public class LineTcpSenderTests
         var nowMillisecond = DateTime.Now.Millisecond;
         var metric = "metric_name" + nowMillisecond;
 
-        using var ls = await LineTcpSender.ConnectAsync(IPAddress.Loopback.ToString(), _port, 256*1024, tlsMode: TlsMode.Disable);
+        using var ls = await LineTcpSender.ConnectAsync(IPAddress.Loopback.ToString(), _port, 256 * 1024,
+            tlsMode: TlsMode.Disable);
         for (var i = 0; i < 1E6; i++)
         {
             ls.Table(metric)
@@ -571,7 +580,7 @@ public class LineTcpSenderTests
                 .Column("int", i)
                 .Column("привед", "мед вед")
                 .At(new DateTime(2021, 1, 1, i / 360 / 1000 % 60, i / 60 / 1000 % 60, i / 1000 % 60, i % 1000));
-            
+
             if (i % 100 == 0)
             {
                 await ls.SendAsync();
@@ -590,7 +599,8 @@ public class LineTcpSenderTests
         var nowMillisecond = DateTime.Now.Millisecond;
         var metric = "metric_name" + nowMillisecond;
 
-        using var ls = await LineTcpSender.ConnectAsync(IPAddress.Loopback.ToString(), _port, 64*1024, BufferOverflowHandling.SendImmediately, TlsMode.Disable);
+        using var ls = await LineTcpSender.ConnectAsync(IPAddress.Loopback.ToString(), _port, 64 * 1024,
+            BufferOverflowHandling.SendImmediately, TlsMode.Disable);
         for (var i = 0; i < 1E6; i++)
         {
             ls.Table(metric)
@@ -603,7 +613,7 @@ public class LineTcpSenderTests
 
         await ls.SendAsync();
     }
-    
+
     [Test]
     public async Task CannotConnect()
     {
@@ -626,11 +636,13 @@ public class LineTcpSenderTests
             "ANhR2AZSs4ar9urE5AZrJqu469X0r7gZ1BBEdcrAuL_6");
         srv.AcceptAsync();
 
-        using var ls = await LineTcpSender.ConnectAsync(IPAddress.Loopback.ToString(), _port, 512, tlsMode: TlsMode.Disable);
+        using var ls =
+            await LineTcpSender.ConnectAsync(IPAddress.Loopback.ToString(), _port, 512, tlsMode: TlsMode.Disable);
 
         try
         {
-            await ls.AuthenticateAsync("testUser1", "NgdiOWDoQNUP18WOnb1xkkEG5TzPYMda5SiUOvT1K0U=", CancellationToken.None);
+            await ls.AuthenticateAsync("testUser1", "NgdiOWDoQNUP18WOnb1xkkEG5TzPYMda5SiUOvT1K0U=",
+                CancellationToken.None);
             Assert.Fail();
         }
         catch (IOException ex)
@@ -642,7 +654,11 @@ public class LineTcpSenderTests
     private static void WaitAssert(DummyIlpServer srv, string expected)
     {
         var expectedLen = Encoding.UTF8.GetBytes(expected).Length;
-        for (var i = 0; i < 500 && srv.TotalReceived < expectedLen; i++) Thread.Sleep(10);
+        for (var i = 0; i < 500 && srv.TotalReceived < expectedLen; i++)
+        {
+            Thread.Sleep(10);
+        }
+
         Assert.AreEqual(expected, srv.GetTextReceived());
     }
 
@@ -652,7 +668,7 @@ public class LineTcpSenderTests
         using var srv = CreateTcpListener(_port);
         srv.AcceptAsync();
 
-        using var ls = await LineTcpSender.ConnectAsync(IPAddress.Loopback.ToString(),  _port, tlsMode: TlsMode.Disable);
+        using var ls = await LineTcpSender.ConnectAsync(IPAddress.Loopback.ToString(), _port, tlsMode: TlsMode.Disable);
         Assert.Throws<ArgumentOutOfRangeException>(
             () => ls.Table("name")
                 .Column("number1", long.MinValue)
@@ -666,7 +682,7 @@ public class LineTcpSenderTests
         using var srv = CreateTcpListener(_port);
         srv.AcceptAsync();
 
-        using var ls = await LineTcpSender.ConnectAsync("127.0.0.1",  _port, tlsMode: TlsMode.Disable);
+        using var ls = await LineTcpSender.ConnectAsync("127.0.0.1", _port, tlsMode: TlsMode.Disable);
         ls.Table("neg name")
             .Column("привед", " мед\rве\n д")
             .AtNow();
@@ -682,7 +698,7 @@ public class LineTcpSenderTests
         using var srv = CreateTcpListener(_port);
         srv.AcceptAsync();
 
-        using var ls = await LineTcpSender.ConnectAsync(IPAddress.Loopback .ToString(), _port, tlsMode: TlsMode.Disable);
+        using var ls = await LineTcpSender.ConnectAsync(IPAddress.Loopback.ToString(), _port, tlsMode: TlsMode.Disable);
         Assert.Throws<InvalidOperationException>(
             () => ls.Table("name")
                 .Column("number1", 123)
@@ -723,6 +739,50 @@ public class LineTcpSenderTests
                 .AtNow()
         );
     }
+
+    [Test]
+    public async Task CheckIsConnected()
+    {
+        using var srv = CreateTcpListener(_port);
+        srv.AcceptAsync();
+
+        using var ls = await LineTcpSender.ConnectAsync(IPAddress.Loopback.ToString(), _port, tlsMode: TlsMode.Disable);
+        Assert.True(ls.IsConnected);
+    }
+
+    [Test]
+    public async Task CheckWriteTimeout()
+    {
+        using var srv = CreateTcpListener(_port);
+        srv.AcceptAsync();
+
+        using var ls = await LineTcpSender.ConnectAsync(IPAddress.Loopback.ToString(), _port, tlsMode: TlsMode.Disable);
+        Assert.AreEqual(ls.WriteTimeout, -1);
+        ls.WriteTimeout = 1000;
+
+        Assert.AreEqual(ls.WriteTimeout, 1000);
+    }
+
+    [Test]
+    public async Task AtWithLongEpochNano()
+    {
+        using var srv = CreateTcpListener(_port);
+        srv.AcceptAsync();
+
+        using var ls = await LineTcpSender.ConnectAsync("localhost", _port, tlsMode: TlsMode.Disable);
+
+        var ts = new DateTime(2022, 2, 24);
+        ls.Table("name")
+            .Column("ts", ts)
+            .At((ts.Ticks - DateTime.UnixEpoch.Ticks) * 100);
+
+        ls.Send();
+
+        var expected =
+            "name ts=1645660800000000t 1645660800000000000\n";
+        WaitAssert(srv, expected);
+    }
+
 
     private DummyIlpServer CreateTcpListener(int port, bool tls = false)
     {

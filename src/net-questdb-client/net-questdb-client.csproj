@@ -14,12 +14,17 @@
         <RepositoryUrl>https://github.com/questdb/net-questdb-client</RepositoryUrl>
         <PackageTags>QuestDB, ILP</PackageTags>
         <Company>QuestDB Limited</Company>
-        <TargetFramework>netstandard2.1</TargetFramework>
         <PackageVersion>1.1.2</PackageVersion>
+        <TargetFramework>net6.0</TargetFramework>
+        <GenerateDocumentationFile>true</GenerateDocumentationFile>
     </PropertyGroup>
 
     <ItemGroup>
-        <PackageReference Include="BouncyCastle.Cryptography" Version="2.2.1" />
+        <PackageReference Include="BouncyCastle.Cryptography" Version="2.2.1"/>
+        <PackageReference Include="Microsoft.Extensions.Configuration" Version="8.0.0"/>
+        <PackageReference Include="Microsoft.Extensions.Configuration.Binder" Version="8.0.1"/>
+        <PackageReference Include="Microsoft.Extensions.Http" Version="8.0.0"/>
+        <PackageReference Include="System.Net.Http" Version="4.3.4"/>
     </ItemGroup>
 
 </Project>

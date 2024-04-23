@@ -37,7 +37,7 @@ If you want to send in parallel, you can use multiple senders and standard async
 
 ### Basic usage
 
-```c#
+```csharp
 using var sender = Sender.New("http::addr=localhost:9000;");
 await sender.Table("metric_name")
     .Symbol("Symbol", "value")
@@ -50,7 +50,7 @@ await sender.SendAsync();
 
 ### Multi-line send (sync)
 
-```c#
+```csharp
 using var sender = Sender.New("http::addr=localhost:9000;auto_flush=off;");
 for(int i = 0; i < 100; i++)
 {
@@ -69,7 +69,7 @@ Alternatively, it will flush every 1000ms.
 
 This is equivalent to a config string of:
 
-```c#
+```csharp
 using var sender = Sender.New("http:addr=localhost:9000;auto_flush=on;auto_flush_rows=75000;auto_flush_interval=1000;");
 ```
 
@@ -78,25 +78,25 @@ the sender is disposed.
 
 #### Flush every 1000 rows or every 1 second
 
-```c#
+```csharp
 using var sender = Sender.New("http::addr=localhost:9000;auto_flush=on;auto_flush_rows=1000;");
 ```
 
 #### Flush every 5000 rows
 
-```c#
+```csharp
 using var sender = Sender.New("http::addr=localhost:9000;auto_flush=on;auto_flush_rows=1000;auto_flush_interval=off;");
 ```
 
 #### Flush after 5 seconds
 
-```c#
+```csharp
 using var sender = Sender.New("http::addr=localhost:9000;auto_flush=on;auto_flush_rows=off;auto_flush_interval=5000;");
 ```
 
 #### Flush only when buffer is 4kb
 
-```c#
+```csharp
 using var sender = Sender.New("http::addr=localhost:9000;auto_flush=on;auto_flush_bytes=4096;auto_flush_rows=off;auto_flush_interval=off;");
 ```
 
@@ -104,19 +104,19 @@ using var sender = Sender.New("http::addr=localhost:9000;auto_flush=on;auto_flus
 
 #### HTTP Authentication (Basic)
 
-```c#
+```csharp
 using var sender = Sender.New("https::addr=localhost:9009;tls_verify=unsafe_off;username=admin;password=quest;");;
 ```
 
 #### HTTP Authentication (Token)
 
-```c#
+```csharp
 using var sender = Sender.New("https::addr=localhost:9009;tls_verify=unsafe_off;username=admin;token=<bearer token>");;
 ```
 
 #### TCP Authentication
 
-```c#
+```csharp
 using var sender = Sender.New("tcps::addr=localhost:9009;tls_verify=unsafe_off;username=admin;token=NgdiOWDoQNUP18WOnb1xkkEG5TzPYMda5SiUOvT1K0U=;");
 ```
 

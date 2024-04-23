@@ -7,6 +7,14 @@
       href: ingestion.md#Initialisation
     - name: Preparing Data
       href: ingestion.md#Preparing Data
+    - name: Flushing
+      href: ingestion.md#Flushing
+    - name: Transactions
+      href: ingestion.md#Transactions
+    - name: Other utilities
+      href: ingestion.md#Other utilities
   expanded: true
+- name: Examples
+  href: examples.md
 - name: Reference
   href: api/

@@ -66,13 +66,13 @@ public interface ISender : IDisposable
     /// </remarks>
     /// <param name="tableName">The name of the table for all the rows in this transaction.</param>
     /// <returns>Itself</returns>
-    /// <exception cref="IngressError">When transactions are unsupported, or invalid name is provided.</exception>
+    /// <exception cref="IngressError">When transactions are unsupported, or an invalid name is provided.</exception>
     public ISender Transaction(ReadOnlySpan<char> tableName);
 
     /// <summary>
     ///     Clears the transaction.
     /// </summary>
-    /// <exception cref="IngressError">When transactioned are unsupported.</exception>
+    /// <exception cref="IngressError">When transactions are unsupported.</exception>
     public void Rollback();
 
     /// <summary>

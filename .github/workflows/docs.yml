@@ -36,7 +36,7 @@ jobs:
 
       - name: DocFX Build
         working-directory: docs
-        run: docfx .\docfx.json
+        run: .\docgen.ps1
         continue-on-error: false
 
       - name: Publish

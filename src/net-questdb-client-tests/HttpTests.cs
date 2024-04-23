@@ -91,7 +91,7 @@ public class HttpTests
                 .Table("test")
                 .Symbol("foo", "bah")
                 .Column("num", i)
-                .AtNowAsync();
+                .AtAsync(DateTime.UtcNow);
         }
 
         Assert.That(
@@ -118,7 +118,7 @@ public class HttpTests
                 .Table("test")
                 .Symbol("foo", "bah")
                 .Column("num", i)
-                .AtNowAsync();
+                .AtAsync(DateTime.UtcNow);
         }
 
         await sender.SendAsync();
@@ -381,7 +381,7 @@ public class HttpTests
             .Column("number2", long.MaxValue)
             .Column("number3", double.MinValue)
             .Column("number4", double.MaxValue)
-            .AtNowAsync();
+            .AtAsync(DateTime.UtcNow);
         await ls.SendAsync();
 
         var expected =
@@ -407,7 +407,7 @@ public class HttpTests
             .Column("dNaN", double.NaN)
             .Column("dInf", double.PositiveInfinity)
             .Column("dNInf", double.NegativeInfinity)
-            .AtNowAsync();
+            .AtAsync(DateTime.UtcNow);
         await ls.SendAsync();
 
         var expected =
@@ -630,7 +630,7 @@ public class HttpTests
         Assert.That(
             () => sender.Table("name")
                 .Column("number1", long.MinValue)
-                .AtNowAsync(),
+                .AtAsync(DateTime.UtcNow),
             Throws.TypeOf<IngressError>().With.Message.Contains("Special case")
         );
     }
@@ -646,7 +646,7 @@ public class HttpTests
                 $"http::addr={Host}:{HttpPort};auto_flush=off;");
         await sender.Table("neg name")
             .Column("привед", " мед\rве\n д")
-            .AtNowAsync();
+            .AtAsync(DateTime.UtcNow);
         await sender.SendAsync();
 
         var expected = "neg\\ name привед=\" мед\\\rве\\\n д\"\n";
@@ -666,7 +666,7 @@ public class HttpTests
             async () => await sender.Table("name")
                 .Column("number1", 123)
                 .Symbol("nand", "asdfa")
-                .AtNowAsync(),
+                .AtAsync(DateTime.UtcNow),
             Throws.TypeOf<IngressError>()
         );
     }
@@ -686,7 +686,7 @@ public class HttpTests
                 await sender.Table("name")
                     .Column("number1", 123)
                     .Table("nand")
-                    .AtNowAsync(),
+                    .AtAsync(DateTime.UtcNow),
             Throws.TypeOf<IngressError>()
             );
     }
@@ -702,12 +702,12 @@ public class HttpTests
                 $"http::addr={Host}:{HttpPort};auto_flush=off;");
         
         Assert.That(
-            async () => await sender.Column("number1", 123).AtNowAsync(),
+            async () => await sender.Column("number1", 123).AtAsync(DateTime.UtcNow),
             Throws.TypeOf<IngressError>()
         );
         
         Assert.That(
-            async () => await sender.Symbol("number1", "1234").AtNowAsync(),
+            async () => await sender.Symbol("number1", "1234").AtAsync(DateTime.UtcNow),
             Throws.TypeOf<IngressError>()
         );
         
@@ -723,7 +723,7 @@ public class HttpTests
         sender.Table("good");
         sender.Symbol("asdf", "sdfad");
         sender.Column("ddd", 123);
-        await sender.AtNowAsync();
+        await sender.AtAsync(DateTime.UtcNow);
 
         sender.Table("bad");
         sender.Symbol("asdf", "sdfad");
@@ -743,7 +743,7 @@ public class HttpTests
     public async Task CannotConnect()
     {
         var sender = Sender.New($"http::addr={Host}:{HttpPort};auto_flush=off;");
-        await sender.Table("foo").Symbol("a", "b").AtNowAsync();
+        await sender.Table("foo").Symbol("a", "b").AtAsync(DateTime.UtcNow);
 
         Assert.That(
             async () =>
@@ -753,7 +753,7 @@ public class HttpTests
             Throws.TypeOf<IngressError>().With.Message.Contains("Cannot connect")
         );
         
-        await sender.Table("foo").Symbol("a", "b").AtNowAsync();
+        await sender.Table("foo").Symbol("a", "b").AtAsync(DateTime.UtcNow);
         
         Assert.That(
              () =>
@@ -773,7 +773,7 @@ public class HttpTests
         using var sender =
             Sender.New(
                 $"http::addr={Host}:{HttpPort};auto_flush=off;");
-        await sender.Transaction("tableName").Symbol("foo", "bah").AtNowAsync();
+        await sender.Transaction("tableName").Symbol("foo", "bah").AtAsync(DateTime.UtcNow);
         await sender.CommitAsync();
 
         var expected = "tableName,foo=bah\n";
@@ -789,7 +789,7 @@ public class HttpTests
         using var sender =
             Sender.New(
                 $"http::addr={Host}:{HttpPort};auto_flush=off;");
-        await sender.Transaction("tableName").Symbol("foo", "bah").AtNowAsync();
+        await sender.Transaction("tableName").Symbol("foo", "bah").AtAsync(DateTime.UtcNow);
         Assert.That(
             () => sender.Table("other table name"),
             Throws.TypeOf<IngressError>().With.Message.Contains("only be for one table")
@@ -811,7 +811,7 @@ public class HttpTests
         using var sender =
             Sender.New(
                 $"http::addr={Host}:{HttpPort};auto_flush=off;");
-        await sender.Transaction("tableName").Symbol("foo", "bah").AtNowAsync();
+        await sender.Transaction("tableName").Symbol("foo", "bah").AtAsync(DateTime.UtcNow);
         Assert.That(
             () => sender.Transaction("tableName"),
             Throws.TypeOf<IngressError>().With.Message.Contains("another transaction")
@@ -840,7 +840,7 @@ public class HttpTests
             await sender
                 .Symbol("foo", "bah")
                 .Column("num", i)
-                .AtNowAsync();
+                .AtAsync(DateTime.UtcNow);
         }
 
         Assert.That(sender.RowCount == 100);
@@ -868,7 +868,7 @@ public class HttpTests
             await sender
                 .Symbol("foo", "bah")
                 .Column("num", i)
-                .AtNowAsync();
+                .AtAsync(DateTime.UtcNow);
         }
 
         Assert.That(
@@ -889,7 +889,7 @@ public class HttpTests
             await sender
                 .Symbol("foo", "bah")
                 .Column("num", i)
-                .AtNowAsync();
+                .AtAsync(DateTime.UtcNow);
         }
 
         sender.Commit();
@@ -952,7 +952,7 @@ public class HttpTests
             Sender.New(
                 $"http::addr={Host}:{HttpPort};auto_flush=off;");
         
-        await sender.Transaction("foo").Symbol("bah", "baz").AtNowAsync();
+        await sender.Transaction("foo").Symbol("bah", "baz").AtAsync(DateTime.UtcNow);
         
         Assert.That(
             () => sender.Send(),
@@ -982,7 +982,7 @@ public class HttpTests
                 Assert.That(sender.Length == 12);
             }
 
-            await sender.Table("foo").Symbol("bah", "baz").AtNowAsync();
+            await sender.Table("foo").Symbol("bah", "baz").AtAsync(DateTime.UtcNow);
         }
     }
 
@@ -999,7 +999,7 @@ public class HttpTests
                 Assert.That(sender.Length == 0);
             }
 
-            await sender.Table("foo").Symbol("bah", "baz").AtNowAsync();
+            await sender.Table("foo").Symbol("bah", "baz").AtAsync(DateTime.UtcNow);
         }
     }
 
@@ -1012,9 +1012,9 @@ public class HttpTests
         
         Assert.That(sender.Length == 0);
         await Task.Delay(500);
-        await sender.Table("foo").Symbol("bah", "baz").AtNowAsync();
+        await sender.Table("foo").Symbol("bah", "baz").AtAsync(DateTime.UtcNow);
         await Task.Delay(500);
-        await sender.Table("foo").Symbol("bah", "baz").AtNowAsync();
+        await sender.Table("foo").Symbol("bah", "baz").AtAsync(DateTime.UtcNow);
         Assert.That(sender.Length == 0);
     }
 
@@ -1026,13 +1026,13 @@ public class HttpTests
         
         using var sender = Sender.New($"http::addr={Host}:{HttpPort};auto_flush=off;");
 
-        await sender.Table("foo").Symbol("bah", "baz").AtNowAsync();
+        await sender.Table("foo").Symbol("bah", "baz").AtAsync(DateTime.UtcNow);
         Assert.That(
             async () => await sender.SendAsync(), 
             Throws.TypeOf<IngressError>());
         
         
-        await sender.Table("foo").Symbol("bah", "baz").AtNowAsync();
+        await sender.Table("foo").Symbol("bah", "baz").AtAsync(DateTime.UtcNow);
         Assert.That(
             () => sender.Send(),
             Throws.TypeOf<IngressError>());
@@ -1063,7 +1063,7 @@ public class HttpTests
 
         await sender.Table("foo")
             .Symbol("bah", "baz")
-            .AtNowAsync();
+            .AtAsync(DateTime.UtcNow);
         
         await sender.Table("foo")
             .Symbol("bah", "baz")
@@ -1079,7 +1079,7 @@ public class HttpTests
         
         sender.Table("foo")
             .Symbol("bah", "baz")
-            .AtNow();
+            .At(DateTime.UtcNow);
         
         sender.Table("foo")
             .Symbol("bah", "baz")
@@ -1101,7 +1101,7 @@ public class HttpTests
     {
         using var sender = Sender.New($"http::addr={Host}:{HttpPort};auto_flush=off;");
         
-        await sender.Table("foo").Symbol("bah", "baz").AtNowAsync();
+        await sender.Table("foo").Symbol("bah", "baz").AtAsync(DateTime.UtcNow);
         Assert.That(sender.Length, Is.GreaterThan(0));
 
         sender.Clear();
@@ -1116,14 +1116,14 @@ public class HttpTests
         
         using var sender = Sender.New($"http::addr={Host}:{HttpPort};auto_flush=off;");
 
-        await sender.Table("foo").Symbol("bah", "baz").AtNowAsync();
+        await sender.Table("foo").Symbol("bah", "baz").AtAsync(DateTime.UtcNow);
 
         Assert.That(
             async () => await sender.SendAsync(),
             Throws.TypeOf<IngressError>().With.Message.Contains("Server Response (\n\tCode: `code`\n\tMessage: `message`\n\tLine: `1`\n\tErrorId: `errorid` \n)")
             );
  
-        await sender.Table("foo").Symbol("bah", "baz").AtNowAsync();
+        await sender.Table("foo").Symbol("bah", "baz").AtAsync(DateTime.UtcNow);
 
         
         Assert.That(
@@ -1150,7 +1150,7 @@ public class HttpTests
                 .Column("db l", 123.12)
                 .Column("string", " -=\"")
                 .Column("при вед", "медвед")
-                .AtNowAsync();
+                .AtAsync(DateTime.UtcNow);
 
             var request = sender.SendAsync();
 
@@ -1169,8 +1169,9 @@ public class HttpTests
         }
 
         await Task.Delay(1);
-        Assert.That(srv?.GetCounter(), Is.EqualTo(lineCount));
-        srv?.Dispose();
+        Assert.That(srv.GetCounter(), Is.EqualTo(lineCount));
+        // ReSharper disable once DisposeOnUsingVariable
+        srv.Dispose();
     }
     
 }

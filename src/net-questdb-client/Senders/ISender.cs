@@ -160,6 +160,7 @@ public interface ISender : IDisposable
     /// </summary>
     /// <param name="ct">A cancellation token applied requests caused by auto-flushing</param>
     /// <returns></returns>
+    [Obsolete("Not compatible with deduplication. Please use `AtAsync(DateTime.UtcNow)` instead.")]
     public ValueTask AtNowAsync(CancellationToken ct = default);
 
     /// <inheritdoc cref="AtAsync(DateTime, CancellationToken)" />
@@ -172,6 +173,7 @@ public interface ISender : IDisposable
     public void At(long value, CancellationToken ct = default);
 
     /// <inheritdoc cref="AtNowAsync" />
+    [Obsolete("Not compatible with deduplication. Please use `At(DateTime.UtcNow)` instead.")]
     public void AtNow(CancellationToken ct = default);
 
     /// <summary>

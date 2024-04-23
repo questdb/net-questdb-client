@@ -55,6 +55,7 @@ public record JsonErrorResponse
     /// </summary>
     public string errorId { get; init; }
 
+    /// <inheritdoc />
     public override string ToString()
     {
         return

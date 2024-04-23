@@ -18,3 +18,12 @@
   href: querying.md
 - name: Examples
   href: examples.md
+  items:
+    - name: Basic usage
+      href: examples.md#basic-usage
+    - name: Streaming data
+      href: examples.md#streaming-data
+    - name: HTTP Authentication
+      href: examples.md#http-authentication
+    - name: TCP Authentication
+      href: examples.md#tcp-authentication

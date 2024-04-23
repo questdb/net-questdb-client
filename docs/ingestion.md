@@ -319,7 +319,7 @@ This will clear the buffer and transactional state, without sending data to the 
 sender.Rollback();
 ```
 
-## Other utilities
+## Misc.
 
 ### Cancelling rows
 

@@ -14,4 +14,4 @@
 
 ## TCP Authentication
 
-[!code-csharp[](~src/example-auth-tls/Program.cs)]
+[!code-csharp[](~/src/example-auth-tls/Program.cs)]

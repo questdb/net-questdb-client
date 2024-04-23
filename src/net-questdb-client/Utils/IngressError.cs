@@ -47,7 +47,7 @@ public class IngressError : Exception
     /// <summary>
     ///     Constructs <see cref="IngressError" /> from a code, message and inner exception.
     /// </summary>
-    /// <param name="code">The error ode</param>
+    /// <param name="code">The error code</param>
     /// <param name="message">The error message</param>
     /// <param name="inner">The inner exception</param>
     public IngressError(ErrorCode code, string? message, Exception inner)

@@ -191,9 +191,19 @@ By default, this is disabled, but set to `100 KiB`.
 Users can manually flush the buffer using [Send](xref:QuestDB.Senders.ISender.Send*)
 and [SendAsync](xref:QuestDB.Senders.ISender.SendAsync*). This will send any outstanding data to the QuestDB server.
 
+```csharp
+using var sender = Sender.New("http::localhost:9000;auto_flush=off;");
+sender.Table("foo").Symbol("bah", "baz").Column("num", 123).At(DateTime.UtcNow);
+await sender.SendAsync(); // send non-blocking
+// OR
+sender.Send(); // send synchronously
+```
+
 > [!TIP]
 > It is recommended to always end your submission code with a manual flush. This will ensure that all data has been sent
 > before disposing of the Sender.
+
+
 
 ## Transactions
 

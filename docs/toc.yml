@@ -4,15 +4,15 @@
   href: ingestion.md
   items:
     - name: Initialisation
-      href: ingestion.md#Initialisation
+      href: ingestion.md#initialisation
     - name: Preparing Data
-      href: ingestion.md#Preparing Data
+      href: ingestion.md#preparing-data
     - name: Flushing
-      href: ingestion.md#Flushing
+      href: ingestion.md#flushing
     - name: Transactions
-      href: ingestion.md#Transactions
+      href: ingestion.md#transactions
     - name: Other utilities
-      href: ingestion.md#Other utilities
+      href: ingestion.md#other-utilities
   expanded: true
 - name: Examples
   href: examples.md

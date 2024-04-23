@@ -36,8 +36,7 @@ jobs:
 
       - name: DocFX Build
         working-directory: docs
-        shell: pwsh
-        run: $github_workspace\docgen.ps1
+        run: docfx .\docfx.json
         continue-on-error: false
 
       - name: Publish

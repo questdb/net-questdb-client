@@ -63,7 +63,7 @@ var options = new ConfigurationBuilder()
 ### Choosing a protocol
 
 > [!TIP]
-> HTTP is the recommended protocol for streaming ILP data to QuestDB!
+> HTTP is the recommended protocol for streaming ILP data into QuestDB!
 
 The client currently supports streaming ILP data over HTTP and TCP transports.
 
@@ -92,6 +92,25 @@ Here is how to build a buffer of rows ready to be sent to QuestDB.
 > [!WARNING]
 > The senders are **not** thread safe, since they manage an internal buffer. If you wish to send data in parallel,
 > you should construct multiple senders and use non-blocking I/O to submit to QuestDB.
+
+
+The API follows the following overall flow:
+
+```mermaid
+flowchart LR
+
+A[New] --> B(Table)
+
+B --> D(Symbol)
+D --> E
+B --> E(Column)
+D --> F(At)
+E --> F
+F --> B
+F --> G(Send)
+G --> B
+G--> H(Dispose)
+```
 
 ### Specify the table
 
@@ -244,6 +263,25 @@ For true transactionality, one can use the transaction feature to enforce a batc
 > a success response. Therefore, making the table idempotent is best to allow for safe retries.
 > With TCP, this is a much greater risk.
 
+Transactions follow this flow:
+
+```mermaid
+flowchart LR
+
+A[New] --> B(Transaction)
+
+B --> D(Symbol)
+D --> E
+B --> E(Column)
+F --> D
+D --> F(At)
+E --> F
+F --> E
+F --> G(Commit)
+G --> B
+G --> H(Dispose)
+```
+
 ### Opening a transaction
 
 A transaction is started by calling [Transaction](xref:QuestDB.Senders.ISender.Transaction*) and passing the name of the
@@ -261,7 +299,7 @@ Data can be added to a transaction in the same way a usual, without the need to
 call [Table](xref:QuestDB.Senders.ISender.Table*) between rows.
 
 ```csharp
-sender.Symbol("bah", "baz").Column("num", 123).AtNow(); // adds a symbol, integer column, and ends with current timestamp
+sender.Symbol("bah", "baz").Column("num", 123).At(DateTime.UtcNow); // adds a symbol, integer column, and ends with current timestamp
 ```
 
 ### Closing a transaction
@@ -283,8 +321,6 @@ sender.Rollback();
 
 ## Other utilities
 
-There are a few other functionalities, and more may be added in the future.
-
 ### Cancelling rows
 
 Users can cancel the current line using [CancelRow](xref:QuestDB.Senders.ISender.CancelRow*). This must be called before
@@ -292,7 +328,7 @@ the row is complete, as otherwise it may have been sent already.
 
 ```csharp
 sender.Table("foo").Symbol("bah", "baz").CancelRow(); // cancels the current row
-sender.Table("foo").Symbol("bah", "baz").AtNow(); // invalid - no row to cancel
+sender.Table("foo").Symbol("bah", "baz").At(DateTime.UtcNow); // invalid - no row to cancel
 ```
 
 This can be useful if a row is being built step-by-step, and an error is thrown. The user can cancel the row
@@ -312,7 +348,7 @@ removing extra pages (each of which is the size of `init_buf_size`), reducing ov
 ```csharp
 using var sender = Sender.New("http::addr=localhost:9000;init_buf_size=1024;");
 for (int i = 0; i < 100_000; i++) {
-    sender.Table("foo").Column("num", i).AtNow();    
+    sender.Table("foo").Column("num", i).At(DateTime.UtcNow);    
 }
 await sender.SendAsync(); // buffer is now flushed and empty
 sender.Truncate(); // buffer is trimmed back to `init_buf_size`

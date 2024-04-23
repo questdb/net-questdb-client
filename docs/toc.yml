@@ -14,7 +14,7 @@
     - name: Other utilities
       href: ingestion.md#other-utilities
   expanded: true
+- name: Querying
+  href: querying.md
 - name: Examples
   href: examples.md
-- name: Reference
-  href: api/

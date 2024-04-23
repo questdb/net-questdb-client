@@ -14,7 +14,7 @@
 
 - [Getting started](#getting-started)
 - [Usage](#usage)
-- [Construction parameters](#construction-parameters)
+- [Configuration parameters](#configuration-parameters)
 - [Properties and methods](#properties-and-methods)
 - [Examples](#examples)
 - [FAQ](#faq-)

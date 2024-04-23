@@ -60,6 +60,27 @@ var options = new ConfigurationBuilder()
     .Get<SenderOptions>();
 ```
 
+### Choosing a protocol
+
+> [!TIP]
+> HTTP is the recommended protocol for streaming ILP data to QuestDB!
+
+The client currently supports streaming ILP data over HTTP and TCP transports.
+
+The sender performs some validation on the data, but it is still possible that errors are present and the
+server will reject the data.
+
+With the TCP protocol, this will lead to a dropped connection and an error server-side.
+
+With the HTTP transport, errors will be returned via standard HTTP responses and propagated to the user
+via [IngressError](xref:QuestDB.Utils.IngressError).
+
+HTTP transport also provides better guarantees around transactionality for submitted data.
+
+In general, it is recommended to use the HTTP transport. If the absolute highest performance is required, then in some
+cases, the TCP transport will be faster. However, it is important to use deduplication keys judiciously in your table
+schemas, as this will help guard against duplication of data in the error case.
+
 ## Preparing Data
 
 Senders use an internal buffer to convert input values into an ILP-compatible UTF-8 byte-string.
@@ -67,6 +88,10 @@ Senders use an internal buffer to convert input values into an ILP-compatible UT
 This buffer can be controlled using the ```init_buf_size``` and ```max_buf_size``` parameters.
 
 Here is how to build a buffer of rows ready to be sent to QuestDB.
+
+> [!WARNING]
+> The senders are **not** thread safe, since they manage an internal buffer. If you wish to send data in parallel,
+> you should construct multiple senders and use non-blocking I/O to submit to QuestDB.
 
 ### Specify the table
 
@@ -115,10 +140,9 @@ sender.At(DateTime.UtcNow);
 
 Generation of the timestamp can be offloaded to the server, using [AtNow()](xref:QuestDB.Senders.ISender.AtNow*).
 
-
 ## Flushing
-Once the buffer is filled with data ready to be sent, it can be flushed to the database automatically, or manually.
 
+Once the buffer is filled with data ready to be sent, it can be flushed to the database automatically, or manually.
 
 ### Auto-flushing
 
@@ -202,8 +226,6 @@ sender.Send(); // send synchronously
 > [!TIP]
 > It is recommended to always end your submission code with a manual flush. This will ensure that all data has been sent
 > before disposing of the Sender.
-
-
 
 ## Transactions
 
@@ -300,7 +322,7 @@ sender.Truncate(); // buffer is trimmed back to `init_buf_size`
 
 Users might wish to keep the sender, but clear the internal buffer.
 
-This can be performed using [Clear](xref:QuestDB:Senders:ISender.Clear*).
+This can be performed using [Clear](xref:QuestDB.Senders.ISender.Clear*).
 
 ```csharp
 sender.Clear(); // empties the internal buffer

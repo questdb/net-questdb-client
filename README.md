@@ -35,6 +35,8 @@ See: [https://www.nuget.org/packages/net-questdb-client/](https://www.nuget.org/
 
 If you want to send in parallel, you can use multiple senders and standard async tasking.
 
+See more in-depth documentation [here](https://questdb.io/docs/clients/ingest-dotnet/).
+
 ### Basic usage
 
 ```csharp

@@ -66,13 +66,13 @@ public interface ISender : IDisposable
     /// </remarks>
     /// <param name="tableName">The name of the table for all the rows in this transaction.</param>
     /// <returns>Itself</returns>
-    /// <exception cref="IngressError">When transactions are unsupported, or invalid name is provided.</exception>
+    /// <exception cref="IngressError">When transactions are unsupported, or an invalid name is provided.</exception>
     public ISender Transaction(ReadOnlySpan<char> tableName);
 
     /// <summary>
     ///     Clears the transaction.
     /// </summary>
-    /// <exception cref="IngressError">When transactioned are unsupported.</exception>
+    /// <exception cref="IngressError">When transactions are unsupported.</exception>
     public void Rollback();
 
     /// <summary>
@@ -160,6 +160,7 @@ public interface ISender : IDisposable
     /// </summary>
     /// <param name="ct">A cancellation token applied requests caused by auto-flushing</param>
     /// <returns></returns>
+    [Obsolete("Not compatible with deduplication. Please use `AtAsync(DateTime.UtcNow)` instead.")]
     public ValueTask AtNowAsync(CancellationToken ct = default);
 
     /// <inheritdoc cref="AtAsync(DateTime, CancellationToken)" />
@@ -172,6 +173,7 @@ public interface ISender : IDisposable
     public void At(long value, CancellationToken ct = default);
 
     /// <inheritdoc cref="AtNowAsync" />
+    [Obsolete("Not compatible with deduplication. Please use `At(DateTime.UtcNow)` instead.")]
     public void AtNow(CancellationToken ct = default);
 
     /// <summary>

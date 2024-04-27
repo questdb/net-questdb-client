@@ -15,3 +15,10 @@
   addr:
     host: localhost
     port: 9009
+
+- name: ilp-from-conf
+  lang: csharp
+  path: src/example-basic/Program.cs
+  header: |-
+    [.NET client library](https://github.com/questdb/net-questdb-client)
+  conf: http::addr=localhost:9000;

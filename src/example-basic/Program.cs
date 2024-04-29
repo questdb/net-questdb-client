@@ -2,7 +2,7 @@
 using QuestDB;
 
 using var sender =  Sender.New("http::addr=localhost:9000;");
-await sender.Table("trades")
+await sender.Table("trades_dotnet")
     .Symbol("pair", "USDGBP")
     .Symbol("type", "buy")
     .Column("traded_price", 0.83)
@@ -11,7 +11,7 @@ await sender.Table("trades")
     .Column("traded_ts", new DateTime(
         2022, 8, 6, 7, 35, 23, 189, DateTimeKind.Utc))
     .AtAsync(DateTime.UtcNow);
-await sender.Table("trades")
+await sender.Table("trades_dotnet")
     .Symbol("pair", "GBPJPY")
     .Column("traded_price", 135.97)
     .Column("qty", 400)

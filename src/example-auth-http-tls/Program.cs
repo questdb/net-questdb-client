@@ -5,7 +5,7 @@
 
 using var sender =
     Sender.New("https::addr=localhost:9000;tls_verify=unsafe_off;username=admin;password=quest;");
-await sender.Table("trades")
+await sender.Table("trades_dotnet")
     .Symbol("pair", "USDGBP")
     .Symbol("type", "buy")
     .Column("traded_price", 0.83)
@@ -14,7 +14,7 @@ await sender.Table("trades")
     .Column("traded_ts", new DateTime(
         2022, 8, 6, 7, 35, 23, 189, DateTimeKind.Utc))
     .AtAsync(DateTime.UtcNow);
-await sender.Table("trades")
+await sender.Table("trades_dotnet")
     .Symbol("pair", "GBPJPY")
     .Column("traded_price", 135.97)
     .Column("qty", 400)

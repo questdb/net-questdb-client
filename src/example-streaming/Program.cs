@@ -10,7 +10,7 @@ timer.Start();
 
 for (var i = 0; i < rowsToSend; i++)
 {
-    await sender.Table("trades")
+    await sender.Table("trades_dotnet")
         .Symbol("pair", "USDGBP")
         .Symbol("type", "buy")
         .Column("traded_price", 0.83)

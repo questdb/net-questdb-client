@@ -100,7 +100,15 @@ public class JsonSpecTestRunner
 
         if (testCase.result.status == "SUCCESS")
         {
-            WaitAssert(srv, testCase.result.line + "\n");
+            if (testCase.result.anyLines == null || testCase.result.anyLines.Length == 0)
+            {
+                WaitAssert(srv, testCase.result.line + "\n");
+            }
+            else
+            {
+                WaitAssert(srv, testCase.result.anyLines);
+            }
+            
         }
         else if (testCase.result.status == "ERROR")
         {
@@ -180,14 +188,19 @@ public class JsonSpecTestRunner
 
         if (testCase.result.status == "SUCCESS")
         {
-            Assert.That(
-                server.GetReceiveBuffer().ToString(),
-                Is.EqualTo(testCase.result.line + "\n")
-            );
+            var textReceived = server.GetReceiveBuffer().ToString();
+            if (testCase.result.anyLines == null || testCase.result.anyLines.Length == 0)
+            {
+                Assert.That(textReceived, Is.EqualTo(testCase.result.line + "\n"));
+            }
+            else
+            {
+                AssertMany(testCase.result.anyLines, textReceived);
+            }
         }
         else if (testCase.result.status == "ERROR")
         {
-            Assert.NotNull(exception, $"Exception should be thrown: {exception}");
+            Assert.NotNull(exception, "Exception should be thrown");
             if (exception is NotSupportedException)
             {
                 throw exception;
@@ -197,8 +210,27 @@ public class JsonSpecTestRunner
         {
             Assert.Fail("Unsupported test case result status: " + testCase.result.status);
         }
+    }
 
-        await server.StopAsync();
+    private void WaitAssert(DummyIlpServer srv, string[] resultAnyLines)
+    {
+        var minExpectedLen = resultAnyLines.Select(l => Encoding.UTF8.GetBytes(l).Length).Min(); 
+        for (var i = 0; i < 500 && srv.TotalReceived < minExpectedLen; i++)
+        {
+            Thread.Sleep(10);
+        }
+        
+        var textReceived = srv.GetTextReceived();
+        AssertMany(resultAnyLines, textReceived);
+    }
+
+    private static void AssertMany(string[] resultAnyLines, string textReceived)
+    {
+        bool anyMatch = resultAnyLines.Any(l => l.Equals(textReceived) || (l + "\n").Equals(textReceived));
+        if (!anyMatch)
+        {
+            Assert.Fail(textReceived + ": did not match any expected results");
+        }
     }
 
     private static void WaitAssert(DummyIlpServer srv, string expected)
@@ -254,5 +286,6 @@ public class JsonSpecTestRunner
     {
         public string status { get; set; }
         public string line { get; set; }
+        public string[]? anyLines { get; set; }
     }
 }

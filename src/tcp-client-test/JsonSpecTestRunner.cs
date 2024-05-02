@@ -25,6 +25,7 @@
 
 using System;
 using System.IO;
+using System.Linq;
 using System.Net;
 using System.Text;
 using System.Text.Json;
@@ -100,7 +101,14 @@ public class JsonSpecTestRunner
 
         if (testCase.result.status == "SUCCESS")
         {
-            WaitAssert(srv, testCase.result.line + "\n");
+            if (testCase.result.anyLines == null || testCase.result.anyLines.Length == 0)
+            {
+                WaitAssert(srv, testCase.result.line + "\n");
+            }
+            else
+            {
+                WaitAssert(srv, testCase.result.anyLines);
+            }
         }
         else if (testCase.result.status == "ERROR")
         {
@@ -113,6 +121,22 @@ public class JsonSpecTestRunner
         else
         {
             Assert.Fail("Unsupported test case result status: " + testCase.result.status);
+        }
+    }
+
+    private void WaitAssert(DummyIlpServer srv, string[] resultAnyLines)
+    {
+        var minExpectedLen = resultAnyLines.Select(l => Encoding.UTF8.GetBytes(l).Length).Min(); 
+        for (var i = 0; i < 500 && srv.TotalReceived < minExpectedLen; i++)
+        {
+            Thread.Sleep(10);
+        }
+        
+        var textReceived = srv.GetTextReceived();
+        bool anyMatch = resultAnyLines.Any(l => (l + "\n").Equals(textReceived));
+        if (!anyMatch)
+        {
+            Assert.Fail(textReceived + ": did not match any expected results");
         }
     }
 
@@ -169,5 +193,6 @@ public class JsonSpecTestRunner
     {
         public string status { get; set; }
         public string line { get; set; }
+        public string[]? anyLines { get; set; }
     }
 }

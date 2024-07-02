@@ -211,7 +211,7 @@ Your best bet is to read the [documentation](https://questdb.io/docs/).
 
 ### Where else can I go to get help?
 
-Come visit the [QuestDB community Slack](https://slack.questdb.io).
+Come visit the [QuestDB community forum](https://community.questdb.io).
 
 ## Contribute 🚀
 

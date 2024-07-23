@@ -13,13 +13,13 @@ await sender.Table("trades")
     .Symbol("side", "sell")
     .Column("price", 2615.54)
     .Column("amount", 0.00044)
-    .AtNowAsync();
+    .AtAsync(DateTime.UtcNow);
 
 await sender.Table("trades")
     .Symbol("symbol", "BTC-USD")
     .Symbol("side", "sell")
     .Column("price", 39269.98)
     .Column("amount", 0.001)
-    .AtNowAsync();
+    .AtAsync(DateTime.UtcNow);
 
 await sender.SendAsync();

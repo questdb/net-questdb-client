@@ -56,14 +56,14 @@ await sender.SendAsync();
 using var sender = Sender.New("http::addr=localhost:9000;");
 for(int i = 0; i < 100; i++)
 {
-    await sender.Table("trades")
-    .Symbol("symbol", "ETH-USD")
-    .Symbol("side", "sell")
-    .Column("price", 2615.54)
-    .Column("amount", 0.00044)
-    .AtNowAsync();
+    sender.Table("trades")
+      .Symbol("symbol", "ETH-USD")
+      .Symbol("side", "sell")
+      .Column("price", 2615.54)
+      .Column("amount", 0.00044)
+      .At(DateTime.UtcNow);
 }
-await sender.SendAsync();
+sender.Send();
 ```
 
 ### Auto-Flush

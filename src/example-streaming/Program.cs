@@ -15,7 +15,7 @@ for (var i = 0; i < rowsToSend; i++)
         .Symbol("side", "sell")
         .Column("price", 2615.54)
         .Column("amount", 0.00044)
-        .AtNowAsync();
+        .AtAsync(DateTime.UtcNow);
 }
 
 // Ensure no pending rows.

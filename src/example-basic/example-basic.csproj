@@ -7,7 +7,7 @@
         <GeneratePackageOnBuild>false</GeneratePackageOnBuild>
         <Title>QuestDB client - Basic Example</Title>
         <Description>Basic example using the QuestDB ILP protocol client</Description>
-        <TargetFramework>net6.0</TargetFramework>
+        <TargetFrameworks>net6.0;net7.0;net8.0</TargetFrameworks>
         <OutputType>Exe</OutputType>
     </PropertyGroup>
 

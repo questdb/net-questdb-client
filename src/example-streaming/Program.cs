@@ -10,15 +10,12 @@ timer.Start();
 
 for (var i = 0; i < rowsToSend; i++)
 {
-    await sender.Table("trades_dotnet")
-        .Symbol("pair", "USDGBP")
-        .Symbol("type", "buy")
-        .Column("traded_price", 0.83)
-        .Column("limit_price", 0.84)
-        .Column("qty", 100)
-        .Column("traded_ts", new DateTime(
-            2022, 8, 6, 7, 35, 23, 189, DateTimeKind.Utc))
-        .AtAsync(DateTime.UtcNow);
+    await sender.Table("trades")
+        .Symbol("symbol", "ETH-USD")
+        .Symbol("side", "sell")
+        .Column("price", 2615.54)
+        .Column("amount", 0.00044)
+        .AtNowAsync();
 }
 
 // Ensure no pending rows.

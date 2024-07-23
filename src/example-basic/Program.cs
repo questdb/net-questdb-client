@@ -2,18 +2,18 @@
 using QuestDB;
 
 using var sender =  Sender.New("http::addr=localhost:9000;");
-await sender.Table("trades_dotnet")
-    .Symbol("pair", "USDGBP")
-    .Symbol("type", "buy")
-    .Column("traded_price", 0.83)
-    .Column("limit_price", 0.84)
-    .Column("qty", 100)
-    .Column("traded_ts", new DateTime(
-        2022, 8, 6, 7, 35, 23, 189, DateTimeKind.Utc))
-    .AtAsync(DateTime.UtcNow);
-await sender.Table("trades_dotnet")
-    .Symbol("pair", "GBPJPY")
-    .Column("traded_price", 135.97)
-    .Column("qty", 400)
-    .AtAsync(DateTime.UtcNow);
+await sender.Table("trades")
+    .Symbol("symbol", "ETH-USD")
+    .Symbol("side", "sell")
+    .Column("price", 2615.54)
+    .Column("amount", 0.00044)
+    .AtNowAsync();
+
+await sender.Table("trades")
+    .Symbol("symbol", "BTC-USD")
+    .Symbol("side", "sell")
+    .Column("price", 39269.98)
+    .Column("amount", 0.001)
+    .AtNowAsync();
+
 await sender.SendAsync();

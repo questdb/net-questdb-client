@@ -4,7 +4,7 @@
         <RootNamespace>tcp_client_test</RootNamespace>
         <Nullable>enable</Nullable>
         <IsPackable>false</IsPackable>
-        <TargetFramework>net6.0</TargetFramework>
+        <TargetFrameworks>net6.0;net7.0;net8.0</TargetFrameworks>
         <OutputType>Library</OutputType>
     </PropertyGroup>
 

@@ -40,12 +40,12 @@ See more in-depth documentation [here](https://questdb.io/docs/clients/ingest-do
 ### Basic usage
 
 ```csharp
-using var sender = Sender.New("http::addr=localhost:9000;");
-await sender.Table("metric_name")
-    .Symbol("Symbol", "value")
-    .Column("number", 10)
-    .Column("double", 12.23)
-    .Column("string", "born to shine")
+using var sender =  Sender.New("http::addr=localhost:9000;");
+await sender.Table("trades")
+    .Symbol("symbol", "ETH-USD")
+    .Symbol("side", "sell")
+    .Column("price", 2615.54)
+    .Column("amount", 0.00044)
     .AtAsync(new DateTime(2021, 11, 25, 0, 46, 26));
 await sender.SendAsync();
 ```
@@ -53,12 +53,15 @@ await sender.SendAsync();
 ### Multi-line send (sync)
 
 ```csharp
-using var sender = Sender.New("http::addr=localhost:9000;auto_flush=off;");
+using var sender = Sender.New("http::addr=localhost:9000;");
 for(int i = 0; i < 100; i++)
 {
-    sender.Table("metric_name")
-        .Column("counter", i)
-        .AtNow();
+    sender.Table("trades")
+      .Symbol("symbol", "ETH-USD")
+      .Symbol("side", "sell")
+      .Column("price", 2615.54)
+      .Column("amount", 0.00044)
+      .At(DateTime.UtcNow);
 }
 sender.Send();
 ```
@@ -107,13 +110,13 @@ using var sender = Sender.New("http::addr=localhost:9000;auto_flush=on;auto_flus
 #### HTTP Authentication (Basic)
 
 ```csharp
-using var sender = Sender.New("https::addr=localhost:9009;tls_verify=unsafe_off;username=admin;password=quest;");;
+using var sender = Sender.New("https::addr=localhost:9009;tls_verify=unsafe_off;username=admin;password=quest;");
 ```
 
 #### HTTP Authentication (Token)
 
 ```csharp
-using var sender = Sender.New("https::addr=localhost:9009;tls_verify=unsafe_off;username=admin;token=<bearer token>");;
+using var sender = Sender.New("https::addr=localhost:9009;tls_verify=unsafe_off;username=admin;token=<bearer token>");
 ```
 
 #### TCP Authentication

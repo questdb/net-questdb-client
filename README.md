@@ -1,7 +1,3 @@
-  <a href="https://slack.questdb.io">
-    <img src="https://slack.questdb.io/badge.svg" alt="QuestDB community Slack channel"/>
-  </a>
-
 <div align="center">
   <a href="https://questdb.io/" target="blank"><img alt="QuestDB Logo" src="https://questdb.io/img/questdb-logo-themed.svg" width="305px"/></a>
 </div>
@@ -214,7 +210,7 @@ Your best bet is to read the [documentation](https://questdb.io/docs/).
 
 ### Where else can I go to get help?
 
-Come visit the [QuestDB community Slack](https://slack.questdb.io).
+Come visit the [QuestDB community forum](https://community.questdb.io).
 
 ## Contribute 🚀
 

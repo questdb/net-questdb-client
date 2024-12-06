@@ -564,7 +564,7 @@ public class HttpTests
         var nowMillisecond = DateTime.Now.Millisecond;
         var metric = "metric_name" + nowMillisecond;
 
-        Assert.True(await srv.Healthcheck());
+        Assert.That(await srv.Healthcheck(), Is.True);
 
         for (var i = 0; i < 1E6; i++)
         {
@@ -590,7 +590,7 @@ public class HttpTests
         var nowMillisecond = DateTime.Now.Millisecond;
         var metric = "metric_name" + nowMillisecond;
 
-        Assert.True(await srv.Healthcheck());
+        Assert.That(await srv.Healthcheck(), Is.True);
 
         using var sender =
             Sender.New(

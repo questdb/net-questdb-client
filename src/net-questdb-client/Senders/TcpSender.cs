@@ -63,6 +63,7 @@ internal class TcpSender : AbstractSender
        _buffer = new Buffer(Options.init_buf_size, Options.max_name_len, Options.max_buf_size);
 
        var socket = new Socket(AddressFamily.InterNetwork, SocketType.Stream, System.Net.Sockets.ProtocolType.Tcp);
+       //socket.SendTimeout = 60 * 1000;
        NetworkStream? networkStream = null;
        SslStream? sslStream = null;
        try
@@ -92,6 +93,7 @@ internal class TcpSender : AbstractSender
 
            _underlyingSocket = socket;
            _dataStream = dataStream;
+           _dataStream.WriteTimeout = 60000;
 
            var authTimeout = new CancellationTokenSource();
            authTimeout.CancelAfter(Options.auth_timeout);

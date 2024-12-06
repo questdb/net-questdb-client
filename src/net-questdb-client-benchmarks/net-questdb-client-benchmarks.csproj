@@ -10,41 +10,41 @@
     </PropertyGroup>
 
     <ItemGroup>
-        <PackageReference Include="BenchmarkDotNet" Version="0.13.12"/>
+        <PackageReference Include="BenchmarkDotNet" Version="0.14.0" />
     </ItemGroup>
 
     <ItemGroup>
-        <ProjectReference Include="..\dummy-http-server\dummy-http-server.csproj"/>
-        <ProjectReference Include="..\net-questdb-client\net-questdb-client.csproj"/>
-        <ProjectReference Include="..\tcp-client-test\tcp-client-test.csproj"/>
+        <ProjectReference Include="..\dummy-http-server\dummy-http-server.csproj" />
+        <ProjectReference Include="..\net-questdb-client\net-questdb-client.csproj" />
+        <ProjectReference Include="..\tcp-client-test\tcp-client-test.csproj" />
     </ItemGroup>
 
     <ItemGroup>
-        <Compile Include="obj\Debug\net6.0\.NETCoreApp,Version=v6.0.AssemblyAttributes.cs"/>
-        <Compile Remove="obj\**"/>
-        <Compile Remove="BenchmarkDotNet.Artifacts\**"/>
+        <Compile Include="obj\Debug\net6.0\.NETCoreApp,Version=v6.0.AssemblyAttributes.cs" />
+        <Compile Remove="obj\**" />
+        <Compile Remove="BenchmarkDotNet.Artifacts\**" />
     </ItemGroup>
 
     <ItemGroup>
-        <Content Include="obj\Debug\net6.0\net-questdb-client-benchmarks.AssemblyInfoInputs.cache"/>
-        <Content Include="obj\Debug\net6.0\net-questdb-client-benchmarks.assets.cache"/>
-        <Content Include="obj\Debug\net6.0\net-questdb-client-benchmarks.csproj.AssemblyReference.cache"/>
-        <Content Include="obj\net-questdb-client-benchmarks.csproj.nuget.dgspec.json"/>
-        <Content Include="obj\project.assets.json"/>
-        <Content Include="obj\project.nuget.cache"/>
-        <Content Include="obj\project.packagespec.json"/>
-        <Content Include="obj\rider.project.model.nuget.info"/>
-        <Content Include="obj\rider.project.restore.info"/>
+        <Content Include="obj\Debug\net6.0\net-questdb-client-benchmarks.AssemblyInfoInputs.cache" />
+        <Content Include="obj\Debug\net6.0\net-questdb-client-benchmarks.assets.cache" />
+        <Content Include="obj\Debug\net6.0\net-questdb-client-benchmarks.csproj.AssemblyReference.cache" />
+        <Content Include="obj\net-questdb-client-benchmarks.csproj.nuget.dgspec.json" />
+        <Content Include="obj\project.assets.json" />
+        <Content Include="obj\project.nuget.cache" />
+        <Content Include="obj\project.packagespec.json" />
+        <Content Include="obj\rider.project.model.nuget.info" />
+        <Content Include="obj\rider.project.restore.info" />
     </ItemGroup>
 
     <ItemGroup>
-        <EmbeddedResource Remove="obj\**"/>
-        <EmbeddedResource Remove="BenchmarkDotNet.Artifacts\**"/>
+        <EmbeddedResource Remove="obj\**" />
+        <EmbeddedResource Remove="BenchmarkDotNet.Artifacts\**" />
     </ItemGroup>
 
     <ItemGroup>
-        <None Remove="obj\**"/>
-        <None Remove="BenchmarkDotNet.Artifacts\**"/>
+        <None Remove="obj\**" />
+        <None Remove="BenchmarkDotNet.Artifacts\**" />
     </ItemGroup>
 
 </Project>

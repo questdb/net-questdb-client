@@ -658,7 +658,9 @@ internal class Buffer
     }
 
     /// <summary>
-    ///     Writes the chunked buffer contents to a stream.
+    /// Writes the chunked buffer contents to a stream.
+    /// Note: Running in Kubernetes you can run into issue where write to stream times out, eg. if you restart QuestDB. The timeout, which looks like a DNS timeout (in Azure AKS) is 15 minutes. Problem is that you don't get an exception, the stream just stops writing. This is a problem with the underlying network stack, not the client.
+    /// The only way to fix is setting a timeout in the CancellationTokenSource <see cref="CancellationTokenSource.CancelAfter(int)"/>. Setting Stream.WriteTimeout does not work, using Async write.
     /// </summary>
     /// <param name="stream"></param>
     /// <param name="ct"></param>

@@ -47,7 +47,7 @@ public class TcpTests
         srv.AcceptAsync();
 
         using var sender = Sender.New($"tcp::addr={_host}:{_port};");
-        sender.Table("metric name")
+        await sender.Table("metric name")
             .Symbol("t a g", "v alu, e")
             .Column("number", 10)
             .Column("string", " -=\"")

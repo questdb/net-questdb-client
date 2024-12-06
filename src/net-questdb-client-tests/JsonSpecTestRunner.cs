@@ -112,7 +112,7 @@ public class JsonSpecTestRunner
         }
         else if (testCase.result.status == "ERROR")
         {
-            Assert.NotNull(exception, "Exception should be thrown");
+            Assert.That(exception, Is.Not.Null, "Exception should be thrown");
             if (exception is NotSupportedException)
             {
                 throw exception;
@@ -200,7 +200,7 @@ public class JsonSpecTestRunner
         }
         else if (testCase.result.status == "ERROR")
         {
-            Assert.NotNull(exception, "Exception should be thrown");
+            Assert.That(exception, Is.Not.Null, "Exception should be thrown");
             if (exception is NotSupportedException)
             {
                 throw exception;
@@ -241,7 +241,7 @@ public class JsonSpecTestRunner
             Thread.Sleep(10);
         }
 
-        Assert.AreEqual(expected, srv.GetTextReceived());
+        Assert.That(expected, Is.EqualTo(srv.GetTextReceived()));
     }
 
     private DummyIlpServer CreateTcpListener(int port, bool tls = false)

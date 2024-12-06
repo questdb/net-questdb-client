@@ -9,41 +9,41 @@
     </PropertyGroup>
 
     <ItemGroup>
-        <PackageReference Include="FastEndpoints" Version="5.23.0"/>
-        <PackageReference Include="FastEndpoints.Security" Version="5.23.0"/>
+        <PackageReference Include="FastEndpoints" Version="5.32.0" />
+        <PackageReference Include="FastEndpoints.Security" Version="5.32.0" />
     </ItemGroup>
 
     <ItemGroup>
-        <Content Include="obj\Debug\net6.0\apphost.exe"/>
-        <Content Include="obj\Debug\net6.0\dummy-http-server.AssemblyInfoInputs.cache"/>
-        <Content Include="obj\Debug\net6.0\dummy-http-server.assets.cache"/>
-        <Content Include="obj\Debug\net6.0\dummy-http-server.csproj.CoreCompileInputs.cache"/>
-        <Content Include="obj\Debug\net6.0\dummy-http-server.csproj.FileListAbsolute.txt"/>
-        <Content Include="obj\Debug\net6.0\dummy-http-server.dll"/>
-        <Content Include="obj\Debug\net6.0\dummy-http-server.genruntimeconfig.cache"/>
-        <Content Include="obj\Debug\net6.0\dummy-http-server.MvcApplicationPartsAssemblyInfo.cache"/>
-        <Content Include="obj\Debug\net6.0\dummy-http-server.pdb"/>
-        <Content Include="obj\Debug\net6.0\dummy-http-server.sourcelink.json"/>
-        <Content Include="obj\Debug\net6.0\staticwebassets.build.json"/>
-        <Content Include="obj\dummy-http-server.csproj.nuget.dgspec.json"/>
-        <Content Include="obj\project.assets.json"/>
-        <Content Include="obj\project.nuget.cache"/>
-        <Content Include="obj\project.packagespec.json"/>
-        <Content Include="obj\rider.project.restore.info"/>
-        <Content Remove="obj\**"/>
+        <Content Include="obj\Debug\net6.0\apphost.exe" />
+        <Content Include="obj\Debug\net6.0\dummy-http-server.AssemblyInfoInputs.cache" />
+        <Content Include="obj\Debug\net6.0\dummy-http-server.assets.cache" />
+        <Content Include="obj\Debug\net6.0\dummy-http-server.csproj.CoreCompileInputs.cache" />
+        <Content Include="obj\Debug\net6.0\dummy-http-server.csproj.FileListAbsolute.txt" />
+        <Content Include="obj\Debug\net6.0\dummy-http-server.dll" />
+        <Content Include="obj\Debug\net6.0\dummy-http-server.genruntimeconfig.cache" />
+        <Content Include="obj\Debug\net6.0\dummy-http-server.MvcApplicationPartsAssemblyInfo.cache" />
+        <Content Include="obj\Debug\net6.0\dummy-http-server.pdb" />
+        <Content Include="obj\Debug\net6.0\dummy-http-server.sourcelink.json" />
+        <Content Include="obj\Debug\net6.0\staticwebassets.build.json" />
+        <Content Include="obj\dummy-http-server.csproj.nuget.dgspec.json" />
+        <Content Include="obj\project.assets.json" />
+        <Content Include="obj\project.nuget.cache" />
+        <Content Include="obj\project.packagespec.json" />
+        <Content Include="obj\rider.project.restore.info" />
+        <Content Remove="obj\**" />
     </ItemGroup>
 
     <ItemGroup>
-        <Compile Include="obj\Debug\net6.0\.NETCoreApp,Version=v6.0.AssemblyAttributes.cs"/>
-        <Compile Remove="obj\**"/>
+        <Compile Include="obj\Debug\net6.0\.NETCoreApp,Version=v6.0.AssemblyAttributes.cs" />
+        <Compile Remove="obj\**" />
     </ItemGroup>
 
     <ItemGroup>
-        <EmbeddedResource Remove="obj\**"/>
+        <EmbeddedResource Remove="obj\**" />
     </ItemGroup>
 
     <ItemGroup>
-        <None Remove="obj\**"/>
+        <None Remove="obj\**" />
     </ItemGroup>
 
 </Project>

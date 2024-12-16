@@ -28,6 +28,7 @@
 Use NuGet to add a dependency on this library.
 
 See: [https://www.nuget.org/packages/net-questdb-client/](https://www.nuget.org/packages/net-questdb-client/)
+(Optional) to use the client with TCP protocol authentication add Neget refrence to [https://www.nuget.org/packages/net-questdb-client-tcp-auth/](https://www.nuget.org/packages/net-questdb-client-tcp-auth/)
 
 ## Usage
 
@@ -121,6 +122,8 @@ using var sender = Sender.New("https::addr=localhost:9009;tls_verify=unsafe_off;
 
 #### TCP Authentication
 
+💥 starting from version 2.1 to use TCP Authentication add reference to [https://www.nuget.org/packages/net-questdb-client-tcp-auth/](https://www.nuget.org/packages/net-questdb-client-tcp-auth/)
+
 ```csharp
 using var sender = Sender.New("tcps::addr=localhost:9009;tls_verify=unsafe_off;username=admin;token=NgdiOWDoQNUP18WOnb1xkkEG5TzPYMda5SiUOvT1K0U=;");
 ```
@@ -147,7 +150,7 @@ The config string format is:
 | `max_buf_size`           | `104857600`                | Maximum size of the byte buffer in bytes. If exceeded, an exception will be thrown.                                                                             |
 | `username`               |                            | The username for authentication. Used for Basic Authentication and TCP JWK Authentication.                                                                      |
 | `password`               |                            | The password for authentication. Used for Basic Authentication.                                                                                                 |
-| `token`                  |                            | The token for authentication. Used for Token Authentication and TCP JWK Authentication.                                                                         |
+| `token`                  |                            | The token for authentication. Used for Token Authentication and TCP JWK Authentication, needs additional reference to `net-questdb-client-tcp-auth` assembly    |
 | `token_x`                |                            | Un-used.                                                                                                                                                        |
 | `token_y`                |                            | Un-used.                                                                                                                                                        |
 | `tls_verify`             | `on`                       | Denotes whether TLS certificates should or should not be verifed. Options are on/unsafe_off.                                                                    |
@@ -202,6 +205,11 @@ The config string format is:
 
 No. This client is for writing data only. For querying, see
 the [Query & SQL overview](https://questdb.io/docs/reference/sql/overview/)
+
+### I updated from version < 2.0.0 and now have error `Could not load QuestDB.Secp256r1SignatureGenerator, please add a reference to assembly "net-client-questdb-tcp-auth\"`
+
+Since version 2.1.0 in order to use TCP authenticaion an additional nuget package is needed [https://www.nuget.org/packages/net-questdb-client-tcp-auth/](https://www.nuget.org/packages/net-questdb-client-tcp-auth/).
+This is done to remove the dependency on `BouncyCastle.Cryptography` and only add it when it is really needed.
 
 ### Where do I report issues with the client?
 

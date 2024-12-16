@@ -208,8 +208,8 @@ the [Query & SQL overview](https://questdb.io/docs/reference/sql/overview/)
 
 ### I updated from version < 2.0.0 and now have error `Could not load QuestDB.Secp256r1SignatureGenerator, please add a reference to assembly "net-client-questdb-tcp-auth\"`
 
-Since Version 2.1.0, in order to use TCP authentication an additional NuGet package is required [https://www.nuget.org/packages/net-questdb-client-tcp-auth/](https://www.nuget.org/packages/net-questdb-client-tcp-auth/).
-This is changed to remove the dependency on `BouncyCastle.Cryptography` from the main library, since it was only required for TCP authentication.
+Since Version 2.1.0, in order to use TCP authentication, an additional NuGet package is required [https://www.nuget.org/packages/net-questdb-client-tcp-auth/](https://www.nuget.org/packages/net-questdb-client-tcp-auth/).
+This was changed to remove the dependency on `BouncyCastle.Cryptography` from the main library, since it was only required for TCP authentication.
 
 ### Where do I report issues with the client?
 

@@ -1,0 +1,38 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+    <PropertyGroup>
+        <TargetFrameworks>net6.0;net7.0;net8.0;net9.0</TargetFrameworks>
+        <RootNamespace>net_questdb_client_tcp_auth_tests</RootNamespace>
+        <ImplicitUsings>enable</ImplicitUsings>
+        <Nullable>enable</Nullable>
+        <IsPackable>false</IsPackable>
+        <AssemblyName>net-questdb-client-tcp-auth-tests</AssemblyName>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.1.0"/>
+        <PackageReference Include="NUnit" Version="3.13.3"/>
+        <PackageReference Include="NUnit3TestAdapter" Version="4.2.1"/>
+        <PackageReference Include="NUnit.Analyzers" Version="3.3.0"/>
+        <PackageReference Include="coverlet.collector" Version="3.1.2"/>
+        <PackageReference Include="Microsoft.Extensions.Configuration" Version="8.0.0"/>
+        <PackageReference Include="Microsoft.Extensions.Configuration.Binder" Version="8.0.1"/>
+    </ItemGroup>
+
+    <ItemGroup>
+        <ProjectReference Include="..\dummy-http-server\dummy-http-server.csproj"/>
+        <ProjectReference Include="..\net-client-questdb-tcp-auth\net-client-questdb-tcp-auth.csproj" />
+        <ProjectReference Include="..\net-questdb-client-tests\net-questdb-client-tests.csproj" />
+        <ProjectReference Include="..\net-questdb-client\net-questdb-client.csproj"/>
+    </ItemGroup>
+
+    <ItemGroup>
+        <None Update="certificate.pfx">
+            <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+        </None>
+        <None Update="config.json">
+            <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+        </None>
+    </ItemGroup>
+
+</Project>

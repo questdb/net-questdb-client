@@ -23,7 +23,7 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "example-auth-http-tls", "sr
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "net-client-questdb-tcp-auth", "src\net-client-questdb-tcp-auth\net-client-questdb-tcp-auth.csproj", "{EF86C5A3-71BE-4D9C-9647-B1A50751F244}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "net-questdb-client-tests", "src\net-questdb-client-tcp-auth-tests\net-questdb-client-tcp-auth-tests.csproj", "{628A6AE1-C0D4-4A40-98DF-1F094BD60203}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "net-questdb-client-tcp-auth-test", "src\net-questdb-client-tcp-auth-tests\net-questdb-client-tcp-auth-tests.csproj", "{628A6AE1-C0D4-4A40-98DF-1F094BD60203}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution

@@ -1,7 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
     <PropertyGroup>
-        <TargetFrameworks>net6.0;net7.0;net8.0</TargetFrameworks>
+        <TargetFrameworks>net6.0;net7.0;net8.0;net9.0</TargetFrameworks>
         <RootNamespace>net_questdb_client_tests</RootNamespace>
         <ImplicitUsings>enable</ImplicitUsings>
         <Nullable>enable</Nullable>
@@ -21,6 +21,7 @@
     <ItemGroup>
         <ProjectReference Include="..\dummy-http-server\dummy-http-server.csproj"/>
         <ProjectReference Include="..\net-questdb-client\net-questdb-client.csproj"/>
+
     </ItemGroup>
 
     <ItemGroup>
@@ -35,5 +36,8 @@
             <CopyToOutputDirectory>Always</CopyToOutputDirectory>
         </None>
     </ItemGroup>
-
+    
+    <ItemGroup>
+        <PackageReference Include="BouncyCastle.Cryptography" Version="2.5.0"/>
+    </ItemGroup>
 </Project>

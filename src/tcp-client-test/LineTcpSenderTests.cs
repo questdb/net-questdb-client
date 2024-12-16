@@ -106,38 +106,6 @@ public class LineTcpSenderTests
     }
 
     [Test]
-    public async Task AuthFailBadKey()
-    {
-        using var srv = CreateTcpListener(_port);
-        srv.WithAuth("testUser1", "Vs4e-cOLsVCntsMrZiAGAZtrkPXO00uoRLuA3d7gEcI=",
-            "ANhR2AZSs4ar9urE5AZrJqu469X0r7gZ1BBEdcrAuL_6");
-        srv.AcceptAsync();
-
-        using var ls = await LineTcpSender.ConnectAsync(IPAddress.Loopback.ToString(), _port, tlsMode: TlsMode.Disable);
-        try
-        {
-            await ls.AuthenticateAsync("testUser1", "ZOvHHNQBGvZuiCLt7CmWt0tTlsnjm9F3O3C749wGT_M=");
-            for (var i = 0; i < 10; i++)
-            {
-                ls.Table("metric name")
-                    .Symbol("t a g", "v alu, e")
-                    .Column("number", 10)
-                    .Column("string", " -=\"")
-                    .At(new DateTime(1970, 01, 01, 0, 0, 1));
-                ls.Send();
-                Thread.Sleep(10);
-            }
-
-            Assert.Fail();
-        }
-        catch (IOException ex)
-        {
-            StringAssert.StartsWith("Unable to write data to the transport connection: ", ex.Message,
-                "Bad exception message");
-        }
-    }
-
-    [Test]
     public void EcdsaSingnatureLoop()
     {
         var privateKey = Convert.FromBase64String("NgdiOWDoQNUP18WOnb1xkkEG5TzPYMda5SiUOvT1K0U=");

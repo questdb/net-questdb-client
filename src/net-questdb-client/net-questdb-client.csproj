@@ -15,11 +15,7 @@
         <PackageTags>QuestDB, ILP</PackageTags>
         <Company>QuestDB Limited</Company>
         <PackageVersion>2.0.0</PackageVersion>
-        <TargetFramework>net6.0</TargetFramework>
         <GenerateDocumentationFile>true</GenerateDocumentationFile>
+        <TargetFrameworks>net6.0;net7.0;net8.0;net9.0</TargetFrameworks>
     </PropertyGroup>
-
-    <ItemGroup>
-        <PackageReference Include="BouncyCastle.Cryptography" Version="2.2.1"/>
-    </ItemGroup>
 </Project>

@@ -4,12 +4,12 @@
         <RootNamespace>tcp_client_test</RootNamespace>
         <Nullable>enable</Nullable>
         <IsPackable>false</IsPackable>
-        <TargetFrameworks>net6.0;net7.0;net8.0</TargetFrameworks>
+        <TargetFrameworks>net6.0;net7.0;net8.0;net9.0</TargetFrameworks>
         <OutputType>Library</OutputType>
     </PropertyGroup>
 
     <ItemGroup>
-        <PackageReference Include="BouncyCastle.Cryptography" Version="2.2.1"/>
+        <PackageReference Include="BouncyCastle.Cryptography" Version="2.5.0"/>
         <PackageReference Include="Microsoft.NET.Test.Sdk" Version="16.11.0"/>
         <PackageReference Include="NUnit" Version="3.13.2"/>
         <PackageReference Include="NUnit3TestAdapter" Version="4.0.0"/>
@@ -17,6 +17,7 @@
     </ItemGroup>
 
     <ItemGroup>
+        <ProjectReference Include="..\net-client-questdb-tcp-auth\net-client-questdb-tcp-auth.csproj" />
         <ProjectReference Include="..\net-questdb-client\net-questdb-client.csproj"/>
     </ItemGroup>
 

@@ -60,77 +60,6 @@ public class TcpTests
     }
 
     [Test]
-    public async Task Authenticate()
-    {
-        using var srv = CreateTcpListener(_port);
-        srv.WithAuth("testUser1", "Vs4e-cOLsVCntsMrZiAGAZtrkPXO00uoRLuA3d7gEcI=",
-            "ANhR2AZSs4ar9urE5AZrJqu469X0r7gZ1BBEdcrAuL_6");
-        srv.AcceptAsync();
-
-        using var sender =
-            Sender.New(
-                $"tcp::addr={_host}:{_port};username=testUser1;token=NgdiOWDoQNUP18WOnb1xkkEG5TzPYMda5SiUOvT1K0U=;");
-
-        await sender.Table("metric name")
-            .Symbol("t a g", "v alu, e")
-            .Column("number", 10)
-            .Column("string", " -=\"")
-            .AtAsync(new DateTime(1970, 01, 01, 0, 0, 1));
-        await sender.SendAsync();
-
-        var expected = "metric\\ name,t\\ a\\ g=v\\ alu\\,\\ e number=10i,string=\" -=\\\"\" 1000000000\n";
-        WaitAssert(srv, expected);
-    }
-
-    [Test]
-    public async Task AuthFailWrongKid()
-    {
-        using var srv = CreateTcpListener(_port);
-        srv.WithAuth("testUser1", "Vs4e-cOLsVCntsMrZiAGAZtrkPXO00uoRLuA3d7gEcI=",
-            "ANhR2AZSs4ar9urE5AZrJqu469X0r7gZ1BBEdcrAuL_6");
-        srv.AcceptAsync();
-
-        Assert.That(
-            () => Sender.New($"tcp::addr={_host}:{_port};username=invalid;token=foo=;")
-            ,
-            Throws.TypeOf<AggregateException>().With.InnerException.TypeOf<IngressError>().With.Message
-                .Contains("Authentication failed")
-        );
-    }
-
-    [Test]
-    public async Task AuthFailBadKey()
-    {
-        using var srv = CreateTcpListener(_port);
-        srv.WithAuth("testUser1", "Vs4e-cOLsVCntsMrZiAGAZtrkPXO00uoRLuA3d7gEcI=",
-            "ANhR2AZSs4ar9urE5AZrJqu469X0r7gZ1BBEdcrAuL_6");
-        srv.AcceptAsync();
-        
-        using var sender = Sender.New(
-            $"tcp::addr={_host}:{_port};username=testUser1;token=ZOvHHNQBGvZuiCLt7CmWt0tTlsnjm9F3O3C749wGT_M=;");
-
-        Assert.That(
-            async () =>
-            {
-                for (var i = 0; i < 10; i++)
-                {
-                    await sender.Table("metric name")
-                        .Symbol("t a g", "v alu, e")
-                        .Column("number", 10)
-                        .Column("string", " -=\"")
-                        .AtAsync(new DateTime(1970, 01, 01, 0, 0, 1));
-                    await sender.SendAsync();
-                    Thread.Sleep(10);
-                }
-
-                Assert.Fail();
-            },
-            Throws.TypeOf<IngressError>().With.Message
-                .Contains("Could not write data to server.")
-        );
-    }
-
-    [Test]
     public void EcdsaSignatureLoop()
     {
         var privateKey = Convert.FromBase64String("NgdiOWDoQNUP18WOnb1xkkEG5TzPYMda5SiUOvT1K0U=");
@@ -390,33 +319,26 @@ public class TcpTests
         WaitAssert(srv, expected);
     }
 
-    //
     [Test]
-    public async Task WithTls()
+    public async Task AuthFailsNeedToReferenceAssembly()
     {
         using var srv = CreateTcpListener(_port, true);
         srv.WithAuth("testUser1", "Vs4e-cOLsVCntsMrZiAGAZtrkPXO00uoRLuA3d7gEcI=",
             "ANhR2AZSs4ar9urE5AZrJqu469X0r7gZ1BBEdcrAuL_6");
         srv.AcceptAsync();
 
-        using var sender =
-            Sender.New(
-                $"tcps::addr={_host}:{_port};username=testUser1;token=NgdiOWDoQNUP18WOnb1xkkEG5TzPYMda5SiUOvT1K0U=;tls_verify=unsafe_off;");
-
-        sender.Table("table_name")
-            .Column("number1", long.MinValue + 1)
-            .Column("number2", long.MaxValue)
-            .Column("number3", double.MinValue)
-            .Column("number4", double.MaxValue)
-            .AtNowAsync();
-
-        await sender.SendAsync();
-
-        var expected =
-            "table_name number1=-9223372036854775807i,number2=9223372036854775807i,number3=-1.7976931348623157E+308,number4=1.7976931348623157E+308\n";
-        WaitAssert(srv, expected);
+        try
+        {
+            using var sender =
+                Sender.New(
+                    $"tcps::addr={_host}:{_port};username=testUser1;token=NgdiOWDoQNUP18WOnb1xkkEG5TzPYMda5SiUOvT1K0U=;tls_verify=unsafe_off;");
+            Assert.Fail("Expected exception");
+        }
+        catch (TypeLoadException ex)
+        {
+            Assert.That(ex.Message.Contains("Could not load QuestDB.Secp256r1SignatureGenerator"), Is.True);
+        }
     }
-
 
     [Test]
     public async Task InvalidState()
@@ -635,22 +557,6 @@ public class TcpTests
             Throws.TypeOf<AggregateException>()
         );
         
-    }
-
-    [Test]
-    public async Task BufferTooSmallForAuth()
-    {
-        using var srv = CreateTcpListener(_port);
-        srv.WithAuth("testUser1", "Vs4e-cOLsVCntsMrZiAGAZtrkPXO00uoRLuA3d7gEcI=",
-            "ANhR2AZSs4ar9urE5AZrJqu469X0r7gZ1BBEdcrAuL_6");
-        srv.AcceptAsync();
-
-        Assert.That(
-            () => Sender.New(
-                $"tcp::addr={_host}:{_port};init_buf_size=512;username=testUser1;token=NgdiOWDoQNUP18WOnb1xkkEG5TzPYMda5SiUOvT1K0U=;"),
-            Throws.TypeOf<AggregateException>().With.InnerException.TypeOf<IngressError>().With.Message
-                .Contains("Buffer is too small to receive the message")
-        );
     }
 
     [Test]

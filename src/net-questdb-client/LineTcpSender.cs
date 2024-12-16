@@ -227,8 +227,6 @@ public class LineTcpSender : IDisposable
         _position = 0;
     }
 
-
-
     /// <summary>
     ///     Set table name for the Line. Table name can be different from line to line.
     /// </summary>

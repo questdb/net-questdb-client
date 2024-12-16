@@ -28,7 +28,7 @@
 Use NuGet to add a dependency on this library.
 
 See: [https://www.nuget.org/packages/net-questdb-client/](https://www.nuget.org/packages/net-questdb-client/)
-(Optional) to use the client with TCP protocol authentication add Neget refrence to [https://www.nuget.org/packages/net-questdb-client-tcp-auth/](https://www.nuget.org/packages/net-questdb-client-tcp-auth/)
+(Optional) to use the client with TCP protocol authentication add NuGet refrence to [https://www.nuget.org/packages/net-questdb-client-tcp-auth/](https://www.nuget.org/packages/net-questdb-client-tcp-auth/)
 
 ## Usage
 
@@ -122,7 +122,7 @@ using var sender = Sender.New("https::addr=localhost:9009;tls_verify=unsafe_off;
 
 #### TCP Authentication
 
-💥 starting from version 2.1 to use TCP Authentication add reference to [https://www.nuget.org/packages/net-questdb-client-tcp-auth/](https://www.nuget.org/packages/net-questdb-client-tcp-auth/)
+💥 From net-questdb-client Version 2.1.0, if you want to use TCP Authentication , you must add a reference to [https://www.nuget.org/packages/net-questdb-client-tcp-auth/](https://www.nuget.org/packages/net-questdb-client-tcp-auth/).
 
 ```csharp
 using var sender = Sender.New("tcps::addr=localhost:9009;tls_verify=unsafe_off;username=admin;token=NgdiOWDoQNUP18WOnb1xkkEG5TzPYMda5SiUOvT1K0U=;");
@@ -208,8 +208,8 @@ the [Query & SQL overview](https://questdb.io/docs/reference/sql/overview/)
 
 ### I updated from version < 2.0.0 and now have error `Could not load QuestDB.Secp256r1SignatureGenerator, please add a reference to assembly "net-client-questdb-tcp-auth\"`
 
-Since version 2.1.0 in order to use TCP authenticaion an additional nuget package is needed [https://www.nuget.org/packages/net-questdb-client-tcp-auth/](https://www.nuget.org/packages/net-questdb-client-tcp-auth/).
-This is done to remove the dependency on `BouncyCastle.Cryptography` and only add it when it is really needed.
+Since Version 2.1.0, in order to use TCP authentication an additional NuGet package is required [https://www.nuget.org/packages/net-questdb-client-tcp-auth/](https://www.nuget.org/packages/net-questdb-client-tcp-auth/).
+This is changed to remove the dependency on `BouncyCastle.Cryptography` from the main library, since it was only required for TCP authentication.
 
 ### Where do I report issues with the client?
 

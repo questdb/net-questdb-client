@@ -133,7 +133,7 @@ internal class TcpSender : AbstractSender
         var privateKey =
             FromBase64String(Options.token!);
 
-        var signature = _signatureGenerator.GenerateSignature(privateKey, _buffer.SendBuffer, bufferLen);
+        var signature = _signatureGenerator!.GenerateSignature(privateKey, _buffer.SendBuffer, bufferLen);
         Base64.EncodeToUtf8(signature, _buffer.SendBuffer, out _, out _buffer.Position);
         _buffer.Put('\n');
 

@@ -17,7 +17,7 @@
     </ItemGroup>
 
     <ItemGroup>
-        <ProjectReference Include="..\net-client-questdb-tcp-auth\net-client-questdb-tcp-auth.csproj" />
+        <ProjectReference Include="..\net-questdb-client-tcp-auth\net-questdb-client-tcp-auth.csproj" />
         <ProjectReference Include="..\net-questdb-client\net-questdb-client.csproj"/>
     </ItemGroup>
 

@@ -11,7 +11,7 @@ public static class Signatures
         Exception? ex = null;
         try
         {
-            var assembly = Assembly.LoadFrom("net-client-questdb-tcp-auth.dll");
+            var assembly = Assembly.LoadFrom("net-questdb-client-tcp-auth.dll");
             Type? type = assembly.GetType("QuestDB.Secp256r1SignatureGenerator");
             if (type != null)
             {
@@ -28,7 +28,7 @@ public static class Signatures
         }
         
         throw new TypeLoadException(
-            "Could not load QuestDB.Secp256r1SignatureGenerator, please add a reference to assembly \"net-client-questdb-tcp-auth\"" +
+            "Could not load QuestDB.Secp256r1SignatureGenerator, please add a reference to assembly \"net-questdb-client-tcp-auth\"" +
             (ex == null ? ": cannot load the type, return value is null": ""), ex);
     }
 

@@ -1,4 +1,4 @@
-<Project Sdk="Microsoft.NET.Sdk">
+﻿<Project Sdk="Microsoft.NET.Sdk">
 
     <PropertyGroup>
         <RootNamespace>QuestDB</RootNamespace>
@@ -6,16 +6,24 @@
         <Nullable>enable</Nullable>
         <LangVersion>10</LangVersion>
         <GeneratePackageOnBuild>true</GeneratePackageOnBuild>
-        <Title>QuestDB client</Title>
-        <Description>Simple QuestDB ILP protocol client</Description>
+        <Title>QuestDB client TCP token authentication add-on</Title>
+        <Description>QuestDB ILP protocol client additional TCP token authentication add-on. Required when used with TCP ILP with token authentication</Description>
         <Copyright>QuestDB</Copyright>
         <PackageProjectUrl>https://questdb.io</PackageProjectUrl>
         <PackageLicenseUrl>Apache 2.0</PackageLicenseUrl>
         <RepositoryUrl>https://github.com/questdb/net-questdb-client</RepositoryUrl>
-        <PackageTags>QuestDB, ILP</PackageTags>
+        <PackageTags>QuestDB, ILP, TCP</PackageTags>
         <Company>QuestDB Limited</Company>
         <PackageVersion>2.1.0</PackageVersion>
-        <GenerateDocumentationFile>true</GenerateDocumentationFile>
+        <GenerateDocumentationFile>false</GenerateDocumentationFile>
         <TargetFrameworks>net6.0;net7.0;net8.0;net9.0</TargetFrameworks>
     </PropertyGroup>
+
+    <ItemGroup>
+      <ProjectReference Include="..\net-questdb-client\net-questdb-client.csproj" />
+    </ItemGroup>
+    
+    <ItemGroup>
+        <PackageReference Include="BouncyCastle.Cryptography" Version="2.5.0"/>
+    </ItemGroup>
 </Project>

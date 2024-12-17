@@ -2,10 +2,11 @@
 
     <PropertyGroup>
         <TargetFrameworks>net6.0;net7.0;net8.0;net9.0</TargetFrameworks>
-        <RootNamespace>net_questdb_client_tests</RootNamespace>
+        <RootNamespace>net_questdb_client_tcp_auth_tests</RootNamespace>
         <ImplicitUsings>enable</ImplicitUsings>
         <Nullable>enable</Nullable>
         <IsPackable>false</IsPackable>
+        <AssemblyName>net-questdb-client-tcp-auth-tests</AssemblyName>
     </PropertyGroup>
 
     <ItemGroup>
@@ -20,15 +21,12 @@
 
     <ItemGroup>
         <ProjectReference Include="..\dummy-http-server\dummy-http-server.csproj"/>
+        <ProjectReference Include="..\net-client-questdb-tcp-auth\net-client-questdb-tcp-auth.csproj" />
+        <ProjectReference Include="..\net-questdb-client-tests\net-questdb-client-tests.csproj" />
         <ProjectReference Include="..\net-questdb-client\net-questdb-client.csproj"/>
-
     </ItemGroup>
 
     <ItemGroup>
-        <None Include="..\questdb-client-test\ilp-client-interop-test.json">
-            <Link>ilp-client-interop-test.json</Link>
-            <CopyToOutputDirectory>Always</CopyToOutputDirectory>
-        </None>
         <None Update="certificate.pfx">
             <CopyToOutputDirectory>Always</CopyToOutputDirectory>
         </None>
@@ -36,8 +34,5 @@
             <CopyToOutputDirectory>Always</CopyToOutputDirectory>
         </None>
     </ItemGroup>
-    
-    <ItemGroup>
-        <PackageReference Include="BouncyCastle.Cryptography" Version="2.5.0"/>
-    </ItemGroup>
+
 </Project>

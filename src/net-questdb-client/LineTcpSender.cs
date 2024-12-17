@@ -28,11 +28,6 @@ using System.Net.Security;
 using System.Net.Sockets;
 using System.Runtime.CompilerServices;
 using System.Text;
-using Org.BouncyCastle.Asn1.Sec;
-using Org.BouncyCastle.Crypto.Parameters;
-using Org.BouncyCastle.Math;
-using Org.BouncyCastle.Security;
-
 // ReSharper disable InconsistentNaming
 
 namespace QuestDB;
@@ -45,7 +40,7 @@ public class LineTcpSender : IDisposable
 {
     private static readonly RemoteCertificateValidationCallback AllowAllCertCallback = (_, _, _, _) => true;
     private static readonly long EpochTicks = new DateTime(1970, 1, 1).Ticks;
-    public static int DefaultQuestDbFsFileNameLimit = 127;
+    public static readonly int DefaultQuestDbFsFileNameLimit = 127;
     private readonly BufferOverflowHandling _bufferOverflowHandling;
     private readonly List<(byte[] Buffer, int Length)> _buffers = new();
     private readonly Stream _networkStream;
@@ -60,6 +55,7 @@ public class LineTcpSender : IDisposable
     private bool _quoted;
     private byte[] _sendBuffer;
     private Socket? _underlyingSocket;
+    public ISignatureGenerator? _signatureGenerator;
 
     private LineTcpSender(Stream networkStream, int bufferSize,
         BufferOverflowHandling bufferOverflowHandling)
@@ -219,19 +215,11 @@ public class LineTcpSender : IDisposable
         var bufferLen = await ReceiveUntil('\n', cancellationToken);
 
         var privateKey = FromBase64String(encodedPrivateKey);
-
-        var p = SecNamedCurves.GetByName("secp256r1");
-        var parameters = new ECDomainParameters(p.Curve, p.G, p.N, p.H);
-        var priKey = new ECPrivateKeyParameters(
-            "ECDSA",
-            new BigInteger(1, privateKey), // d
-            parameters);
-
-        var ecdsa = SignerUtilities.GetSigner("SHA-256withECDSA");
-        ecdsa.Init(true, priKey);
-        ecdsa.BlockUpdate(_sendBuffer, 0, bufferLen);
-        var signature = ecdsa.GenerateSignature();
-
+        if (_signatureGenerator == null)
+        {
+            _signatureGenerator = Signatures.CreateSignatureGenerator();
+        }
+        var signature = _signatureGenerator.GenerateSignature(privateKey, _sendBuffer, bufferLen);
         Base64.EncodeToUtf8(signature, _sendBuffer, out _, out _position);
         _sendBuffer[_position++] = (byte)'\n';
 

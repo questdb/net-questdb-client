@@ -26,10 +26,6 @@
 using System.Buffers.Text;
 using System.Net.Security;
 using System.Net.Sockets;
-using Org.BouncyCastle.Asn1.Sec;
-using Org.BouncyCastle.Crypto.Parameters;
-using Org.BouncyCastle.Math;
-using Org.BouncyCastle.Security;
 using QuestDB.Enums;
 using QuestDB.Utils;
 using Buffer = QuestDB.Buffers.Buffer;
@@ -47,7 +43,8 @@ internal class TcpSender : AbstractSender
     private Stream _dataStream = null!;
     private static readonly RemoteCertificateValidationCallback AllowAllCertCallback = (_, _, _, _) => true;
     private bool _authenticated;
-    
+    private ISignatureGenerator? _signatureGenerator;
+
     public TcpSender(SenderOptions options)
     {
         Options = options;
@@ -57,58 +54,59 @@ internal class TcpSender : AbstractSender
     public TcpSender(string confStr) : this(new SenderOptions(confStr))
     {
     }
-    
+
     private void Build()
     {
-       _buffer = new Buffer(Options.init_buf_size, Options.max_name_len, Options.max_buf_size);
+        _buffer = new Buffer(Options.init_buf_size, Options.max_name_len, Options.max_buf_size);
 
-       var socket = new Socket(AddressFamily.InterNetwork, SocketType.Stream, System.Net.Sockets.ProtocolType.Tcp);
-       NetworkStream? networkStream = null;
-       SslStream? sslStream = null;
-       try
-       {
-           socket.ConnectAsync(Options.Host, Options.Port).Wait();
-           networkStream = new NetworkStream(socket, Options.own_socket);
-           Stream dataStream = networkStream;
+        var socket = new Socket(AddressFamily.InterNetwork, SocketType.Stream, System.Net.Sockets.ProtocolType.Tcp);
+        NetworkStream? networkStream = null;
+        SslStream? sslStream = null;
+        try
+        {
+            socket.ConnectAsync(Options.Host, Options.Port).Wait();
+            networkStream = new NetworkStream(socket, Options.own_socket);
+            Stream dataStream = networkStream;
 
-           if (Options.protocol == ProtocolType.tcps)
-           {
-               sslStream = new SslStream(networkStream, false);
-               var sslOptions = new SslClientAuthenticationOptions
-               {
-                   TargetHost = Options.Host,
-                   RemoteCertificateValidationCallback =
-                       Options.tls_verify == TlsVerifyType.unsafe_off ? AllowAllCertCallback : null
-               };
+            if (Options.protocol == ProtocolType.tcps)
+            {
+                sslStream = new SslStream(networkStream, false);
+                var sslOptions = new SslClientAuthenticationOptions
+                {
+                    TargetHost = Options.Host,
+                    RemoteCertificateValidationCallback =
+                        Options.tls_verify == TlsVerifyType.unsafe_off ? AllowAllCertCallback : null
+                };
 
-               sslStream.AuthenticateAsClient(sslOptions);
-               if (!sslStream.IsEncrypted)
-               {
-                   throw new IngressError(ErrorCode.TlsError, "Could not establish encrypted connection.");
-               }
+                sslStream.AuthenticateAsClient(sslOptions);
+                if (!sslStream.IsEncrypted)
+                {
+                    throw new IngressError(ErrorCode.TlsError, "Could not establish encrypted connection.");
+                }
 
-               dataStream = sslStream;
-           }
+                dataStream = sslStream;
+            }
 
-           _underlyingSocket = socket;
-           _dataStream = dataStream;
+            _underlyingSocket = socket;
+            _dataStream = dataStream;
 
-           var authTimeout = new CancellationTokenSource();
-           authTimeout.CancelAfter(Options.auth_timeout);
-           if (!string.IsNullOrEmpty(Options.token))
-           {
-               AuthenticateAsync(authTimeout.Token).AsTask().Wait(authTimeout.Token);
-           }
-       }
-       catch
-       {
-           socket.Dispose();
-           networkStream?.Dispose();
-           sslStream?.Dispose();
-           throw;
-       }
+            var authTimeout = new CancellationTokenSource();
+            authTimeout.CancelAfter(Options.auth_timeout);
+            if (!string.IsNullOrEmpty(Options.token))
+            {
+                _signatureGenerator = Signatures.CreateSignatureGenerator();
+                AuthenticateAsync(authTimeout.Token).AsTask().Wait(authTimeout.Token);
+            }
+        }
+        catch
+        {
+            socket.Dispose();
+            networkStream?.Dispose();
+            sslStream?.Dispose();
+            throw;
+        }
     }
-    
+
     /// <summary>
     ///     Performs Key based Authentication with QuestDB.
     /// </summary>
@@ -135,28 +133,14 @@ internal class TcpSender : AbstractSender
         var privateKey =
             FromBase64String(Options.token!);
 
-        // ReSharper disable once StringLiteralTypo
-        var p = SecNamedCurves.GetByName("secp256r1");
-        var parameters = new ECDomainParameters(p.Curve, p.G, p.N, p.H);
-        var priKey = new ECPrivateKeyParameters(
-            "ECDSA",
-            new BigInteger(1, privateKey), // d
-            parameters);
-
-        var ecdsa = SignerUtilities.GetSigner("SHA-256withECDSA");
-        ecdsa.Init(true, priKey);
-
-
-        ecdsa.BlockUpdate(_buffer.SendBuffer, 0, bufferLen);
-        var signature = ecdsa.GenerateSignature();
-
+        var signature = _signatureGenerator.GenerateSignature(privateKey, _buffer.SendBuffer, bufferLen);
         Base64.EncodeToUtf8(signature, _buffer.SendBuffer, out _, out _buffer.Position);
         _buffer.Put('\n');
 
         await _dataStream.WriteAsync(_buffer.SendBuffer, 0, _buffer.Position, ct);
         _buffer.Clear();
     }
-    
+
     /// <summary>
     ///     Receives a chunk of data from the TCP stream.
     /// </summary>
@@ -188,7 +172,7 @@ internal class TcpSender : AbstractSender
 
         throw new IngressError(ErrorCode.SocketError, "Buffer is too small to receive the message.");
     }
-    
+
     private static byte[] FromBase64String(string encodedPrivateKey)
     {
         var urlUnsafe = encodedPrivateKey.Replace('-', '+').Replace('_', '/');
@@ -200,7 +184,7 @@ internal class TcpSender : AbstractSender
 
         return Convert.FromBase64String(urlUnsafe);
     }
-    
+
     /// <inheritdoc cref="SendAsync"/>
     public override void Send(CancellationToken ct = default)
     {
@@ -228,7 +212,7 @@ internal class TcpSender : AbstractSender
             _buffer.Clear();
         }
     }
-        
+
     /// <inheritdoc />
     public override async Task SendAsync(CancellationToken ct = default)
     {
@@ -254,7 +238,7 @@ internal class TcpSender : AbstractSender
             _buffer.Clear();
         }
     }
-    
+
     /// <inheritdoc />
     public override void Dispose()
     {

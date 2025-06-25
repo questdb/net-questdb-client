@@ -26,6 +26,7 @@
 
 using System.Globalization;
 using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 using System.Text;
 using QuestDB.Enums;
 using QuestDB.Utils;
@@ -35,7 +36,7 @@ namespace QuestDB.Buffers;
 /// <summary>
 ///     Buffer for building up batches of ILP rows.
 /// </summary>
-internal class Buffer
+public class Buffer
 {
     private static readonly long EpochTicks = new DateTime(1970, 1, 1).Ticks;
     private readonly List<(byte[] Buffer, int Length)> _buffers = new();
@@ -52,13 +53,15 @@ internal class Buffer
     internal int Position;
     internal byte[] SendBuffer;
     public bool WithinTransaction;
+    private ProtocolVersion _version;
 
-    public Buffer(int bufferSize, int maxNameLen, int maxBufSize)
+    public Buffer(int bufferSize, int maxNameLen, int maxBufSize, ProtocolVersion version)
     {
         SendBuffer = new byte[bufferSize];
         _buffers.Add((SendBuffer, 0));
         _maxNameLen = maxNameLen;
         _maxBufSize = maxBufSize;
+        _version = version = version;
     }
 
     /// <summary>
@@ -145,7 +148,7 @@ internal class Buffer
 
         GuardInvalidColumnName(symbolName);
 
-        Put(',').EncodeUtf8(symbolName).Put('=').EncodeUtf8(value);
+        PutAscii(',').EncodeUtf8(symbolName).PutAscii('=').EncodeUtf8(value);
         _noSymbols = false;
         return this;
     }
@@ -160,11 +163,11 @@ internal class Buffer
     {
         if (WithinTransaction && !_hasTable) Table(_currentTableName);
 
-        Column(name).Put('\"');
+        Column(name).PutAscii('\"');
         _quoted = true;
         EncodeUtf8(value);
         _quoted = false;
-        Put('\"');
+        PutAscii('\"');
         return this;
     }
 
@@ -178,7 +181,7 @@ internal class Buffer
     {
         if (WithinTransaction && !_hasTable) Table(_currentTableName);
 
-        Column(name).Put(value).Put('i');
+        Column(name).Put(value).PutAscii('i');
         return this;
     }
 
@@ -192,7 +195,7 @@ internal class Buffer
     {
         if (WithinTransaction && !_hasTable) Table(_currentTableName);
 
-        Column(name).Put(value ? 't' : 'f');
+        Column(name).PutAscii(value ? 't' : 'f');
         return this;
     }
 
@@ -221,7 +224,7 @@ internal class Buffer
         if (WithinTransaction && !_hasTable) Table(_currentTableName);
 
         var epoch = timestamp.Ticks - EpochTicks;
-        Column(name).Put(epoch / 10).Put('t');
+        Column(name).Put(epoch / 10).PutAscii('t');
         return this;
     }
 
@@ -236,6 +239,182 @@ internal class Buffer
         if (WithinTransaction && !_hasTable) Table(_currentTableName);
 
         Column(name, timestamp.UtcDateTime);
+        return this;
+    }
+    
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private void GuardAgainstProtocolVersion1()
+    {
+        if (_version == ProtocolVersion.V1)
+        {
+            throw new IngressError(ErrorCode.ProtocolVersionError, "Protocol version v1 does not support ARRAY types.");
+        }
+    }
+    
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private void GuardAgainstNonDoubleTypes(Type t)
+    {
+        if (t != typeof(double))
+        {
+            throw new IngressError(ErrorCode.InvalidApiCall, "only double arrays are supported");
+        }
+    }
+
+    private Buffer PutBinaryU32(UInt32 u)
+    {
+        EnsureCapacity(4);
+        Span<byte> lengthSlice = SendBuffer.AsSpan(Position, 4);
+        MemoryMarshal.Cast<byte, UInt32>(lengthSlice)[0] = Convert.ToUInt32(u);
+        
+        if (!BitConverter.IsLittleEndian)
+        {
+            // todo: test this
+            lengthSlice.Reverse();
+        }
+        Position += 4;
+        Length += 4;
+        return this;
+    }
+    
+    private void PutBinaryDouble(double value)
+    {
+        EnsureCapacity(8);
+        Span<byte> bufferSlice = SendBuffer.AsSpan(Position, 8);
+        Span<double> valueSlice = MemoryMarshal.Cast<byte, double>(bufferSlice);
+        valueSlice[0] = value;
+        if (!BitConverter.IsLittleEndian)
+        {
+            bufferSlice.Reverse();
+        }
+        Position += 8;
+        Length += 8;
+    }
+
+    private void Put<T>(T[][] value) where T : struct
+    {
+        foreach (var t in value)
+        {
+            Put(t);
+        }
+    }
+    
+    private void Put<T>(T[] value) where T: struct
+    {
+        Span<byte> srcSpan = MemoryMarshal.Cast<T, byte>(value.AsSpan());
+        int byteSize =  Unsafe.SizeOf<T>();
+        
+        while (srcSpan.Length > 0)
+        {
+            int dstLength = GetSpareCapacity(); // length
+            int availLength = dstLength - (dstLength % byteSize); // rounded length
+
+            if (srcSpan.Length < availLength)
+            {
+                Span<byte> dstSpan = SendBuffer.AsSpan(Position, srcSpan.Length);
+                srcSpan.CopyTo(dstSpan);
+                Position += srcSpan.Length;
+                Length += srcSpan.Length;
+                srcSpan = srcSpan.Slice(srcSpan.Length);
+            }
+            else
+            {
+                Span<byte> dstSpan = SendBuffer.AsSpan(Position, availLength);
+                Span<byte> reducedSpan = srcSpan.Slice(0, availLength);
+                reducedSpan.CopyTo(dstSpan);
+                Position += availLength;
+                Length += availLength;
+                srcSpan = srcSpan.Slice(availLength);
+            }
+        }
+    }
+
+    public Buffer Column<T>(ReadOnlySpan<char> name, T[] value) where T: struct
+    {
+        // todo: make this jagged arrays
+        
+        GuardAgainstNonDoubleTypes(typeof(T));
+        GuardAgainstProtocolVersion1();
+        
+        if (WithinTransaction && !_hasTable) Table(_currentTableName);
+        
+        Column(name)
+            .Put((byte)Constants.BINARY_FORMAT_FLAG)
+            .Put((byte)BinaryFormatType.ARRAY)
+            .Put((byte)DataType.DOUBLE)
+            .Put(1) // dims count
+            .PutBinaryU32(Convert.ToUInt32(value.Length))
+            .Put(value);
+        
+        return this;
+    }
+    
+    public Buffer Column(ReadOnlySpan<char> name, Array value) 
+    {
+        GuardAgainstProtocolVersion1();
+        
+        var type = value.GetType().GetElementType();
+        GuardAgainstNonDoubleTypes(type);
+
+        if (WithinTransaction && !_hasTable) Table(_currentTableName);
+        
+        Column(name)
+            .Put((byte)Constants.BINARY_FORMAT_FLAG)
+            .Put((byte)BinaryFormatType.ARRAY)
+            .Put((byte)DataType.DOUBLE)
+            .Put((byte)value.Rank); // dims count
+        
+        for (int i = 0; i < value.Rank; i++)
+        {
+            PutBinaryU32(Convert.ToUInt32(value.GetLength(i)));
+        };
+
+        foreach (double d in value)
+        {
+            PutBinaryDouble(d);
+        }
+        
+        return this;
+    }
+
+    private void GetPlaceholderSlice(int length, out Span<byte> span)
+    {
+        EnsureCapacity(length);
+        span = SendBuffer.AsSpan(Position, length);
+    }
+
+    public Buffer Column<T>(ReadOnlySpan<char> name, IEnumerable<T> value) where T: struct
+    {
+        GuardAgainstNonDoubleTypes(typeof(T));
+        GuardAgainstProtocolVersion1();
+        
+        if (WithinTransaction && !_hasTable) Table(_currentTableName);
+        
+        Column(name)
+            .PutAscii(Constants.BINARY_FORMAT_FLAG)
+            .Put((byte)BinaryFormatType.ARRAY)
+            .Put((byte)DataType.DOUBLE)
+            .Put(1) // dims count
+            ;
+
+        GetPlaceholderSlice(sizeof(UInt32), out var span);
+
+        Position += sizeof(UInt32);
+        Length += sizeof(UInt32);
+        
+        int startLength = Length;
+        foreach (var d in (IEnumerable<double>)value)
+        {
+            PutBinaryDouble(d);
+        }
+        
+        int enumerableLength = (Length - startLength) / sizeof(double);
+            
+        MemoryMarshal.Cast<byte, UInt32>(span)[0] = Convert.ToUInt32(enumerableLength);
+        if (!BitConverter.IsLittleEndian)
+        {
+            span.Reverse();
+        }
+        
         return this;
     }
 
@@ -260,7 +439,7 @@ internal class Buffer
     public void At(DateTime timestamp)
     {
         var epoch = timestamp.Ticks - EpochTicks;
-        Put(' ').Put(epoch).Put('0').Put('0');
+        PutAscii(' ').Put(epoch).PutAscii('0').PutAscii('0');
         FinishLine();
     }
 
@@ -279,7 +458,7 @@ internal class Buffer
     /// <param name="epochNano">Nanoseconds since Unix epoch</param>
     public void At(long epochNano)
     {
-        Put(' ').Put(epochNano);
+        PutAscii(' ').Put(epochNano);
         FinishLine();
     }
 
@@ -311,7 +490,7 @@ internal class Buffer
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void FinishLine()
     {
-        Put('\n');
+        PutAscii('\n');
         RowCount++;
         _hasTable = false;
         _noFields = true;
@@ -339,17 +518,36 @@ internal class Buffer
 
         if (_noFields)
         {
-            Put(' ');
+            PutAscii(' ');
             _noFields = false;
         }
         else
         {
-            Put(',');
+            PutAscii(',');
         }
 
-        return EncodeUtf8(columnName).Put('=');
+        return EncodeUtf8(columnName).PutAscii('=');
     }
 
+    public void GuardAgainstOversizedChunk(int additional)
+    {
+        if (additional > SendBuffer.Length)
+        {
+            throw new IngressError(ErrorCode.InvalidApiCall, "tried to allocate oversized chunk: " + additional + " bytes");
+        }
+    }
+    
+    private void EnsureCapacity(int additional)
+    {
+        GuardAgainstOversizedChunk(additional);
+        if (Position + additional >= SendBuffer.Length) NextBuffer();
+    }
+    
+    private int GetSpareCapacity()
+    {
+        return SendBuffer.Length - Position;
+    }
+    
     private Buffer Put(long value)
     {
         if (value == long.MinValue)
@@ -369,7 +567,7 @@ internal class Buffer
         if (value < 0) num[--pos] = (byte)'-';
 
         var len = num.Length - pos;
-        if (Position + len >= SendBuffer.Length) NextBuffer();
+        EnsureCapacity(len);
 
         num.Slice(pos, len).CopyTo(SendBuffer.AsSpan(Position));
         Position += len;
@@ -407,23 +605,23 @@ internal class Buffer
             case ' ':
             case ',':
             case '=':
-                if (!_quoted) Put('\\');
+                if (!_quoted) PutAscii('\\');
 
                 goto default;
             default:
-                Put(c);
+                PutAscii(c);
                 break;
             case '\n':
             case '\r':
-                Put('\\').Put(c);
+                PutAscii('\\').PutAscii(c);
                 break;
             case '"':
-                if (_quoted) Put('\\');
+                if (_quoted) PutAscii('\\');
 
-                Put(c);
+                PutAscii(c);
                 break;
             case '\\':
-                Put('\\').Put('\\');
+                PutAscii('\\').PutAscii('\\');
                 break;
         }
     }
@@ -431,15 +629,22 @@ internal class Buffer
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void Put(ReadOnlySpan<char> chars)
     {
-        foreach (var c in chars) Put(c);
+        EncodeUtf8(chars);
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    internal Buffer Put(char c)
+    internal Buffer PutAscii(char c)
     {
-        if (Position + 2 > SendBuffer.Length) NextBuffer();
+        Put((byte)c);
+        return this;
+    }
+    
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal Buffer Put(byte value)
+    {
+        if (Position + 1 > SendBuffer.Length) NextBuffer();
 
-        SendBuffer[Position++] = (byte)c;
+        SendBuffer[Position++] = value;
         Length++;
         return this;
     }

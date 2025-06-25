@@ -24,7 +24,11 @@
 
 
 using System;
+using System.Collections;
+using System.Diagnostics;
 using System.Net.Http;
+using System.Runtime.InteropServices;
+using System.Runtime.Serialization.Formatters.Binary;
 using System.Text;
 using System.Threading.Tasks;
 using FastEndpoints;
@@ -44,17 +48,17 @@ public class DummyHttpServer : IDisposable
     private int _port = 29743;
     private readonly WebApplication _app;
 
-    public DummyHttpServer(bool withTokenAuth = false, bool withBasicAuth = false, bool withRetriableError=false, bool withErrorMessage = false)
+    public DummyHttpServer(bool withTokenAuth = false, bool withBasicAuth = false, bool withRetriableError = false,
+        bool withErrorMessage = false)
     {
         var bld = WebApplication.CreateBuilder();
 
-        bld.Services.AddLogging(
-            builder =>
-            {
-                builder.AddFilter("Microsoft", LogLevel.Warning)
-                    .AddFilter("System", LogLevel.Warning)
-                    .AddConsole();
-            });
+        bld.Services.AddLogging(builder =>
+        {
+            builder.AddFilter("Microsoft", LogLevel.Warning)
+                .AddFilter("System", LogLevel.Warning)
+                .AddConsole();
+        });
 
         IlpEndpoint.WithTokenAuth = withTokenAuth;
         IlpEndpoint.WithBasicAuth = withBasicAuth;
@@ -103,6 +107,7 @@ public class DummyHttpServer : IDisposable
     public void Clear()
     {
         IlpEndpoint.ReceiveBuffer.Clear();
+        IlpEndpoint.ReceiveBytes.Clear();
         IlpEndpoint.LastError = null;
         IlpEndpoint.Counter = 0;
     }
@@ -127,6 +132,11 @@ public class DummyHttpServer : IDisposable
     public StringBuilder GetReceiveBuffer()
     {
         return IlpEndpoint.ReceiveBuffer;
+    }
+    
+    public List<byte> GetReceiveBytes()
+    {
+        return IlpEndpoint.ReceiveBytes;
     }
 
     public Exception? GetLastError()
@@ -159,5 +169,75 @@ public class DummyHttpServer : IDisposable
     public int GetCounter()
     {
         return IlpEndpoint.Counter;
+    }
+
+    public String PrintBuffer()
+    {
+        byte[] bytes = GetReceiveBytes().ToArray();
+        StringBuilder sb = new StringBuilder();
+
+        for (int i = 0; i < bytes.Length; i++)
+        {
+            sb.Append((char)bytes[i]);
+            if (bytes[i] == (byte)'=')
+            {
+                if (bytes[i - 1] == (byte)'=')
+                {
+                    // binary context
+                    if (bytes[++i] == 14)
+                    {
+                        sb.Append("ARRAY<");
+                        // array context
+                        byte type_= bytes[++i];
+                        byte dims = bytes[++i];
+
+                        ++i;
+
+                        long length = 0;
+                        for (int j = 0; j < dims; j++)
+                        {
+                            Span<byte> lengthBytes = bytes.AsSpan()[i..(i + 4)];
+                            UInt32 _length = MemoryMarshal.Cast<byte, UInt32>(lengthBytes)[0];
+                            if (length == 0)
+                            {
+                                length = _length;
+                            }
+                            else
+                            {
+                                length *= _length;
+                            }
+                            sb.Append(_length);
+                            sb.Append(',');
+                            i += 4;
+                        }
+                      
+                        sb.Remove(sb.Length - 1, 1);
+                        sb.Append('>');
+                        
+                        Span<double> doubleBytes = 
+                            MemoryMarshal.Cast<byte, double>(bytes.AsSpan().Slice(i, (int)(length * 8)));
+                        
+                        
+                        sb.Append('[');
+                        for (int j = 0; j < length; j++)
+                        {
+                            sb.Append(doubleBytes[j]);
+                            sb.Append(',');
+                        }
+                        sb.Remove(sb.Length - 1, 1);
+                        sb.Append(']');
+
+                        i += (int)(length * 8);
+                        i--;
+                    }
+                    else
+                    {
+                        throw new NotImplementedException();
+                    }
+                }
+            }
+        }
+
+        return sb.ToString();
     }
 }

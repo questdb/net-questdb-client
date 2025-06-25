@@ -56,6 +56,7 @@ public record SenderOptions
     private string? _password;
     private TimeSpan _poolTimeout = TimeSpan.FromMinutes(2);
     private ProtocolType _protocol = ProtocolType.http;
+    private ProtocolVersion _protocol_version = ProtocolVersion.V2;
     private int _requestMinThroughput = 102400;
     private TimeSpan _requestTimeout = TimeSpan.FromMilliseconds(10000);
     private TimeSpan _retryTimeout = TimeSpan.FromMilliseconds(10000);
@@ -75,6 +76,10 @@ public record SenderOptions
     {
     }
 
+    /// <summary>
+    /// Max number of dimensions an array is allowed.
+    /// </summary>
+    public const int ARRAY_MAX_DIMENSIONS = 32;
 
     /// <summary>
     ///     Construct a <see cref="SenderOptions" /> object from a config string.
@@ -84,6 +89,7 @@ public record SenderOptions
     {
         ReadConfigStringIntoBuilder(confStr);
         ParseEnumWithDefault(nameof(protocol), "http", out _protocol);
+        ParseEnumWithDefault(nameof(protocol_version), "v1", out _protocol_version);
         ParseStringWithDefault(nameof(addr), "localhost:9000", out _addr!);
         ParseEnumWithDefault(nameof(auto_flush), "on", out _autoFlush);
         ParseIntThatMayBeOff(nameof(auto_flush_rows), IsHttp() ? "75000" : "600", out _autoFlushRows);
@@ -119,6 +125,12 @@ public record SenderOptions
     {
         get => _protocol;
         set => _protocol = value;
+    }
+    
+    public ProtocolVersion protocol_version
+    {
+        get => _protocol_version;
+        set => _protocol_version = value;
     }
 
     /// <summary>

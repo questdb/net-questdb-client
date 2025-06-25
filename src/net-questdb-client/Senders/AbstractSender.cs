@@ -98,6 +98,24 @@ internal abstract class AbstractSender : ISender
         return this;
     }
 
+    public ISender Column<T>(ReadOnlySpan<char> name, T value) where T : IEnumerable<double>
+    {
+        _buffer.Column(name, value);
+        return this;
+    }
+
+    public ISender Column<T>(ReadOnlySpan<char> name, T[] value) where T : struct
+    {
+        _buffer.Column(name, value);
+        return this;
+    }
+
+    public ISender Column(ReadOnlySpan<char> name, Array value)
+    {
+        _buffer.Column(name, value);
+        return this;
+    }
+
     /// <inheritdoc />
     public ValueTask AtAsync(DateTime value, CancellationToken ct = default)
     {

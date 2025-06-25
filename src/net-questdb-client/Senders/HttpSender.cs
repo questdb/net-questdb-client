@@ -66,7 +66,7 @@ internal class HttpSender : AbstractSender
 
     private void Build()
     {
-        _buffer = new Buffer(Options.init_buf_size, Options.max_name_len, Options.max_buf_size);
+        _buffer = new Buffer(Options.init_buf_size, Options.max_name_len, Options.max_buf_size, Options.protocol_version);
 
         _handler = new SocketsHttpHandler
         {

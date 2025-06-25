@@ -57,7 +57,7 @@ internal class TcpSender : AbstractSender
 
     private void Build()
     {
-        _buffer = new Buffer(Options.init_buf_size, Options.max_name_len, Options.max_buf_size);
+        _buffer = new Buffer(Options.init_buf_size, Options.max_name_len, Options.max_buf_size, Options.protocol_version);
 
         var socket = new Socket(AddressFamily.InterNetwork, SocketType.Stream, System.Net.Sockets.ProtocolType.Tcp);
         NetworkStream? networkStream = null;
@@ -125,7 +125,7 @@ internal class TcpSender : AbstractSender
         _authenticated = true;
         _buffer.EncodeUtf8(Options.username); // key_id
 
-        _buffer.Put('\n');
+        _buffer.PutAscii('\n');
         await SendAsync(ct);
 
         var bufferLen = await ReceiveUntil('\n', ct);
@@ -135,7 +135,7 @@ internal class TcpSender : AbstractSender
 
         var signature = _signatureGenerator!.GenerateSignature(privateKey, _buffer.SendBuffer, bufferLen);
         Base64.EncodeToUtf8(signature, _buffer.SendBuffer, out _, out _buffer.Position);
-        _buffer.Put('\n');
+        _buffer.PutAscii('\n');
 
         await _dataStream.WriteAsync(_buffer.SendBuffer, 0, _buffer.Position, ct);
         _buffer.Clear();

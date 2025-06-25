@@ -35,9 +35,10 @@ using FastEndpoints;
 
 namespace dummy_http_server;
 
-public record Request : IPlainTextRequest
+public record Request
 {
-    public string Content { get; set; }
+    public byte[] ByteContent { get; set; }
+    public string StringContent { get; set; }
 }
 
 public record JsonErrorResponse
@@ -53,9 +54,26 @@ public record JsonErrorResponse
     }
 }
 
+public class Binder : IRequestBinder<Request>
+{
+    public async ValueTask<Request> BindAsync(BinderContext ctx, CancellationToken ct)
+    {
+        // populate and return a request dto object however you please...
+        MemoryStream ms = new MemoryStream();
+        await ctx.HttpContext.Request.Body.CopyToAsync(ms, ct);
+        return new Request
+        {
+            ByteContent = ms.ToArray(),
+            StringContent = Encoding.UTF8.GetString(ms.ToArray())
+        };
+    }
+}
+
+
 public class IlpEndpoint : Endpoint<Request, JsonErrorResponse?>
 {
     public static readonly StringBuilder ReceiveBuffer = new();
+    public static readonly List<byte> ReceiveBytes = new();
     public static Exception? LastError = new();
     public static bool WithTokenAuth = false;
     public static bool WithBasicAuth = false;
@@ -79,6 +97,7 @@ public class IlpEndpoint : Endpoint<Request, JsonErrorResponse?>
         }
 
         Description(b => b.Accepts<Request>());
+        RequestBinder(new Binder());
     }
 
     public override async Task HandleAsync(Request req, CancellationToken ct)
@@ -99,7 +118,8 @@ public class IlpEndpoint : Endpoint<Request, JsonErrorResponse?>
         
         try
         {
-            ReceiveBuffer.Append(req.Content);
+            ReceiveBuffer.Append(req.StringContent);
+            ReceiveBytes.AddRange(req.ByteContent);
             await SendNoContentAsync(ct);
         }
         catch (Exception ex)

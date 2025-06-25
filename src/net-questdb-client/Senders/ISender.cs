@@ -23,6 +23,8 @@
  *
  ******************************************************************************/
 
+using System.Collections;
+using System.ComponentModel.DataAnnotations.Schema;
 using QuestDB.Utils;
 
 // ReSharper disable InconsistentNaming
@@ -141,6 +143,15 @@ public interface ISender : IDisposable
     /// <inheritdoc cref="Column(System.ReadOnlySpan{char},System.ReadOnlySpan{char})" />
     public ISender Column(ReadOnlySpan<char> name, DateTimeOffset value);
 
+    /// <inheritdoc cref="Column(System.ReadOnlySpan{char},System.ReadOnlySpan{char})" />
+    public ISender Column<T>(ReadOnlySpan<char> name, T value) where T : IEnumerable<double>;
+
+    /// <inheritdoc cref="Column(System.ReadOnlySpan{char},System.ReadOnlySpan{char})" />
+    public ISender Column<T>(ReadOnlySpan<char> name, T[] value) where T : struct;
+
+    /// <inheritdoc cref="Column(System.ReadOnlySpan{char},System.ReadOnlySpan{char})" />
+    public ISender Column(ReadOnlySpan<char> name, Array value);
+    
     /// <summary>
     ///     Adds a value for the designated timestamp column.
     /// </summary>

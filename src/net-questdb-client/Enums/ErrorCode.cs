@@ -87,5 +87,8 @@ public enum ErrorCode
     /// <summary>
     ///     Bad configuration.
     /// </summary>
-    ConfigError
+    ConfigError,
+    
+    ProtocolVersionError,
+    
 }

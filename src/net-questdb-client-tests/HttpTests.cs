@@ -44,13 +44,13 @@ public class HttpTests
     private const int HttpsPort = 29474;
 
     [Test]
-    public async Task BasicArrayF64()
+    public async Task BasicArrayDouble()
     {
         using var server = new DummyHttpServer(withBasicAuth: false);
         await server.StartAsync(HttpPort);
         var sender =
             Sender.New(
-                $"http::addr={Host}:{HttpPort};username=asdasdada;password=asdadad;tls_verify=unsafe_off;auto_flush=off;version=V2;");
+                $"http::addr={Host}:{HttpPort};username=asdasdada;password=asdadad;tls_verify=unsafe_off;auto_flush=off;protocol_version=V2;");
         await sender.Table("metrics")
             .Symbol("tag", "value")
             .Column("number", 10)
@@ -66,13 +66,13 @@ public class HttpTests
     }
     
     [Test]
-    public async Task BasicEnumerableF64()
+    public async Task BasicEnumerableDouble()
     {
         using var server = new DummyHttpServer(withBasicAuth: false);
         await server.StartAsync(HttpPort);
         var sender =
             Sender.New(
-                $"http::addr={Host}:{HttpPort};username=asdasdada;password=asdadad;tls_verify=unsafe_off;auto_flush=off;version=V2;");
+                $"http::addr={Host}:{HttpPort};username=asdasdada;password=asdadad;tls_verify=unsafe_off;auto_flush=off;protocol_version=V2;");
         await sender.Table("metrics")
             .Symbol("tag", "value")
             .Column("number", 10)
@@ -88,7 +88,30 @@ public class HttpTests
     }
     
     [Test]
-    public async Task BasicMultidimensionalArrayF64()
+    public async Task BasicShapedEnumerableDouble()
+    {
+        using var server = new DummyHttpServer(withBasicAuth: false);
+        await server.StartAsync(HttpPort);
+        var sender =
+            Sender.New(
+                $"http::addr={Host}:{HttpPort};username=asdasdada;password=asdadad;tls_verify=unsafe_off;auto_flush=off;protocol_version=V2;");
+        await sender.Table("metrics")
+            .Symbol("tag", "value")
+            .Column("number", 10)
+            .Column("string", "abc")
+            .Column("array", new double[] { 1.2, 2.6, 3.1, 4.6 }.AsEnumerable(), new int[] { 2, 2}.AsEnumerable())
+            .AtAsync(new DateTime(1970, 01, 01, 0, 0, 1));
+        
+        await sender.SendAsync();
+        Assert.That(
+            server.PrintBuffer(), 
+            Is.EqualTo("metrics,tag=value number=10i,string=\"abc\",array==ARRAY<2,2>[1.2,2.6,3.1,4.6] 1000000000\n"));
+        await server.StopAsync();
+    }
+
+    
+    [Test]
+    public async Task BasicMultidimensionalArrayDouble()
     {
         double[,,] arr = new double[2, 3, 4];
 
@@ -106,7 +129,7 @@ public class HttpTests
         await server.StartAsync(HttpPort);
         var sender =
             Sender.New(
-                $"http::addr={Host}:{HttpPort};username=asdasdada;password=asdadad;tls_verify=unsafe_off;auto_flush=off;version=V2;");
+                $"http::addr={Host}:{HttpPort};username=asdasdada;password=asdadad;tls_verify=unsafe_off;auto_flush=off;protocol_version=V2;");
         await sender.Table("metrics")
             .Symbol("tag", "value")
             .Column("number", 10)

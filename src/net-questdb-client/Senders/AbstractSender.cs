@@ -110,6 +110,12 @@ internal abstract class AbstractSender : ISender
         return this;
     }
 
+    public ISender Column<T>(ReadOnlySpan<char> name, IEnumerable<T> value, IEnumerable<int> shape) where T : struct
+    {
+        _buffer.Column(name, value, shape);
+        return this;
+    }
+
     public ISender Column(ReadOnlySpan<char> name, Array value)
     {
         _buffer.Column(name, value);

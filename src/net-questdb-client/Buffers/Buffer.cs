@@ -140,7 +140,7 @@ public class Buffer
     public Buffer Symbol(ReadOnlySpan<char> symbolName, ReadOnlySpan<char> value)
     {
         GuardFsFileNameLimit(symbolName);
-        if (WithinTransaction && !_hasTable) Table(_currentTableName);
+        SetTableIfAppropriate();
 
         if (!_hasTable) throw new IngressError(ErrorCode.InvalidApiCall, "Table must be specified first.");
 
@@ -161,8 +161,8 @@ public class Buffer
     /// <returns>Itself</returns>
     public Buffer Column(ReadOnlySpan<char> name, ReadOnlySpan<char> value)
     {
-        if (WithinTransaction && !_hasTable) Table(_currentTableName);
-
+        SetTableIfAppropriate();
+        
         Column(name).PutAscii('\"');
         _quoted = true;
         EncodeUtf8(value);
@@ -179,7 +179,7 @@ public class Buffer
     /// <returns>Itself</returns>
     public Buffer Column(ReadOnlySpan<char> name, long value)
     {
-        if (WithinTransaction && !_hasTable) Table(_currentTableName);
+        SetTableIfAppropriate();
 
         Column(name).Put(value).PutAscii('i');
         return this;
@@ -260,48 +260,34 @@ public class Buffer
         }
     }
 
-    private Buffer PutBinaryU32(UInt32 u)
+    private Buffer PutBinary<T>(T value) where T : struct
     {
-        EnsureCapacity(4);
-        Span<byte> lengthSlice = SendBuffer.AsSpan(Position, 4);
-        MemoryMarshal.Cast<byte, UInt32>(lengthSlice)[0] = Convert.ToUInt32(u);
-        
+        int size = Marshal.SizeOf<T>();
+        EnsureCapacity(size);
+        Span<byte> span = SendBuffer.AsSpan(Position, size);
+        MemoryMarshal.Cast<byte, T>(span)[0] = value;
         if (!BitConverter.IsLittleEndian)
         {
-            // todo: test this
-            lengthSlice.Reverse();
+            span.Reverse();
         }
-        Position += 4;
-        Length += 4;
+        Advance(size);
         return this;
     }
     
-    private void PutBinaryDouble(double value)
+    private Buffer PutBinary<T>(T value, in Span<T> span) where T : struct
     {
-        EnsureCapacity(8);
-        Span<byte> bufferSlice = SendBuffer.AsSpan(Position, 8);
-        Span<double> valueSlice = MemoryMarshal.Cast<byte, double>(bufferSlice);
-        valueSlice[0] = value;
+        span[0] = value;
         if (!BitConverter.IsLittleEndian)
         {
-            bufferSlice.Reverse();
+            span.Reverse();
         }
-        Position += 8;
-        Length += 8;
-    }
-
-    private void Put<T>(T[][] value) where T : struct
-    {
-        foreach (var t in value)
-        {
-            Put(t);
-        }
+        return this;
     }
     
-    private void Put<T>(T[] value) where T: struct
+    private void PutBinaryEndianUnaware<T>(Span<T> value) where T: struct
     {
-        Span<byte> srcSpan = MemoryMarshal.Cast<T, byte>(value.AsSpan());
-        int byteSize =  Unsafe.SizeOf<T>();
+        Span<byte> srcSpan = MemoryMarshal.Cast<T, byte>(value);
+        int byteSize = Marshal.SizeOf<T>();
         
         while (srcSpan.Length > 0)
         {
@@ -312,8 +298,7 @@ public class Buffer
             {
                 Span<byte> dstSpan = SendBuffer.AsSpan(Position, srcSpan.Length);
                 srcSpan.CopyTo(dstSpan);
-                Position += srcSpan.Length;
-                Length += srcSpan.Length;
+                Advance(srcSpan.Length);
                 srcSpan = srcSpan.Slice(srcSpan.Length);
             }
             else
@@ -321,40 +306,60 @@ public class Buffer
                 Span<byte> dstSpan = SendBuffer.AsSpan(Position, availLength);
                 Span<byte> reducedSpan = srcSpan.Slice(0, availLength);
                 reducedSpan.CopyTo(dstSpan);
-                Position += availLength;
-                Length += availLength;
+                Advance(availLength);
                 srcSpan = srcSpan.Slice(availLength);
             }
+        }
+    }
+    
+    private void PutBinaryEndianAware<T>(Span<T> value) where T: struct
+    {
+        foreach (T t in value)
+        {
+            PutBinary(t);
         }
     }
 
     public Buffer Column<T>(ReadOnlySpan<char> name, T[] value) where T: struct
     {
-        // todo: make this jagged arrays
-        
+        return Column(name, value.AsSpan());
+    }
+
+    private Buffer PutBinary<T>(Span<T> value) where T : struct
+    {
+        if (BitConverter.IsLittleEndian)
+        {
+            PutBinaryEndianUnaware(value);
+        }
+        else
+        {
+            PutBinaryEndianAware(value);
+        }
+
+        return this;
+    }
+    
+    public Buffer Column<T>(ReadOnlySpan<char> name, Span<T> value) where T: struct
+    {
         GuardAgainstNonDoubleTypes(typeof(T));
         GuardAgainstProtocolVersion1();
-        
-        if (WithinTransaction && !_hasTable) Table(_currentTableName);
-        
-        Column(name)
-            .Put((byte)Constants.BINARY_FORMAT_FLAG)
-            .Put((byte)BinaryFormatType.ARRAY)
-            .Put((byte)DataType.DOUBLE)
-            .Put(1) // dims count
-            .PutBinaryU32(Convert.ToUInt32(value.Length))
-            .Put(value);
+        SetTableIfAppropriate();
+        PutDoubleArrayHeader(name);
+        Put(1);
+        PutBinary(Convert.ToUInt32(value.Length));
+        PutBinary(value);
         
         return this;
     }
     
     public Buffer Column(ReadOnlySpan<char> name, Array value) 
     {
-        GuardAgainstProtocolVersion1();
-        
         var type = value.GetType().GetElementType();
         GuardAgainstNonDoubleTypes(type);
-
+        GuardAgainstProtocolVersion1();
+        SetTableIfAppropriate();
+        PutDoubleArrayHeader(name);
+        
         if (WithinTransaction && !_hasTable) Table(_currentTableName);
         
         Column(name)
@@ -365,55 +370,107 @@ public class Buffer
         
         for (int i = 0; i < value.Rank; i++)
         {
-            PutBinaryU32(Convert.ToUInt32(value.GetLength(i)));
+            PutBinary<UInt32>(Convert.ToUInt32(value.GetLength(i)));
         };
-
+        
         foreach (double d in value)
         {
-            PutBinaryDouble(d);
+            PutBinary(d);
         }
         
         return this;
     }
-
-    private void GetPlaceholderSlice(int length, out Span<byte> span)
+    
+    private void PutBinaryDeferred<T>(out Span<T> span) where T: struct
     {
+        int length = Marshal.SizeOf<T>();
         EnsureCapacity(length);
-        span = SendBuffer.AsSpan(Position, length);
+        span = MemoryMarshal.Cast<byte, T>(SendBuffer.AsSpan(Position, length));
+        Advance(length);
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private void Advance<T>() where  T: struct
+    {
+        Advance(Marshal.SizeOf<T>());
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private void Advance(int by)
+    {
+        Position += by;
+        Length += by;
+    }
+
+    private void PutDoubleArrayHeader(ReadOnlySpan<char> name)
+    {
+        Column(name)
+            .PutAscii(Constants.BINARY_FORMAT_FLAG)
+            .Put((byte)BinaryFormatType.ARRAY)
+            .Put((byte)DataType.DOUBLE);
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private void SetTableIfAppropriate()
+    {
+        if (WithinTransaction && !_hasTable) Table(_currentTableName);
+    }
+    
+    public Buffer Column<T>(ReadOnlySpan<char> name, IEnumerable<T> value, IEnumerable<int> shape) where T: struct
+    {
+        GuardAgainstNonDoubleTypes(typeof(T));
+        GuardAgainstProtocolVersion1();
+        SetTableIfAppropriate();
+        PutDoubleArrayHeader(name);
+        
+        PutBinaryDeferred(out Span<byte> dimsSlot);
+        dimsSlot[0] = Byte.MinValue;
+
+        
+        int expectedLength = 1;
+        foreach (var i in shape)
+        {
+            PutBinary(Convert.ToUInt32(i));
+            dimsSlot[0]++;
+            expectedLength *= i;
+        }
+        
+        int startLength = Length;
+        foreach (var d in (IEnumerable<double>)value)
+        {
+            PutBinary(d);
+        }
+        
+        int enumerableLength = (Length - startLength) / sizeof(double);
+
+        if (expectedLength != enumerableLength)
+        {
+            throw new IngressError(ErrorCode.InvalidApiCall, "shape does not match enumerable length");
+        }
+        
+        return this;
     }
 
     public Buffer Column<T>(ReadOnlySpan<char> name, IEnumerable<T> value) where T: struct
     {
         GuardAgainstNonDoubleTypes(typeof(T));
         GuardAgainstProtocolVersion1();
+        SetTableIfAppropriate();
+        PutDoubleArrayHeader(name);
         
-        if (WithinTransaction && !_hasTable) Table(_currentTableName);
-        
-        Column(name)
-            .PutAscii(Constants.BINARY_FORMAT_FLAG)
-            .Put((byte)BinaryFormatType.ARRAY)
-            .Put((byte)DataType.DOUBLE)
-            .Put(1) // dims count
-            ;
+        Put(1); // dims count
 
-        GetPlaceholderSlice(sizeof(UInt32), out var span);
-
-        Position += sizeof(UInt32);
-        Length += sizeof(UInt32);
+        PutBinaryDeferred(out Span<UInt32> lengthSlot);
         
         int startLength = Length;
         foreach (var d in (IEnumerable<double>)value)
         {
-            PutBinaryDouble(d);
+            PutBinary(d);
         }
         
         int enumerableLength = (Length - startLength) / sizeof(double);
             
-        MemoryMarshal.Cast<byte, UInt32>(span)[0] = Convert.ToUInt32(enumerableLength);
-        if (!BitConverter.IsLittleEndian)
-        {
-            span.Reverse();
-        }
+        PutBinary(Convert.ToUInt32(enumerableLength), lengthSlot);
         
         return this;
     }
@@ -529,6 +586,7 @@ public class Buffer
         return EncodeUtf8(columnName).PutAscii('=');
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public void GuardAgainstOversizedChunk(int additional)
     {
         if (additional > SendBuffer.Length)
@@ -537,6 +595,13 @@ public class Buffer
         }
     }
     
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private void EnsureCapacity<T>()
+    {
+        EnsureCapacity(Marshal.SizeOf<T>());
+    }
+    
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void EnsureCapacity(int additional)
     {
         GuardAgainstOversizedChunk(additional);

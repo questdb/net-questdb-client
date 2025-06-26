@@ -149,6 +149,8 @@ public interface ISender : IDisposable
     /// <inheritdoc cref="Column(System.ReadOnlySpan{char},System.ReadOnlySpan{char})" />
     public ISender Column<T>(ReadOnlySpan<char> name, T[] value) where T : struct;
 
+    public ISender Column<T>(ReadOnlySpan<char> name, IEnumerable<T> value, IEnumerable<int> shape) where T : struct;
+    
     /// <inheritdoc cref="Column(System.ReadOnlySpan{char},System.ReadOnlySpan{char})" />
     public ISender Column(ReadOnlySpan<char> name, Array value);
     
@@ -201,4 +203,6 @@ public interface ISender : IDisposable
     ///     Clears the sender's buffer.
     /// </summary>
     public void Clear();
+    
+    
 }

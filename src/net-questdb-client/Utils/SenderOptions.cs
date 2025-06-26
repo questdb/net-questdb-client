@@ -27,6 +27,7 @@
 using System.Collections.Immutable;
 using System.Data.Common;
 using System.Reflection;
+using System.Reflection.Metadata;
 using System.Runtime.CompilerServices;
 using System.Text.Json.Serialization;
 using QuestDB.Enums;

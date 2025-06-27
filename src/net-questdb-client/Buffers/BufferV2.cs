@@ -56,9 +56,8 @@ public class BufferV2 : BufferV1
     {
         var size = Marshal.SizeOf<T>();
         EnsureCapacity(size);
-        var span = SendBuffer.AsSpan(Position, size);
-        MemoryMarshal.Cast<byte, T>(span)[0] = value;
-        Advance(size);
+        PutBinaryDeferred(out Span<T> slot);
+        slot[0] = value;
         return this;
     }
 
@@ -66,10 +65,9 @@ public class BufferV2 : BufferV1
     {
         var size = Marshal.SizeOf<T>();
         EnsureCapacity(size);
-        var span = SendBuffer.AsSpan(Position, size);
-        MemoryMarshal.Cast<byte, T>(span)[0] = value;
-        span.Reverse();
-        Advance(size);
+        PutBinaryDeferred(out Span<T> slot);
+        slot[0] = value;
+        MemoryMarshal.Cast<T, byte>(slot).Reverse();
         return this;
     }
 

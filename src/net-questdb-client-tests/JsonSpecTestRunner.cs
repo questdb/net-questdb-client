@@ -45,7 +45,7 @@ public class JsonSpecTestRunner
         using var srv = CreateTcpListener(TcpPort);
         srv.AcceptAsync();
 
-        using var sender =  Sender.New(
+        using var sender = Sender.New(
             $"tcp::addr={IPAddress.Loopback}:{TcpPort};");
 
         Exception? exception = null;
@@ -53,13 +53,9 @@ public class JsonSpecTestRunner
         try
         {
             sender.Table(testCase.table);
-            foreach (var symbol in testCase.symbols)
-            {
-                sender.Symbol(symbol.name, symbol.value);
-            }
+            foreach (var symbol in testCase.symbols) sender.Symbol(symbol.name, symbol.value);
 
             foreach (var column in testCase.columns)
-            {
                 switch (column.type)
                 {
                     case "STRING":
@@ -81,17 +77,13 @@ public class JsonSpecTestRunner
                     default:
                         throw new NotSupportedException("Column type not supported: " + column.type);
                 }
-            }
 
             await sender.AtNowAsync();
             await sender.SendAsync();
         }
         catch (Exception? ex)
         {
-            if (testCase.result.status == "SUCCESS")
-            {
-                throw;
-            }
+            if (testCase.result.status == "SUCCESS") throw;
 
             exception = ex;
         }
@@ -101,22 +93,14 @@ public class JsonSpecTestRunner
         if (testCase.result.status == "SUCCESS")
         {
             if (testCase.result.anyLines == null || testCase.result.anyLines.Length == 0)
-            {
                 WaitAssert(srv, testCase.result.line + "\n");
-            }
             else
-            {
                 WaitAssert(srv, testCase.result.anyLines);
-            }
-            
         }
         else if (testCase.result.status == "ERROR")
         {
             Assert.NotNull(exception, "Exception should be thrown");
-            if (exception is NotSupportedException)
-            {
-                throw exception;
-            }
+            if (exception is NotSupportedException) throw exception;
         }
         else
         {
@@ -132,7 +116,7 @@ public class JsonSpecTestRunner
 
         Assert.That(await server.Healthcheck());
 
-        using var sender =  Sender.New(
+        using var sender = Sender.New(
             $"http::addr={IPAddress.Loopback}:{HttpPort};");
 
         Exception? exception = null;
@@ -140,13 +124,9 @@ public class JsonSpecTestRunner
         try
         {
             sender.Table(testCase.table);
-            foreach (var symbol in testCase.symbols)
-            {
-                sender.Symbol(symbol.name, symbol.value);
-            }
+            foreach (var symbol in testCase.symbols) sender.Symbol(symbol.name, symbol.value);
 
             foreach (var column in testCase.columns)
-            {
                 switch (column.type)
                 {
                     case "STRING":
@@ -168,7 +148,6 @@ public class JsonSpecTestRunner
                     default:
                         throw new NotSupportedException("Column type not supported: " + column.type);
                 }
-            }
 
             await sender.AtNowAsync();
             await sender.SendAsync();
@@ -176,10 +155,7 @@ public class JsonSpecTestRunner
         catch (Exception? ex)
         {
             TestContext.Write(server.GetLastError());
-            if (testCase.result.status == "SUCCESS")
-            {
-                throw;
-            }
+            if (testCase.result.status == "SUCCESS") throw;
 
             exception = ex;
         }
@@ -188,23 +164,16 @@ public class JsonSpecTestRunner
 
         if (testCase.result.status == "SUCCESS")
         {
-            var textReceived = server.GetReceiveBuffer().ToString();
+            var textReceived = server.PrintBuffer();
             if (testCase.result.anyLines == null || testCase.result.anyLines.Length == 0)
-            {
                 Assert.That(textReceived, Is.EqualTo(testCase.result.line + "\n"));
-            }
             else
-            {
                 AssertMany(testCase.result.anyLines, textReceived);
-            }
         }
         else if (testCase.result.status == "ERROR")
         {
             Assert.NotNull(exception, "Exception should be thrown");
-            if (exception is NotSupportedException)
-            {
-                throw exception;
-            }
+            if (exception is NotSupportedException) throw exception;
         }
         else
         {
@@ -214,32 +183,23 @@ public class JsonSpecTestRunner
 
     private void WaitAssert(DummyIlpServer srv, string[] resultAnyLines)
     {
-        var minExpectedLen = resultAnyLines.Select(l => Encoding.UTF8.GetBytes(l).Length).Min(); 
-        for (var i = 0; i < 500 && srv.TotalReceived < minExpectedLen; i++)
-        {
-            Thread.Sleep(10);
-        }
-        
+        var minExpectedLen = resultAnyLines.Select(l => Encoding.UTF8.GetBytes(l).Length).Min();
+        for (var i = 0; i < 500 && srv.TotalReceived < minExpectedLen; i++) Thread.Sleep(10);
+
         var textReceived = srv.GetTextReceived();
         AssertMany(resultAnyLines, textReceived);
     }
 
     private static void AssertMany(string[] resultAnyLines, string textReceived)
     {
-        bool anyMatch = resultAnyLines.Any(l => l.Equals(textReceived) || (l + "\n").Equals(textReceived));
-        if (!anyMatch)
-        {
-            Assert.Fail(textReceived + ": did not match any expected results");
-        }
+        var anyMatch = resultAnyLines.Any(l => l.Equals(textReceived) || (l + "\n").Equals(textReceived));
+        if (!anyMatch) Assert.Fail(textReceived + ": did not match any expected results");
     }
 
     private static void WaitAssert(DummyIlpServer srv, string expected)
     {
         var expectedLen = Encoding.UTF8.GetBytes(expected).Length;
-        for (var i = 0; i < 500 && srv.TotalReceived < expectedLen; i++)
-        {
-            Thread.Sleep(10);
-        }
+        for (var i = 0; i < 500 && srv.TotalReceived < expectedLen; i++) Thread.Sleep(10);
 
         Assert.AreEqual(expected, srv.GetTextReceived());
     }

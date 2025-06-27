@@ -39,25 +39,27 @@ public class DummyHttpServer : IDisposable
     private int _port = 29743;
 
     public DummyHttpServer(bool withTokenAuth = false, bool withBasicAuth = false, bool withRetriableError = false,
-        bool withErrorMessage = false)
+                           bool withErrorMessage = false)
     {
         var bld = WebApplication.CreateBuilder();
 
         bld.Services.AddLogging(builder =>
         {
             builder.AddFilter("Microsoft", LogLevel.Warning)
-                .AddFilter("System", LogLevel.Warning)
-                .AddConsole();
+                   .AddFilter("System", LogLevel.Warning)
+                   .AddConsole();
         });
 
-        IlpEndpoint.WithTokenAuth = withTokenAuth;
-        IlpEndpoint.WithBasicAuth = withBasicAuth;
+        IlpEndpoint.WithTokenAuth      = withTokenAuth;
+        IlpEndpoint.WithBasicAuth      = withBasicAuth;
         IlpEndpoint.WithRetriableError = withRetriableError;
-        IlpEndpoint.WithErrorMessage = withErrorMessage;
+        IlpEndpoint.WithErrorMessage   = withErrorMessage;
 
         if (withTokenAuth)
+        {
             bld.Services.AddAuthenticationJwtBearer(s => s.SigningKey = SigningKey)
-                .AddAuthorization();
+               .AddAuthorization();
+        }
 
 
         bld.Services.AddFastEndpoints();
@@ -67,7 +69,7 @@ public class DummyHttpServer : IDisposable
         {
             o.Limits.MaxRequestBodySize = 1073741824;
             o.ListenLocalhost(29474,
-                options => { options.UseHttps(); });
+                              options => { options.UseHttps(); });
             o.ListenLocalhost(29473);
         });
 
@@ -77,9 +79,11 @@ public class DummyHttpServer : IDisposable
         _app.UseDefaultExceptionHandler();
 
         if (withTokenAuth)
+        {
             _app
                 .UseAuthentication()
                 .UseAuthorization();
+        }
 
         _app.UseFastEndpoints();
     }
@@ -95,7 +99,7 @@ public class DummyHttpServer : IDisposable
         IlpEndpoint.ReceiveBuffer.Clear();
         IlpEndpoint.ReceiveBytes.Clear();
         IlpEndpoint.LastError = null;
-        IlpEndpoint.Counter = 0;
+        IlpEndpoint.Counter   = 0;
     }
 
     public Task StartAsync(int port = 29743)
@@ -144,7 +148,7 @@ public class DummyHttpServer : IDisposable
             var jwtToken = JwtBearer.CreateToken(o =>
             {
                 o.SigningKey = SigningKey;
-                o.ExpireAt = DateTime.UtcNow.AddDays(1);
+                o.ExpireAt   = DateTime.UtcNow.AddDays(1);
             });
             return jwtToken;
         }
@@ -159,22 +163,25 @@ public class DummyHttpServer : IDisposable
 
     public string PrintBuffer()
     {
-        var bytes = GetReceiveBytes().ToArray();
-        var sb = new StringBuilder();
+        var bytes      = GetReceiveBytes().ToArray();
+        var sb         = new StringBuilder();
+        var lastAppend = 0;
 
-        for (var i = 0; i < bytes.Length; i++)
+        var i = 0;
+        for (; i < bytes.Length; i++)
         {
-            
-            sb.Append((char)bytes[i]);
             if (bytes[i] == (byte)'=')
+            {
                 if (bytes[i - 1] == (byte)'=')
+                {
+                    sb.Append(Encoding.UTF8.GetString(bytes, lastAppend, i + 1 - lastAppend));
                     switch (bytes[++i])
                     {
                         case 14:
                             sb.Append("ARRAY<");
-                            // array context
+                            // array contexta
                             var type_ = bytes[++i];
-                            var dims = bytes[++i];
+                            var dims  = bytes[++i];
 
                             ++i;
 
@@ -182,11 +189,16 @@ public class DummyHttpServer : IDisposable
                             for (var j = 0; j < dims; j++)
                             {
                                 var lengthBytes = bytes.AsSpan()[i..(i + 4)];
-                                var _length = MemoryMarshal.Cast<byte, uint>(lengthBytes)[0];
+                                var _length     = MemoryMarshal.Cast<byte, uint>(lengthBytes)[0];
                                 if (length == 0)
+                                {
                                     length = _length;
+                                }
                                 else
+                                {
                                     length *= _length;
+                                }
+
                                 sb.Append(_length);
                                 sb.Append(',');
                                 i += 4;
@@ -222,8 +234,13 @@ public class DummyHttpServer : IDisposable
                         default:
                             throw new NotImplementedException();
                     }
+
+                    lastAppend = i + 1;
+                }
+            }
         }
 
+        sb.Append(Encoding.UTF8.GetString(bytes, lastAppend, i - lastAppend));
         return sb.ToString();
     }
 }

@@ -29,9 +29,6 @@ using dummy_http_server;
 using NUnit.Framework;
 using QuestDB;
 using QuestDB.Utils;
-using QuestDB.Buffers;
-using QuestDB.Enums;
-using Buffer = QuestDB.Buffers.Buffer;
 
 // ReSharper disable AsyncVoidLambda
 
@@ -55,38 +52,16 @@ public class HttpTests
             .Symbol("tag", "value")
             .Column("number", 10)
             .Column("string", "abc")
-            .Column("array", new double[] { 1.2, 2.6, 3.1 })
+            .Column("array", new[] { 1.2, 2.6, 3.1 })
             .AtAsync(new DateTime(1970, 01, 01, 0, 0, 1));
-        
+
         await sender.SendAsync();
         Assert.That(
             server.PrintBuffer(),
-        Is.EqualTo("metrics,tag=value number=10i,string=\"abc\",array==ARRAY<3>[1.2,2.6,3.1] 1000000000\n"));
-        await server.StopAsync();
-    }
-    
-    [Test]
-    public async Task BasicEnumerableDouble()
-    {
-        using var server = new DummyHttpServer(withBasicAuth: false);
-        await server.StartAsync(HttpPort);
-        var sender =
-            Sender.New(
-                $"http::addr={Host}:{HttpPort};username=asdasdada;password=asdadad;tls_verify=unsafe_off;auto_flush=off;protocol_version=V2;");
-        await sender.Table("metrics")
-            .Symbol("tag", "value")
-            .Column("number", 10)
-            .Column("string", "abc")
-            .Column("array", new double[] { 1.2, 2.6, 3.1 }.AsEnumerable())
-            .AtAsync(new DateTime(1970, 01, 01, 0, 0, 1));
-        
-        await sender.SendAsync();
-        Assert.That(
-            server.PrintBuffer(), 
             Is.EqualTo("metrics,tag=value number=10i,string=\"abc\",array==ARRAY<3>[1.2,2.6,3.1] 1000000000\n"));
         await server.StopAsync();
     }
-    
+
     [Test]
     public async Task BasicShapedEnumerableDouble()
     {
@@ -99,32 +74,27 @@ public class HttpTests
             .Symbol("tag", "value")
             .Column("number", 10)
             .Column("string", "abc")
-            .Column("array", new double[] { 1.2, 2.6, 3.1, 4.6 }.AsEnumerable(), new int[] { 2, 2}.AsEnumerable())
+            .Column("array", new[] { 1.2, 2.6, 3.1, 4.6 }.AsEnumerable(), new[] { 2, 2 }.AsEnumerable())
             .AtAsync(new DateTime(1970, 01, 01, 0, 0, 1));
-        
+
         await sender.SendAsync();
         Assert.That(
-            server.PrintBuffer(), 
+            server.PrintBuffer(),
             Is.EqualTo("metrics,tag=value number=10i,string=\"abc\",array==ARRAY<2,2>[1.2,2.6,3.1,4.6] 1000000000\n"));
         await server.StopAsync();
     }
 
-    
+
     [Test]
     public async Task BasicMultidimensionalArrayDouble()
     {
-        double[,,] arr = new double[2, 3, 4];
+        var arr = new double[2, 3, 4];
 
         for (var i = 0; i < 2; i++)
-        {
-            for (var j = 0; j < 3; j++)
-            {
-                for (var k = 0; k < 3; k++)
-                {
-                    arr[i, j, k] = (i+1) * (j+1) * (k+1);
-                }
-            }
-        }
+        for (var j = 0; j < 3; j++)
+        for (var k = 0; k < 3; k++)
+            arr[i, j, k] = (i + 1) * (j + 1) * (k + 1);
+
         using var server = new DummyHttpServer(withBasicAuth: false);
         await server.StartAsync(HttpPort);
         var sender =
@@ -136,16 +106,16 @@ public class HttpTests
             .Column("string", "abc")
             .Column("array", arr)
             .AtAsync(new DateTime(1970, 01, 01, 0, 0, 1));
-        
+
         await sender.SendAsync();
         Assert.That(
-            server.PrintBuffer(), 
-            Is.EqualTo("metrics,tag=value number=10i,string=\"abc\",array==ARRAY<2,3,4>[1,2,3,0,2,4,6,0,3,6,9,0,2,4,6,0,4,8,12,0,6,12,18,0] 1000000000\n"));
+            server.PrintBuffer(),
+            Is.EqualTo(
+                "metrics,tag=value number=10i,string=\"abc\",array==ARRAY<2,3,4>[1,2,3,0,2,4,6,0,3,6,9,0,2,4,6,0,4,8,12,0,6,12,18,0] 1000000000\n"));
         await server.StopAsync();
     }
 
-    
-    
+
     [Test]
     public async Task AuthBasicFailed()
     {
@@ -318,7 +288,7 @@ public class HttpTests
 
         await sender.SendAsync();
 
-        Assert.That(srv.GetReceiveBuffer().ToString, Is.EqualTo(totalExpectedSb.ToString()));
+        Assert.That(srv.PrintBuffer(), Is.EqualTo(totalExpectedSb.ToString()));
     }
 
     [Test]
@@ -384,7 +354,7 @@ public class HttpTests
 
         await sender.SendAsync();
 
-        Assert.That(srv.GetReceiveBuffer().ToString, Is.EqualTo(totalExpectedSb.ToString()));
+        Assert.That(srv.PrintBuffer(), Is.EqualTo(totalExpectedSb.ToString()));
     }
 
     [Test]
@@ -428,7 +398,7 @@ public class HttpTests
 
         await sender.SendAsync();
 
-        Assert.That(srv.GetReceiveBuffer().ToString, Is.EqualTo(totalExpectedSb.ToString()));
+        Assert.That(srv.PrintBuffer(), Is.EqualTo(totalExpectedSb.ToString()));
     }
 
     [Test]

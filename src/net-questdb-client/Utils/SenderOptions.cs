@@ -27,7 +27,6 @@
 using System.Collections.Immutable;
 using System.Data.Common;
 using System.Reflection;
-using System.Reflection.Metadata;
 using System.Runtime.CompilerServices;
 using System.Text.Json.Serialization;
 using QuestDB.Enums;
@@ -43,6 +42,11 @@ namespace QuestDB.Utils;
 /// </summary>
 public record SenderOptions
 {
+    /// <summary>
+    ///     Max number of dimensions an array is allowed.
+    /// </summary>
+    public const int ARRAY_MAX_DIMENSIONS = 32;
+
     private string _addr = "localhost:9000";
     private TimeSpan _authTimeout = TimeSpan.FromMilliseconds(15000);
     private AutoFlushType _autoFlush = AutoFlushType.on;
@@ -78,11 +82,6 @@ public record SenderOptions
     }
 
     /// <summary>
-    /// Max number of dimensions an array is allowed.
-    /// </summary>
-    public const int ARRAY_MAX_DIMENSIONS = 32;
-
-    /// <summary>
     ///     Construct a <see cref="SenderOptions" /> object from a config string.
     /// </summary>
     /// <param name="confStr">A configuration string.</param>
@@ -90,7 +89,7 @@ public record SenderOptions
     {
         ReadConfigStringIntoBuilder(confStr);
         ParseEnumWithDefault(nameof(protocol), "http", out _protocol);
-        ParseEnumWithDefault(nameof(protocol_version), "v1", out _protocol_version);
+        ParseEnumWithDefault(nameof(protocol_version), "auto", out _protocol_version);
         ParseStringWithDefault(nameof(addr), "localhost:9000", out _addr!);
         ParseEnumWithDefault(nameof(auto_flush), "on", out _autoFlush);
         ParseIntThatMayBeOff(nameof(auto_flush_rows), IsHttp() ? "75000" : "600", out _autoFlushRows);
@@ -127,7 +126,7 @@ public record SenderOptions
         get => _protocol;
         set => _protocol = value;
     }
-    
+
     public ProtocolVersion protocol_version
     {
         get => _protocol_version;
@@ -474,7 +473,7 @@ public record SenderOptions
 
     private void ParseEnumWithDefault<T>(string name, string defaultValue, out T field) where T : struct, Enum
     {
-        if (!Enum.TryParse(ReadOptionFromBuilder(name) ?? defaultValue, false, out field))
+        if (!Enum.TryParse(ReadOptionFromBuilder(name) ?? defaultValue, true, out field))
             throw new IngressError(ErrorCode.ConfigError,
                 $"`{name}` must be one of: " + string.Join(", ", typeof(T).GetEnumNames()));
     }

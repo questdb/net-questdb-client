@@ -23,20 +23,10 @@
  ******************************************************************************/
 
 
-using System;
-using System.Collections;
-using System.Diagnostics;
-using System.Net.Http;
 using System.Runtime.InteropServices;
-using System.Runtime.Serialization.Formatters.Binary;
 using System.Text;
-using System.Threading.Tasks;
 using FastEndpoints;
 using FastEndpoints.Security;
-using Microsoft.AspNetCore.Builder;
-using Microsoft.AspNetCore.Hosting;
-using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Logging;
 
 namespace dummy_http_server;
 
@@ -45,8 +35,8 @@ public class DummyHttpServer : IDisposable
     private static readonly string SigningKey = Guid.NewGuid().ToString("N") + Guid.NewGuid().ToString("N");
     private static readonly string Username = "admin";
     private static readonly string Password = "quest";
-    private int _port = 29743;
     private readonly WebApplication _app;
+    private int _port = 29743;
 
     public DummyHttpServer(bool withTokenAuth = false, bool withBasicAuth = false, bool withRetriableError = false,
         bool withErrorMessage = false)
@@ -66,10 +56,8 @@ public class DummyHttpServer : IDisposable
         IlpEndpoint.WithErrorMessage = withErrorMessage;
 
         if (withTokenAuth)
-        {
             bld.Services.AddAuthenticationJwtBearer(s => s.SigningKey = SigningKey)
                 .AddAuthorization();
-        }
 
 
         bld.Services.AddFastEndpoints();
@@ -89,11 +77,9 @@ public class DummyHttpServer : IDisposable
         _app.UseDefaultExceptionHandler();
 
         if (withTokenAuth)
-        {
             _app
                 .UseAuthentication()
                 .UseAuthorization();
-        }
 
         _app.UseFastEndpoints();
     }
@@ -133,7 +119,7 @@ public class DummyHttpServer : IDisposable
     {
         return IlpEndpoint.ReceiveBuffer;
     }
-    
+
     public List<byte> GetReceiveBytes()
     {
         return IlpEndpoint.ReceiveBytes;
@@ -171,71 +157,71 @@ public class DummyHttpServer : IDisposable
         return IlpEndpoint.Counter;
     }
 
-    public String PrintBuffer()
+    public string PrintBuffer()
     {
-        byte[] bytes = GetReceiveBytes().ToArray();
-        StringBuilder sb = new StringBuilder();
+        var bytes = GetReceiveBytes().ToArray();
+        var sb = new StringBuilder();
 
-        for (int i = 0; i < bytes.Length; i++)
+        for (var i = 0; i < bytes.Length; i++)
         {
+            
             sb.Append((char)bytes[i]);
             if (bytes[i] == (byte)'=')
-            {
                 if (bytes[i - 1] == (byte)'=')
-                {
-                    // binary context
-                    if (bytes[++i] == 14)
+                    switch (bytes[++i])
                     {
-                        sb.Append("ARRAY<");
-                        // array context
-                        byte type_= bytes[++i];
-                        byte dims = bytes[++i];
+                        case 14:
+                            sb.Append("ARRAY<");
+                            // array context
+                            var type_ = bytes[++i];
+                            var dims = bytes[++i];
 
-                        ++i;
+                            ++i;
 
-                        long length = 0;
-                        for (int j = 0; j < dims; j++)
-                        {
-                            Span<byte> lengthBytes = bytes.AsSpan()[i..(i + 4)];
-                            UInt32 _length = MemoryMarshal.Cast<byte, UInt32>(lengthBytes)[0];
-                            if (length == 0)
+                            long length = 0;
+                            for (var j = 0; j < dims; j++)
                             {
-                                length = _length;
+                                var lengthBytes = bytes.AsSpan()[i..(i + 4)];
+                                var _length = MemoryMarshal.Cast<byte, uint>(lengthBytes)[0];
+                                if (length == 0)
+                                    length = _length;
+                                else
+                                    length *= _length;
+                                sb.Append(_length);
+                                sb.Append(',');
+                                i += 4;
                             }
-                            else
-                            {
-                                length *= _length;
-                            }
-                            sb.Append(_length);
-                            sb.Append(',');
-                            i += 4;
-                        }
-                      
-                        sb.Remove(sb.Length - 1, 1);
-                        sb.Append('>');
-                        
-                        Span<double> doubleBytes = 
-                            MemoryMarshal.Cast<byte, double>(bytes.AsSpan().Slice(i, (int)(length * 8)));
-                        
-                        
-                        sb.Append('[');
-                        for (int j = 0; j < length; j++)
-                        {
-                            sb.Append(doubleBytes[j]);
-                            sb.Append(',');
-                        }
-                        sb.Remove(sb.Length - 1, 1);
-                        sb.Append(']');
 
-                        i += (int)(length * 8);
-                        i--;
+                            sb.Remove(sb.Length - 1, 1);
+                            sb.Append('>');
+
+                            var doubleBytes =
+                                MemoryMarshal.Cast<byte, double>(bytes.AsSpan().Slice(i, (int)(length * 8)));
+
+
+                            sb.Append('[');
+                            for (var j = 0; j < length; j++)
+                            {
+                                sb.Append(doubleBytes[j]);
+                                sb.Append(',');
+                            }
+
+                            sb.Remove(sb.Length - 1, 1);
+                            sb.Append(']');
+
+                            i += (int)(length * 8);
+                            i--;
+                            break;
+                        case 16:
+                            sb.Remove(sb.Length - 1, 1);
+                            var doubleValue = MemoryMarshal.Cast<byte, double>(bytes.AsSpan().Slice(++i, 8));
+                            sb.Append(doubleValue[0]);
+                            i += 8;
+                            i--;
+                            break;
+                        default:
+                            throw new NotImplementedException();
                     }
-                    else
-                    {
-                        throw new NotImplementedException();
-                    }
-                }
-            }
         }
 
         return sb.ToString();

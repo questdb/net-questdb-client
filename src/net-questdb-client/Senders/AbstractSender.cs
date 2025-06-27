@@ -1,21 +1,21 @@
 using System.Runtime.CompilerServices;
+using QuestDB.Buffers;
 using QuestDB.Enums;
 using QuestDB.Utils;
-using Buffer = QuestDB.Buffers.Buffer;
 
 namespace QuestDB.Senders;
 
 internal abstract class AbstractSender : ISender
 {
-    protected Buffer _buffer = null!;
+    protected IBuffer Buffer = null!;
     protected bool CommittingTransaction { get; set; }
 
     /// <inheritdoc />
     public SenderOptions Options { get; protected init; }
 
-    public int Length => _buffer.Length;
-    public int RowCount => _buffer.RowCount;
-    public bool WithinTransaction => _buffer.WithinTransaction;
+    public int Length => Buffer.Length;
+    public int RowCount => Buffer.RowCount;
+    public bool WithinTransaction => Buffer.WithinTransaction;
     public DateTime LastFlush { get; protected set; } = DateTime.MinValue;
 
     /// <inheritdoc />
@@ -45,80 +45,74 @@ internal abstract class AbstractSender : ISender
     /// <inheritdoc />
     public ISender Table(ReadOnlySpan<char> name)
     {
-        _buffer.Table(name);
+        Buffer.Table(name);
         return this;
     }
 
     /// <inheritdoc />
     public ISender Symbol(ReadOnlySpan<char> name, ReadOnlySpan<char> value)
     {
-        _buffer.Symbol(name, value);
+        Buffer.Symbol(name, value);
         return this;
     }
 
     /// <inheritdoc />
     public ISender Column(ReadOnlySpan<char> name, ReadOnlySpan<char> value)
     {
-        _buffer.Column(name, value);
+        ((BufferV1)Buffer).Column(name, value);
         return this;
     }
 
     /// <inheritdoc />
     public ISender Column(ReadOnlySpan<char> name, long value)
     {
-        _buffer.Column(name, value);
+        Buffer.Column(name, value);
         return this;
     }
 
     /// <inheritdoc />
     public ISender Column(ReadOnlySpan<char> name, bool value)
     {
-        _buffer.Column(name, value);
+        Buffer.Column(name, value);
         return this;
     }
 
     /// <inheritdoc />
     public ISender Column(ReadOnlySpan<char> name, double value)
     {
-        _buffer.Column(name, value);
+        Buffer.Column(name, value);
         return this;
     }
 
     /// <inheritdoc />
     public ISender Column(ReadOnlySpan<char> name, DateTime value)
     {
-        _buffer.Column(name, value);
+        Buffer.Column(name, value);
         return this;
     }
 
     /// <inheritdoc />
     public ISender Column(ReadOnlySpan<char> name, DateTimeOffset value)
     {
-        _buffer.Column(name, value);
-        return this;
-    }
-
-    public ISender Column<T>(ReadOnlySpan<char> name, T value) where T : IEnumerable<double>
-    {
-        _buffer.Column(name, value);
-        return this;
-    }
-
-    public ISender Column<T>(ReadOnlySpan<char> name, T[] value) where T : struct
-    {
-        _buffer.Column(name, value);
+        Buffer.Column(name, value);
         return this;
     }
 
     public ISender Column<T>(ReadOnlySpan<char> name, IEnumerable<T> value, IEnumerable<int> shape) where T : struct
     {
-        _buffer.Column(name, value, shape);
+        Buffer.Column(name, value, shape);
         return this;
     }
 
     public ISender Column(ReadOnlySpan<char> name, Array value)
     {
-        _buffer.Column(name, value);
+        Buffer.Column(name, value);
+        return this;
+    }
+
+    public ISender Column<T>(ReadOnlySpan<char> name, ReadOnlySpan<T> value) where T : struct
+    {
+        Buffer.Column(name, value);
         return this;
     }
 
@@ -126,7 +120,7 @@ internal abstract class AbstractSender : ISender
     public ValueTask AtAsync(DateTime value, CancellationToken ct = default)
     {
         GuardLastFlushNotSet();
-        _buffer.At(value);
+        Buffer.At(value);
         return FlushIfNecessaryAsync(ct);
     }
 
@@ -134,7 +128,7 @@ internal abstract class AbstractSender : ISender
     public ValueTask AtAsync(DateTimeOffset value, CancellationToken ct = default)
     {
         GuardLastFlushNotSet();
-        _buffer.At(value);
+        Buffer.At(value);
         return FlushIfNecessaryAsync(ct);
     }
 
@@ -142,7 +136,7 @@ internal abstract class AbstractSender : ISender
     public ValueTask AtAsync(long value, CancellationToken ct = default)
     {
         GuardLastFlushNotSet();
-        _buffer.At(value);
+        Buffer.At(value);
         return FlushIfNecessaryAsync(ct);
     }
 
@@ -150,7 +144,7 @@ internal abstract class AbstractSender : ISender
     public ValueTask AtNowAsync(CancellationToken ct = default)
     {
         GuardLastFlushNotSet();
-        _buffer.AtNow();
+        Buffer.AtNow();
         return FlushIfNecessaryAsync(ct);
     }
 
@@ -158,7 +152,7 @@ internal abstract class AbstractSender : ISender
     public void At(DateTime value, CancellationToken ct = default)
     {
         GuardLastFlushNotSet();
-        _buffer.At(value);
+        Buffer.At(value);
         FlushIfNecessary(ct);
     }
 
@@ -166,7 +160,7 @@ internal abstract class AbstractSender : ISender
     public void At(DateTimeOffset value, CancellationToken ct = default)
     {
         GuardLastFlushNotSet();
-        _buffer.At(value);
+        Buffer.At(value);
         FlushIfNecessary(ct);
     }
 
@@ -174,7 +168,7 @@ internal abstract class AbstractSender : ISender
     public void At(long value, CancellationToken ct = default)
     {
         GuardLastFlushNotSet();
-        _buffer.At(value);
+        Buffer.At(value);
         FlushIfNecessary(ct);
     }
 
@@ -182,26 +176,26 @@ internal abstract class AbstractSender : ISender
     public void AtNow(CancellationToken ct = default)
     {
         GuardLastFlushNotSet();
-        _buffer.AtNow();
+        Buffer.AtNow();
         FlushIfNecessary(ct);
     }
 
     /// <inheritdoc />
     public void Truncate()
     {
-        _buffer.TrimExcessBuffers();
+        Buffer.TrimExcessBuffers();
     }
 
     /// <inheritdoc />
     public void CancelRow()
     {
-        _buffer.CancelRow();
+        Buffer.CancelRow();
     }
 
     /// <inheritdoc />
     public void Clear()
     {
-        _buffer.Clear();
+        Buffer.Clear();
     }
 
     /// <inheritdoc />
@@ -212,6 +206,12 @@ internal abstract class AbstractSender : ISender
 
     /// <inheritdoc />
     public abstract void Send(CancellationToken ct = default);
+
+    public ISender Column<T>(ReadOnlySpan<char> name, T[] value) where T : struct
+    {
+        Buffer.Column(name, value);
+        return this;
+    }
 
     /// <summary>
     ///     Handles auto-flushing logic.

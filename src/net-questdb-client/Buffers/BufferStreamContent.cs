@@ -32,13 +32,13 @@ namespace QuestDB.Buffers;
 /// </summary>
 internal class BufferStreamContent : HttpContent
 {
-    public BufferStreamContent(Buffer buffer)
+    public BufferStreamContent(IBuffer buffer)
     {
         Buffer = buffer;
     }
 
-    private Buffer Buffer { get; }
-    
+    private IBuffer Buffer { get; }
+
     /// <inheritdoc />
     protected override async Task SerializeToStreamAsync(Stream stream, TransportContext? context)
     {

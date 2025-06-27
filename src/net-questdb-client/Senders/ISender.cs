@@ -23,8 +23,6 @@
  *
  ******************************************************************************/
 
-using System.Collections;
-using System.ComponentModel.DataAnnotations.Schema;
 using QuestDB.Utils;
 
 // ReSharper disable InconsistentNaming
@@ -34,7 +32,11 @@ namespace QuestDB.Senders;
 /// <summary>
 ///     Interface representing <see cref="Sender" /> implementations.
 /// </summary>
-public interface ISender : IDisposable
+public interface ISender : ISenderV2
+{
+}
+
+public interface ISenderV1 : IDisposable
 {
     /// <summary>
     ///     Represents the current length of the buffer in UTF-8 bytes.
@@ -143,17 +145,6 @@ public interface ISender : IDisposable
     /// <inheritdoc cref="Column(System.ReadOnlySpan{char},System.ReadOnlySpan{char})" />
     public ISender Column(ReadOnlySpan<char> name, DateTimeOffset value);
 
-    /// <inheritdoc cref="Column(System.ReadOnlySpan{char},System.ReadOnlySpan{char})" />
-    public ISender Column<T>(ReadOnlySpan<char> name, T value) where T : IEnumerable<double>;
-
-    /// <inheritdoc cref="Column(System.ReadOnlySpan{char},System.ReadOnlySpan{char})" />
-    public ISender Column<T>(ReadOnlySpan<char> name, T[] value) where T : struct;
-
-    public ISender Column<T>(ReadOnlySpan<char> name, IEnumerable<T> value, IEnumerable<int> shape) where T : struct;
-    
-    /// <inheritdoc cref="Column(System.ReadOnlySpan{char},System.ReadOnlySpan{char})" />
-    public ISender Column(ReadOnlySpan<char> name, Array value);
-    
     /// <summary>
     ///     Adds a value for the designated timestamp column.
     /// </summary>
@@ -203,6 +194,25 @@ public interface ISender : IDisposable
     ///     Clears the sender's buffer.
     /// </summary>
     public void Clear();
-    
-    
+}
+
+public interface ISenderV2 : ISenderV1
+{
+    public ISender Column<T>(ReadOnlySpan<char> name, IEnumerable<T> value, IEnumerable<int> shape) where T : struct;
+
+    /// <inheritdoc cref="Column(System.ReadOnlySpan{char},System.ReadOnlySpan{char})" />
+    public ISender Column(ReadOnlySpan<char> name, Array value);
+
+    public ISender Column<T>(ReadOnlySpan<char> name, ReadOnlySpan<T> value) where T : struct;
+
+    /// <summary>
+    ///     Adds a column (field) to the current row.
+    /// </summary>
+    /// <param name="name">The name of the column</param>
+    /// <param name="value">The value for the column</param>
+    /// <returns>Itself</returns>
+    public ISender Column(ReadOnlySpan<char> name, string value)
+    {
+        return ((ISenderV1)this).Column(name, value);
+    }
 }

@@ -35,7 +35,6 @@ using System.Text.Json;
 using QuestDB.Buffers;
 using QuestDB.Enums;
 using QuestDB.Utils;
-using Buffer = QuestDB.Buffers.Buffer;
 
 namespace QuestDB.Senders;
 
@@ -66,7 +65,12 @@ internal class HttpSender : AbstractSender
 
     private void Build()
     {
-        _buffer = new Buffer(Options.init_buf_size, Options.max_name_len, Options.max_buf_size, Options.protocol_version);
+        Buffer = BufferFactory.Create(
+            Options.init_buf_size,
+            Options.max_name_len,
+            Options.max_buf_size,
+            Options.protocol_version
+        );
 
         _handler = new SocketsHttpHandler
         {
@@ -127,9 +131,9 @@ internal class HttpSender : AbstractSender
     private (HttpRequestMessage, CancellationTokenSource?) GenerateRequest(CancellationToken ct = default)
     {
         var request = new HttpRequestMessage(HttpMethod.Post, "/write")
-            { Content = new BufferStreamContent(_buffer) };
+            { Content = new BufferStreamContent(Buffer) };
         request.Content.Headers.ContentType = new MediaTypeHeaderValue("text/plain") { CharSet = "utf-8" };
-        request.Content.Headers.ContentLength = _buffer.Length;
+        request.Content.Headers.ContentLength = Buffer.Length;
         var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         cts.CancelAfter(CalculateRequestTimeout());
         return (request, cts);
@@ -147,7 +151,7 @@ internal class HttpSender : AbstractSender
     private TimeSpan CalculateRequestTimeout()
     {
         return Options.request_timeout
-               + TimeSpan.FromSeconds(_buffer.Length / (double)Options.request_min_throughput);
+               + TimeSpan.FromSeconds(Buffer.Length / (double)Options.request_min_throughput);
     }
 
     /// <inheritdoc />
@@ -161,7 +165,7 @@ internal class HttpSender : AbstractSender
             throw new IngressError(ErrorCode.InvalidApiCall,
                 "Buffer must be clear before you can start a transaction.");
 
-        _buffer.Transaction(tableName);
+        Buffer.Transaction(tableName);
         return this;
     }
 
@@ -179,7 +183,7 @@ internal class HttpSender : AbstractSender
         finally
         {
             CommittingTransaction = false;
-            Debug.Assert(!_buffer.WithinTransaction);
+            Debug.Assert(!Buffer.WithinTransaction);
         }
     }
 
@@ -196,7 +200,7 @@ internal class HttpSender : AbstractSender
         finally
         {
             CommittingTransaction = false;
-            Debug.Assert(!_buffer.WithinTransaction);
+            Debug.Assert(!Buffer.WithinTransaction);
         }
     }
 
@@ -206,7 +210,7 @@ internal class HttpSender : AbstractSender
         if (!WithinTransaction)
             throw new IngressError(ErrorCode.InvalidApiCall, "Cannot rollback - no open transaction.");
 
-        _buffer.Clear();
+        Buffer.Clear();
     }
 
     /// <inheritdoc cref="SendAsync" />
@@ -215,7 +219,7 @@ internal class HttpSender : AbstractSender
         if (WithinTransaction && !CommittingTransaction)
             throw new IngressError(ErrorCode.InvalidApiCall, "Please `commit` to complete your transaction.");
 
-        if (_buffer.Length == 0) return;
+        if (Buffer.Length == 0) return;
 
         HttpRequestMessage? request = null;
         CancellationTokenSource? cts = null;
@@ -300,7 +304,7 @@ internal class HttpSender : AbstractSender
         }
         finally
         {
-            _buffer.Clear();
+            Buffer.Clear();
             LastFlush = (response?.Headers.Date ?? DateTimeOffset.UtcNow).UtcDateTime;
             request?.Dispose();
             response?.Dispose();
@@ -330,7 +334,7 @@ internal class HttpSender : AbstractSender
         if (WithinTransaction && !CommittingTransaction)
             throw new IngressError(ErrorCode.InvalidApiCall, "Please `commit` to complete your transaction.");
 
-        if (_buffer.Length == 0) return;
+        if (Buffer.Length == 0) return;
 
         HttpRequestMessage? request = null;
         CancellationTokenSource? cts = null;
@@ -416,7 +420,7 @@ internal class HttpSender : AbstractSender
         }
         finally
         {
-            _buffer.Clear();
+            Buffer.Clear();
             LastFlush = (response?.Headers.Date ?? DateTimeOffset.UtcNow).UtcDateTime;
             request?.Dispose();
             response?.Dispose();
@@ -454,7 +458,7 @@ internal class HttpSender : AbstractSender
     {
         _client.Dispose();
         _handler.Dispose();
-        _buffer.Clear();
-        _buffer.TrimExcessBuffers();
+        Buffer.Clear();
+        Buffer.TrimExcessBuffers();
     }
 }

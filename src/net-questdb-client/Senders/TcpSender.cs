@@ -58,11 +58,11 @@ internal class TcpSender : AbstractSender
     private void Build()
     {
         Buffer = Buffer = BufferFactory.Create(
-            Options.init_buf_size,
-            Options.max_name_len,
-            Options.max_buf_size,
-            Options.protocol_version
-        );
+                     Options.init_buf_size,
+                     Options.max_name_len,
+                     Options.max_buf_size,
+                     Options.protocol_version == ProtocolVersion.Auto ? ProtocolVersion.V1 : Options.protocol_version
+                 );
 
         var socket = new Socket(AddressFamily.InterNetwork, SocketType.Stream, System.Net.Sockets.ProtocolType.Tcp);
         NetworkStream? networkStream = null;
@@ -80,18 +80,20 @@ internal class TcpSender : AbstractSender
                 {
                     TargetHost = Options.Host,
                     RemoteCertificateValidationCallback =
-                        Options.tls_verify == TlsVerifyType.unsafe_off ? AllowAllCertCallback : null
+                        Options.tls_verify == TlsVerifyType.unsafe_off ? AllowAllCertCallback : null,
                 };
 
                 sslStream.AuthenticateAsClient(sslOptions);
                 if (!sslStream.IsEncrypted)
+                {
                     throw new IngressError(ErrorCode.TlsError, "Could not establish encrypted connection.");
+                }
 
                 dataStream = sslStream;
             }
 
             _underlyingSocket = socket;
-            _dataStream = dataStream;
+            _dataStream       = dataStream;
 
             var authTimeout = new CancellationTokenSource();
             authTimeout.CancelAfter(Options.auth_timeout);
@@ -120,7 +122,10 @@ internal class TcpSender : AbstractSender
     /// <exception cref="IngressError"></exception>
     private async ValueTask AuthenticateAsync(CancellationToken ct = default)
     {
-        if (_authenticated) throw new IngressError(ErrorCode.AuthError, "Already authenticated.");
+        if (_authenticated)
+        {
+            throw new IngressError(ErrorCode.AuthError, "Already authenticated.");
+        }
 
         _authenticated = true;
         Buffer.EncodeUtf8(Options.username); // key_id
@@ -155,11 +160,14 @@ internal class TcpSender : AbstractSender
         while (totalReceived < Buffer.SendBuffer.Length)
         {
             var received = await _dataStream.ReadAsync(Buffer.SendBuffer, totalReceived,
-                Buffer.SendBuffer.Length - totalReceived, cancellationToken);
+                                                       Buffer.SendBuffer.Length - totalReceived, cancellationToken);
             if (received > 0)
             {
                 totalReceived += received;
-                if (Buffer.SendBuffer[totalReceived - 1] == endChar) return totalReceived - 1;
+                if (Buffer.SendBuffer[totalReceived - 1] == endChar)
+                {
+                    return totalReceived - 1;
+                }
             }
             else
             {
@@ -174,8 +182,11 @@ internal class TcpSender : AbstractSender
     private static byte[] FromBase64String(string encodedPrivateKey)
     {
         var urlUnsafe = encodedPrivateKey.Replace('-', '+').Replace('_', '/');
-        var padding = 3 - (urlUnsafe.Length + 3) % 4;
-        if (padding != 0) urlUnsafe += new string('=', padding);
+        var padding   = 3 - (urlUnsafe.Length + 3) % 4;
+        if (padding != 0)
+        {
+            urlUnsafe += new string('=', padding);
+        }
 
         return Convert.FromBase64String(urlUnsafe);
     }
@@ -194,7 +205,10 @@ internal class TcpSender : AbstractSender
         }
         catch (Exception ex)
         {
-            if (ex is not IngressError) throw new IngressError(ErrorCode.ServerFlushError, ex.Message, ex);
+            if (ex is not IngressError)
+            {
+                throw new IngressError(ErrorCode.ServerFlushError, ex.Message, ex);
+            }
 
             throw;
         }
@@ -210,11 +224,17 @@ internal class TcpSender : AbstractSender
     {
         try
         {
-            if (Buffer.Length != 0) await Buffer.WriteToStreamAsync(_dataStream, ct);
+            if (Buffer.Length != 0)
+            {
+                await Buffer.WriteToStreamAsync(_dataStream, ct);
+            }
         }
         catch (Exception ex)
         {
-            if (ex is not IngressError) throw new IngressError(ErrorCode.ServerFlushError, ex.Message, ex);
+            if (ex is not IngressError)
+            {
+                throw new IngressError(ErrorCode.ServerFlushError, ex.Message, ex);
+            }
 
             throw;
         }

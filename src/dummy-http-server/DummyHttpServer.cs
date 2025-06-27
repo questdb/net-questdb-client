@@ -102,9 +102,11 @@ public class DummyHttpServer : IDisposable
         IlpEndpoint.Counter   = 0;
     }
 
-    public Task StartAsync(int port = 29743)
+    public Task StartAsync(int port = 29743, int[] versions = null)
     {
-        _port = port;
+        versions                  ??= new[] { 1, 2, };
+        SettingsEndpoint.Versions =   versions;
+        _port                     =   port;
         _app.RunAsync($"http://localhost:{port}");
         return Task.CompletedTask;
     }

@@ -47,7 +47,7 @@ public class HttpTests
         await server.StartAsync(HttpPort);
         var sender =
             Sender.New(
-                $"http::addr={Host}:{HttpPort};username=asdasdada;password=asdadad;tls_verify=unsafe_off;auto_flush=off;protocol_version=V2;");
+                $"http::addr={Host}:{HttpPort};username=asdasdada;password=asdadad;tls_verify=unsafe_off;auto_flush=off;");
         await sender.Table("metrics")
                     .Symbol("tag", "value")
                     .Column("number", 10)
@@ -63,13 +63,32 @@ public class HttpTests
     }
 
     [Test]
+    public async Task BasicArrayDoubleNegotiationFailed()
+    {
+        using var server = new DummyHttpServer(withBasicAuth: false);
+        await server.StartAsync(HttpPort, new[] { 1, });
+        var sender =
+            Sender.New(
+                $"http::addr={Host}:{HttpPort};username=asdasdada;password=asdadad;tls_verify=unsafe_off;auto_flush=off;");
+        sender.Table("metrics")
+              .Symbol("tag", "value")
+              .Column("number", 10)
+              .Column("string", "abc");
+
+        Assert.That(
+            () => sender.Column("array", new[] { 1.2, 2.6, 3.1, }),
+            Throws.TypeOf<IngressError>().With.Message.Contains("does not support ARRAY types"));
+        await server.StopAsync();
+    }
+
+    [Test]
     public async Task BasicBinaryDouble()
     {
         using var server = new DummyHttpServer(withBasicAuth: false);
         await server.StartAsync(HttpPort);
         var sender =
             Sender.New(
-                $"http::addr={Host}:{HttpPort};username=asdasdada;password=asdadad;tls_verify=unsafe_off;auto_flush=off;protocol_version=V2;");
+                $"http::addr={Host}:{HttpPort};username=asdasdada;password=asdadad;tls_verify=unsafe_off;auto_flush=off;");
         await sender.Table("metrics")
                     .Symbol("tag", "value")
                     .Column("number", 12.2)
@@ -89,7 +108,7 @@ public class HttpTests
         await server.StartAsync(HttpPort);
         var sender =
             Sender.New(
-                $"http::addr={Host}:{HttpPort};username=asdasdada;password=asdadad;tls_verify=unsafe_off;auto_flush=off;protocol_version=V2;");
+                $"http::addr={Host}:{HttpPort};username=asdasdada;password=asdadad;tls_verify=unsafe_off;auto_flush=off;");
         await sender.Table("metrics")
                     .Symbol("tag", "value")
                     .Column("number", 10)

@@ -295,7 +295,7 @@ public class TcpTests
         await sender.SendAsync();
 
         var expected =
-            "doubles d0=0,dm0=-0,d1=1,dE100=1E+100,d0000001=1E-06,dNaN=NaN,dInf=∞,dNInf=-∞\n";
+            "doubles d0=0,dm0=-0,d1=1,dE100=1E+100,d0000001=1E-06,dNaN=NaN,dInf=Infinity,dNInf=-Infinity\n";
         WaitAssert(srv, expected);
     }
 
@@ -809,7 +809,7 @@ public class TcpTests
             Thread.Sleep(10);
         }
 
-        Assert.That(srv.GetTextReceived(), Is.EqualTo(expected));
+        Assert.That(srv.PrintBuffer(), Is.EqualTo(expected));
     }
 
     private DummyIlpServer CreateTcpListener(int port, bool tls = false)

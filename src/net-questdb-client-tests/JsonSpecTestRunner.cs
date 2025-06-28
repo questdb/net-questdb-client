@@ -30,6 +30,8 @@ using dummy_http_server;
 using NUnit.Framework;
 using QuestDB;
 
+// ReSharper disable InconsistentNaming
+
 namespace net_questdb_client_tests;
 
 [TestFixture]
@@ -53,9 +55,13 @@ public class JsonSpecTestRunner
         try
         {
             sender.Table(testCase.table);
-            foreach (var symbol in testCase.symbols) sender.Symbol(symbol.name, symbol.value);
+            foreach (var symbol in testCase.symbols)
+            {
+                sender.Symbol(symbol.name, symbol.value);
+            }
 
             foreach (var column in testCase.columns)
+            {
                 switch (column.type)
                 {
                     case "STRING":
@@ -77,30 +83,41 @@ public class JsonSpecTestRunner
                     default:
                         throw new NotSupportedException("Column type not supported: " + column.type);
                 }
+            }
 
+#pragma warning disable CS0618 // Type or member is obsolete
             await sender.AtNowAsync();
+#pragma warning restore CS0618 // Type or member is obsolete
             await sender.SendAsync();
         }
         catch (Exception? ex)
         {
-            if (testCase.result.status == "SUCCESS") throw;
+            if (testCase.result.status == "SUCCESS")
+            {
+                throw;
+            }
 
             exception = ex;
         }
 
-        sender.Dispose();
-
         if (testCase.result.status == "SUCCESS")
         {
             if (testCase.result.anyLines == null || testCase.result.anyLines.Length == 0)
+            {
                 WaitAssert(srv, testCase.result.line + "\n");
+            }
             else
+            {
                 WaitAssert(srv, testCase.result.anyLines);
+            }
         }
         else if (testCase.result.status == "ERROR")
         {
             Assert.NotNull(exception, "Exception should be thrown");
-            if (exception is NotSupportedException) throw exception;
+            if (exception is NotSupportedException)
+            {
+                throw exception;
+            }
         }
         else
         {
@@ -124,9 +141,13 @@ public class JsonSpecTestRunner
         try
         {
             sender.Table(testCase.table);
-            foreach (var symbol in testCase.symbols) sender.Symbol(symbol.name, symbol.value);
+            foreach (var symbol in testCase.symbols)
+            {
+                sender.Symbol(symbol.name, symbol.value);
+            }
 
             foreach (var column in testCase.columns)
+            {
                 switch (column.type)
                 {
                     case "STRING":
@@ -148,32 +169,43 @@ public class JsonSpecTestRunner
                     default:
                         throw new NotSupportedException("Column type not supported: " + column.type);
                 }
+            }
 
+#pragma warning disable CS0618 // Type or member is obsolete
             await sender.AtNowAsync();
+#pragma warning restore CS0618 // Type or member is obsolete
             await sender.SendAsync();
         }
         catch (Exception? ex)
         {
             TestContext.Write(server.GetLastError());
-            if (testCase.result.status == "SUCCESS") throw;
+            if (testCase.result.status == "SUCCESS")
+            {
+                throw;
+            }
 
             exception = ex;
         }
-
-        sender.Dispose();
 
         if (testCase.result.status == "SUCCESS")
         {
             var textReceived = server.PrintBuffer();
             if (testCase.result.anyLines == null || testCase.result.anyLines.Length == 0)
+            {
                 Assert.That(textReceived, Is.EqualTo(testCase.result.line + "\n"));
+            }
             else
+            {
                 AssertMany(testCase.result.anyLines, textReceived);
+            }
         }
         else if (testCase.result.status == "ERROR")
         {
             Assert.NotNull(exception, "Exception should be thrown");
-            if (exception is NotSupportedException) throw exception;
+            if (exception is NotSupportedException)
+            {
+                throw exception;
+            }
         }
         else
         {
@@ -184,7 +216,10 @@ public class JsonSpecTestRunner
     private void WaitAssert(DummyIlpServer srv, string[] resultAnyLines)
     {
         var minExpectedLen = resultAnyLines.Select(l => Encoding.UTF8.GetBytes(l).Length).Min();
-        for (var i = 0; i < 500 && srv.TotalReceived < minExpectedLen; i++) Thread.Sleep(10);
+        for (var i = 0; i < 500 && srv.TotalReceived < minExpectedLen; i++)
+        {
+            Thread.Sleep(10);
+        }
 
         var textReceived = srv.GetTextReceived();
         AssertMany(resultAnyLines, textReceived);
@@ -193,15 +228,21 @@ public class JsonSpecTestRunner
     private static void AssertMany(string[] resultAnyLines, string textReceived)
     {
         var anyMatch = resultAnyLines.Any(l => l.Equals(textReceived) || (l + "\n").Equals(textReceived));
-        if (!anyMatch) Assert.Fail(textReceived + ": did not match any expected results");
+        if (!anyMatch)
+        {
+            Assert.Fail(textReceived + ": did not match any expected results");
+        }
     }
 
     private static void WaitAssert(DummyIlpServer srv, string expected)
     {
         var expectedLen = Encoding.UTF8.GetBytes(expected).Length;
-        for (var i = 0; i < 500 && srv.TotalReceived < expectedLen; i++) Thread.Sleep(10);
+        for (var i = 0; i < 500 && srv.TotalReceived < expectedLen; i++)
+        {
+            Thread.Sleep(10);
+        }
 
-        Assert.AreEqual(expected, srv.GetTextReceived());
+        Assert.That(srv.GetTextReceived(), Is.EqualTo(expected));
     }
 
     private DummyIlpServer CreateTcpListener(int port, bool tls = false)
@@ -217,11 +258,11 @@ public class JsonSpecTestRunner
 
     public class TestCase
     {
-        public string testName { get; set; }
-        public string table { get; set; }
-        public TestCaseSymbol[] symbols { get; set; }
-        public TestCaseColumn[] columns { get; set; }
-        public TestCaseResult result { get; set; }
+        public string testName { get; set; } = null!;
+        public string table { get; set; } = null!;
+        public TestCaseSymbol[] symbols { get; set; } = null!;
+        public TestCaseColumn[] columns { get; set; } = null!;
+        public TestCaseResult result { get; set; } = null!;
 
         public override string ToString()
         {
@@ -231,21 +272,21 @@ public class JsonSpecTestRunner
 
     public class TestCaseSymbol
     {
-        public string name { get; set; }
-        public string value { get; set; }
+        public string name { get; set; } = null!;
+        public string value { get; set; } = null!;
     }
 
     public class TestCaseColumn
     {
-        public string type { get; set; }
-        public string name { get; set; }
-        public object value { get; set; }
+        public string type { get; set; } = null!;
+        public string name { get; set; } = null!;
+        public object value { get; set; } = null!;
     }
 
     public class TestCaseResult
     {
-        public string status { get; set; }
-        public string line { get; set; }
-        public string[]? anyLines { get; set; }
+        public string status { get; set; } = null!;
+        public string line { get; set; } = null!;
+        public string[]? anyLines { get; set; } = null!;
     }
 }

@@ -37,6 +37,8 @@ using Org.BouncyCastle.Crypto.Parameters;
 using Org.BouncyCastle.Math;
 using Org.BouncyCastle.Security;
 
+// ReSharper disable NonAtomicCompoundOperator
+
 namespace tcp_client_test;
 
 public class DummyIlpServer : IDisposable
@@ -53,7 +55,7 @@ public class DummyIlpServer : IDisposable
 
     public DummyIlpServer(int port, bool tls)
     {
-        _tls = tls;
+        _tls    = tls;
         _server = new TcpListener(IPAddress.Loopback, port);
         _server.Start();
     }
@@ -79,7 +81,7 @@ public class DummyIlpServer : IDisposable
             using var socket = await _server.AcceptSocketAsync();
             clientSocket = socket;
             await using var connection = new NetworkStream(socket, true);
-            Stream dataStream = connection;
+            Stream          dataStream = connection;
             if (_tls)
             {
                 var sslStream = new SslStream(connection);
@@ -139,7 +141,7 @@ public class DummyIlpServer : IDisposable
         var pubKey1 = FromBase64String(_publicKeyX);
         var pubKey2 = FromBase64String(_publicKeyY);
 
-        var p = SecNamedCurves.GetByName("secp256r1");
+        var p          = SecNamedCurves.GetByName("secp256r1");
         var parameters = new ECDomainParameters(p.Curve, p.G, p.N, p.H);
 
         // Verify the signature
@@ -170,8 +172,8 @@ public class DummyIlpServer : IDisposable
     public static byte[] FromBase64String(string encodedPrivateKey)
     {
         var replace = encodedPrivateKey
-            .Replace('-', '+')
-            .Replace('_', '/');
+                      .Replace('-', '+')
+                      .Replace('_', '/');
         return Convert.FromBase64String(Pad(replace));
     }
 
@@ -180,7 +182,7 @@ public class DummyIlpServer : IDisposable
         var len = 0;
         while (true)
         {
-            var n = await connection.ReadAsync(_buffer.AsMemory(len));
+            var n        = await connection.ReadAsync(_buffer.AsMemory(len));
             var inBuffer = len + n;
             for (var i = len; i < inBuffer; i++)
             {
@@ -230,7 +232,7 @@ public class DummyIlpServer : IDisposable
 
     public void WithAuth(string keyId, string publicKeyX, string publicKeyY)
     {
-        _keyId = keyId;
+        _keyId      = keyId;
         _publicKeyX = publicKeyX;
         _publicKeyY = publicKeyY;
     }

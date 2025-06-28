@@ -23,6 +23,7 @@
  ******************************************************************************/
 
 
+using System.Diagnostics;
 using System.Net;
 using System.Net.Security;
 using System.Net.Sockets;
@@ -186,6 +187,7 @@ public class DummyIlpServer : IDisposable
                     if (i + 1 < inBuffer)
                     {
                         _received.Write(_buffer, i + 1, inBuffer - i - 1);
+                        // ReSharper disable once NonAtomicCompoundOperator
                         _totalReceived += inBuffer - i;
                     }
 
@@ -211,6 +213,7 @@ public class DummyIlpServer : IDisposable
             if (received > 0)
             {
                 _received.Write(_buffer, 0, received);
+                // ReSharper disable once NonAtomicCompoundOperator
                 _totalReceived += received;
             }
             else
@@ -244,9 +247,10 @@ public class DummyIlpServer : IDisposable
                     {
                         case 14:
                             sb.Append("ARRAY<");
-                            // array contexta
-                            var type_ = bytes[++i];
-                            var dims  = bytes[++i];
+                            var type = bytes[++i];
+
+                            Debug.Assert(type == 10);
+                            var dims = bytes[++i];
 
                             ++i;
 

@@ -227,7 +227,7 @@ public interface ISenderV2 : ISenderV1
     /// <param name="name">The name of the column</param>
     /// <param name="value">The value for the column</param>
     /// <returns>Itself</returns>
-    public ISender Column(ReadOnlySpan<char> name, string value)
+    public ISender Column(ReadOnlySpan<char> name, string? value)
     {
         return ((ISenderV1)this).Column(name, value);
     }

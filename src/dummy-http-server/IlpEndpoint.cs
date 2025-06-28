@@ -24,12 +24,10 @@
  ******************************************************************************/
 
 
-using System;
-using System.Linq;
+using System.Diagnostics.CodeAnalysis;
 using System.Text;
-using System.Threading;
-using System.Threading.Tasks;
 using FastEndpoints;
+
 // ReSharper disable ClassNeverInstantiated.Global
 #pragma warning disable CS8618 // Non-nullable field must contain a non-null value when exiting constructor. Consider declaring as nullable.
 
@@ -37,20 +35,22 @@ namespace dummy_http_server;
 
 public record Request
 {
-    public byte[] ByteContent { get; set; }
-    public string StringContent { get; set; }
+    public byte[] ByteContent { get; init; }
+    public string StringContent { get; init; }
 }
 
+[SuppressMessage("ReSharper", "InconsistentNaming")]
 public record JsonErrorResponse
 {
     public string code { get; init; }
     public string message { get; init; }
     public int line { get; init; }
     public string errorId { get; init; }
-    
+
     public override string ToString()
     {
-        return $"\nServer Response (\n\tCode: `{code}`\n\tMessage: `{message}`\n\tLine: `{line}`\n\tErrorId: `{errorId}` \n)";
+        return
+            $"\nServer Response (\n\tCode: `{code}`\n\tMessage: `{message}`\n\tLine: `{line}`\n\tErrorId: `{errorId}` \n)";
     }
 }
 
@@ -59,19 +59,20 @@ public class Binder : IRequestBinder<Request>
     public async ValueTask<Request> BindAsync(BinderContext ctx, CancellationToken ct)
     {
         // populate and return a request dto object however you please...
-        MemoryStream ms = new MemoryStream();
+        var ms = new MemoryStream();
         await ctx.HttpContext.Request.Body.CopyToAsync(ms, ct);
         return new Request
         {
-            ByteContent = ms.ToArray(),
-            StringContent = Encoding.UTF8.GetString(ms.ToArray())
+            ByteContent   = ms.ToArray(),
+            StringContent = Encoding.UTF8.GetString(ms.ToArray()),
         };
     }
 }
 
-
 public class IlpEndpoint : Endpoint<Request, JsonErrorResponse?>
 {
+    private const string Username = "admin";
+    private const string Password = "quest";
     public static readonly StringBuilder ReceiveBuffer = new();
     public static readonly List<byte> ReceiveBytes = new();
     public static Exception? LastError = new();
@@ -79,9 +80,7 @@ public class IlpEndpoint : Endpoint<Request, JsonErrorResponse?>
     public static bool WithBasicAuth = false;
     public static bool WithRetriableError = false;
     public static bool WithErrorMessage = false;
-    private const string Username = "admin";
-    private const string Password = "quest";
-    public static int Counter = 0;
+    public static int Counter;
 
     public override void Configure()
     {
@@ -111,11 +110,11 @@ public class IlpEndpoint : Endpoint<Request, JsonErrorResponse?>
 
         if (WithErrorMessage)
         {
-            await SendAsync(new JsonErrorResponse()
-                { code = "code", errorId = "errorid", line = 1, message = "message" }, 400, ct);
+            await SendAsync(new JsonErrorResponse
+                                { code = "code", errorId = "errorid", line = 1, message = "message", }, 400, ct);
             return;
         }
-        
+
         try
         {
             ReceiveBuffer.Append(req.StringContent);

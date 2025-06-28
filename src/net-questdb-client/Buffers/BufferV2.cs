@@ -3,6 +3,8 @@ using System.Runtime.InteropServices;
 using QuestDB.Enums;
 using QuestDB.Utils;
 
+#pragma warning disable CS1591 // Missing XML comment for publicly visible type or member
+
 namespace QuestDB.Buffers;
 
 public class BufferV2 : BufferV1
@@ -36,12 +38,17 @@ public class BufferV2 : BufferV1
         }
 
         var startLength = Length;
-        foreach (var d in (IEnumerable<double>)value) PutBinary(d);
+        foreach (var d in (IEnumerable<double>)value)
+        {
+            PutBinary(d);
+        }
 
         var enumerableLength = (Length - startLength) / sizeof(double);
 
         if (expectedLength != enumerableLength)
+        {
             throw new IngressError(ErrorCode.InvalidApiCall, "shape does not match enumerable length");
+        }
 
         return this;
     }
@@ -49,55 +56,63 @@ public class BufferV2 : BufferV1
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void GuardAgainstNonDoubleTypes(Type t)
     {
-        if (t != typeof(double)) throw new IngressError(ErrorCode.InvalidApiCall, "only double arrays are supported");
+        if (t != typeof(double))
+        {
+            throw new IngressError(ErrorCode.InvalidApiCall, "only double arrays are supported");
+        }
     }
 
-    private IBuffer PutBinaryLE<T>(T value) where T : struct
+    // ReSharper disable once InconsistentNaming
+    private void PutBinaryLE<T>(T value) where T : struct
     {
         var size = Marshal.SizeOf<T>();
         EnsureCapacity(size);
         PutBinaryDeferred(out Span<T> slot);
         slot[0] = value;
-        return this;
     }
 
-    private IBuffer PutBinaryBE<T>(T value) where T : struct
+    // ReSharper disable once InconsistentNaming
+    private void PutBinaryBE<T>(T value) where T : struct
     {
         var size = Marshal.SizeOf<T>();
         EnsureCapacity(size);
         PutBinaryDeferred(out Span<T> slot);
         slot[0] = value;
         MemoryMarshal.Cast<T, byte>(slot).Reverse();
-        return this;
     }
 
     private IBuffer PutBinary<T>(T value, in Span<T> span) where T : struct
     {
         span[0] = value;
-        if (!BitConverter.IsLittleEndian) span.Reverse();
+        if (!BitConverter.IsLittleEndian)
+        {
+            span.Reverse();
+        }
+
         return this;
     }
 
+    // ReSharper disable once InconsistentNaming
     private void PutBinaryManyLE<T>(ReadOnlySpan<T> value) where T : struct
     {
-        var srcSpan = MemoryMarshal.Cast<T, byte>(value);
+        var srcSpan  = MemoryMarshal.Cast<T, byte>(value);
         var byteSize = Marshal.SizeOf<T>();
 
         while (srcSpan.Length > 0)
         {
-            var dstLength = GetSpareCapacity(); // length
+            var dstLength   = GetSpareCapacity();               // length
             var availLength = dstLength - dstLength % byteSize; // rounded length
 
             if (srcSpan.Length < availLength)
             {
-                var dstSpan = SendBuffer.AsSpan(Position, srcSpan.Length);
+                var dstSpan = Chunk.AsSpan(Position, srcSpan.Length);
                 srcSpan.CopyTo(dstSpan);
                 Advance(srcSpan.Length);
                 srcSpan = srcSpan.Slice(srcSpan.Length);
             }
             else
             {
-                var dstSpan = SendBuffer.AsSpan(Position, availLength);
+                var dstSpan     = Chunk.AsSpan(Position, availLength);
                 var reducedSpan = srcSpan.Slice(0, availLength);
                 reducedSpan.CopyTo(dstSpan);
                 Advance(availLength);
@@ -106,25 +121,37 @@ public class BufferV2 : BufferV1
         }
     }
 
+    // ReSharper disable once InconsistentNaming
     private void PutBinaryManyBE<T>(ReadOnlySpan<T> value) where T : struct
     {
-        foreach (var t in value) PutBinaryBE(t);
+        foreach (var t in value)
+        {
+            PutBinaryBE(t);
+        }
     }
 
     private void PutBinaryMany<T>(ReadOnlySpan<T> value) where T : struct
     {
         if (BitConverter.IsLittleEndian)
+        {
             PutBinaryManyLE(value);
+        }
         else
+        {
             PutBinaryManyBE(value);
+        }
     }
 
     private void PutBinary<T>(T value) where T : struct
     {
         if (BitConverter.IsLittleEndian)
+        {
             PutBinaryLE(value);
+        }
         else
+        {
             PutBinaryBE(value);
+        }
     }
 
     public override IBuffer Column<T>(ReadOnlySpan<char> name, ReadOnlySpan<T> value) where T : struct
@@ -142,15 +169,21 @@ public class BufferV2 : BufferV1
     public override IBuffer Column(ReadOnlySpan<char> name, Array value)
     {
         var type = value.GetType().GetElementType();
-        GuardAgainstNonDoubleTypes(type);
+        GuardAgainstNonDoubleTypes(type ?? throw new InvalidOperationException());
         SetTableIfAppropriate();
         PutArrayOfDoubleHeader(name);
 
         Put((byte)value.Rank); // dims count
 
-        for (var i = 0; i < value.Rank; i++) PutBinary(Convert.ToUInt32(value.GetLength(i)));
+        for (var i = 0; i < value.Rank; i++)
+        {
+            PutBinary(Convert.ToUInt32(value.GetLength(i)));
+        }
 
-        foreach (double d in value) PutBinary(d);
+        foreach (double d in value)
+        {
+            PutBinary(d);
+        }
 
         return this;
     }
@@ -159,7 +192,7 @@ public class BufferV2 : BufferV1
     {
         var length = Marshal.SizeOf<T>();
         EnsureCapacity(length);
-        span = MemoryMarshal.Cast<byte, T>(SendBuffer.AsSpan(Position, length));
+        span = MemoryMarshal.Cast<byte, T>(Chunk.AsSpan(Position, length));
         Advance(length);
     }
 
@@ -181,7 +214,7 @@ public class BufferV2 : BufferV1
 
     private int GetSpareCapacity()
     {
-        return SendBuffer.Length - Position;
+        return Chunk.Length - Position;
     }
 
     /// <inheritdoc />

@@ -5,7 +5,7 @@ namespace dummy_http_server;
 
 public class SettingsEndpoint : EndpointWithoutRequest<string>
 {
-    public static int[] Versions { get; set; }
+    public static int[]? Versions { get; set; }
 
     public override void Configure()
     {

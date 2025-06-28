@@ -2,6 +2,8 @@ using System.Reflection;
 
 namespace QuestDB;
 
+/// <summary>
+/// </summary>
 public static class Signatures
 {
     private static readonly Lazy<ISignatureGenerator> SigGen = new(() => CreateSignatureGenerator0());
@@ -12,7 +14,7 @@ public static class Signatures
         try
         {
             var assembly = Assembly.LoadFrom("net-questdb-client-tcp-auth.dll");
-            Type? type = assembly.GetType("QuestDB.Secp256r1SignatureGenerator");
+            var type     = assembly.GetType("QuestDB.Secp256r1SignatureGenerator");
             if (type != null)
             {
                 var val = (ISignatureGenerator?)Activator.CreateInstance(type);
@@ -26,12 +28,14 @@ public static class Signatures
         {
             ex = e;
         }
-        
+
         throw new TypeLoadException(
             "Could not load QuestDB.Secp256r1SignatureGenerator, please add a reference to assembly \"net-questdb-client-tcp-auth\"" +
-            (ex == null ? ": cannot load the type, return value is null": ""), ex);
+            (ex == null ? ": cannot load the type, return value is null" : ""), ex);
     }
 
+    /// <summary>
+    /// </summary>
     public static ISignatureGenerator CreateSignatureGenerator()
     {
         return SigGen.Value;

@@ -28,16 +28,18 @@ using dummy_http_server;
 using QuestDB;
 using tcp_client_test;
 
+#pragma warning disable CS0414 // Field is assigned but its value is never used
+
 namespace net_questdb_client_benchmarks;
 
 [MarkdownExporterAttribute.GitHub]
 public class BenchInserts
 {
-    private readonly DummyHttpServer _httpServer;
-    private readonly DummyIlpServer _tcpServer;
     private readonly int _httpPort = 29473;
+    private readonly DummyHttpServer _httpServer;
     private readonly int _httpsPort = 29474;
     private readonly int _tcpPort = 29472;
+    private readonly DummyIlpServer _tcpServer;
 
     [Params(1000, 10000, 25000, 75000, 100000)]
     public int BatchSize;
@@ -93,6 +95,4 @@ public class BenchInserts
 
         await sender.SendAsync();
     }
-
-   
 }

@@ -127,6 +127,9 @@ public record SenderOptions
         set => _protocol = value;
     }
 
+    /// <summary>
+    ///     Protocol Version to connect with.
+    /// </summary>
     public ProtocolVersion protocol_version
     {
         get => _protocol_version;
@@ -328,7 +331,7 @@ public record SenderOptions
     ///     To account for this, the user can specify the expected data transfer speed.
     ///     This is then used to calculate an appropriate timeout value with the following equation:
     ///     <para />
-    ///     <see cref="HttpClient.Timeout" /> = (<see cref="Buffers.Buffer.Length" /> /
+    ///     <see cref="HttpClient.Timeout" /> = (<see cref="Buffers.IBuffer.Length" /> /
     ///     <see cref="SenderOptions.request_min_throughput" />) + <see cref="SenderOptions.request_timeout" />
     /// </remarks>
     public int request_min_throughput

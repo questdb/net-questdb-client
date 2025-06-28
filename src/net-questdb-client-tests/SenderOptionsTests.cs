@@ -23,6 +23,7 @@
  ******************************************************************************/
 
 
+using System.Diagnostics;
 using Microsoft.Extensions.Configuration;
 using NUnit.Framework;
 using QuestDB;
@@ -91,6 +92,7 @@ public class SenderOptionsTests
         var fromFileOptions = new ConfigurationBuilder().AddJsonFile("config.json").Build().GetSection("QuestDB")
                                                         .Get<SenderOptions>();
         var defaultOptions = new SenderOptions("http::addr=localhost:9000;tls_verify=unsafe_off;");
+        Debug.Assert(fromFileOptions != null, nameof(fromFileOptions) + " != null");
         Assert.That(fromFileOptions.ToString(), Is.EqualTo(defaultOptions.ToString()));
     }
 

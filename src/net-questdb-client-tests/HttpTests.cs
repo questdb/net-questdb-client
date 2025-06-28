@@ -1010,7 +1010,7 @@ public class HttpTests
     }
 
     [Test]
-    public async Task CannotCommitWithoutTransaction()
+    public Task CannotCommitWithoutTransaction()
     {
         using var sender =
             Sender.New(
@@ -1024,10 +1024,11 @@ public class HttpTests
             async () => await sender.CommitAsync(),
             Throws.TypeOf<IngressError>().With.Message.Contains("No transaction")
         );
+        return Task.CompletedTask;
     }
 
     [Test]
-    public async Task TransactionBufferMustBeClearBeforeStart()
+    public Task TransactionBufferMustBeClearBeforeStart()
     {
         using var sender =
             Sender.New(
@@ -1041,10 +1042,11 @@ public class HttpTests
         );
 
         sender.Clear();
+        return Task.CompletedTask;
     }
 
     [Test]
-    public async Task TransactionCannotBeRolledBackIfItDoesNotExist()
+    public Task TransactionCannotBeRolledBackIfItDoesNotExist()
     {
         using var sender =
             Sender.New(
@@ -1057,6 +1059,7 @@ public class HttpTests
             Throws.TypeOf<IngressError>().With.Message.Contains("no")
         );
         sender.Clear();
+        return Task.CompletedTask;
     }
 
     [Test]

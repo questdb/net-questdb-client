@@ -10,12 +10,23 @@ public interface IBuffer : IBufferV2
 {
 }
 
+/// <summary>
+///     Buffer following the V1 API.
+/// </summary>
 public interface IBufferV1
 {
-    public byte[] SendBuffer { get; set; }
+    /// <summary>
+    ///     The current chunk of the chunked buffer.
+    /// </summary>
+    public byte[] Chunk { get; set; }
 
+    /// <summary>
+    ///     The current head of the buffer within the current chunk
+    /// </summary>
     public int Position { get; set; }
 
+    /// <summary>
+    /// </summary>
     public bool WithinTransaction { get; protected set; }
 
     /// <summary>
@@ -178,6 +189,9 @@ public interface IBufferV1
     public IBuffer Put(byte value);
 }
 
+/// <summary>
+///     Buffer following the V2 API.
+/// </summary>
 public interface IBufferV2 : IBufferV1
 {
     public IBuffer Column<T>(ReadOnlySpan<char> name, T[] value) where T : struct;

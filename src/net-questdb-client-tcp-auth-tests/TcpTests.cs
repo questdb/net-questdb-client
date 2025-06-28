@@ -33,6 +33,7 @@ using Org.BouncyCastle.Security;
 using QuestDB;
 using QuestDB.Utils;
 
+// ReSharper disable once CheckNamespace
 namespace net_questdb_client_tests;
 
 public class TcpTests
@@ -45,7 +46,7 @@ public class TcpTests
     {
         using var srv = CreateTcpListener(_port);
         srv.WithAuth("testUser1", "Vs4e-cOLsVCntsMrZiAGAZtrkPXO00uoRLuA3d7gEcI=",
-            "ANhR2AZSs4ar9urE5AZrJqu469X0r7gZ1BBEdcrAuL_6");
+                     "ANhR2AZSs4ar9urE5AZrJqu469X0r7gZ1BBEdcrAuL_6");
         srv.AcceptAsync();
 
         using var sender =
@@ -53,10 +54,10 @@ public class TcpTests
                 $"tcp::addr={_host}:{_port};username=testUser1;token=NgdiOWDoQNUP18WOnb1xkkEG5TzPYMda5SiUOvT1K0U=;");
 
         await sender.Table("metric name")
-            .Symbol("t a g", "v alu, e")
-            .Column("number", 10)
-            .Column("string", " -=\"")
-            .AtAsync(new DateTime(1970, 01, 01, 0, 0, 1));
+                    .Symbol("t a g", "v alu, e")
+                    .Column("number", 10)
+                    .Column("string", " -=\"")
+                    .AtAsync(new DateTime(1970, 01, 01, 0, 0, 1));
         await sender.SendAsync();
 
         var expected = "metric\\ name,t\\ a\\ g=v\\ alu\\,\\ e number=10i,string=\" -=\\\"\" 1000000000\n";
@@ -64,29 +65,30 @@ public class TcpTests
     }
 
     [Test]
-    public async Task AuthFailWrongKid()
+    public Task AuthFailWrongKid()
     {
         using var srv = CreateTcpListener(_port);
         srv.WithAuth("testUser1", "Vs4e-cOLsVCntsMrZiAGAZtrkPXO00uoRLuA3d7gEcI=",
-            "ANhR2AZSs4ar9urE5AZrJqu469X0r7gZ1BBEdcrAuL_6");
+                     "ANhR2AZSs4ar9urE5AZrJqu469X0r7gZ1BBEdcrAuL_6");
         srv.AcceptAsync();
 
         Assert.That(
             () => Sender.New($"tcp::addr={_host}:{_port};username=invalid;token=foo=;")
-            ,
+           ,
             Throws.TypeOf<AggregateException>().With.InnerException.TypeOf<IngressError>().With.Message
-                .Contains("Authentication failed")
+                  .Contains("Authentication failed")
         );
+        return Task.CompletedTask;
     }
 
     [Test]
-    public async Task AuthFailBadKey()
+    public Task AuthFailBadKey()
     {
         using var srv = CreateTcpListener(_port);
         srv.WithAuth("testUser1", "Vs4e-cOLsVCntsMrZiAGAZtrkPXO00uoRLuA3d7gEcI=",
-            "ANhR2AZSs4ar9urE5AZrJqu469X0r7gZ1BBEdcrAuL_6");
+                     "ANhR2AZSs4ar9urE5AZrJqu469X0r7gZ1BBEdcrAuL_6");
         srv.AcceptAsync();
-        
+
         using var sender = Sender.New(
             $"tcp::addr={_host}:{_port};username=testUser1;token=ZOvHHNQBGvZuiCLt7CmWt0tTlsnjm9F3O3C749wGT_M=;");
 
@@ -96,10 +98,10 @@ public class TcpTests
                 for (var i = 0; i < 10; i++)
                 {
                     await sender.Table("metric name")
-                        .Symbol("t a g", "v alu, e")
-                        .Column("number", 10)
-                        .Column("string", " -=\"")
-                        .AtAsync(new DateTime(1970, 01, 01, 0, 0, 1));
+                                .Symbol("t a g", "v alu, e")
+                                .Column("number", 10)
+                                .Column("string", " -=\"")
+                                .AtAsync(new DateTime(1970, 01, 01, 0, 0, 1));
                     await sender.SendAsync();
                     Thread.Sleep(10);
                 }
@@ -107,15 +109,16 @@ public class TcpTests
                 Assert.Fail();
             },
             Throws.TypeOf<IngressError>().With.Message
-                .Contains("Could not write data to server.")
+                  .Contains("Could not write data to server.")
         );
+        return Task.CompletedTask;
     }
 
     [Test]
     public void EcdsaSignatureLoop()
     {
         var privateKey = Convert.FromBase64String("NgdiOWDoQNUP18WOnb1xkkEG5TzPYMda5SiUOvT1K0U=");
-        var p = SecNamedCurves.GetByName("secp256r1");
+        var p          = SecNamedCurves.GetByName("secp256r1");
         var parameters = new ECDomainParameters(p.Curve, p.G, p.N, p.H);
         var priKey = new ECPrivateKeyParameters(
             "ECDSA",
@@ -145,7 +148,7 @@ public class TcpTests
         ecdsa.BlockUpdate(m, 0, m.Length);
         Assert.That(ecdsa.VerifySignature(signature));
     }
-    
+
     private static void WaitAssert(DummyIlpServer srv, string expected)
     {
         var expectedLen = Encoding.UTF8.GetBytes(expected).Length;

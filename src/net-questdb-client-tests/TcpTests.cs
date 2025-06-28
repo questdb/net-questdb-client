@@ -33,6 +33,9 @@ using Org.BouncyCastle.Security;
 using QuestDB;
 using QuestDB.Utils;
 
+#pragma warning disable CS0618 // Type or member is obsolete
+#pragma warning disable CS0618 // Type or member is obsolete
+
 namespace net_questdb_client_tests;
 
 public class TcpTests
@@ -47,11 +50,11 @@ public class TcpTests
         srv.AcceptAsync();
 
         using var sender = Sender.New($"tcp::addr={_host}:{_port};");
-        sender.Table("metric name")
-              .Symbol("t a g", "v alu, e")
-              .Column("number", 10)
-              .Column("string", " -=\"")
-              .AtAsync(new DateTime(1970, 01, 01, 0, 0, 1));
+        await sender.Table("metric name")
+                    .Symbol("t a g", "v alu, e")
+                    .Column("number", 10)
+                    .Column("string", " -=\"")
+                    .AtAsync(new DateTime(1970, 01, 01, 0, 0, 1));
         await sender.SendAsync();
 
 
@@ -261,12 +264,14 @@ public class TcpTests
 
         using var sender = Sender.New($"tcp::addr={_host}:{_port};");
 
+#pragma warning disable CS0618 // Type or member is obsolete
         await sender.Table("neg name")
                     .Column("number1", long.MinValue + 1)
                     .Column("number2", long.MaxValue)
                     .Column("number3", double.MinValue)
                     .Column("number4", double.MaxValue)
                     .AtNowAsync();
+#pragma warning restore CS0618 // Type or member is obsolete
         await sender.SendAsync();
 
         var expected =
@@ -282,6 +287,7 @@ public class TcpTests
 
         using var sender = Sender.New($"tcp::addr={_host}:{_port};");
 
+#pragma warning disable CS0618 // Type or member is obsolete
         await sender.Table("doubles")
                     .Column("d0", 0.0)
                     .Column("dm0", -0.0)
@@ -292,6 +298,7 @@ public class TcpTests
                     .Column("dInf", double.PositiveInfinity)
                     .Column("dNInf", double.NegativeInfinity)
                     .AtNowAsync();
+#pragma warning restore CS0618 // Type or member is obsolete
         await sender.SendAsync();
 
         var expected =
@@ -320,7 +327,7 @@ public class TcpTests
     }
 
     [Test]
-    public async Task AuthFailsNeedToReferenceAssembly()
+    public Task AuthFailsNeedToReferenceAssembly()
     {
         using var srv = CreateTcpListener(_port, true);
         srv.WithAuth("testUser1", "Vs4e-cOLsVCntsMrZiAGAZtrkPXO00uoRLuA3d7gEcI=",
@@ -338,10 +345,12 @@ public class TcpTests
         {
             Assert.That(ex.Message.Contains("Could not load QuestDB.Secp256r1SignatureGenerator"), Is.True);
         }
+
+        return Task.CompletedTask;
     }
 
     [Test]
-    public async Task InvalidState()
+    public Task InvalidState()
     {
         using var srv = CreateTcpListener(_port);
         srv.AcceptAsync();
@@ -390,6 +399,7 @@ public class TcpTests
             () => sender.Symbol("asdf", "asdf"),
             Throws.TypeOf<IngressError>().With.Message.Contains("Cannot write symbols after fields")
         );
+        return Task.CompletedTask;
     }
 
 
@@ -443,7 +453,7 @@ public class TcpTests
     }
 
     [Test]
-    public async Task InvalidTableName()
+    public Task InvalidTableName()
     {
         using var srv = CreateTcpListener(_port);
         srv.AcceptAsync();
@@ -464,6 +474,7 @@ public class TcpTests
         sender.Column("asdf", 123);
 
         Assert.Throws<IngressError>(() => sender.Symbol("asdf", "asdf"));
+        return Task.CompletedTask;
     }
 
     [Test]
@@ -477,12 +488,16 @@ public class TcpTests
         sender.Table("good");
         sender.Symbol("asdf", "sdfad");
         sender.Column("ddd", 123);
+#pragma warning disable CS0618 // Type or member is obsolete
         await sender.AtNowAsync();
+#pragma warning restore CS0618 // Type or member is obsolete
 
         sender.Table("bad");
         sender.Symbol("asdf", "sdfad");
         sender.Column("asdf", 123);
+#pragma warning disable CS0618 // Type or member is obsolete
         await sender.AtNowAsync();
+#pragma warning restore CS0618 // Type or member is obsolete
         sender.CancelRow();
 
         sender.Table("good");
@@ -552,16 +567,17 @@ public class TcpTests
     }
 
     [Test]
-    public async Task CannotConnect()
+    public Task CannotConnect()
     {
         Assert.That(
             () => Sender.New($"tcp::addr={_host}:{_port};auto_flush=off;"),
             Throws.TypeOf<AggregateException>()
         );
+        return Task.CompletedTask;
     }
 
     [Test]
-    public async Task SendNegativeLongMin()
+    public Task SendNegativeLongMin()
     {
         using var srv = CreateTcpListener(_port);
         srv.AcceptAsync();
@@ -570,11 +586,14 @@ public class TcpTests
             Sender.New(
                 $"tcp::addr={_host}:{_port};");
         Assert.That(
+#pragma warning disable CS0618 // Type or member is obsolete
             () => sender.Table("name")
                         .Column("number1", long.MinValue)
                         .AtNowAsync(),
+#pragma warning restore CS0618 // Type or member is obsolete
             Throws.TypeOf<IngressError>().With.Message.Contains("Special case")
         );
+        return Task.CompletedTask;
     }
 
     [Test]
@@ -586,9 +605,11 @@ public class TcpTests
         using var sender =
             Sender.New(
                 $"tcp::addr={_host}:{_port};");
+#pragma warning disable CS0618 // Type or member is obsolete
         await sender.Table("neg name")
                     .Column("привед", " мед\rве\n д")
                     .AtNowAsync();
+#pragma warning restore CS0618 // Type or member is obsolete
         await sender.SendAsync();
 
         var expected = "neg\\ name привед=\" мед\\\rве\\\n д\"\n";
@@ -596,7 +617,7 @@ public class TcpTests
     }
 
     [Test]
-    public async Task SendTagAfterField()
+    public Task SendTagAfterField()
     {
         using var srv = CreateTcpListener(_port);
         srv.AcceptAsync();
@@ -606,16 +627,19 @@ public class TcpTests
                 $"tcp::addr={_host}:{_port};");
 
         Assert.That(
+#pragma warning disable CS0618 // Type or member is obsolete
             async () => await sender.Table("name")
                                     .Column("number1", 123)
                                     .Symbol("nand", "asdfa")
                                     .AtNowAsync(),
+#pragma warning restore CS0618 // Type or member is obsolete
             Throws.TypeOf<IngressError>()
         );
+        return Task.CompletedTask;
     }
 
     [Test]
-    public async Task SendMetricOnce()
+    public Task SendMetricOnce()
     {
         using var srv = CreateTcpListener(_port);
         srv.AcceptAsync();
@@ -625,16 +649,19 @@ public class TcpTests
                 $"tcp::addr={_host}:{_port};");
 
         Assert.That(
+#pragma warning disable CS0618 // Type or member is obsolete
             async () => await sender.Table("name")
                                     .Column("number1", 123)
                                     .Table("nand")
                                     .AtNowAsync(),
+#pragma warning restore CS0618 // Type or member is obsolete
             Throws.TypeOf<IngressError>()
         );
+        return Task.CompletedTask;
     }
 
     [Test]
-    public async Task StartFromMetric()
+    public Task StartFromMetric()
     {
         using var srv = CreateTcpListener(_port);
         srv.AcceptAsync();
@@ -644,16 +671,21 @@ public class TcpTests
                 $"tcp::addr={_host}:{_port};");
 
         Assert.That(
+#pragma warning disable CS0618 // Type or member is obsolete
             async () => await sender.Column("number1", 123)
                                     .AtNowAsync(),
+#pragma warning restore CS0618 // Type or member is obsolete
             Throws.TypeOf<IngressError>()
         );
 
         Assert.That(
+#pragma warning disable CS0618 // Type or member is obsolete
             async () => await sender.Symbol("number1", "1234")
                                     .AtNowAsync(),
+#pragma warning restore CS0618 // Type or member is obsolete
             Throws.TypeOf<IngressError>()
         );
+        return Task.CompletedTask;
     }
 
     [Test]
@@ -673,7 +705,9 @@ public class TcpTests
                 Assert.That(sender.Length == 12);
             }
 
+#pragma warning disable CS0618 // Type or member is obsolete
             await sender.Table("foo").Symbol("bah", "baz").AtNowAsync();
+#pragma warning restore CS0618 // Type or member is obsolete
         }
     }
 
@@ -692,7 +726,9 @@ public class TcpTests
                 Assert.That(sender.Length == 0);
             }
 
+#pragma warning disable CS0618 // Type or member is obsolete
             await sender.Table("foo").Symbol("bah", "baz").AtNowAsync();
+#pragma warning restore CS0618 // Type or member is obsolete
         }
     }
 
@@ -705,16 +741,20 @@ public class TcpTests
             Sender.New(
                 $"tcp::addr={_host}:{_port};auto_flush=on;auto_flush_interval=250;auto_flush_rows=-1;auto_flush_bytes=-1;");
 
+#pragma warning disable CS0618 // Type or member is obsolete
         await sender.Table("foo").Symbol("bah", "baz").AtNowAsync();
+#pragma warning restore CS0618 // Type or member is obsolete
         await sender.SendAsync();
         await Task.Delay(500);
+#pragma warning disable CS0618 // Type or member is obsolete
         await sender.Table("foo").Symbol("bah", "baz").AtNowAsync();
+#pragma warning restore CS0618 // Type or member is obsolete
         Assert.That(sender.Length == 0);
     }
 
 
     [Test]
-    public async Task TcpSenderDoesNotSupportTransactions()
+    public Task TcpSenderDoesNotSupportTransactions()
     {
         using var srv = CreateTcpListener(_port);
         srv.AcceptAsync();
@@ -741,6 +781,7 @@ public class TcpTests
             async () => await sender.CommitAsync(),
             Throws.TypeOf<IngressError>().With.Message.Contains("does not support")
         );
+        return Task.CompletedTask;
     }
 
     [Test]
@@ -751,9 +792,11 @@ public class TcpTests
 
         using var sender = Sender.New($"tcp::addr={_host}:{_port};auto_flush=off;");
 
+#pragma warning disable CS0618 // Type or member is obsolete
         await sender.Table("foo")
                     .Symbol("bah", "baz")
                     .AtNowAsync();
+#pragma warning restore CS0618 // Type or member is obsolete
 
         await sender.Table("foo")
                     .Symbol("bah", "baz")
@@ -767,9 +810,11 @@ public class TcpTests
                     .Symbol("bah", "baz")
                     .AtAsync(DateTime.UtcNow.Ticks / 100);
 
+#pragma warning disable CS0618 // Type or member is obsolete
         sender.Table("foo")
               .Symbol("bah", "baz")
               .AtNow();
+#pragma warning restore CS0618 // Type or member is obsolete
 
         sender.Table("foo")
               .Symbol("bah", "baz")
@@ -794,7 +839,9 @@ public class TcpTests
 
         using var sender = Sender.New($"tcp::addr={_host}:{_port};auto_flush=off;");
 
+#pragma warning disable CS0618 // Type or member is obsolete
         await sender.Table("foo").Symbol("bah", "baz").AtNowAsync();
+#pragma warning restore CS0618 // Type or member is obsolete
         Assert.That(sender.Length, Is.GreaterThan(0));
 
         sender.Clear();

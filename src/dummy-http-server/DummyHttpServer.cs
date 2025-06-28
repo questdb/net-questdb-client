@@ -23,6 +23,7 @@
  ******************************************************************************/
 
 
+using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Text;
 using FastEndpoints;
@@ -102,7 +103,7 @@ public class DummyHttpServer : IDisposable
         IlpEndpoint.Counter   = 0;
     }
 
-    public Task StartAsync(int port = 29743, int[] versions = null)
+    public Task StartAsync(int port = 29743, int[]? versions = null)
     {
         versions                  ??= new[] { 1, 2, };
         SettingsEndpoint.Versions =   versions;
@@ -181,9 +182,10 @@ public class DummyHttpServer : IDisposable
                     {
                         case 14:
                             sb.Append("ARRAY<");
-                            // array contexta
-                            var type_ = bytes[++i];
-                            var dims  = bytes[++i];
+                            var type = bytes[++i];
+
+                            Debug.Assert(type == 10);
+                            var dims = bytes[++i];
 
                             ++i;
 
@@ -191,17 +193,17 @@ public class DummyHttpServer : IDisposable
                             for (var j = 0; j < dims; j++)
                             {
                                 var lengthBytes = bytes.AsSpan()[i..(i + 4)];
-                                var _length     = MemoryMarshal.Cast<byte, uint>(lengthBytes)[0];
+                                var lengthValue = MemoryMarshal.Cast<byte, uint>(lengthBytes)[0];
                                 if (length == 0)
                                 {
-                                    length = _length;
+                                    length = lengthValue;
                                 }
                                 else
                                 {
-                                    length *= _length;
+                                    length *= lengthValue;
                                 }
 
-                                sb.Append(_length);
+                                sb.Append(lengthValue);
                                 sb.Append(',');
                                 i += 4;
                             }

@@ -140,8 +140,9 @@ internal class HttpSender : AbstractSender
                 var request  = new HttpRequestMessage(HttpMethod.Get, "/settings");
                 var response = _client.Send(request);
                 response.EnsureSuccessStatusCode();
-                var json       = response.Content.ReadFromJsonAsync<SettingsResponse>().Result!;
-                var versions   = json.Config.LineProtoSupportVersions!;
+                var json = response.Content
+                                   .ReadFromJsonAsync<SettingsResponse>().Result!;
+                var versions   = json.Config?.LineProtoSupportVersions!;
                 var maxVersion = 0;
                 foreach (var element in versions)
                 {

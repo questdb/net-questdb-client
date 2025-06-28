@@ -1,7 +1,7 @@
 ﻿using QuestDB;
 
 using var sender = Sender.New("http::addr=localhost:9000;");
-var       x      = sender.Options.ToString();
+
 await sender.Table("trades")
             .Symbol("symbol", "ETH-USD")
             .Symbol("side", "sell")
@@ -17,3 +17,6 @@ await sender.Table("trades")
             .AtAsync(DateTime.UtcNow);
 
 await sender.SendAsync();
+
+// Test with:
+// dotnet publish -r osx-arm64 -c Release

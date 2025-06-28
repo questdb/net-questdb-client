@@ -137,12 +137,12 @@ internal class TcpSender : AbstractSender
         var privateKey =
             FromBase64String(Options.token!);
 
-        var signature = _signatureGenerator!.GenerateSignature(privateKey, Buffer.SendBuffer, bufferLen);
-        Base64.EncodeToUtf8(signature, Buffer.SendBuffer, out _, out var bytesWritten);
+        var signature = _signatureGenerator!.GenerateSignature(privateKey, Buffer.Chunk, bufferLen);
+        Base64.EncodeToUtf8(signature, Buffer.Chunk, out _, out var bytesWritten);
         Buffer.Position = bytesWritten;
         Buffer.PutAscii('\n');
 
-        await _dataStream.WriteAsync(Buffer.SendBuffer, 0, Buffer.Position, ct);
+        await _dataStream.WriteAsync(Buffer.Chunk, 0, Buffer.Position, ct);
         Buffer.Clear();
     }
 
@@ -156,14 +156,14 @@ internal class TcpSender : AbstractSender
     private async ValueTask<int> ReceiveUntil(char endChar, CancellationToken cancellationToken)
     {
         var totalReceived = 0;
-        while (totalReceived < Buffer.SendBuffer.Length)
+        while (totalReceived < Buffer.Chunk.Length)
         {
-            var received = await _dataStream.ReadAsync(Buffer.SendBuffer, totalReceived,
-                                                       Buffer.SendBuffer.Length - totalReceived, cancellationToken);
+            var received = await _dataStream.ReadAsync(Buffer.Chunk, totalReceived,
+                                                       Buffer.Chunk.Length - totalReceived, cancellationToken);
             if (received > 0)
             {
                 totalReceived += received;
-                if (Buffer.SendBuffer[totalReceived - 1] == endChar)
+                if (Buffer.Chunk[totalReceived - 1] == endChar)
                 {
                     return totalReceived - 1;
                 }

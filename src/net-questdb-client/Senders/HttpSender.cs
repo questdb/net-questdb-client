@@ -140,13 +140,12 @@ internal class HttpSender : AbstractSender
                 var request  = new HttpRequestMessage(HttpMethod.Get, "/settings");
                 var response = _client.Send(request);
                 response.EnsureSuccessStatusCode();
-                var json       = (JsonElement)response.Content.ReadFromJsonAsync<object>().Result;
-                var versions   = json.GetProperty("config").GetProperty("line.proto.support.versions");
+                var json       = response.Content.ReadFromJsonAsync<SettingsResponse>().Result!;
+                var versions   = json.Config.LineProtoSupportVersions!;
                 var maxVersion = 0;
-                foreach (var element in versions.EnumerateArray())
+                foreach (var element in versions)
                 {
-                    Debug.Assert(element.ValueKind == JsonValueKind.Number);
-                    maxVersion = Math.Max(maxVersion, element.GetInt32());
+                    maxVersion = Math.Max(maxVersion, element);
                 }
 
                 protocolVersion = (ProtocolVersion)maxVersion;
@@ -157,7 +156,7 @@ internal class HttpSender : AbstractSender
             }
         }
 
-        Buffer = BufferFactory.Create(
+        Buffer = Buffers.Buffer.Create(
             Options.init_buf_size,
             Options.max_name_len,
             Options.max_buf_size,
@@ -286,6 +285,7 @@ internal class HttpSender : AbstractSender
 
         try
         {
+            // ReSharper disable once PossiblyMistakenUseOfCancellationToken
             (request, cts) = GenerateRequest(ct);
 
             try
@@ -322,6 +322,7 @@ internal class HttpSender : AbstractSender
                         response?.Dispose();
                         cts?.Dispose();
 
+                        // ReSharper disable once PossiblyMistakenUseOfCancellationToken
                         (request, cts) = GenerateRequest(ct);
 
                         var jitter = TimeSpan.FromMilliseconds(Random.Shared.Next(0, 10) - 10 / 2.0);
@@ -357,7 +358,7 @@ internal class HttpSender : AbstractSender
             // unwrap json error if present
             if (response.Content.Headers.ContentType?.MediaType == "application/json")
             {
-                HandleErrorJsonAsync(response, cts).Wait();
+                HandleErrorJsonAsync(response, cts).Wait(CancellationToken.None);
             }
 
             // fallback to basic error
@@ -387,13 +388,14 @@ internal class HttpSender : AbstractSender
         try
         {
             var jsonErr = response.Content.ReadFromJsonAsync<JsonErrorResponse>((JsonSerializerOptions)null!,
-                                                                                cts?.Token ?? default).Result;
+                                                                                cts?.Token ?? CancellationToken.None)
+                                  .Result;
             throw new IngressError(ErrorCode.ServerFlushError,
                                    $"{response.ReasonPhrase}. {jsonErr?.ToString() ?? ""}");
         }
         catch (JsonException)
         {
-            var strErr = response.Content.ReadAsStringAsync(cts?.Token ?? default).Result;
+            var strErr = response.Content.ReadAsStringAsync(cts?.Token ?? CancellationToken.None).Result;
             throw new IngressError(ErrorCode.ServerFlushError, $"{response.ReasonPhrase}. {strErr}");
         }
     }
@@ -418,6 +420,7 @@ internal class HttpSender : AbstractSender
 
         try
         {
+            // ReSharper disable once PossiblyMistakenUseOfCancellationToken
             (request, cts) = GenerateRequest(ct);
 
             try
@@ -454,10 +457,11 @@ internal class HttpSender : AbstractSender
                         response?.Dispose();
                         cts?.Dispose();
 
+                        // ReSharper disable once PossiblyMistakenUseOfCancellationToken
                         (request, cts) = GenerateRequest(ct);
 
                         var jitter = TimeSpan.FromMilliseconds(Random.Shared.Next(0, 10) - 10 / 2.0);
-                        await Task.Delay(retryInterval + jitter, cts?.Token ?? default);
+                        await Task.Delay(retryInterval + jitter, cts?.Token ?? CancellationToken.None);
 
                         try
                         {

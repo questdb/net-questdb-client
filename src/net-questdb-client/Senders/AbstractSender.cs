@@ -11,7 +11,7 @@ internal abstract class AbstractSender : ISender
     protected bool CommittingTransaction { get; set; }
 
     /// <inheritdoc />
-    public SenderOptions Options { get; protected init; }
+    public SenderOptions Options { get; protected init; } = null!;
 
     public int Length => Buffer.Length;
     public int RowCount => Buffer.RowCount;
@@ -230,32 +230,39 @@ internal abstract class AbstractSender : ISender
     ///     to <see cref="AutoFlushType.off" />, or individually by setting their values to `-1`.
     /// </remarks>
     /// <param name="ct">A user-provided cancellation token.</param>
-    public ValueTask FlushIfNecessaryAsync(CancellationToken ct = default)
+    private ValueTask FlushIfNecessaryAsync(CancellationToken ct = default)
     {
         if (Options.auto_flush == AutoFlushType.on && !WithinTransaction &&
             ((Options.auto_flush_rows > 0 && RowCount >= Options.auto_flush_rows)
              || (Options.auto_flush_bytes > 0 && Length >= Options.auto_flush_bytes)
              || (Options.auto_flush_interval > TimeSpan.Zero &&
                  DateTime.UtcNow - LastFlush >= Options.auto_flush_interval)))
+        {
             return new ValueTask(SendAsync(ct));
+        }
 
         return ValueTask.CompletedTask;
     }
 
     /// <inheritdoc cref="FlushIfNecessaryAsync" />
-    public void FlushIfNecessary(CancellationToken ct = default)
+    private void FlushIfNecessary(CancellationToken ct = default)
     {
         if (Options.auto_flush == AutoFlushType.on && !WithinTransaction &&
             ((Options.auto_flush_rows > 0 && RowCount >= Options.auto_flush_rows)
              || (Options.auto_flush_bytes > 0 && Length >= Options.auto_flush_bytes)
              || (Options.auto_flush_interval > TimeSpan.Zero &&
                  DateTime.UtcNow - LastFlush >= Options.auto_flush_interval)))
+        {
             Send(ct);
+        }
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void GuardLastFlushNotSet()
     {
-        if (LastFlush == DateTime.MinValue) LastFlush = DateTime.UtcNow;
+        if (LastFlush == DateTime.MinValue)
+        {
+            LastFlush = DateTime.UtcNow;
+        }
     }
 }

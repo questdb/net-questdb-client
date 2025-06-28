@@ -23,14 +23,15 @@
  *
  ******************************************************************************/
 
+#pragma warning disable CS1591 // Missing XML comment for publicly visible type or member
 namespace QuestDB;
 
 /// <summary>
-///     Deprecated enum. 
+///     Deprecated enum.
 /// </summary>
 [Obsolete]
 public enum BufferOverflowHandling
 {
     SendImmediately,
-    Extend
+    Extend,
 }

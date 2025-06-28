@@ -36,6 +36,9 @@ public interface ISender : ISenderV2
 {
 }
 
+/// <summary>
+///     Version 1 of the Sender API.
+/// </summary>
 public interface ISenderV1 : IDisposable
 {
     /// <summary>
@@ -196,13 +199,26 @@ public interface ISenderV1 : IDisposable
     public void Clear();
 }
 
+/// <summary>
+///     Version 2 of the Sender API, adding ARRAY and binary DOUBLE support.
+/// </summary>
 public interface ISenderV2 : ISenderV1
 {
+    /// <inheritdoc
+    ///     cref="Column{T}(System.ReadOnlySpan{char},System.Collections.Generic.IEnumerable{T},System.Collections.Generic.IEnumerable{int})" />
     public ISender Column<T>(ReadOnlySpan<char> name, IEnumerable<T> value, IEnumerable<int> shape) where T : struct;
 
-    /// <inheritdoc cref="Column(System.ReadOnlySpan{char},System.ReadOnlySpan{char})" />
+    /// <summary>
+    ///     Adds an ARRAY to the current row.
+    ///     Arrays are n-dimensional non-jagged arrays.
+    /// </summary>
+    /// <param name="name"></param>
+    /// <param name="value"></param>
+    /// <returns></returns>
     public ISender Column(ReadOnlySpan<char> name, Array value);
 
+    /// <inheritdoc
+    ///     cref="Column{T}(System.ReadOnlySpan{char},System.Collections.Generic.IEnumerable{T},System.Collections.Generic.IEnumerable{int})" />
     public ISender Column<T>(ReadOnlySpan<char> name, ReadOnlySpan<T> value) where T : struct;
 
     /// <summary>

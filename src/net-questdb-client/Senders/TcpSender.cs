@@ -26,7 +26,6 @@
 using System.Buffers.Text;
 using System.Net.Security;
 using System.Net.Sockets;
-using QuestDB.Buffers;
 using QuestDB.Enums;
 using QuestDB.Utils;
 using ProtocolType = QuestDB.Enums.ProtocolType;
@@ -57,7 +56,7 @@ internal class TcpSender : AbstractSender
 
     private void Build()
     {
-        Buffer = Buffer = BufferFactory.Create(
+        Buffer = Buffer = Buffers.Buffer.Create(
                      Options.init_buf_size,
                      Options.max_name_len,
                      Options.max_buf_size,

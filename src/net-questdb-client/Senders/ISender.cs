@@ -231,4 +231,95 @@ public interface ISenderV2 : ISenderV1
     {
         return ((ISenderV1)this).Column(name, value);
     }
+
+    public ISender NullableColumn<T>(ReadOnlySpan<char> name, IEnumerable<T>? value, IEnumerable<int>? shape)
+        where T : struct
+    {
+        if (value != null && shape != null)
+        {
+            Column(name, value, shape);
+        }
+
+        return (ISender)this;
+    }
+
+    public ISender NullableColumn(ReadOnlySpan<char> name, Array? value)
+    {
+        if (value != null)
+        {
+            Column(name, value);
+        }
+
+        return (ISender)this;
+    }
+
+    public ISender NullableColumn<T>(ReadOnlySpan<char> name, T[]? value) where T : struct
+    {
+        if (value != null)
+        {
+            Column(name, value);
+        }
+
+        return (ISender)this;
+    }
+
+    public ISender NullableColumn(ReadOnlySpan<char> name, string? value)
+    {
+        if (value != null)
+        {
+            Column(name, value);
+        }
+
+        return (ISender)this;
+    }
+
+    public ISender NullableColumn(ReadOnlySpan<char> name, long? value)
+    {
+        if (value != null)
+        {
+            return Column(name, value ?? throw new InvalidOperationException());
+        }
+
+        return (ISender)this;
+    }
+
+    public ISender NullableColumn(ReadOnlySpan<char> name, bool? value)
+    {
+        if (value != null)
+        {
+            return Column(name, value ?? throw new InvalidOperationException());
+        }
+
+        return (ISender)this;
+    }
+
+    public ISender NullableColumn(ReadOnlySpan<char> name, double? value)
+    {
+        if (value != null)
+        {
+            return Column(name, value ?? throw new InvalidOperationException());
+        }
+
+        return (ISender)this;
+    }
+
+    public ISender NullableColumn(ReadOnlySpan<char> name, DateTime? value)
+    {
+        if (value != null)
+        {
+            return Column(name, value ?? throw new InvalidOperationException());
+        }
+
+        return (ISender)this;
+    }
+
+    public ISender NullableColumn(ReadOnlySpan<char> name, DateTimeOffset? value)
+    {
+        if (value != null)
+        {
+            return Column(name, value ?? throw new InvalidOperationException());
+        }
+
+        return (ISender)this;
+    }
 }

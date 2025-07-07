@@ -1,4 +1,3 @@
-// ReSharper disable CommentTypo
 /*******************************************************************************
  *     ___                  _   ____  ____
  *    / _ \ _   _  ___  ___| |_|  _ \| __ )
@@ -22,6 +21,8 @@
  *  limitations under the License.
  *
  ******************************************************************************/
+
+// ReSharper disable CommentTypo
 
 
 using System.Data.Common;
@@ -49,7 +50,7 @@ public record SenderOptions
     private static readonly HashSet<string> keySet = new()
     {
         "protocol", "protocol_version", "addr", "auto_flush", "auto_flush_rows", "auto_flush_bytes",
-        "auto_flush_interval", "init_buf_size", "max_name_len", "username", "password", "token",
+        "auto_flush_interval", "init_buf_size", "max_buf_size", "max_name_len", "username", "password", "token",
         "request_min_throughput", "auth_timeout", "request_timeout", "retry_timeout",
         "pool_timeout", "tls_verify", "tls_roots", "tls_roots_password", "own_socket",
     };

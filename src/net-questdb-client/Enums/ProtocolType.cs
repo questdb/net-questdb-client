@@ -1,4 +1,3 @@
-// ReSharper disable CommentTypo
 /*******************************************************************************
  *     ___                  _   ____  ____
  *    / _ \ _   _  ___  ___| |_|  _ \| __ )
@@ -26,6 +25,7 @@
 
 // ReSharper disable InconsistentNaming
 // ReSharper disable IdentifierTypo
+// ReSharper disable CommentTypo
 
 namespace QuestDB.Enums;
 
@@ -52,5 +52,5 @@ public enum ProtocolType
     /// <summary>
     ///     HTTP transport with TLS.
     /// </summary>
-    https
+    https,
 }

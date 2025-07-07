@@ -1,4 +1,3 @@
-// ReSharper disable CommentTypo
 /*******************************************************************************
  *     ___                  _   ____  ____
  *    / _ \ _   _  ___  ___| |_|  _ \| __ )
@@ -23,7 +22,7 @@
  *
  ******************************************************************************/
 
-
+// ReSharper disable CommentTypo
 // ReSharper disable InconsistentNaming
 
 namespace QuestDB.Enums;
@@ -42,5 +41,5 @@ public enum AutoFlushType
     /// <summary>
     ///     Enable auto-flushing. (default)
     /// </summary>
-    on
+    on,
 }

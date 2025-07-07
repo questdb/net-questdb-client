@@ -38,12 +38,6 @@ public class BufferV2 : BufferV1
     }
 
     /// <summary />
-    public override IBuffer Column<T>(ReadOnlySpan<char> name, T[] value) where T : struct
-    {
-        return Column(name, (ReadOnlySpan<T>)value.AsSpan());
-    }
-
-    /// <summary />
     public override IBuffer Column<T>(ReadOnlySpan<char> name, IEnumerable<T> value, IEnumerable<int> shape)
         where T : struct
     {

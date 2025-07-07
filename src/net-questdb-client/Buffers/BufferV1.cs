@@ -24,7 +24,6 @@
 
 using System.Globalization;
 using System.Runtime.CompilerServices;
-using System.Runtime.InteropServices;
 using System.Text;
 using QuestDB.Enums;
 using QuestDB.Utils;
@@ -400,12 +399,6 @@ public class BufferV1 : IBuffer
     }
 
     /// <summary />
-    public virtual IBuffer Column<T>(ReadOnlySpan<char> name, T[] value) where T : struct
-    {
-        throw new IngressError(ErrorCode.ProtocolVersionError, "Protocol Version V1 does not support ARRAY types");
-    }
-
-    /// <summary />
     public virtual IBuffer Column<T>(ReadOnlySpan<char> name, ReadOnlySpan<T> value) where T : struct
     {
         throw new IngressError(ErrorCode.ProtocolVersionError, "Protocol Version V1 does not support ARRAY types");
@@ -438,11 +431,6 @@ public class BufferV1 : IBuffer
         return this;
     }
 
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    internal void Advance<T>() where T : struct
-    {
-        Advance(Marshal.SizeOf<T>());
-    }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal void Advance(int by)
@@ -515,12 +503,6 @@ public class BufferV1 : IBuffer
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    internal void EnsureCapacity<T>()
-    {
-        EnsureCapacity(Marshal.SizeOf<T>());
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal void EnsureCapacity(int additional)
     {
         GuardAgainstOversizedChunk(additional);
@@ -583,7 +565,7 @@ public class BufferV1 : IBuffer
     /// <remarks>
     ///     A new <c>byte[]</c> will be allocated if there is not already an overflow buffer.
     /// </remarks>
-    internal void NextBuffer()
+    private void NextBuffer()
     {
         _buffers[_currentBufferIndex] = (Chunk, Position);
         _currentBufferIndex++;

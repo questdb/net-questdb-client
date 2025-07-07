@@ -123,6 +123,28 @@ public class HttpTests
         await server.StopAsync();
     }
 
+    [Test]
+    public async Task BasicFlatArray()
+    {
+        using var server = new DummyHttpServer(withBasicAuth: false);
+        await server.StartAsync(HttpPort);
+        var sender =
+            Sender.New(
+                $"http::addr={Host}:{HttpPort};username=asdasdada;password=asdadad;tls_verify=unsafe_off;auto_flush=off;");
+        await sender.Table("metrics")
+                    .Symbol("tag", "value")
+                    .Column("number", 10)
+                    .Column("string", "abc")
+                    .Column("array", new[] { 1.2, 2.6, 3.1, 4.6, })
+                    .AtAsync(new DateTime(1970, 01, 01, 0, 0, 1));
+
+        await sender.SendAsync();
+        Assert.That(
+            server.PrintBuffer(),
+            Is.EqualTo("metrics,tag=value number=10i,string=\"abc\",array==ARRAY<4>[1.2,2.6,3.1,4.6] 1000000000\n"));
+        await server.StopAsync();
+    }
+
 
     [Test]
     public async Task BasicMultidimensionalArrayDouble()
@@ -893,6 +915,31 @@ public class HttpTests
         var expected = "tableName,foo=bah 86400000000000\n";
         Assert.That(srv.PrintBuffer(), Is.EqualTo(expected));
     }
+
+    [Test]
+    public async Task TransactionMultipleTypes()
+    {
+        using var srv = new DummyHttpServer();
+        await srv.StartAsync(HttpPort);
+
+        using var sender =
+            Sender.New(
+                $"http::addr={Host}:{HttpPort};auto_flush=off;");
+        await sender.Transaction("tableName").Symbol("foo", "bah").AtAsync(86400000000000);
+        await sender.Column("foo", 123).AtAsync(86400000000000);
+        await sender.Column("foo", 123d).AtAsync(86400000000000);
+        await sender.Column("foo", new DateTime(1970, 1, 1)).AtAsync(86400000000000);
+        await sender.Column("foo", new DateTimeOffset(new DateTime(1970, 1, 1))).AtAsync(86400000000000);
+        await sender.Column("foo", false).AtAsync(86400000000000);
+
+
+        await sender.CommitAsync();
+
+        var expected =
+            "tableName,foo=bah 86400000000000\ntableName foo=123i 86400000000000\ntableName foo=123 86400000000000\ntableName foo=0t 86400000000000\ntableName foo=-3600000000t 86400000000000\ntableName foo=f 86400000000000\n";
+        Assert.That(srv.PrintBuffer(), Is.EqualTo(expected));
+    }
+
 
     [Test]
     public async Task TransactionCanOnlyHaveOneTable()

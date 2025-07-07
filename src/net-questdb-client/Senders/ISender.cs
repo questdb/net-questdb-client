@@ -257,17 +257,6 @@ public interface ISenderV2 : ISenderV1
     }
 
     /// <summary />
-    public ISender NullableColumn<T>(ReadOnlySpan<char> name, T[]? value) where T : struct
-    {
-        if (value != null)
-        {
-            Column(name, value);
-        }
-
-        return (ISender)this;
-    }
-
-    /// <summary />
     public ISender NullableColumn(ReadOnlySpan<char> name, string? value)
     {
         if (value != null)

@@ -225,9 +225,6 @@ public interface IBufferV1
 public interface IBufferV2 : IBufferV1
 {
     /// <summary />
-    public IBuffer Column<T>(ReadOnlySpan<char> name, T[] value) where T : struct;
-
-    /// <summary />
     public IBuffer Column<T>(ReadOnlySpan<char> name, ReadOnlySpan<T> value) where T : struct;
 
     /// <summary />

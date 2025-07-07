@@ -1,7 +1,6 @@
 using System.Diagnostics.CodeAnalysis;
 
 // ReSharper disable UnusedType.Global
-#pragma warning disable CS1591 // Missing XML comment for publicly visible type or member
 
 namespace QuestDB.Enums;
 
@@ -10,6 +9,7 @@ namespace QuestDB.Enums;
 /// </summary>
 public enum DataType : byte
 {
+    /// <summary />
     [SuppressMessage("ReSharper", "InconsistentNaming")]
     DOUBLE = 10,
 }

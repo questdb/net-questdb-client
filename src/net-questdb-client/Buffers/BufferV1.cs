@@ -5,8 +5,6 @@ using System.Text;
 using QuestDB.Enums;
 using QuestDB.Utils;
 
-#pragma warning disable CS1591 // Missing XML comment for publicly visible type or member
-
 namespace QuestDB.Buffers;
 
 /// <inheritdoc />
@@ -25,6 +23,7 @@ public class BufferV1 : IBuffer
     private bool _noSymbols = true;
     private bool _quoted;
 
+    /// <summary />
     public BufferV1(int bufferSize, int maxNameLen, int maxBufSize)
     {
         Chunk = new byte[bufferSize];
@@ -33,6 +32,7 @@ public class BufferV1 : IBuffer
         _maxBufSize = maxBufSize;
     }
 
+    /// <inheritdoc />
     public bool WithinTransaction { get; set; }
 
     /// <inheritdoc />
@@ -308,7 +308,7 @@ public class BufferV1 : IBuffer
         return this;
     }
 
-
+    /// <summary />
     public IBuffer EncodeUtf8(ReadOnlySpan<char> name)
     {
         foreach (var c in name)
@@ -326,6 +326,7 @@ public class BufferV1 : IBuffer
         return this;
     }
 
+    /// <summary />
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public IBuffer PutAscii(char c)
     {
@@ -333,12 +334,14 @@ public class BufferV1 : IBuffer
         return this;
     }
 
+    /// <summary />
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public void Put(ReadOnlySpan<char> chars)
     {
         EncodeUtf8(chars);
     }
 
+    /// <summary />
     public IBuffer Put(long value)
     {
         if (value == long.MinValue)
@@ -372,27 +375,32 @@ public class BufferV1 : IBuffer
         return this;
     }
 
+    /// <summary />
     public virtual IBuffer Column<T>(ReadOnlySpan<char> name, T[] value) where T : struct
     {
         throw new IngressError(ErrorCode.ProtocolVersionError, "Protocol Version V1 does not support ARRAY types");
     }
 
+    /// <summary />
     public virtual IBuffer Column<T>(ReadOnlySpan<char> name, ReadOnlySpan<T> value) where T : struct
     {
         throw new IngressError(ErrorCode.ProtocolVersionError, "Protocol Version V1 does not support ARRAY types");
     }
 
+    /// <summary />
     public virtual IBuffer Column(ReadOnlySpan<char> name, Array value)
     {
         throw new IngressError(ErrorCode.ProtocolVersionError, "Protocol Version V1 does not support ARRAY types");
     }
 
+    /// <summary />
     public virtual IBuffer Column<T>(ReadOnlySpan<char> name, IEnumerable<T> value, IEnumerable<int> shape)
         where T : struct
     {
         throw new IngressError(ErrorCode.ProtocolVersionError, "Protocol Version V1 does not support ARRAY types");
     }
 
+    /// <summary />
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public IBuffer Put(byte value)
     {

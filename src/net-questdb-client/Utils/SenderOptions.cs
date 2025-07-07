@@ -24,7 +24,6 @@
  ******************************************************************************/
 
 
-using System.Collections.Immutable;
 using System.Data.Common;
 using System.Reflection;
 using System.Runtime.CompilerServices;
@@ -46,6 +45,14 @@ public record SenderOptions
     ///     Max number of dimensions an array is allowed.
     /// </summary>
     public const int ARRAY_MAX_DIMENSIONS = 32;
+
+    private static readonly HashSet<string> keySet = new()
+    {
+        "protocol", "protocol_version", "addr", "auto_flush", "auto_flush_rows", "auto_flush_bytes",
+        "auto_flush_interval", "init_buf_size", "max_name_len", "username", "password", "token",
+        "request_min_throughput", "auth_timeout", "request_timeout", "retry_timeout",
+        "pool_timeout", "tls_verify", "tls_roots", "tls_roots_password", "own_socket",
+    };
 
     private string _addr = "localhost:9000";
     private TimeSpan _authTimeout = TimeSpan.FromMilliseconds(15000);
@@ -621,11 +628,9 @@ public record SenderOptions
 
     private void VerifyCorrectKeysInConfigString()
     {
-        var props = GetType().GetProperties(BindingFlags.Instance | BindingFlags.Public).Select(x => x.Name)
-                             .ToImmutableHashSet();
         foreach (string key in _connectionStringBuilder.Keys)
         {
-            if (!props.Contains(key))
+            if (!keySet.Contains(key))
             {
                 throw new IngressError(ErrorCode.ConfigError, $"Invalid property: `{key}`");
             }

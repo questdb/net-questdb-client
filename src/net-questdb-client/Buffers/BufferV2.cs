@@ -3,21 +3,23 @@ using System.Runtime.InteropServices;
 using QuestDB.Enums;
 using QuestDB.Utils;
 
-#pragma warning disable CS1591 // Missing XML comment for publicly visible type or member
-
 namespace QuestDB.Buffers;
 
+/// <summary />
 public class BufferV2 : BufferV1
 {
+    /// <summary />
     public BufferV2(int bufferSize, int maxNameLen, int maxBufSize) : base(bufferSize, maxNameLen, maxBufSize)
     {
     }
 
+    /// <summary />
     public override IBuffer Column<T>(ReadOnlySpan<char> name, T[] value) where T : struct
     {
         return Column(name, (ReadOnlySpan<T>)value.AsSpan());
     }
 
+    /// <summary />
     public override IBuffer Column<T>(ReadOnlySpan<char> name, IEnumerable<T> value, IEnumerable<int> shape)
         where T : struct
     {
@@ -79,17 +81,6 @@ public class BufferV2 : BufferV1
         PutBinaryDeferred(out Span<T> slot);
         slot[0] = value;
         MemoryMarshal.Cast<T, byte>(slot).Reverse();
-    }
-
-    private IBuffer PutBinary<T>(T value, in Span<T> span) where T : struct
-    {
-        span[0] = value;
-        if (!BitConverter.IsLittleEndian)
-        {
-            span.Reverse();
-        }
-
-        return this;
     }
 
     // ReSharper disable once InconsistentNaming
@@ -154,6 +145,7 @@ public class BufferV2 : BufferV1
         }
     }
 
+    /// <summary />
     public override IBuffer Column<T>(ReadOnlySpan<char> name, ReadOnlySpan<T> value) where T : struct
     {
         GuardAgainstNonDoubleTypes(typeof(T));
@@ -166,6 +158,7 @@ public class BufferV2 : BufferV1
         return this;
     }
 
+    /// <summary />
     public override IBuffer Column(ReadOnlySpan<char> name, Array value)
     {
         var type = value.GetType().GetElementType();

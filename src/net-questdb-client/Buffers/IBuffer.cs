@@ -41,6 +41,7 @@ public interface IBufferV1
     // ReSharper disable once InconsistentNaming
     public int RowCount { get; protected set; }
 
+    /// <summary />
     public IBuffer EncodeUtf8(ReadOnlySpan<char> name);
 
     /// <summary>
@@ -162,6 +163,7 @@ public interface IBufferV1
     /// <exception cref="InvalidOperationException"></exception>
     public void CancelRow();
 
+    /// <summary />
     public ReadOnlySpan<byte> GetSendBuffer();
 
     /// <summary>
@@ -180,12 +182,16 @@ public interface IBufferV1
     /// <exception cref="IngressError">When writing to stream fails.</exception>
     public void WriteToStream(Stream stream, CancellationToken ct = default);
 
+    /// <summary />
     public IBuffer PutAscii(char c);
 
+    /// <summary />
     public IBuffer Put(long value);
 
+    /// <summary />
     public void Put(ReadOnlySpan<char> chars);
 
+    /// <summary />
     public IBuffer Put(byte value);
 }
 
@@ -194,11 +200,15 @@ public interface IBufferV1
 /// </summary>
 public interface IBufferV2 : IBufferV1
 {
+    /// <summary />
     public IBuffer Column<T>(ReadOnlySpan<char> name, T[] value) where T : struct;
 
+    /// <summary />
     public IBuffer Column<T>(ReadOnlySpan<char> name, ReadOnlySpan<T> value) where T : struct;
 
+    /// <summary />
     public IBuffer Column(ReadOnlySpan<char> name, Array value);
 
+    /// <summary />
     public IBuffer Column<T>(ReadOnlySpan<char> name, IEnumerable<T> value, IEnumerable<int> shape) where T : struct;
 }

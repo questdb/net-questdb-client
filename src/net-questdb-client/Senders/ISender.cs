@@ -232,6 +232,7 @@ public interface ISenderV2 : ISenderV1
         return ((ISenderV1)this).Column(name, value);
     }
 
+    /// <summary />
     public ISender NullableColumn<T>(ReadOnlySpan<char> name, IEnumerable<T>? value, IEnumerable<int>? shape)
         where T : struct
     {
@@ -243,6 +244,7 @@ public interface ISenderV2 : ISenderV1
         return (ISender)this;
     }
 
+    /// <summary />
     public ISender NullableColumn(ReadOnlySpan<char> name, Array? value)
     {
         if (value != null)
@@ -253,6 +255,7 @@ public interface ISenderV2 : ISenderV1
         return (ISender)this;
     }
 
+    /// <summary />
     public ISender NullableColumn<T>(ReadOnlySpan<char> name, T[]? value) where T : struct
     {
         if (value != null)
@@ -263,6 +266,7 @@ public interface ISenderV2 : ISenderV1
         return (ISender)this;
     }
 
+    /// <summary />
     public ISender NullableColumn(ReadOnlySpan<char> name, string? value)
     {
         if (value != null)
@@ -273,6 +277,7 @@ public interface ISenderV2 : ISenderV1
         return (ISender)this;
     }
 
+    /// <summary />
     public ISender NullableColumn(ReadOnlySpan<char> name, long? value)
     {
         if (value != null)
@@ -283,6 +288,7 @@ public interface ISenderV2 : ISenderV1
         return (ISender)this;
     }
 
+    /// <summary />
     public ISender NullableColumn(ReadOnlySpan<char> name, bool? value)
     {
         if (value != null)
@@ -293,6 +299,7 @@ public interface ISenderV2 : ISenderV1
         return (ISender)this;
     }
 
+    /// <summary />
     public ISender NullableColumn(ReadOnlySpan<char> name, double? value)
     {
         if (value != null)
@@ -303,6 +310,7 @@ public interface ISenderV2 : ISenderV1
         return (ISender)this;
     }
 
+    /// <summary />
     public ISender NullableColumn(ReadOnlySpan<char> name, DateTime? value)
     {
         if (value != null)
@@ -313,6 +321,7 @@ public interface ISenderV2 : ISenderV1
         return (ISender)this;
     }
 
+    /// <summary />
     public ISender NullableColumn(ReadOnlySpan<char> name, DateTimeOffset? value)
     {
         if (value != null)

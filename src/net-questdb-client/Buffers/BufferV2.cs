@@ -87,8 +87,10 @@ public class BufferV2 : BufferV1
     {
         var size = Marshal.SizeOf<T>();
         EnsureCapacity(size);
-        PutBinaryDeferred(out Span<T> slot);
-        slot[0] = value;
+        var length = Marshal.SizeOf<T>();
+        var mem    = MemoryMarshal.Cast<byte, T>(Chunk.AsSpan(Position, length));
+        mem[0] = value;
+        Advance(length);
     }
 
     // ReSharper disable once InconsistentNaming
@@ -110,23 +112,23 @@ public class BufferV2 : BufferV1
         while (srcSpan.Length > 0)
         {
             var dstLength   = GetSpareCapacity();               // length
+            if (dstLength < byteSize)
+            {
+                NextBuffer();
+                dstLength   = GetSpareCapacity();
+            }
             var availLength = dstLength - dstLength % byteSize; // rounded length
 
             if (srcSpan.Length < availLength)
             {
-                var dstSpan = Chunk.AsSpan(Position, srcSpan.Length);
-                srcSpan.CopyTo(dstSpan);
+                srcSpan.CopyTo(Chunk.AsSpan(Position, srcSpan.Length));
                 Advance(srcSpan.Length);
-                srcSpan = srcSpan.Slice(srcSpan.Length);
+                return;
             }
-            else
-            {
-                var dstSpan     = Chunk.AsSpan(Position, availLength);
-                var reducedSpan = srcSpan.Slice(0, availLength);
-                reducedSpan.CopyTo(dstSpan);
-                Advance(availLength);
-                srcSpan = srcSpan.Slice(availLength);
-            }
+            var dstSpan     = Chunk.AsSpan(Position, availLength);
+            srcSpan.Slice(0, availLength).CopyTo(dstSpan);
+            Advance(availLength);
+            srcSpan = srcSpan.Slice(availLength);
         }
     }
 
@@ -167,6 +169,11 @@ public class BufferV2 : BufferV1
     public override IBuffer Column<T>(ReadOnlySpan<char> name, ReadOnlySpan<T> value) where T : struct
     {
         GuardAgainstNonDoubleTypes(typeof(T));
+        return PutDoubleArray(name, value);
+    }
+
+    private IBuffer PutDoubleArray<T>(ReadOnlySpan<char> name, ReadOnlySpan<T> value)  where T : struct
+    {
         SetTableIfAppropriate();
         PutArrayOfDoubleHeader(name);
         Put(1);
@@ -181,6 +188,12 @@ public class BufferV2 : BufferV1
     {
         var type = value.GetType().GetElementType();
         GuardAgainstNonDoubleTypes(type ?? throw new InvalidOperationException());
+        if (value.Rank == 1)
+        {
+            // Fast path, one dim array
+            return PutDoubleArray(name, (ReadOnlySpan<double>)value);
+        }
+        
         SetTableIfAppropriate();
         PutArrayOfDoubleHeader(name);
 
@@ -188,7 +201,7 @@ public class BufferV2 : BufferV1
 
         for (var i = 0; i < value.Rank; i++)
         {
-            PutBinary(Convert.ToUInt32(value.GetLength(i)));
+            PutBinary(value.GetLength(i));
         }
 
         foreach (double d in value)

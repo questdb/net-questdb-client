@@ -30,8 +30,6 @@ using NUnit.Framework;
 using QuestDB;
 using QuestDB.Utils;
 
-// ReSharper disable AsyncVoidLambda
-
 namespace net_questdb_client_tests;
 
 public class HttpTests
@@ -45,20 +43,73 @@ public class HttpTests
     {
         using var server = new DummyHttpServer(withBasicAuth: false);
         await server.StartAsync(HttpPort);
-        var sender =
+        using var sender =
             Sender.New(
                 $"http::addr={Host}:{HttpPort};username=asdasdada;password=asdadad;tls_verify=unsafe_off;auto_flush=off;");
         await sender.Table("metrics")
                     .Symbol("tag", "value")
                     .Column("number", 10)
                     .Column("string", "abc")
-                    .Column("array", new[] { 1.2, 2.6, 3.1, })
+                    .Column("array", new[] { 1.2, 2.6, 3.1 })
+                    .AtAsync(new DateTime(1970, 01, 01, 0, 0, 1));
+
+        await sender.Table("metrics")
+                    .Symbol("tag", "value")
+                    .Column("number", 10)
+                    .Column("string", "abc")
+                    .Column("array", (ReadOnlySpan<double>)(new[] { 1.5, 2.1, 3.1 }))
+                    .AtAsync(new DateTime(1970, 01, 01, 0, 0, 2));
+
+        await sender.Table("metrics")
+                    .Symbol("tag", "value")
+                    .Column("number", 10)
+                    .Column("string", "abc")
+                    .Column("array", (ReadOnlySpan<double>)Array.Empty<double>())
+                    .AtAsync(new DateTime(1970, 01, 01, 0, 0, 3));
+
+        await sender.SendAsync();
+        Assert.That(
+            server.PrintBuffer(),
+            Is.EqualTo("metrics,tag=value number=10i,string=\"abc\",array==ARRAY<3>[1.2,2.6,3.1] 1000000000\n" +
+                       "metrics,tag=value number=10i,string=\"abc\",array==ARRAY<3>[1.5,2.1,3.1] 2000000000\n" +
+                       "metrics,tag=value number=10i,string=\"abc\",array==ARRAY<0>] 3000000000\n"));
+        await server.StopAsync();
+    }
+
+    [Test]
+    public async Task SendLongArrayAsSpan()
+    {
+        using var server = new DummyHttpServer(withBasicAuth: false);
+        await server.StartAsync(HttpPort);
+        using var sender =
+            Sender.New(
+                $"http::addr={Host}:{HttpPort};init_buf_size=256;username=asdasdada;password=asdadad;tls_verify=unsafe_off;auto_flush=off;");
+
+        sender.Table("metrics")
+              .Symbol("tag", "value")
+              .Column("number", 10)
+              .Column("string", "abc");
+
+        int           arrayLen      = (1024 - sender.Length) / 8 + 1;
+        double[]      aray          = new double[arrayLen];
+        StringBuilder expectedArray = new StringBuilder();
+        for (int i = 0; i < arrayLen; i++)
+        {
+            aray[i] = 1.5;
+            if (i > 0)
+            {
+                expectedArray.Append(",");
+            }
+            expectedArray.Append("1.5");
+        }
+
+        await sender.Column("array", (ReadOnlySpan<double>) aray.AsSpan())
                     .AtAsync(new DateTime(1970, 01, 01, 0, 0, 1));
 
         await sender.SendAsync();
         Assert.That(
             server.PrintBuffer(),
-            Is.EqualTo("metrics,tag=value number=10i,string=\"abc\",array==ARRAY<3>[1.2,2.6,3.1] 1000000000\n"));
+            Is.EqualTo($"metrics,tag=value number=10i,string=\"abc\",array==ARRAY<{arrayLen}>[{expectedArray}] 1000000000\n"));
         await server.StopAsync();
     }
 
@@ -66,8 +117,8 @@ public class HttpTests
     public async Task BasicArrayDoubleNegotiationFailed()
     {
         using var server = new DummyHttpServer(withBasicAuth: false);
-        await server.StartAsync(HttpPort, new[] { 1, });
-        var sender =
+        await server.StartAsync(HttpPort, new[] { 1 });
+        using var sender =
             Sender.New(
                 $"http::addr={Host}:{HttpPort};username=asdasdada;password=asdadad;tls_verify=unsafe_off;auto_flush=off;");
         sender.Table("metrics")
@@ -76,7 +127,7 @@ public class HttpTests
               .Column("string", "abc");
 
         Assert.That(
-            () => sender.Column("array", new[] { 1.2, 2.6, 3.1, }),
+            () => sender.Column("array", new[] { 1.2, 2.6, 3.1 }),
             Throws.TypeOf<IngressError>().With.Message.Contains("does not support ARRAY types"));
         await server.StopAsync();
     }
@@ -86,7 +137,7 @@ public class HttpTests
     {
         using var server = new DummyHttpServer(withBasicAuth: false);
         await server.StartAsync(HttpPort);
-        var sender =
+        using var sender =
             Sender.New(
                 $"http::addr={Host}:{HttpPort};username=asdasdada;password=asdadad;tls_verify=unsafe_off;auto_flush=off;");
         await sender.Table("metrics")
@@ -106,14 +157,14 @@ public class HttpTests
     {
         using var server = new DummyHttpServer(withBasicAuth: false);
         await server.StartAsync(HttpPort);
-        var sender =
+        using var sender =
             Sender.New(
                 $"http::addr={Host}:{HttpPort};username=asdasdada;password=asdadad;tls_verify=unsafe_off;auto_flush=off;");
         await sender.Table("metrics")
                     .Symbol("tag", "value")
                     .Column("number", 10)
                     .Column("string", "abc")
-                    .Column("array", new[] { 1.2, 2.6, 3.1, 4.6, }.AsEnumerable(), new[] { 2, 2, }.AsEnumerable())
+                    .Column("array", new[] { 1.2, 2.6, 3.1, 4.6 }.AsEnumerable(), new[] { 2, 2 }.AsEnumerable())
                     .AtAsync(new DateTime(1970, 01, 01, 0, 0, 1));
 
         await sender.SendAsync();
@@ -128,14 +179,14 @@ public class HttpTests
     {
         using var server = new DummyHttpServer(withBasicAuth: false);
         await server.StartAsync(HttpPort);
-        var sender =
+        using var sender =
             Sender.New(
                 $"http::addr={Host}:{HttpPort};username=asdasdada;password=asdadad;tls_verify=unsafe_off;auto_flush=off;");
         await sender.Table("metrics")
                     .Symbol("tag", "value")
                     .Column("number", 10)
                     .Column("string", "abc")
-                    .Column("array", new[] { 1.2, 2.6, 3.1, 4.6, })
+                    .Column("array", new[] { 1.2, 2.6, 3.1, 4.6 })
                     .AtAsync(new DateTime(1970, 01, 01, 0, 0, 1));
 
         await sender.SendAsync();
@@ -154,13 +205,11 @@ public class HttpTests
         for (var i = 0; i < 2; i++)
         for (var j = 0; j < 3; j++)
         for (var k = 0; k < 3; k++)
-        {
             arr[i, j, k] = (i + 1) * (j + 1) * (k + 1);
-        }
 
         using var server = new DummyHttpServer(withBasicAuth: false);
         await server.StartAsync(HttpPort);
-        var sender =
+        using var sender =
             Sender.New(
                 $"http::addr={Host}:{HttpPort};username=asdasdada;password=asdadad;tls_verify=unsafe_off;auto_flush=off;protocol_version=V2;");
         await sender.Table("metrics")
@@ -184,7 +233,7 @@ public class HttpTests
     {
         using var server = new DummyHttpServer(withBasicAuth: true);
         await server.StartAsync(HttpPort);
-        var sender =
+        using var sender =
             Sender.New(
                 $"https::addr={Host}:{HttpsPort};username=asdasdada;password=asdadad;tls_verify=unsafe_off;auto_flush=off;");
         await sender.Table("metrics")
@@ -204,7 +253,7 @@ public class HttpTests
     {
         using var server = new DummyHttpServer(withBasicAuth: true);
         await server.StartAsync(HttpPort);
-        var sender =
+        using var sender =
             Sender.New(
                 $"https::addr={Host}:{HttpsPort};username=admin;password=quest;tls_verify=unsafe_off;auto_flush=off;");
         await sender.Table("metrics")
@@ -227,13 +276,11 @@ public class HttpTests
                 $"https::addr={Host}:{HttpsPort};token=askldaklds;tls_verify=unsafe_off;auto_flush=off;");
 
         for (var i = 0; i < 100; i++)
-        {
             await sender
                   .Table("test")
                   .Symbol("foo", "bah")
                   .Column("num", i)
                   .AtAsync(DateTime.UtcNow);
-        }
 
         Assert.That(
             async () => await sender.SendAsync(),
@@ -254,13 +301,11 @@ public class HttpTests
                 $"https::addr={Host}:{HttpsPort};token={token};tls_verify=unsafe_off;auto_flush=off;");
 
         for (var i = 0; i < 100; i++)
-        {
             await sender
                   .Table("test")
                   .Symbol("foo", "bah")
                   .Column("num", i)
                   .AtAsync(DateTime.UtcNow);
-        }
 
         await sender.SendAsync();
     }
@@ -370,7 +415,6 @@ public class HttpTests
         Assert.That(async () =>
                     {
                         for (var i = 0; i < 500; i++)
-                        {
                             await sender.Table("table name")
                                         .Symbol("t a g", "v alu, e")
                                         .Column("number", 10)
@@ -378,7 +422,6 @@ public class HttpTests
                                         .Column("string", " -=\"")
                                         .Column("при вед", "медвед")
                                         .AtAsync(new DateTime(1970, 01, 01, 0, 0, 1));
-                        }
                     },
                     Throws.Exception.With.Message.Contains("maximum buffer size"));
     }
@@ -502,10 +545,7 @@ public class HttpTests
             }
 
             // ReSharper disable once DisposeOnUsingVariable
-            if (i == 1)
-            {
-                srv.Dispose();
-            }
+            if (i == 1) srv.Dispose();
         }
     }
 
@@ -723,10 +763,7 @@ public class HttpTests
                         .AtAsync(new DateTime(2021, 1, 1, i / 360 / 1000 % 60, i / 60 / 1000 % 60, i / 1000 % 60,
                                               i % 1000));
 
-            if (i % 100 == 0)
-            {
-                await sender.SendAsync();
-            }
+            if (i % 100 == 0) await sender.SendAsync();
         }
 
         await sender.SendAsync();
@@ -748,7 +785,6 @@ public class HttpTests
                 $"http::addr={Host}:{HttpPort};init_buf_size={1024 * 1024};auto_flush=on;auto_flush_bytes={1024 * 1024};request_timeout=30000;");
 
         for (var i = 0; i < 1E6; i++)
-        {
             await sender.Table(metric)
                         .Symbol("nopoint", "tag" + i % 100)
                         .Column("counter", i * 1111.1)
@@ -756,7 +792,6 @@ public class HttpTests
                         .Column("привед", "мед вед")
                         .AtAsync(new DateTime(2021, 1, 1, i / 360 / 1000 % 60, i / 60 / 1000 % 60, i / 1000 % 60,
                                               i % 1000));
-        }
 
         await sender.SendAsync();
     }
@@ -997,12 +1032,10 @@ public class HttpTests
 
         sender.Transaction("tableName");
         for (var i = 0; i < 100; i++)
-        {
             await sender
                   .Symbol("foo", "bah")
                   .Column("num", i)
                   .AtAsync(DateTime.UtcNow);
-        }
 
         Assert.That(sender.RowCount == 100);
         Assert.That(sender.WithinTransaction);
@@ -1025,12 +1058,10 @@ public class HttpTests
 
         sender.Transaction("tableName");
         for (var i = 0; i < 100; i++)
-        {
             await sender
                   .Symbol("foo", "bah")
                   .Column("num", i)
                   .AtAsync(DateTime.UtcNow);
-        }
 
         Assert.That(
             async () => await sender.SendAsync(),
@@ -1046,12 +1077,10 @@ public class HttpTests
 
         sender.Transaction("tableName");
         for (var i = 0; i < 100; i++)
-        {
             await sender
                   .Symbol("foo", "bah")
                   .Column("num", i)
                   .AtAsync(DateTime.UtcNow);
-        }
 
         sender.Commit();
     }
@@ -1143,10 +1172,7 @@ public class HttpTests
 
         for (var i = 0; i < 100000; i++)
         {
-            if ((i - 1) % 100 == 0 && i != 0)
-            {
-                Assert.That(sender.Length == 32);
-            }
+            if ((i - 1) % 100 == 0 && i != 0) Assert.That(sender.Length == 32);
 
             await sender.Table("foo").Symbol("bah", "baz").AtAsync(DateTime.UtcNow);
         }
@@ -1162,10 +1188,7 @@ public class HttpTests
                 $"http::addr={Host}:{HttpPort};auto_flush=on;auto_flush_bytes=3200;auto_flush_interval=off;auto_flush_rows=off;");
         for (var i = 0; i < 100000; i++)
         {
-            if (i % 100 == 0)
-            {
-                Assert.That(sender.Length == 0);
-            }
+            if (i % 100 == 0) Assert.That(sender.Length == 0);
 
             await sender.Table("foo").Symbol("bah", "baz").AtAsync(DateTime.UtcNow);
         }
@@ -1325,10 +1348,7 @@ public class HttpTests
 
             var request = sender.SendAsync();
 
-            while (request.Status == TaskStatus.WaitingToRun)
-            {
-                await Task.Delay(10);
-            }
+            while (request.Status == TaskStatus.WaitingToRun) await Task.Delay(10);
 
             if (i == 0)
             {

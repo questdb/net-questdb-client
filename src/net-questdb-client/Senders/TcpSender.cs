@@ -57,16 +57,16 @@ internal class TcpSender : AbstractSender
 
     private void Build()
     {
-        Buffer = Buffer = Buffers.Buffer.Create(
-                     Options.init_buf_size,
-                     Options.max_name_len,
-                     Options.max_buf_size,
-                     Options.protocol_version == ProtocolVersion.Auto ? ProtocolVersion.V1 : Options.protocol_version
-                 );
+        Buffer = Buffers.Buffer.Create(
+            Options.init_buf_size,
+            Options.max_name_len,
+            Options.max_buf_size,
+            Options.protocol_version == ProtocolVersion.Auto ? ProtocolVersion.V1 : Options.protocol_version
+        );
 
-        var socket = new Socket(AddressFamily.InterNetwork, SocketType.Stream, System.Net.Sockets.ProtocolType.Tcp);
+        var            socket        = new Socket(AddressFamily.InterNetwork, SocketType.Stream, System.Net.Sockets.ProtocolType.Tcp);
         NetworkStream? networkStream = null;
-        SslStream? sslStream = null;
+        SslStream?     sslStream     = null;
         try
         {
             socket.ConnectAsync(Options.Host, Options.Port).Wait();

@@ -28,16 +28,9 @@ using QuestDB.Utils;
 namespace QuestDB.Buffers;
 
 /// <summary>
-///     Buffer for building up batches of ILP rows.
-/// </summary>
-public interface IBuffer : IBufferV2
-{
-}
-
-/// <summary>
 ///     Buffer following the V1 API.
 /// </summary>
-public interface IBufferV1
+public interface IBuffer
 {
     /// <summary>
     ///     The current chunk of the chunked buffer.
@@ -217,19 +210,13 @@ public interface IBufferV1
 
     /// <summary />
     public IBuffer Put(byte value);
-}
 
-/// <summary>
-///     Buffer following the V2 API.
-/// </summary>
-public interface IBufferV2 : IBufferV1
-{
     /// <summary />
     public IBuffer Column<T>(ReadOnlySpan<char> name, ReadOnlySpan<T> value) where T : struct;
 
     /// <summary />
     public IBuffer Column(ReadOnlySpan<char> name, Array value);
-
+    
     /// <summary />
     public IBuffer Column<T>(ReadOnlySpan<char> name, IEnumerable<T> value, IEnumerable<int> shape) where T : struct;
 }

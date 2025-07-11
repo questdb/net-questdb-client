@@ -565,7 +565,7 @@ public class BufferV1 : IBuffer
     /// <remarks>
     ///     A new <c>byte[]</c> will be allocated if there is not already an overflow buffer.
     /// </remarks>
-    private void NextBuffer()
+    protected void NextBuffer()
     {
         _buffers[_currentBufferIndex] = (Chunk, Position);
         _currentBufferIndex++;

@@ -61,8 +61,8 @@ internal class HttpSender : AbstractSender
     {
         _sendRequestFactory    = GenerateRequest;
         _settingRequestFactory = GenerateSettingsRequest;
-        
-        Options                = options;
+
+        Options = options;
         Build();
     }
 
@@ -334,7 +334,7 @@ internal class HttpSender : AbstractSender
                 success   = true;
                 return;
             }
-            
+
             // unwrap json error if present
             if (response.Content.Headers.ContentType?.MediaType == "application/json")
             {
@@ -367,8 +367,8 @@ internal class HttpSender : AbstractSender
     {
         HttpResponseMessage?    response = null;
         CancellationTokenSource cts      = GenerateRequestCts(ct);
-        HttpRequestMessage request = requestFactory();
-        
+        HttpRequestMessage      request  = requestFactory();
+
         try
         {
             try
@@ -393,10 +393,10 @@ internal class HttpSender : AbstractSender
 
                     while (retryTimer.Elapsed < retryTimeout // whilst we can still retry
                            && (
-                                  response == null ||                // either we can't connect
-                                  (retryTimer.Elapsed < retryTimeout // or we have another http error
-                                   && !response!.IsSuccessStatusCode &&
-                                   IsRetriableError(response.StatusCode))))
+                                  response == null ||               // either we can't connect
+                                  (!response.IsSuccessStatusCode && // or we have another http error
+                                   IsRetriableError(response.StatusCode)))
+                          )
                     {
                         retryInterval = TimeSpan.FromMilliseconds(Math.Min(retryInterval.TotalMilliseconds * 2, 1000));
                         // cleanup last run
@@ -504,8 +504,8 @@ internal class HttpSender : AbstractSender
             // retry if appropriate - error that's retriable, and retries are enabled
             if (Options.retry_timeout > TimeSpan.Zero)
             {
-                if (response == null                   // if it was a cannot correct error
-                    || (!response!.IsSuccessStatusCode // or some other http error
+                if (response == null                  // if it was a cannot correct error
+                    || (!response.IsSuccessStatusCode // or some other http error
                         && IsRetriableError(response.StatusCode)))
                 {
                     var retryTimer = new Stopwatch();
@@ -514,10 +514,10 @@ internal class HttpSender : AbstractSender
 
                     while (retryTimer.Elapsed < Options.retry_timeout // whilst we can still retry
                            && (
-                                  response == null ||                         // either we can't connect
-                                  (retryTimer.Elapsed < Options.retry_timeout // or we have another http error
-                                   && !response.IsSuccessStatusCode &&
-                                   IsRetriableError(response.StatusCode))))
+                                  response == null ||               // either we can't connect
+                                  (!response.IsSuccessStatusCode && // or we have another http error
+                                   IsRetriableError(response.StatusCode)))
+                          )
                     {
                         retryInterval = TimeSpan.FromMilliseconds(Math.Min(retryInterval.TotalMilliseconds * 2, 1000));
                         // cleanup last run

@@ -1,4 +1,3 @@
-// ReSharper disable CommentTypo
 /*******************************************************************************
  *     ___                  _   ____  ____
  *    / _ \ _   _  ___  ___| |_|  _ \| __ )
@@ -23,6 +22,8 @@
  *
  ******************************************************************************/
 
+// ReSharper disable CommentTypo
+
 using QuestDB.Utils;
 
 // ReSharper disable InconsistentNaming
@@ -32,7 +33,14 @@ namespace QuestDB.Senders;
 /// <summary>
 ///     Interface representing <see cref="Sender" /> implementations.
 /// </summary>
-public interface ISender : IDisposable
+public interface ISender : ISenderV2
+{
+}
+
+/// <summary>
+///     Version 1 of the Sender API.
+/// </summary>
+public interface ISenderV1 : IDisposable
 {
     /// <summary>
     ///     Represents the current length of the buffer in UTF-8 bytes.
@@ -190,4 +198,127 @@ public interface ISender : IDisposable
     ///     Clears the sender's buffer.
     /// </summary>
     public void Clear();
+}
+
+/// <summary>
+///     Version 2 of the Sender API, adding ARRAY and binary DOUBLE support.
+/// </summary>
+public interface ISenderV2 : ISenderV1
+{
+    /// <inheritdoc
+    ///     cref="Column{T}(System.ReadOnlySpan{char},System.Collections.Generic.IEnumerable{T},System.Collections.Generic.IEnumerable{int})" />
+    public ISender Column<T>(ReadOnlySpan<char> name, IEnumerable<T> value, IEnumerable<int> shape) where T : struct;
+
+    /// <summary>
+    ///     Adds an ARRAY to the current row.
+    ///     Arrays are n-dimensional non-jagged arrays.
+    /// </summary>
+    /// <param name="name"></param>
+    /// <param name="value"></param>
+    /// <returns></returns>
+    public ISender Column(ReadOnlySpan<char> name, Array value);
+
+    /// <inheritdoc
+    ///     cref="Column{T}(System.ReadOnlySpan{char},System.Collections.Generic.IEnumerable{T},System.Collections.Generic.IEnumerable{int})" />
+    public ISender Column<T>(ReadOnlySpan<char> name, ReadOnlySpan<T> value) where T : struct;
+
+    /// <summary>
+    ///     Adds a column (field) to the current row.
+    /// </summary>
+    /// <param name="name">The name of the column</param>
+    /// <param name="value">The value for the column</param>
+    /// <returns>Itself</returns>
+    public ISender Column(ReadOnlySpan<char> name, string? value)
+    {
+        return ((ISenderV1)this).Column(name, value);
+    }
+
+    /// <summary />
+    public ISender NullableColumn<T>(ReadOnlySpan<char> name, IEnumerable<T>? value, IEnumerable<int>? shape)
+        where T : struct
+    {
+        if (value != null && shape != null)
+        {
+            Column(name, value, shape);
+        }
+
+        return (ISender)this;
+    }
+
+    /// <summary />
+    public ISender NullableColumn(ReadOnlySpan<char> name, Array? value)
+    {
+        if (value != null)
+        {
+            Column(name, value);
+        }
+
+        return (ISender)this;
+    }
+
+    /// <summary />
+    public ISender NullableColumn(ReadOnlySpan<char> name, string? value)
+    {
+        if (value != null)
+        {
+            Column(name, value);
+        }
+
+        return (ISender)this;
+    }
+
+    /// <summary />
+    public ISender NullableColumn(ReadOnlySpan<char> name, long? value)
+    {
+        if (value != null)
+        {
+            return Column(name, value ?? throw new InvalidOperationException());
+        }
+
+        return (ISender)this;
+    }
+
+    /// <summary />
+    public ISender NullableColumn(ReadOnlySpan<char> name, bool? value)
+    {
+        if (value != null)
+        {
+            return Column(name, value ?? throw new InvalidOperationException());
+        }
+
+        return (ISender)this;
+    }
+
+    /// <summary />
+    public ISender NullableColumn(ReadOnlySpan<char> name, double? value)
+    {
+        if (value != null)
+        {
+            return Column(name, value ?? throw new InvalidOperationException());
+        }
+
+        return (ISender)this;
+    }
+
+    /// <summary />
+    public ISender NullableColumn(ReadOnlySpan<char> name, DateTime? value)
+    {
+        if (value != null)
+        {
+            return Column(name, value ?? throw new InvalidOperationException());
+        }
+
+        return (ISender)this;
+    }
+
+    /// <summary />
+    public ISender NullableColumn(ReadOnlySpan<char> name, DateTimeOffset? value)
+    {
+        if (value != null)
+        {
+            return Column(name, value ?? throw new InvalidOperationException());
+        }
+
+        return (ISender)this;
+    }
 }

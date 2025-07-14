@@ -1,4 +1,3 @@
-// ReSharper disable CommentTypo
 /*******************************************************************************
  *     ___                  _   ____  ____
  *    / _ \ _   _  ___  ___| |_|  _ \| __ )
@@ -23,6 +22,7 @@
  *
  ******************************************************************************/
 
+// ReSharper disable CommentTypo
 // ReSharper disable UnusedAutoPropertyAccessor.Global
 // ReSharper disable InconsistentNaming
 

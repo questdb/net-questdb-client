@@ -34,6 +34,10 @@ using System.Threading.Tasks;
 using NUnit.Framework;
 using QuestDB;
 
+// ReSharper disable InconsistentNaming
+
+#pragma warning disable CS0618 // Type or member is obsolete
+
 namespace tcp_client_test;
 
 [TestFixture]
@@ -48,7 +52,9 @@ public class JsonSpecTestRunner
         using var srv = CreateTcpListener(Port);
         srv.AcceptAsync();
 
+#pragma warning disable CS0612 // Type or member is obsolete
         using var ls = await LineTcpSender.ConnectAsync(IPAddress.Loopback.ToString(), Port, tlsMode: TlsMode.Disable);
+#pragma warning restore CS0612 // Type or member is obsolete
         Exception? exception = null;
 
         try
@@ -97,8 +103,6 @@ public class JsonSpecTestRunner
             exception = ex;
         }
 
-        ls.Dispose();
-
         if (testCase.result.status == "SUCCESS")
         {
             if (testCase.result.anyLines == null || testCase.result.anyLines.Length == 0)
@@ -126,14 +130,14 @@ public class JsonSpecTestRunner
 
     private void WaitAssert(DummyIlpServer srv, string[] resultAnyLines)
     {
-        var minExpectedLen = resultAnyLines.Select(l => Encoding.UTF8.GetBytes(l).Length).Min(); 
+        var minExpectedLen = resultAnyLines.Select(l => Encoding.UTF8.GetBytes(l).Length).Min();
         for (var i = 0; i < 500 && srv.TotalReceived < minExpectedLen; i++)
         {
             Thread.Sleep(10);
         }
-        
+
         var textReceived = srv.GetTextReceived();
-        bool anyMatch = resultAnyLines.Any(l => (l + "\n").Equals(textReceived));
+        var anyMatch     = resultAnyLines.Any(l => (l + "\n").Equals(textReceived));
         if (!anyMatch)
         {
             Assert.Fail(textReceived + ": did not match any expected results");
@@ -164,11 +168,11 @@ public class JsonSpecTestRunner
 
     public class TestCase
     {
-        public string testName { get; set; }
-        public string table { get; set; }
-        public TestCaseSymbol[] symbols { get; set; }
-        public TestCaseColumn[] columns { get; set; }
-        public TestCaseResult result { get; set; }
+        public string testName { get; set; } = null!;
+        public string table { get; set; } = null!;
+        public TestCaseSymbol[] symbols { get; set; } = null!;
+        public TestCaseColumn[] columns { get; set; } = null!;
+        public TestCaseResult result { get; set; } = null!;
 
         public override string ToString()
         {
@@ -178,21 +182,21 @@ public class JsonSpecTestRunner
 
     public class TestCaseSymbol
     {
-        public string name { get; set; }
-        public string value { get; set; }
+        public string name { get; set; } = null!;
+        public string value { get; set; } = null!;
     }
 
     public class TestCaseColumn
     {
-        public string type { get; set; }
-        public string name { get; set; }
-        public object value { get; set; }
+        public string type { get; set; } = null!;
+        public string name { get; set; } = null!;
+        public object value { get; set; } = null!;
     }
 
     public class TestCaseResult
     {
-        public string status { get; set; }
-        public string line { get; set; }
-        public string[]? anyLines { get; set; }
+        public string status { get; set; } = null!;
+        public string line { get; set; } = null!;
+        public string[]? anyLines { get; set; } = null!;
     }
 }

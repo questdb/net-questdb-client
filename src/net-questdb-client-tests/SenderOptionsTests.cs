@@ -23,6 +23,7 @@
  ******************************************************************************/
 
 
+using System.Diagnostics;
 using Microsoft.Extensions.Configuration;
 using NUnit.Framework;
 using QuestDB;
@@ -49,15 +50,6 @@ public class SenderOptionsTests
     }
 
     [Test]
-    public void CaseSensitivityForSchema()
-    {
-        Assert.That(
-            () => new SenderOptions("hTTp::aDdR=locALhOSt:9000;"),
-            Throws.TypeOf<IngressError>()
-        );
-    }
-
-    [Test]
     public void DuplicateKey()
     {
         // duplicate keys are 'last writer wins'
@@ -81,7 +73,7 @@ public class SenderOptionsTests
     {
         Assert.That(
             new SenderOptions("http::addr=localhost:9000;").ToString()
-            , Is.EqualTo("http::addr=localhost:9000;auth_timeout=15000;auto_flush=on;auto_flush_bytes=2147483647;auto_flush_interval=1000;auto_flush_rows=75000;init_buf_size=65536;max_buf_size=104857600;max_name_len=127;pool_timeout=120000;request_min_throughput=102400;request_timeout=10000;retry_timeout=10000;tls_verify=on;"));
+          , Is.EqualTo("http::addr=localhost:9000;auth_timeout=15000;auto_flush=on;auto_flush_bytes=2147483647;auto_flush_interval=1000;auto_flush_rows=75000;init_buf_size=65536;max_buf_size=104857600;max_name_len=127;pool_timeout=120000;protocol_version=Auto;request_min_throughput=102400;request_timeout=10000;retry_timeout=10000;tls_verify=on;"));
     }
 
     [Test]
@@ -90,26 +82,29 @@ public class SenderOptionsTests
         Assert.That(
             () => new SenderOptions("http::asdada=localhost:9000;"),
             Throws.TypeOf<IngressError>()
-                .With.Message.Contains("Invalid property")
+                  .With.Message.Contains("Invalid property")
         );
     }
-    
+
     [Test]
     public void BindConfigFileToOptions()
     {
         var fromFileOptions = new ConfigurationBuilder().AddJsonFile("config.json").Build().GetSection("QuestDB")
-            .Get<SenderOptions>();
+                                                        .Get<SenderOptions>();
         var defaultOptions = new SenderOptions("http::addr=localhost:9000;tls_verify=unsafe_off;");
+        Debug.Assert(fromFileOptions != null, nameof(fromFileOptions) + " != null");
         Assert.That(fromFileOptions.ToString(), Is.EqualTo(defaultOptions.ToString()));
     }
-    
+
     [Test]
     public void UseOffInAutoFlushSettings()
     {
         var sender =
             Sender.New(
                 "http::addr=localhost:9000;auto_flush=on;auto_flush_rows=off;auto_flush_bytes=off;auto_flush_interval=off;");
-        
-        Assert.That(sender.Options.ToString(), Is.EqualTo("http::addr=localhost:9000;auth_timeout=15000;auto_flush=on;auto_flush_bytes=-1;auto_flush_interval=-1;auto_flush_rows=-1;init_buf_size=65536;max_buf_size=104857600;max_name_len=127;pool_timeout=120000;request_min_throughput=102400;request_timeout=10000;retry_timeout=10000;tls_verify=on;"));
+
+        Assert.That(sender.Options.ToString(),
+                    Is.EqualTo(
+                        "http::addr=localhost:9000;auth_timeout=15000;auto_flush=on;auto_flush_bytes=-1;auto_flush_interval=-1;auto_flush_rows=-1;init_buf_size=65536;max_buf_size=104857600;max_name_len=127;pool_timeout=120000;protocol_version=Auto;request_min_throughput=102400;request_timeout=10000;retry_timeout=10000;tls_verify=on;"));
     }
 }

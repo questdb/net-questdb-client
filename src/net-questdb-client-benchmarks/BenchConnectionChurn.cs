@@ -27,13 +27,15 @@ using BenchmarkDotNet.Attributes;
 using dummy_http_server;
 using QuestDB;
 
+#pragma warning disable CS0414 // Field is assigned but its value is never used
+
 namespace net_questdb_client_benchmarks;
 
 [MarkdownExporterAttribute.GitHub]
 public class BenchConnectionChurn
 {
-    private readonly DummyHttpServer _httpServer;
     private readonly int _httpPort = 29473;
+    private readonly DummyHttpServer _httpServer;
     private readonly int _httpsPort = 29474;
 
     [Params(1000, 10000, 100000)] public int BatchSize;
@@ -74,11 +76,11 @@ public class BenchConnectionChurn
         var sender =
             Sender.New(
                 $"http::addr=localhost:{_httpPort};auto_flush=on;auto_flush_rows={BatchSize};pool_limit={ConnectionLimit};");
-        
+
         for (var i = 0; i < RowsPerIteration; i++)
         {
             await sender.Table($"random_table_{Random.Shared.NextInt64(0, NumberOfTables - 1)}").Column("number", i)
-                .AtNowAsync();
+                        .AtNowAsync();
             if (i % BatchSize == 0)
             {
                 _httpServer.Clear();

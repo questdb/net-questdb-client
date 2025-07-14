@@ -22,24 +22,25 @@
  *
  ******************************************************************************/
 
-// ReSharper disable CommentTypo
-// ReSharper disable InconsistentNaming
-
 namespace QuestDB.Enums;
 
 /// <summary>
-///     Enum for auto_flush
-///     Defaults to 'on'.
+///     Represents the protocol version to use.
 /// </summary>
-public enum AutoFlushType
+public enum ProtocolVersion
 {
     /// <summary>
-    ///     Disable auto-flushing
+    ///     Unset, defaults to highest
     /// </summary>
-    off,
+    Auto,
 
     /// <summary>
-    ///     Enable auto-flushing. (default)
+    ///     Vanilla, text ILP
     /// </summary>
-    on,
+    V1,
+
+    /// <summary>
+    ///     Text ILP with binary extensions for DOUBLE and ARRAY[DOUBLE]
+    /// </summary>
+    V2,
 }

@@ -1,4 +1,3 @@
-// ReSharper disable CommentTypo
 /*******************************************************************************
  *     ___                  _   ____  ____
  *    / _ \ _   _  ___  ___| |_|  _ \| __ )
@@ -22,7 +21,7 @@
  *  limitations under the License.
  *
  ******************************************************************************/
-
+// ReSharper disable CommentTypo
 
 namespace QuestDB.Enums;
 
@@ -87,5 +86,15 @@ public enum ErrorCode
     /// <summary>
     ///     Bad configuration.
     /// </summary>
-    ConfigError
+    ConfigError,
+
+    /// <summary>
+    ///     Issues relating to protocol version mismatch.
+    /// </summary>
+    ProtocolVersionError,
+
+    /// <summary>
+    ///     Bad configuration.
+    /// </summary>
+    InvalidArrayShapeError,
 }

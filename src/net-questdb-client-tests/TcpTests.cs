@@ -33,6 +33,9 @@ using Org.BouncyCastle.Security;
 using QuestDB;
 using QuestDB.Utils;
 
+#pragma warning disable CS0618 // Type or member is obsolete
+#pragma warning disable CS0618 // Type or member is obsolete
+
 namespace net_questdb_client_tests;
 
 public class TcpTests
@@ -47,11 +50,11 @@ public class TcpTests
         srv.AcceptAsync();
 
         using var sender = Sender.New($"tcp::addr={_host}:{_port};");
-        sender.Table("metric name")
-            .Symbol("t a g", "v alu, e")
-            .Column("number", 10)
-            .Column("string", " -=\"")
-            .AtAsync(new DateTime(1970, 01, 01, 0, 0, 1));
+        await sender.Table("metric name")
+                    .Symbol("t a g", "v alu, e")
+                    .Column("number", 10)
+                    .Column("string", " -=\"")
+                    .AtAsync(new DateTime(1970, 01, 01, 0, 0, 1));
         await sender.SendAsync();
 
 
@@ -60,10 +63,52 @@ public class TcpTests
     }
 
     [Test]
+    public async Task SendLineWithArrayProtocolV2()
+    {
+        using var srv = CreateTcpListener(_port);
+        srv.AcceptAsync();
+
+        using var sender = Sender.New($"tcp::addr={_host}:{_port};protocol_version=2;");
+        await sender.Table("metric name")
+                    .Symbol("t a g", "v alu, e")
+                    .Column("number", 10)
+                    .Column("string", " -=\"")
+                    .Column("array", new[] { 1.2 })
+                    .AtAsync(new DateTime(1970, 01, 01, 0, 0, 1));
+        await sender.SendAsync();
+
+
+        var expected = "metric\\ name,t\\ a\\ g=v\\ alu\\,\\ e number=10i,string=\" -=\\\"\",array==ARRAY<1>[1.2] 1000000000\n";
+        WaitAssert(srv, expected);
+    }
+
+    [Test]
+    public void SendLineWithArrayProtocolV1Exception()
+    {
+        using var srv = CreateTcpListener(_port);
+        srv.AcceptAsync();
+
+        using var sender = Sender.New($"tcp::addr={_host}:{_port};");
+
+        try
+        {
+            sender.Table("metric name")
+                  .Symbol("t a g", "v alu, e")
+                  .Column("number", 10)
+                  .Column("string", " -=\"")
+                  .Column("array", new[] { 1.2 });
+        }
+        catch (IngressError err)
+        {
+            Assert.That(err.Message, Contains.Substring("Protocol Version V1 does not support ARRAY types"));
+        }
+    }
+
+    [Test]
     public void EcdsaSignatureLoop()
     {
         var privateKey = Convert.FromBase64String("NgdiOWDoQNUP18WOnb1xkkEG5TzPYMda5SiUOvT1K0U=");
-        var p = SecNamedCurves.GetByName("secp256r1");
+        var p          = SecNamedCurves.GetByName("secp256r1");
         var parameters = new ECDomainParameters(p.Curve, p.G, p.N, p.H);
         var priKey = new ECPrivateKeyParameters(
             "ECDSA",
@@ -109,12 +154,12 @@ public class TcpTests
         for (var i = 0; i < lineCount; i++)
         {
             await sender.Table("table name")
-                .Symbol("t a g", "v alu, e")
-                .Column("number", 10)
-                .Column("db l", 123.12)
-                .Column("string", " -=\"")
-                .Column("при вед", "медвед")
-                .AtAsync(new DateTime(1970, 01, 01, 0, 0, 1));
+                        .Symbol("t a g", "v alu, e")
+                        .Column("number", 10)
+                        .Column("db l", 123.12)
+                        .Column("string", " -=\"")
+                        .Column("при вед", "медвед")
+                        .AtAsync(new DateTime(1970, 01, 01, 0, 0, 1));
             totalExpectedSb.Append(expected);
         }
 
@@ -139,12 +184,12 @@ public class TcpTests
         for (var i = 0; i < lineCount; i++)
         {
             await sender.Table("table name")
-                .Symbol("t a g", "v alu, e")
-                .Column("number", 10)
-                .Column("db l", 123.12)
-                .Column("string", " -=\"")
-                .Column("при вед", "медвед")
-                .AtAsync(new DateTime(1970, 01, 01, 0, 0, 1));
+                        .Symbol("t a g", "v alu, e")
+                        .Column("number", 10)
+                        .Column("db l", 123.12)
+                        .Column("string", " -=\"")
+                        .Column("при вед", "медвед")
+                        .AtAsync(new DateTime(1970, 01, 01, 0, 0, 1));
             totalExpectedSb.Append(expected);
         }
 
@@ -153,12 +198,12 @@ public class TcpTests
         for (var i = 0; i < lineCount; i++)
         {
             await sender.Table("table name")
-                .Symbol("t a g", "v alu, e")
-                .Column("number", 10)
-                .Column("db l", 123.12)
-                .Column("string", " -=\"")
-                .Column("при вед", "медвед")
-                .AtAsync(new DateTime(1970, 01, 01, 0, 0, 1));
+                        .Symbol("t a g", "v alu, e")
+                        .Column("number", 10)
+                        .Column("db l", 123.12)
+                        .Column("string", " -=\"")
+                        .Column("при вед", "медвед")
+                        .AtAsync(new DateTime(1970, 01, 01, 0, 0, 1));
             totalExpectedSb.Append(expected);
         }
 
@@ -183,12 +228,12 @@ public class TcpTests
         for (var i = 0; i < lineCount; i++)
         {
             await sender.Table("table name")
-                .Symbol("t a g", "v alu, e")
-                .Column("number", 10)
-                .Column("db l", 123.12)
-                .Column("string", " -=\"")
-                .Column("при вед", "медвед")
-                .AtAsync(new DateTime(1970, 01, 01, 0, 0, 1));
+                        .Symbol("t a g", "v alu, e")
+                        .Column("number", 10)
+                        .Column("db l", 123.12)
+                        .Column("string", " -=\"")
+                        .Column("при вед", "медвед")
+                        .AtAsync(new DateTime(1970, 01, 01, 0, 0, 1));
             totalExpectedSb.Append(expected);
         }
 
@@ -198,12 +243,12 @@ public class TcpTests
         for (var i = 0; i < lineCount; i++)
         {
             await sender.Table("table name")
-                .Symbol("t a g", "v alu, e")
-                .Column("number", 10)
-                .Column("db l", 123.12)
-                .Column("string", " -=\"")
-                .Column("при вед", "медвед")
-                .AtAsync(new DateTime(1970, 01, 01, 0, 0, 1));
+                        .Symbol("t a g", "v alu, e")
+                        .Column("number", 10)
+                        .Column("db l", 123.12)
+                        .Column("string", " -=\"")
+                        .Column("при вед", "медвед")
+                        .AtAsync(new DateTime(1970, 01, 01, 0, 0, 1));
             totalExpectedSb.Append(expected);
         }
 
@@ -229,12 +274,12 @@ public class TcpTests
         for (var i = 0; i < lineCount; i++)
         {
             await sender.Table("table name")
-                .Symbol("t a g", "v alu, e")
-                .Column("number", 10)
-                .Column("db l", 123.12)
-                .Column("string", " -=\"")
-                .Column("при вед", "медвед")
-                .AtAsync(new DateTime(1970, 01, 01, 0, 0, 1));
+                        .Symbol("t a g", "v alu, e")
+                        .Column("number", 10)
+                        .Column("db l", 123.12)
+                        .Column("string", " -=\"")
+                        .Column("при вед", "медвед")
+                        .AtAsync(new DateTime(1970, 01, 01, 0, 0, 1));
             totalExpectedSb.Append(expected);
             try
             {
@@ -261,12 +306,14 @@ public class TcpTests
 
         using var sender = Sender.New($"tcp::addr={_host}:{_port};");
 
+#pragma warning disable CS0618 // Type or member is obsolete
         await sender.Table("neg name")
-            .Column("number1", long.MinValue + 1)
-            .Column("number2", long.MaxValue)
-            .Column("number3", double.MinValue)
-            .Column("number4", double.MaxValue)
-            .AtNowAsync();
+                    .Column("number1", long.MinValue + 1)
+                    .Column("number2", long.MaxValue)
+                    .Column("number3", double.MinValue)
+                    .Column("number4", double.MaxValue)
+                    .AtNowAsync();
+#pragma warning restore CS0618 // Type or member is obsolete
         await sender.SendAsync();
 
         var expected =
@@ -282,16 +329,18 @@ public class TcpTests
 
         using var sender = Sender.New($"tcp::addr={_host}:{_port};");
 
+#pragma warning disable CS0618 // Type or member is obsolete
         await sender.Table("doubles")
-            .Column("d0", 0.0)
-            .Column("dm0", -0.0)
-            .Column("d1", 1.0)
-            .Column("dE100", 1E100)
-            .Column("d0000001", 0.000001)
-            .Column("dNaN", double.NaN)
-            .Column("dInf", double.PositiveInfinity)
-            .Column("dNInf", double.NegativeInfinity)
-            .AtNowAsync();
+                    .Column("d0", 0.0)
+                    .Column("dm0", -0.0)
+                    .Column("d1", 1.0)
+                    .Column("dE100", 1E100)
+                    .Column("d0000001", 0.000001)
+                    .Column("dNaN", double.NaN)
+                    .Column("dInf", double.PositiveInfinity)
+                    .Column("dNInf", double.NegativeInfinity)
+                    .AtNowAsync();
+#pragma warning restore CS0618 // Type or member is obsolete
         await sender.SendAsync();
 
         var expected =
@@ -309,8 +358,8 @@ public class TcpTests
 
         var ts = new DateTime(2022, 2, 24);
         await sender.Table("name")
-            .Column("ts", ts)
-            .AtAsync(ts);
+                    .Column("ts", ts)
+                    .AtAsync(ts);
 
         await sender.SendAsync();
 
@@ -320,11 +369,11 @@ public class TcpTests
     }
 
     [Test]
-    public async Task AuthFailsNeedToReferenceAssembly()
+    public Task AuthFailsNeedToReferenceAssembly()
     {
         using var srv = CreateTcpListener(_port, true);
         srv.WithAuth("testUser1", "Vs4e-cOLsVCntsMrZiAGAZtrkPXO00uoRLuA3d7gEcI=",
-            "ANhR2AZSs4ar9urE5AZrJqu469X0r7gZ1BBEdcrAuL_6");
+                     "ANhR2AZSs4ar9urE5AZrJqu469X0r7gZ1BBEdcrAuL_6");
         srv.AcceptAsync();
 
         try
@@ -338,16 +387,18 @@ public class TcpTests
         {
             Assert.That(ex.Message.Contains("Could not load QuestDB.Secp256r1SignatureGenerator"), Is.True);
         }
+
+        return Task.CompletedTask;
     }
 
     [Test]
-    public async Task InvalidState()
+    public Task InvalidState()
     {
         using var srv = CreateTcpListener(_port);
         srv.AcceptAsync();
 
-        using var sender = Sender.New($"tcp::addr={_host}:{_port};");
-        string? nullString = null;
+        using var sender     = Sender.New($"tcp::addr={_host}:{_port};");
+        string?   nullString = null;
 
         Assert.That(
             () => sender.Table(nullString),
@@ -390,6 +441,7 @@ public class TcpTests
             () => sender.Symbol("asdf", "asdf"),
             Throws.TypeOf<IngressError>().With.Message.Contains("Cannot write symbols after fields")
         );
+        return Task.CompletedTask;
     }
 
 
@@ -443,13 +495,13 @@ public class TcpTests
     }
 
     [Test]
-    public async Task InvalidTableName()
+    public Task InvalidTableName()
     {
         using var srv = CreateTcpListener(_port);
         srv.AcceptAsync();
 
-        using var sender = Sender.New($"tcp::addr={_host}:{_port};");
-        string? nullString = null;
+        using var sender     = Sender.New($"tcp::addr={_host}:{_port};");
+        string?   nullString = null;
 
         Assert.Throws<IngressError>(() => sender.Table(nullString));
         Assert.Throws<IngressError>(() => sender.Column("abc", 123));
@@ -464,6 +516,7 @@ public class TcpTests
         sender.Column("asdf", 123);
 
         Assert.Throws<IngressError>(() => sender.Symbol("asdf", "asdf"));
+        return Task.CompletedTask;
     }
 
     [Test]
@@ -477,12 +530,16 @@ public class TcpTests
         sender.Table("good");
         sender.Symbol("asdf", "sdfad");
         sender.Column("ddd", 123);
+#pragma warning disable CS0618 // Type or member is obsolete
         await sender.AtNowAsync();
+#pragma warning restore CS0618 // Type or member is obsolete
 
         sender.Table("bad");
         sender.Symbol("asdf", "sdfad");
         sender.Column("asdf", 123);
+#pragma warning disable CS0618 // Type or member is obsolete
         await sender.AtNowAsync();
+#pragma warning restore CS0618 // Type or member is obsolete
         sender.CancelRow();
 
         sender.Table("good");
@@ -501,18 +558,19 @@ public class TcpTests
         srv.AcceptAsync();
 
         var nowMillisecond = DateTime.Now.Millisecond;
-        var metric = "metric_name" + nowMillisecond;
+        var metric         = "metric_name" + nowMillisecond;
 
         using var sender = Sender.New($"tcp::addr={_host}:{_port};init_buf_size={256 * 1024};");
 
         for (var i = 0; i < 1E6; i++)
         {
             await sender.Table(metric)
-                .Symbol("nopoint", "tag" + i % 100)
-                .Column("counter", i * 1111.1)
-                .Column("int", i)
-                .Column("привед", "мед вед")
-                .AtAsync(new DateTime(2021, 1, 1, i / 360 / 1000 % 60, i / 60 / 1000 % 60, i / 1000 % 60, i % 1000));
+                        .Symbol("nopoint", "tag" + i % 100)
+                        .Column("counter", i * 1111.1)
+                        .Column("int", i)
+                        .Column("привед", "мед вед")
+                        .AtAsync(new DateTime(2021, 1, 1, i / 360 / 1000 % 60, i / 60 / 1000 % 60, i / 1000 % 60,
+                                              i % 1000));
 
             if (i % 100 == 0)
             {
@@ -530,7 +588,7 @@ public class TcpTests
         srv.AcceptAsync();
 
         var nowMillisecond = DateTime.Now.Millisecond;
-        var metric = "metric_name" + nowMillisecond;
+        var metric         = "metric_name" + nowMillisecond;
 
         using var sender =
             Sender.New(
@@ -539,28 +597,29 @@ public class TcpTests
         for (var i = 0; i < 1E6; i++)
         {
             await sender.Table(metric)
-                .Symbol("nopoint", "tag" + i % 100)
-                .Column("counter", i * 1111.1)
-                .Column("int", i)
-                .Column("привед", "мед вед")
-                .AtAsync(new DateTime(2021, 1, 1, i / 360 / 1000 % 60, i / 60 / 1000 % 60, i / 1000 % 60, i % 1000));
+                        .Symbol("nopoint", "tag" + i % 100)
+                        .Column("counter", i * 1111.1)
+                        .Column("int", i)
+                        .Column("привед", "мед вед")
+                        .AtAsync(new DateTime(2021, 1, 1, i / 360 / 1000 % 60, i / 60 / 1000 % 60, i / 1000 % 60,
+                                              i % 1000));
         }
 
         await sender.SendAsync();
     }
 
     [Test]
-    public async Task CannotConnect()
+    public Task CannotConnect()
     {
         Assert.That(
             () => Sender.New($"tcp::addr={_host}:{_port};auto_flush=off;"),
             Throws.TypeOf<AggregateException>()
         );
-        
+        return Task.CompletedTask;
     }
 
     [Test]
-    public async Task SendNegativeLongMin()
+    public Task SendNegativeLongMin()
     {
         using var srv = CreateTcpListener(_port);
         srv.AcceptAsync();
@@ -569,11 +628,14 @@ public class TcpTests
             Sender.New(
                 $"tcp::addr={_host}:{_port};");
         Assert.That(
+#pragma warning disable CS0618 // Type or member is obsolete
             () => sender.Table("name")
-                .Column("number1", long.MinValue)
-                .AtNowAsync(),
+                        .Column("number1", long.MinValue)
+                        .AtNowAsync(),
+#pragma warning restore CS0618 // Type or member is obsolete
             Throws.TypeOf<IngressError>().With.Message.Contains("Special case")
         );
+        return Task.CompletedTask;
     }
 
     [Test]
@@ -585,9 +647,11 @@ public class TcpTests
         using var sender =
             Sender.New(
                 $"tcp::addr={_host}:{_port};");
+#pragma warning disable CS0618 // Type or member is obsolete
         await sender.Table("neg name")
-            .Column("привед", " мед\rве\n д")
-            .AtNowAsync();
+                    .Column("привед", " мед\rве\n д")
+                    .AtNowAsync();
+#pragma warning restore CS0618 // Type or member is obsolete
         await sender.SendAsync();
 
         var expected = "neg\\ name привед=\" мед\\\rве\\\n д\"\n";
@@ -595,7 +659,7 @@ public class TcpTests
     }
 
     [Test]
-    public async Task SendTagAfterField()
+    public Task SendTagAfterField()
     {
         using var srv = CreateTcpListener(_port);
         srv.AcceptAsync();
@@ -603,37 +667,21 @@ public class TcpTests
         using var sender =
             Sender.New(
                 $"tcp::addr={_host}:{_port};");
-        
-        Assert.That(
-            async () => await  sender.Table("name")
-                .Column("number1", 123)
-                .Symbol("nand", "asdfa")
-                .AtNowAsync(),
-            Throws.TypeOf<IngressError>()
-        );
-    }
 
-    [Test]
-    public async Task SendMetricOnce()
-    {
-        using var srv = CreateTcpListener(_port);
-        srv.AcceptAsync();
-
-        using var sender =
-            Sender.New(
-                $"tcp::addr={_host}:{_port};");
-        
         Assert.That(
+#pragma warning disable CS0618 // Type or member is obsolete
             async () => await sender.Table("name")
-                .Column("number1", 123)
-                .Table("nand")
-                .AtNowAsync(),
+                                    .Column("number1", 123)
+                                    .Symbol("nand", "asdfa")
+                                    .AtNowAsync(),
+#pragma warning restore CS0618 // Type or member is obsolete
             Throws.TypeOf<IngressError>()
         );
+        return Task.CompletedTask;
     }
 
     [Test]
-    public async Task StartFromMetric()
+    public Task SendMetricOnce()
     {
         using var srv = CreateTcpListener(_port);
         srv.AcceptAsync();
@@ -641,27 +689,56 @@ public class TcpTests
         using var sender =
             Sender.New(
                 $"tcp::addr={_host}:{_port};");
-        
+
         Assert.That(
-            async() => await sender.Column("number1", 123)
-                .AtNowAsync(),
+#pragma warning disable CS0618 // Type or member is obsolete
+            async () => await sender.Table("name")
+                                    .Column("number1", 123)
+                                    .Table("nand")
+                                    .AtNowAsync(),
+#pragma warning restore CS0618 // Type or member is obsolete
             Throws.TypeOf<IngressError>()
         );
-        
-        Assert.That(
-            async() => await sender.Symbol("number1", "1234")
-                .AtNowAsync(),
-            Throws.TypeOf<IngressError>()
-        );
+        return Task.CompletedTask;
     }
-    
+
+    [Test]
+    public Task StartFromMetric()
+    {
+        using var srv = CreateTcpListener(_port);
+        srv.AcceptAsync();
+
+        using var sender =
+            Sender.New(
+                $"tcp::addr={_host}:{_port};");
+
+        Assert.That(
+#pragma warning disable CS0618 // Type or member is obsolete
+            async () => await sender.Column("number1", 123)
+                                    .AtNowAsync(),
+#pragma warning restore CS0618 // Type or member is obsolete
+            Throws.TypeOf<IngressError>()
+        );
+
+        Assert.That(
+#pragma warning disable CS0618 // Type or member is obsolete
+            async () => await sender.Symbol("number1", "1234")
+                                    .AtNowAsync(),
+#pragma warning restore CS0618 // Type or member is obsolete
+            Throws.TypeOf<IngressError>()
+        );
+        return Task.CompletedTask;
+    }
+
     [Test]
     public async Task AutoFlushRows()
     {
         using var srv = CreateTcpListener(_port);
         srv.AcceptAsync();
 
-        using var sender = Sender.New($"tcp::addr={_host}:{_port};auto_flush=on;auto_flush_rows=100;auto_flush_interval=-1;auto_flush_bytes=-1;");
+        using var sender =
+            Sender.New(
+                $"tcp::addr={_host}:{_port};auto_flush=on;auto_flush_rows=100;auto_flush_interval=-1;auto_flush_bytes=-1;");
 
         for (var i = 0; i < 100000; i++)
         {
@@ -670,7 +747,9 @@ public class TcpTests
                 Assert.That(sender.Length == 12);
             }
 
+#pragma warning disable CS0618 // Type or member is obsolete
             await sender.Table("foo").Symbol("bah", "baz").AtNowAsync();
+#pragma warning restore CS0618 // Type or member is obsolete
         }
     }
 
@@ -679,7 +758,9 @@ public class TcpTests
     {
         using var srv = CreateTcpListener(_port);
         srv.AcceptAsync();
-        using var sender = Sender.New($"tcp::addr={_host}:{_port};auto_flush=on;auto_flush_bytes=1200;auto_flush_interval=-1;auto_flush_rows=-1;");
+        using var sender =
+            Sender.New(
+                $"tcp::addr={_host}:{_port};auto_flush=on;auto_flush_bytes=1200;auto_flush_interval=-1;auto_flush_rows=-1;");
         for (var i = 0; i < 100000; i++)
         {
             if (i % 100 == 0)
@@ -687,7 +768,9 @@ public class TcpTests
                 Assert.That(sender.Length == 0);
             }
 
+#pragma warning disable CS0618 // Type or member is obsolete
             await sender.Table("foo").Symbol("bah", "baz").AtNowAsync();
+#pragma warning restore CS0618 // Type or member is obsolete
         }
     }
 
@@ -696,87 +779,100 @@ public class TcpTests
     {
         using var srv = CreateTcpListener(_port);
         srv.AcceptAsync();
-        using var sender = Sender.New($"tcp::addr={_host}:{_port};auto_flush=on;auto_flush_interval=250;auto_flush_rows=-1;auto_flush_bytes=-1;");
+        using var sender =
+            Sender.New(
+                $"tcp::addr={_host}:{_port};auto_flush=on;auto_flush_interval=250;auto_flush_rows=-1;auto_flush_bytes=-1;");
 
+#pragma warning disable CS0618 // Type or member is obsolete
         await sender.Table("foo").Symbol("bah", "baz").AtNowAsync();
+#pragma warning restore CS0618 // Type or member is obsolete
         await sender.SendAsync();
         await Task.Delay(500);
+#pragma warning disable CS0618 // Type or member is obsolete
         await sender.Table("foo").Symbol("bah", "baz").AtNowAsync();
+#pragma warning restore CS0618 // Type or member is obsolete
         Assert.That(sender.Length == 0);
     }
 
 
     [Test]
-    public async Task TcpSenderDoesNotSupportTransactions()
+    public Task TcpSenderDoesNotSupportTransactions()
     {
         using var srv = CreateTcpListener(_port);
         srv.AcceptAsync();
-        using var sender = Sender.New($"tcp::addr={_host}:{_port};auto_flush=on;auto_flush_interval=250;auto_flush_rows=-1;auto_flush_bytes=-1;");
-        
+        using var sender =
+            Sender.New(
+                $"tcp::addr={_host}:{_port};auto_flush=on;auto_flush_interval=250;auto_flush_rows=-1;auto_flush_bytes=-1;");
+
         Assert.That(
             () => sender.Transaction("foo"),
             Throws.TypeOf<IngressError>().With.Message.Contains("does not support")
-            );
-        
+        );
+
         Assert.That(
             () => sender.Rollback(),
             Throws.TypeOf<IngressError>().With.Message.Contains("does not support")
         );
-        
+
         Assert.That(
             () => sender.Commit(),
             Throws.TypeOf<IngressError>().With.Message.Contains("does not support")
         );
-        
+
         Assert.That(
             async () => await sender.CommitAsync(),
             Throws.TypeOf<IngressError>().With.Message.Contains("does not support")
         );
+        return Task.CompletedTask;
     }
-    
+
     [Test]
     public async Task SendVariousAts()
     {
         using var srv = CreateTcpListener(_port);
         srv.AcceptAsync();
-        
+
         using var sender = Sender.New($"tcp::addr={_host}:{_port};auto_flush=off;");
 
+#pragma warning disable CS0618 // Type or member is obsolete
         await sender.Table("foo")
-            .Symbol("bah", "baz")
-            .AtNowAsync();
-        
+                    .Symbol("bah", "baz")
+                    .AtNowAsync();
+#pragma warning restore CS0618 // Type or member is obsolete
+
         await sender.Table("foo")
-            .Symbol("bah", "baz")
-            .AtAsync(DateTime.UtcNow);
-        
+                    .Symbol("bah", "baz")
+                    .AtAsync(DateTime.UtcNow);
+
         await sender.Table("foo")
-            .Symbol("bah", "baz")
-            .AtAsync(DateTimeOffset.UtcNow);
-        
+                    .Symbol("bah", "baz")
+                    .AtAsync(DateTimeOffset.UtcNow);
+
         await sender.Table("foo")
-            .Symbol("bah", "baz")
-            .AtAsync(DateTime.UtcNow.Ticks / 100);
-          
+                    .Symbol("bah", "baz")
+                    .AtAsync(DateTime.UtcNow.Ticks / 100);
+
+#pragma warning disable CS0618 // Type or member is obsolete
         sender.Table("foo")
-            .Symbol("bah", "baz")
-            .AtNow();
-        
+              .Symbol("bah", "baz")
+              .AtNow();
+#pragma warning restore CS0618 // Type or member is obsolete
+
         sender.Table("foo")
-            .Symbol("bah", "baz")
-            .At(DateTime.UtcNow);
-        
+              .Symbol("bah", "baz")
+              .At(DateTime.UtcNow);
+
         sender.Table("foo")
-            .Symbol("bah", "baz")
-            .At(DateTimeOffset.UtcNow);
-        
+              .Symbol("bah", "baz")
+              .At(DateTimeOffset.UtcNow);
+
         sender.Table("foo")
-            .Symbol("bah", "baz")
-            .At(DateTime.UtcNow.Ticks / 100);
-        
+              .Symbol("bah", "baz")
+              .At(DateTime.UtcNow.Ticks / 100);
+
         await sender.SendAsync();
     }
-    
+
     [Test]
     public async Task ClearSender()
     {
@@ -784,14 +880,16 @@ public class TcpTests
         srv.AcceptAsync();
 
         using var sender = Sender.New($"tcp::addr={_host}:{_port};auto_flush=off;");
-        
+
+#pragma warning disable CS0618 // Type or member is obsolete
         await sender.Table("foo").Symbol("bah", "baz").AtNowAsync();
+#pragma warning restore CS0618 // Type or member is obsolete
         Assert.That(sender.Length, Is.GreaterThan(0));
 
         sender.Clear();
         Assert.That(sender.Length, Is.EqualTo(0));
     }
-    
+
     private static void WaitAssert(DummyIlpServer srv, string expected)
     {
         var expectedLen = Encoding.UTF8.GetBytes(expected).Length;
@@ -800,7 +898,7 @@ public class TcpTests
             Thread.Sleep(10);
         }
 
-        Assert.That(srv.GetTextReceived(), Is.EqualTo(expected));
+        Assert.That(srv.PrintBuffer(), Is.EqualTo(expected));
     }
 
     private DummyIlpServer CreateTcpListener(int port, bool tls = false)

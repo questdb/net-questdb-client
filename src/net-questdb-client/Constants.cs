@@ -22,24 +22,11 @@
  *
  ******************************************************************************/
 
-// ReSharper disable CommentTypo
 // ReSharper disable InconsistentNaming
 
-namespace QuestDB.Enums;
+namespace QuestDB;
 
-/// <summary>
-///     Enum for auto_flush
-///     Defaults to 'on'.
-/// </summary>
-public enum AutoFlushType
+internal static class Constants
 {
-    /// <summary>
-    ///     Disable auto-flushing
-    /// </summary>
-    off,
-
-    /// <summary>
-    ///     Enable auto-flushing. (default)
-    /// </summary>
-    on,
+    public const char BINARY_FORMAT_FLAG = '=';
 }

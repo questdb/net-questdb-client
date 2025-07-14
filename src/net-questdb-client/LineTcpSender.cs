@@ -28,7 +28,12 @@ using System.Net.Security;
 using System.Net.Sockets;
 using System.Runtime.CompilerServices;
 using System.Text;
+
 // ReSharper disable InconsistentNaming
+// ReSharper disable ConvertToConstant.Global
+#pragma warning disable CS1573 // Parameter has no matching param tag in the XML comment (but other parameters do)
+#pragma warning disable CS1572 // XML comment has a param tag, but there is no parameter by that name
+#pragma warning disable CS1591 // Missing XML comment for publicly visible type or member
 
 namespace QuestDB;
 
@@ -54,15 +59,15 @@ public class LineTcpSender : IDisposable
     private int _position;
     private bool _quoted;
     private byte[] _sendBuffer;
-    private Socket? _underlyingSocket;
     public ISignatureGenerator? _signatureGenerator;
+    private Socket? _underlyingSocket;
 
     private LineTcpSender(Stream networkStream, int bufferSize,
-        BufferOverflowHandling bufferOverflowHandling)
+                          BufferOverflowHandling bufferOverflowHandling)
     {
-        _networkStream = networkStream;
+        _networkStream          = networkStream;
         _bufferOverflowHandling = bufferOverflowHandling;
-        _sendBuffer = new byte[bufferSize];
+        _sendBuffer             = new byte[bufferSize];
         _buffers.Add((_sendBuffer, 0));
         QuestDbFsFileNameLimit = DefaultQuestDbFsFileNameLimit;
     }
@@ -118,7 +123,7 @@ public class LineTcpSender : IDisposable
         {
             await socket.ConnectAsync(host, port);
             return await ConnectAsync(host, socket, true, bufferSize, bufferOverflowHandling, tlsMode,
-                cancellationToken);
+                                      cancellationToken);
         }
         catch
         {
@@ -149,7 +154,7 @@ public class LineTcpSender : IDisposable
         CancellationToken cancellationToken = default)
     {
         NetworkStream? networkStream = null;
-        SslStream? sslStream = null;
+        SslStream?     sslStream     = null;
         try
         {
             networkStream = new NetworkStream(socket, ownSocket);
@@ -162,10 +167,13 @@ public class LineTcpSender : IDisposable
                 {
                     TargetHost = host,
                     RemoteCertificateValidationCallback =
-                        tlsMode == TlsMode.AllowAnyServerCertificate ? AllowAllCertCallback : null
+                        tlsMode == TlsMode.AllowAnyServerCertificate ? AllowAllCertCallback : null,
                 };
                 await sslStream.AuthenticateAsClientAsync(options, cancellationToken);
-                if (!sslStream.IsEncrypted) throw new IOException("Cannot establish encrypted connection");
+                if (!sslStream.IsEncrypted)
+                {
+                    throw new IOException("Cannot establish encrypted connection");
+                }
 
                 dataStream = sslStream;
             }
@@ -190,8 +198,9 @@ public class LineTcpSender : IDisposable
     /// <param name="tlsMode">Enables / Disable TSL connection</param>
     /// <returns>Instance of LineTcpSender</returns>
     public static LineTcpSender FromStream(Stream networkStream,
-        int bufferSize = 4096,
-        BufferOverflowHandling bufferOverflowHandling = BufferOverflowHandling.SendImmediately)
+                                           int bufferSize = 4096,
+                                           BufferOverflowHandling bufferOverflowHandling =
+                                               BufferOverflowHandling.SendImmediately)
     {
         return new LineTcpSender(networkStream, bufferSize, bufferOverflowHandling);
     }
@@ -204,9 +213,12 @@ public class LineTcpSender : IDisposable
     /// <param name="cancellationToken">cancellation token</param>
     /// <exception cref="InvalidOperationException">Throws InvalidOperationException if already authenticated</exception>
     public async ValueTask AuthenticateAsync(string keyId, string encodedPrivateKey,
-        CancellationToken cancellationToken = default)
+                                             CancellationToken cancellationToken = default)
     {
-        if (_authenticated) throw new InvalidOperationException("Already authenticated");
+        if (_authenticated)
+        {
+            throw new InvalidOperationException("Already authenticated");
+        }
 
         _authenticated = true;
         EncodeUtf8(keyId);
@@ -219,6 +231,7 @@ public class LineTcpSender : IDisposable
         {
             _signatureGenerator = Signatures.CreateSignatureGenerator();
         }
+
         var signature = _signatureGenerator.GenerateSignature(privateKey, _sendBuffer, bufferLen);
         Base64.EncodeToUtf8(signature, _sendBuffer, out _, out _position);
         _sendBuffer[_position++] = (byte)'\n';
@@ -236,19 +249,25 @@ public class LineTcpSender : IDisposable
     /// <exception cref="ArgumentException">If table name empty or contains unsupported characters</exception>
     public LineTcpSender Table(ReadOnlySpan<char> name)
     {
-        if (_hasTable) throw new InvalidOperationException("table already specified");
+        if (_hasTable)
+        {
+            throw new InvalidOperationException("table already specified");
+        }
 
         if (!IsValidTableName(name))
         {
-            if (IsEmpty(name)) throw new ArgumentException(nameof(name) + " cannot be empty");
+            if (IsEmpty(name))
+            {
+                throw new ArgumentException(nameof(name) + " cannot be empty");
+            }
 
             throw new ArgumentException(nameof(name) + " contains invalid characters");
         }
 
-        _quoted = false;
+        _quoted   = false;
         _hasTable = true;
 
-        _lineStartBufferIndex = _currentBufferIndex;
+        _lineStartBufferIndex    = _currentBufferIndex;
         _lineStartBufferPosition = _position;
 
         EncodeUtf8(name);
@@ -269,7 +288,10 @@ public class LineTcpSender : IDisposable
         {
             if (!IsValidColumnName(symbolName))
             {
-                if (IsEmpty(symbolName)) throw new ArgumentException(nameof(symbolName) + " cannot be empty");
+                if (IsEmpty(symbolName))
+                {
+                    throw new ArgumentException(nameof(symbolName) + " cannot be empty");
+                }
 
                 throw new ArgumentException(nameof(symbolName) + " contains invalid characters");
             }
@@ -279,7 +301,10 @@ public class LineTcpSender : IDisposable
             return this;
         }
 
-        if (!_hasTable) throw new InvalidOperationException("table expected");
+        if (!_hasTable)
+        {
+            throw new InvalidOperationException("table expected");
+        }
 
         throw new InvalidOperationException("cannot write Symbols after Fields");
     }
@@ -356,7 +381,9 @@ public class LineTcpSender : IDisposable
     public void AtNow()
     {
         if (!_hasTable || (_noFields && _noSymbols))
+        {
             throw new InvalidOperationException("No symbols or column specified.");
+        }
 
         FinishLine();
     }
@@ -390,12 +417,15 @@ public class LineTcpSender : IDisposable
         for (var i = 0; i <= _currentBufferIndex; i++)
         {
             var length = i == _currentBufferIndex ? _position : _buffers[i].Length;
-            if (length > 0) _networkStream.Write(_buffers[i].Buffer, 0, length);
+            if (length > 0)
+            {
+                _networkStream.Write(_buffers[i].Buffer, 0, length);
+            }
         }
 
         _currentBufferIndex = 0;
-        _sendBuffer = _buffers[_currentBufferIndex].Buffer;
-        _position = 0;
+        _sendBuffer         = _buffers[_currentBufferIndex].Buffer;
+        _position           = 0;
     }
 
     /// <summary>
@@ -407,12 +437,15 @@ public class LineTcpSender : IDisposable
         for (var i = 0; i <= _currentBufferIndex; i++)
         {
             var length = i == _currentBufferIndex ? _position : _buffers[i].Length;
-            if (length > 0) await _networkStream.WriteAsync(_buffers[i].Buffer, 0, length, cancellationToken);
+            if (length > 0)
+            {
+                await _networkStream.WriteAsync(_buffers[i].Buffer, 0, length, cancellationToken);
+            }
         }
 
         _currentBufferIndex = 0;
-        _sendBuffer = _buffers[0].Buffer;
-        _position = 0;
+        _sendBuffer         = _buffers[0].Buffer;
+        _position           = 0;
     }
 
     /// <summary>
@@ -422,10 +455,12 @@ public class LineTcpSender : IDisposable
     public void CancelLine()
     {
         if (_bufferOverflowHandling == BufferOverflowHandling.SendImmediately)
+        {
             throw new InvalidOperationException("Cannot cancel line in BufferOverflowHandling.SendImmediately mode");
+        }
 
         _currentBufferIndex = _lineStartBufferIndex;
-        _position = _lineStartBufferPosition;
+        _position           = _lineStartBufferPosition;
     }
 
     /// <summary>
@@ -434,14 +469,20 @@ public class LineTcpSender : IDisposable
     public void TrimExcessBuffers()
     {
         var removeCount = _buffers.Count - _currentBufferIndex - 1;
-        if (removeCount > 0) _buffers.RemoveRange(_currentBufferIndex + 1, removeCount);
+        if (removeCount > 0)
+        {
+            _buffers.RemoveRange(_currentBufferIndex + 1, removeCount);
+        }
     }
 
     private static byte[] FromBase64String(string encodedPrivateKey)
     {
         var urlUnsafe = encodedPrivateKey.Replace('-', '+').Replace('_', '/');
-        var padding = 3 - (urlUnsafe.Length + 3) % 4;
-        if (padding != 0) urlUnsafe += new string('=', padding);
+        var padding   = 3 - (urlUnsafe.Length + 3) % 4;
+        if (padding != 0)
+        {
+            urlUnsafe += new string('=', padding);
+        }
 
         return Convert.FromBase64String(urlUnsafe);
     }
@@ -452,11 +493,14 @@ public class LineTcpSender : IDisposable
         while (totalReceived < _sendBuffer.Length)
         {
             var received = await _networkStream.ReadAsync(_sendBuffer, totalReceived,
-                _sendBuffer.Length - totalReceived, cancellationToken);
+                                                          _sendBuffer.Length - totalReceived, cancellationToken);
             if (received > 0)
             {
                 totalReceived += received;
-                if (_sendBuffer[totalReceived - 1] == endChar) return totalReceived - 1;
+                if (_sendBuffer[totalReceived - 1] == endChar)
+                {
+                    return totalReceived - 1;
+                }
             }
             else
             {
@@ -478,8 +522,8 @@ public class LineTcpSender : IDisposable
     private void FinishLine()
     {
         Put('\n');
-        _hasTable = false;
-        _noFields = true;
+        _hasTable  = false;
+        _noFields  = true;
         _noSymbols = true;
     }
 
@@ -489,7 +533,10 @@ public class LineTcpSender : IDisposable
         {
             if (!IsValidColumnName(columnName))
             {
-                if (IsEmpty(columnName)) throw new ArgumentException(nameof(columnName) + " cannot be empty");
+                if (IsEmpty(columnName))
+                {
+                    throw new ArgumentException(nameof(columnName) + " cannot be empty");
+                }
 
                 throw new ArgumentException(nameof(columnName) + " contains invalid characters");
             }
@@ -514,22 +561,30 @@ public class LineTcpSender : IDisposable
     {
         if (value == long.MinValue)
             // Special case, long.MinValue cannot be handled by QuestDB
+        {
             throw new ArgumentOutOfRangeException();
+        }
 
-        Span<byte> num = stackalloc byte[20];
-        var pos = num.Length;
-        var remaining = Math.Abs(value);
+        Span<byte> num       = stackalloc byte[20];
+        var        pos       = num.Length;
+        var        remaining = Math.Abs(value);
         do
         {
             var digit = remaining % 10;
-            num[--pos] = (byte)('0' + digit);
-            remaining /= 10;
+            num[--pos] =  (byte)('0' + digit);
+            remaining  /= 10;
         } while (remaining != 0);
 
-        if (value < 0) num[--pos] = (byte)'-';
+        if (value < 0)
+        {
+            num[--pos] = (byte)'-';
+        }
 
         var len = num.Length - pos;
-        if (_position + len >= _sendBuffer.Length) NextBuffer();
+        if (_position + len >= _sendBuffer.Length)
+        {
+            NextBuffer();
+        }
 
         num.Slice(pos, len).CopyTo(_sendBuffer.AsSpan(_position));
         _position += len;
@@ -543,9 +598,13 @@ public class LineTcpSender : IDisposable
         {
             var c = name[i];
             if (c < 128)
+            {
                 PutSpecial(c);
+            }
             else
+            {
                 PutUtf8(c);
+            }
         }
 
         return this;
@@ -554,7 +613,10 @@ public class LineTcpSender : IDisposable
     private bool IsValidTableName(ReadOnlySpan<char> tableName)
     {
         var l = tableName.Length;
-        if (l > QuestDbFsFileNameLimit) return false;
+        if (l > QuestDbFsFileNameLimit)
+        {
+            return false;
+        }
 
         for (var i = 0; i < l; i++)
         {
@@ -569,7 +631,9 @@ public class LineTcpSender : IDisposable
                         // Double, triple dot look suspicious
                         // Single dot allowed as compatibility,
                         // when someone uploads 'file_name.csv' the file name used as the table name
+                    {
                         return false;
+                    }
 
                     break;
                 case '?':
@@ -613,7 +677,10 @@ public class LineTcpSender : IDisposable
     private bool IsValidColumnName(ReadOnlySpan<char> tableName)
     {
         var l = tableName.Length;
-        if (l > QuestDbFsFileNameLimit) return false;
+        if (l > QuestDbFsFileNameLimit)
+        {
+            return false;
+        }
 
         for (var i = 0; i < l; i++)
         {
@@ -662,10 +729,13 @@ public class LineTcpSender : IDisposable
 
     private void PutUtf8(char c)
     {
-        if (_position + 4 >= _sendBuffer.Length) NextBuffer();
+        if (_position + 4 >= _sendBuffer.Length)
+        {
+            NextBuffer();
+        }
 
-        var bytes = _sendBuffer.AsSpan(_position);
-        Span<char> chars = stackalloc char[1] { c };
+        var        bytes = _sendBuffer.AsSpan(_position);
+        Span<char> chars = stackalloc char[1] { c, };
         _position += Encoding.UTF8.GetBytes(chars, bytes);
     }
 
@@ -676,7 +746,10 @@ public class LineTcpSender : IDisposable
             case ' ':
             case ',':
             case '=':
-                if (!_quoted) Put('\\');
+                if (!_quoted)
+                {
+                    Put('\\');
+                }
 
                 goto default;
             default:
@@ -687,7 +760,10 @@ public class LineTcpSender : IDisposable
                 Put('\\').Put(c);
                 break;
             case '"':
-                if (_quoted) Put('\\');
+                if (_quoted)
+                {
+                    Put('\\');
+                }
 
                 Put(c);
                 break;
@@ -700,13 +776,19 @@ public class LineTcpSender : IDisposable
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void Put(ReadOnlySpan<char> chars)
     {
-        foreach (var c in chars) Put(c);
+        foreach (var c in chars)
+        {
+            Put(c);
+        }
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private LineTcpSender Put(char c)
     {
-        if (_position + 2 > _sendBuffer.Length) NextBuffer();
+        if (_position + 2 > _sendBuffer.Length)
+        {
+            NextBuffer();
+        }
 
         _sendBuffer[_position++] = (byte)c;
         return this;

@@ -1,4 +1,3 @@
-// ReSharper disable CommentTypo
 /*******************************************************************************
  *     ___                  _   ____  ____
  *    / _ \ _   _  ___  ___| |_|  _ \| __ )
@@ -23,6 +22,8 @@
  *
  ******************************************************************************/
 
+// ReSharper disable CommentTypo
+
 using System.Diagnostics;
 using System.Net;
 using System.Net.Http.Headers;
@@ -35,7 +36,6 @@ using System.Text.Json;
 using QuestDB.Buffers;
 using QuestDB.Enums;
 using QuestDB.Utils;
-using Buffer = QuestDB.Buffers.Buffer;
 
 namespace QuestDB.Senders;
 
@@ -54,8 +54,14 @@ internal class HttpSender : AbstractSender
     /// </summary>
     private SocketsHttpHandler _handler = null!;
 
+    private readonly Func<HttpRequestMessage> _sendRequestFactory;
+    private readonly Func<HttpRequestMessage> _settingRequestFactory;
+
     public HttpSender(SenderOptions options)
     {
+        _sendRequestFactory    = GenerateRequest;
+        _settingRequestFactory = GenerateSettingsRequest;
+
         Options = options;
         Build();
     }
@@ -66,26 +72,30 @@ internal class HttpSender : AbstractSender
 
     private void Build()
     {
-        _buffer = new Buffer(Options.init_buf_size, Options.max_name_len, Options.max_buf_size);
-
         _handler = new SocketsHttpHandler
         {
             PooledConnectionIdleTimeout = Options.pool_timeout,
-            MaxConnectionsPerServer = 1
+            MaxConnectionsPerServer     = 1,
         };
 
         if (Options.protocol == ProtocolType.https)
         {
-            _handler.SslOptions.TargetHost = Options.Host;
+            _handler.SslOptions.TargetHost          = Options.Host;
             _handler.SslOptions.EnabledSslProtocols = SslProtocols.Tls12 | SslProtocols.Tls13;
 
             if (Options.tls_verify == TlsVerifyType.unsafe_off)
+            {
                 _handler.SslOptions.RemoteCertificateValidationCallback += (_, _, _, _) => true;
+            }
             else
+            {
                 _handler.SslOptions.RemoteCertificateValidationCallback =
                     (_, certificate, chain, errors) =>
                     {
-                        if ((errors & ~SslPolicyErrors.RemoteCertificateChainErrors) != 0) return false;
+                        if ((errors & ~SslPolicyErrors.RemoteCertificateChainErrors) != 0)
+                        {
+                            return false;
+                        }
 
                         if (Options.tls_roots != null)
                         {
@@ -96,6 +106,7 @@ internal class HttpSender : AbstractSender
 
                         return chain!.Build(new X509Certificate2(certificate!));
                     };
+            }
 
             if (!string.IsNullOrEmpty(Options.tls_roots))
             {
@@ -105,34 +116,111 @@ internal class HttpSender : AbstractSender
             }
         }
 
-        _handler.ConnectTimeout = Options.auth_timeout;
+        _handler.ConnectTimeout  = Options.auth_timeout;
         _handler.PreAuthenticate = true;
 
         _client = new HttpClient(_handler);
         var uri = new UriBuilder(Options.protocol.ToString(), Options.Host, Options.Port);
         _client.BaseAddress = uri.Uri;
-        _client.Timeout = Timeout.InfiniteTimeSpan;
+        _client.Timeout     = Timeout.InfiniteTimeSpan;
 
         if (!string.IsNullOrEmpty(Options.username) && !string.IsNullOrEmpty(Options.password))
-            _client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Basic",
-                Convert.ToBase64String(Encoding.ASCII.GetBytes($"{Options.username}:{Options.password}")));
+        {
+            _client.DefaultRequestHeaders.Authorization
+                = new AuthenticationHeaderValue("Basic",
+                                                Convert.ToBase64String(
+                                                    Encoding.ASCII.GetBytes(
+                                                        $"{Options.username}:{Options.password}")));
+        }
         else if (!string.IsNullOrEmpty(Options.token))
+        {
             _client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", Options.token);
+        }
+
+        var protocolVersion = Options.protocol_version;
+
+        if (protocolVersion == ProtocolVersion.Auto)
+        {
+            // We need to see if this will be a V1 or a V2
+            // Other clients use 1 second timeout for "/settings", follow same practice here.
+            using var response = SendWithRetries(default, _settingRequestFactory, TimeSpan.FromSeconds(1));
+            if (!response.IsSuccessStatusCode)
+            {
+                if (response.StatusCode == HttpStatusCode.NotFound)
+                {
+                    protocolVersion = ProtocolVersion.V1;
+                }
+                else
+                {
+                    _client.Dispose();
+                    // Throw exception.
+                    response.EnsureSuccessStatusCode();
+                }
+            }
+
+            if (protocolVersion == ProtocolVersion.Auto)
+            {
+                try
+                {
+                    var json     = response.Content.ReadFromJsonAsync<SettingsResponse>().Result!;
+                    var versions = json.Config?.LineProtoSupportVersions!;
+                    foreach (var element in versions)
+                    {
+                        if (element == (int)ProtocolVersion.V2)
+                        {
+                            // V2 is supported, use it.
+                            protocolVersion = ProtocolVersion.V2;
+                            break;
+                        }
+                    }
+                }
+                catch
+                {
+                    protocolVersion = ProtocolVersion.V1;
+                }
+            }
+
+            if (protocolVersion == ProtocolVersion.Auto)
+            {
+                protocolVersion = ProtocolVersion.V1;
+            }
+        }
+
+        Buffer = Buffers.Buffer.Create(
+            Options.init_buf_size,
+            Options.max_name_len,
+            Options.max_buf_size,
+            protocolVersion
+        );
+    }
+
+    private static HttpRequestMessage GenerateSettingsRequest()
+    {
+        return new HttpRequestMessage(HttpMethod.Get, "/settings");
     }
 
     /// <summary>
     ///     Creates a new HTTP request with appropriate encoding and timeout.
     /// </summary>
     /// <returns></returns>
-    private (HttpRequestMessage, CancellationTokenSource?) GenerateRequest(CancellationToken ct = default)
+    private CancellationTokenSource GenerateRequestCts(CancellationToken ct = default)
     {
-        var request = new HttpRequestMessage(HttpMethod.Post, "/write")
-            { Content = new BufferStreamContent(_buffer) };
-        request.Content.Headers.ContentType = new MediaTypeHeaderValue("text/plain") { CharSet = "utf-8" };
-        request.Content.Headers.ContentLength = _buffer.Length;
         var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         cts.CancelAfter(CalculateRequestTimeout());
-        return (request, cts);
+        return cts;
+    }
+
+    /// <summary>
+    ///     Creates a new HTTP request with appropriate encoding.
+    /// </summary>
+    /// <returns></returns>
+    private HttpRequestMessage GenerateRequest()
+    {
+        var request = new HttpRequestMessage(HttpMethod.Post, "/write")
+            { Content = new BufferStreamContent(Buffer), };
+        request.Content.Headers.ContentType   = new MediaTypeHeaderValue("text/plain") { CharSet = "utf-8", };
+        request.Content.Headers.ContentLength = Buffer.Length;
+        return request;
     }
 
     /// <summary>
@@ -147,21 +235,25 @@ internal class HttpSender : AbstractSender
     private TimeSpan CalculateRequestTimeout()
     {
         return Options.request_timeout
-               + TimeSpan.FromSeconds(_buffer.Length / (double)Options.request_min_throughput);
+               + TimeSpan.FromSeconds((Buffer?.Length ?? 0) / (double)Options.request_min_throughput);
     }
 
     /// <inheritdoc />
     public override ISender Transaction(ReadOnlySpan<char> tableName)
     {
         if (WithinTransaction)
+        {
             throw new IngressError(ErrorCode.InvalidApiCall,
-                "Cannot start another transaction - only one allowed at a time.");
+                                   "Cannot start another transaction - only one allowed at a time.");
+        }
 
         if (Length > 0)
+        {
             throw new IngressError(ErrorCode.InvalidApiCall,
-                "Buffer must be clear before you can start a transaction.");
+                                   "Buffer must be clear before you can start a transaction.");
+        }
 
-        _buffer.Transaction(tableName);
+        Buffer.Transaction(tableName);
         return this;
     }
 
@@ -171,7 +263,10 @@ internal class HttpSender : AbstractSender
     {
         try
         {
-            if (!WithinTransaction) throw new IngressError(ErrorCode.InvalidApiCall, "No transaction to commit.");
+            if (!WithinTransaction)
+            {
+                throw new IngressError(ErrorCode.InvalidApiCall, "No transaction to commit.");
+            }
 
             CommittingTransaction = true;
             Send(ct);
@@ -179,7 +274,7 @@ internal class HttpSender : AbstractSender
         finally
         {
             CommittingTransaction = false;
-            Debug.Assert(!_buffer.WithinTransaction);
+            Debug.Assert(!Buffer.WithinTransaction);
         }
     }
 
@@ -188,7 +283,10 @@ internal class HttpSender : AbstractSender
     {
         try
         {
-            if (!WithinTransaction) throw new IngressError(ErrorCode.InvalidApiCall, "No transaction to commit.");
+            if (!WithinTransaction)
+            {
+                throw new IngressError(ErrorCode.InvalidApiCall, "No transaction to commit.");
+            }
 
             CommittingTransaction = true;
             await SendAsync(ct);
@@ -196,7 +294,7 @@ internal class HttpSender : AbstractSender
         finally
         {
             CommittingTransaction = false;
-            Debug.Assert(!_buffer.WithinTransaction);
+            Debug.Assert(!Buffer.WithinTransaction);
         }
     }
 
@@ -204,123 +302,171 @@ internal class HttpSender : AbstractSender
     public override void Rollback()
     {
         if (!WithinTransaction)
+        {
             throw new IngressError(ErrorCode.InvalidApiCall, "Cannot rollback - no open transaction.");
+        }
 
-        _buffer.Clear();
+        Buffer.Clear();
     }
 
     /// <inheritdoc cref="SendAsync" />
     public override void Send(CancellationToken ct = default)
     {
         if (WithinTransaction && !CommittingTransaction)
+        {
             throw new IngressError(ErrorCode.InvalidApiCall, "Please `commit` to complete your transaction.");
+        }
 
-        if (_buffer.Length == 0) return;
+        if (Buffer.Length == 0)
+        {
+            return;
+        }
 
-        HttpRequestMessage? request = null;
-        CancellationTokenSource? cts = null;
-        HttpResponseMessage? response = null;
-        HttpRequestException? cannotConnect = null;
-
+        bool success = false;
         try
         {
-            (request, cts) = GenerateRequest(ct);
-
-            try
-            {
-                response = _client.Send(request, HttpCompletionOption.ResponseHeadersRead, cts!.Token);
-            }
-            catch (HttpRequestException hre)
-            {
-                Debug.Assert(hre.Message.Contains("refused"));
-                cannotConnect = hre;
-            }
-
-            if (Options.retry_timeout > TimeSpan.Zero)
-                // retry if appropriate - error that's retriable, and retries are enabled
-                if (cannotConnect != null // if it was a cannot correct error
-                    || (!response!.IsSuccessStatusCode // or some other http error
-                        && IsRetriableError(response.StatusCode)))
-                {
-                    var retryTimer = new Stopwatch();
-                    retryTimer.Start();
-                    var retryInterval = TimeSpan.FromMilliseconds(5); // it'll get doubled
-
-                    while (retryTimer.Elapsed < Options.retry_timeout // whilst we can still retry
-                           && (
-                               cannotConnect != null || // either we can't connect
-                               (retryTimer.Elapsed < Options.retry_timeout // or we have another http error
-                                && !response!.IsSuccessStatusCode &&
-                                IsRetriableError(response.StatusCode))))
-                    {
-                        retryInterval = TimeSpan.FromMilliseconds(Math.Min(retryInterval.TotalMilliseconds * 2, 1000));
-                        // cleanup last run
-                        request.Dispose();
-                        response?.Dispose();
-                        cts?.Dispose();
-
-                        (request, cts) = GenerateRequest(ct);
-
-                        var jitter = TimeSpan.FromMilliseconds(Random.Shared.Next(0, 10) - 10 / 2.0);
-                        Thread.Sleep(retryInterval + jitter);
-
-                        try
-                        {
-                            response = _client.Send(request, HttpCompletionOption.ResponseHeadersRead, cts!.Token);
-                            cannotConnect = null;
-                        }
-                        catch (HttpRequestException hre)
-                        {
-                            Debug.Assert(hre.Message.Contains("refused"));
-                            cannotConnect = hre;
-                        }
-                    }
-                }
-
-            // check for cannot connect error
-            if (cannotConnect != null && response == null)
-                throw new IngressError(ErrorCode.ServerFlushError,
-                    $"Cannot connect to `{Options.Host}:{Options.Port}`");
+            using var response = SendWithRetries(ct, _sendRequestFactory, Options.retry_timeout);
 
             // return if ok
-            if (response!.IsSuccessStatusCode) return;
+            if (response.IsSuccessStatusCode)
+            {
+                LastFlush = (response.Headers.Date ?? DateTime.UtcNow).UtcDateTime;
+                success   = true;
+                return;
+            }
 
             // unwrap json error if present
             if (response.Content.Headers.ContentType?.MediaType == "application/json")
-                HandleErrorJsonAsync(response, cts).Wait();
+            {
+                HandleErrorJson(response);
+            }
 
             // fallback to basic error
             throw new IngressError(ErrorCode.ServerFlushError, response.ReasonPhrase);
         }
         catch (Exception ex)
         {
-            if (ex is not IngressError) throw new IngressError(ErrorCode.ServerFlushError, ex.ToString(), ex);
+            if (ex is not IngressError)
+            {
+                throw new IngressError(ErrorCode.ServerFlushError, ex.ToString(), ex);
+            }
 
             throw;
         }
         finally
         {
-            _buffer.Clear();
-            LastFlush = (response?.Headers.Date ?? DateTimeOffset.UtcNow).UtcDateTime;
-            request?.Dispose();
-            response?.Dispose();
-            cts?.Dispose();
+            Buffer.Clear();
+            if (!success)
+            {
+                LastFlush = DateTime.UtcNow;
+            }
         }
     }
 
-    private Task HandleErrorJsonAsync(HttpResponseMessage response, CancellationTokenSource? cts)
+    private HttpResponseMessage SendWithRetries(CancellationToken ct, Func<HttpRequestMessage> requestFactory, TimeSpan retryTimeout)
     {
+        HttpResponseMessage?    response = null;
+        CancellationTokenSource cts      = GenerateRequestCts(ct);
+        HttpRequestMessage      request  = requestFactory();
+
         try
         {
-            var jsonErr = response.Content.ReadFromJsonAsync<JsonErrorResponse>(
-                cancellationToken: cts?.Token ?? default).Result;
-            throw new IngressError(ErrorCode.ServerFlushError,
-                $"{response.ReasonPhrase}. {jsonErr?.ToString() ?? ""}");
+            try
+            {
+                response = _client.Send(request, HttpCompletionOption.ResponseHeadersRead, cts.Token);
+            }
+            catch (HttpRequestException)
+            {
+                // Connection error
+            }
+
+            if (retryTimeout > TimeSpan.Zero)
+                // retry if appropriate - error that's retriable, and retries are enabled
+            {
+                if (response == null                  // if it was a cannot correct error
+                    || (!response.IsSuccessStatusCode // or some other http error
+                        && IsRetriableError(response.StatusCode)))
+                {
+                    var retryTimer = new Stopwatch();
+                    retryTimer.Start();
+                    var retryInterval = TimeSpan.FromMilliseconds(5); // it'll get doubled
+
+                    while (retryTimer.Elapsed < retryTimeout // whilst we can still retry
+                           && (
+                                  response == null ||               // either we can't connect
+                                  (!response.IsSuccessStatusCode && // or we have another http error
+                                   IsRetriableError(response.StatusCode)))
+                          )
+                    {
+                        retryInterval = TimeSpan.FromMilliseconds(Math.Min(retryInterval.TotalMilliseconds * 2, 1000));
+                        // cleanup last run
+                        request.Dispose();
+                        response?.Dispose();
+                        response = null;
+                        cts.Dispose();
+
+                        request = requestFactory();
+                        cts     = GenerateRequestCts();
+
+                        var jitter = TimeSpan.FromMilliseconds(Random.Shared.Next(0, 10) - 10 / 2.0);
+                        Thread.Sleep(retryInterval + jitter);
+
+                        try
+                        {
+                            response = _client.Send(request, HttpCompletionOption.ResponseHeadersRead, cts.Token);
+                        }
+                        catch (HttpRequestException)
+                        {
+                            // Connection error
+                        }
+                    }
+                }
+            }
+
+            // check for cannot connect error
+            if (response == null)
+            {
+                throw new IngressError(ErrorCode.ServerFlushError,
+                                       $"Cannot connect to `{Options.Host}:{Options.Port}`");
+            }
+
+            return response;
+        }
+        finally
+        {
+            request.Dispose();
+            cts.Dispose();
+        }
+    }
+
+    private void HandleErrorJson(HttpResponseMessage response)
+    {
+        using var respStream = response.Content.ReadAsStream();
+        try
+        {
+            var jsonErr = JsonSerializer.Deserialize<JsonErrorResponse>(respStream);
+            throw new IngressError(ErrorCode.ServerFlushError, $"{response.ReasonPhrase}. {jsonErr?.ToString() ?? ""}");
         }
         catch (JsonException)
         {
-            var strErr = response.Content.ReadAsStringAsync(cts?.Token ?? default).Result;
-            throw new IngressError(ErrorCode.ServerFlushError, $"{response.ReasonPhrase}. {strErr}");
+            using var strReader = new StreamReader(respStream);
+            throw new IngressError(ErrorCode.ServerFlushError, $"{response.ReasonPhrase}. {strReader.ReadToEnd()}");
+        }
+    }
+
+    private async Task HandleErrorJsonAsync(HttpResponseMessage response)
+    {
+        await using var respStream = await response.Content.ReadAsStreamAsync();
+        try
+        {
+            var jsonErr = await JsonSerializer.DeserializeAsync<JsonErrorResponse>(respStream);
+            throw new IngressError(ErrorCode.ServerFlushError, $"{response.ReasonPhrase}. {jsonErr?.ToString() ?? ""}");
+        }
+        catch (JsonException)
+        {
+            using var strReader = new StreamReader(respStream);
+            var       errorStr  = await strReader.ReadToEndAsync();
+            throw new IngressError(ErrorCode.ServerFlushError, $"{response.ReasonPhrase}. {errorStr}");
         }
     }
 
@@ -328,33 +474,38 @@ internal class HttpSender : AbstractSender
     public override async Task SendAsync(CancellationToken ct = default)
     {
         if (WithinTransaction && !CommittingTransaction)
+        {
             throw new IngressError(ErrorCode.InvalidApiCall, "Please `commit` to complete your transaction.");
+        }
 
-        if (_buffer.Length == 0) return;
+        if (Buffer.Length == 0)
+        {
+            return;
+        }
 
-        HttpRequestMessage? request = null;
-        CancellationTokenSource? cts = null;
-        HttpResponseMessage? response = null;
-        HttpRequestException? cannotConnect = null;
+        HttpRequestMessage?      request  = null;
+        CancellationTokenSource? cts      = null;
+        HttpResponseMessage?     response = null;
 
         try
         {
-            (request, cts) = GenerateRequest(ct);
+            request = GenerateRequest();
+            cts     = GenerateRequestCts(ct);
 
             try
             {
-                response = await _client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cts!.Token);
+                response = await _client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cts.Token);
             }
-            catch (HttpRequestException hre)
+            catch (HttpRequestException)
             {
-                Debug.Assert(hre.Message.Contains("refused"));
-                cannotConnect = hre;
+                // Connection error
             }
 
             // retry if appropriate - error that's retriable, and retries are enabled
             if (Options.retry_timeout > TimeSpan.Zero)
-                if (cannotConnect != null // if it was a cannot correct error
-                    || (!response!.IsSuccessStatusCode // or some other http error
+            {
+                if (response == null                  // if it was a cannot correct error
+                    || (!response.IsSuccessStatusCode // or some other http error
                         && IsRetriableError(response.StatusCode)))
                 {
                     var retryTimer = new Stopwatch();
@@ -363,60 +514,72 @@ internal class HttpSender : AbstractSender
 
                     while (retryTimer.Elapsed < Options.retry_timeout // whilst we can still retry
                            && (
-                               cannotConnect != null || // either we can't connect
-                               (retryTimer.Elapsed < Options.retry_timeout // or we have another http error
-                                && !response!.IsSuccessStatusCode &&
-                                IsRetriableError(response.StatusCode))))
+                                  response == null ||               // either we can't connect
+                                  (!response.IsSuccessStatusCode && // or we have another http error
+                                   IsRetriableError(response.StatusCode)))
+                          )
                     {
                         retryInterval = TimeSpan.FromMilliseconds(Math.Min(retryInterval.TotalMilliseconds * 2, 1000));
                         // cleanup last run
                         request.Dispose();
                         response?.Dispose();
-                        cts?.Dispose();
+                        response = null;
+                        cts.Dispose();
+                        cts = null;
 
-                        (request, cts) = GenerateRequest(ct);
+                        request = GenerateRequest();
+                        cts     = GenerateRequestCts(ct);
 
                         var jitter = TimeSpan.FromMilliseconds(Random.Shared.Next(0, 10) - 10 / 2.0);
-                        await Task.Delay(retryInterval + jitter, cts?.Token ?? default);
+                        await Task.Delay(retryInterval + jitter, cts.Token);
 
                         try
                         {
                             response = await _client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead,
-                                cts!.Token);
-                            cannotConnect = null;
+                                                               cts.Token);
                         }
-                        catch (HttpRequestException hre)
+                        catch (HttpRequestException)
                         {
-                            Debug.Assert(hre.Message.Contains("refused"));
-                            cannotConnect = hre;
+                            // Connection error
                         }
                     }
                 }
+            }
 
             // check for cannot connect error
-            if (cannotConnect != null && response == null)
+            if (response == null)
+            {
                 throw new IngressError(ErrorCode.ServerFlushError,
-                    $"Cannot connect to `{Options.Host}:{Options.Port}`");
+                                       $"Cannot connect to `{Options.Host}:{Options.Port}`");
+            }
 
             // return if ok
-            if (response!.IsSuccessStatusCode) return;
+            if (response.IsSuccessStatusCode)
+            {
+                return;
+            }
 
             // unwrap json error if present
             if (response.Content.Headers.ContentType?.MediaType == "application/json")
-                await HandleErrorJsonAsync(response, cts);
+            {
+                await HandleErrorJsonAsync(response);
+            }
 
             // fallback to basic error
             throw new IngressError(ErrorCode.ServerFlushError, response.ReasonPhrase);
         }
         catch (Exception ex)
         {
-            if (ex is not IngressError) throw new IngressError(ErrorCode.ServerFlushError, ex.ToString(), ex);
+            if (ex is not IngressError)
+            {
+                throw new IngressError(ErrorCode.ServerFlushError, ex.ToString(), ex);
+            }
 
             throw;
         }
         finally
         {
-            _buffer.Clear();
+            Buffer.Clear();
             LastFlush = (response?.Headers.Date ?? DateTimeOffset.UtcNow).UtcDateTime;
             request?.Dispose();
             response?.Dispose();
@@ -454,7 +617,7 @@ internal class HttpSender : AbstractSender
     {
         _client.Dispose();
         _handler.Dispose();
-        _buffer.Clear();
-        _buffer.TrimExcessBuffers();
+        Buffer.Clear();
+        Buffer.TrimExcessBuffers();
     }
 }

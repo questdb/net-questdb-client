@@ -23,9 +23,11 @@
  ******************************************************************************/
 
 
+using System.Diagnostics;
 using System.Net;
 using System.Net.Security;
 using System.Net.Sockets;
+using System.Runtime.InteropServices;
 using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using Org.BouncyCastle.Asn1.Sec;
@@ -49,7 +51,7 @@ public class DummyIlpServer : IDisposable
 
     public DummyIlpServer(int port, bool tls)
     {
-        _tls = tls;
+        _tls    = tls;
         _server = new TcpListener(IPAddress.Loopback, port);
         _server.Start();
     }
@@ -75,7 +77,7 @@ public class DummyIlpServer : IDisposable
             using var socket = await _server.AcceptSocketAsync();
             clientSocket = socket;
             await using var connection = new NetworkStream(socket, true);
-            Stream dataStream = connection;
+            Stream          dataStream = connection;
             if (_tls)
             {
                 var sslStream = new SslStream(connection);
@@ -135,7 +137,7 @@ public class DummyIlpServer : IDisposable
         var pubKey1 = FromBase64String(_publicKeyX);
         var pubKey2 = FromBase64String(_publicKeyY);
 
-        var p = SecNamedCurves.GetByName("secp256r1");
+        var p          = SecNamedCurves.GetByName("secp256r1");
         var parameters = new ECDomainParameters(p.Curve, p.G, p.N, p.H);
 
         // Verify the signature
@@ -166,8 +168,8 @@ public class DummyIlpServer : IDisposable
     public static byte[] FromBase64String(string encodedPrivateKey)
     {
         var replace = encodedPrivateKey
-            .Replace('-', '+')
-            .Replace('_', '/');
+                      .Replace('-', '+')
+                      .Replace('_', '/');
         return Convert.FromBase64String(Pad(replace));
     }
 
@@ -176,7 +178,7 @@ public class DummyIlpServer : IDisposable
         var len = 0;
         while (true)
         {
-            var n = await connection.ReadAsync(_buffer.AsMemory(len));
+            var n        = await connection.ReadAsync(_buffer.AsMemory(len));
             var inBuffer = len + n;
             for (var i = len; i < inBuffer; i++)
             {
@@ -185,6 +187,7 @@ public class DummyIlpServer : IDisposable
                     if (i + 1 < inBuffer)
                     {
                         _received.Write(_buffer, i + 1, inBuffer - i - 1);
+                        // ReSharper disable once NonAtomicCompoundOperator
                         _totalReceived += inBuffer - i;
                     }
 
@@ -210,6 +213,7 @@ public class DummyIlpServer : IDisposable
             if (received > 0)
             {
                 _received.Write(_buffer, 0, received);
+                // ReSharper disable once NonAtomicCompoundOperator
                 _totalReceived += received;
             }
             else
@@ -221,12 +225,97 @@ public class DummyIlpServer : IDisposable
 
     public string GetTextReceived()
     {
-        return Encoding.UTF8.GetString(_received.GetBuffer(), 0, (int)_received.Length);
+        return PrintBuffer();
+        // return Encoding.UTF8.GetString(_received.GetBuffer(), 0, (int)_received.Length);
+    }
+
+    public string PrintBuffer()
+    {
+        var bytes      = _received.GetBuffer().AsSpan().Slice(0, (int)_received.Length).ToArray();
+        var sb         = new StringBuilder();
+        var lastAppend = 0;
+
+        var i = 0;
+        for (; i < bytes.Length; i++)
+        {
+            if (bytes[i] == (byte)'=')
+            {
+                if (bytes[i - 1] == (byte)'=')
+                {
+                    sb.Append(Encoding.UTF8.GetString(bytes, lastAppend, i + 1 - lastAppend));
+                    switch (bytes[++i])
+                    {
+                        case 14:
+                            sb.Append("ARRAY<");
+                            var type = bytes[++i];
+
+                            Debug.Assert(type == 10);
+                            var dims = bytes[++i];
+
+                            ++i;
+
+                            long length = 0;
+                            for (var j = 0; j < dims; j++)
+                            {
+                                var lengthBytes = bytes.AsSpan()[i..(i + 4)];
+                                var _length     = MemoryMarshal.Cast<byte, uint>(lengthBytes)[0];
+                                if (length == 0)
+                                {
+                                    length = _length;
+                                }
+                                else
+                                {
+                                    length *= _length;
+                                }
+
+                                sb.Append(_length);
+                                sb.Append(',');
+                                i += 4;
+                            }
+
+                            sb.Remove(sb.Length - 1, 1);
+                            sb.Append('>');
+
+                            var doubleBytes =
+                                MemoryMarshal.Cast<byte, double>(bytes.AsSpan().Slice(i, (int)(length * 8)));
+
+
+                            sb.Append('[');
+                            for (var j = 0; j < length; j++)
+                            {
+                                sb.Append(doubleBytes[j]);
+                                sb.Append(',');
+                            }
+
+                            sb.Remove(sb.Length - 1, 1);
+                            sb.Append(']');
+
+                            i += (int)(length * 8);
+                            i--;
+                            break;
+                        case 16:
+                            sb.Remove(sb.Length - 1, 1);
+                            var doubleValue = MemoryMarshal.Cast<byte, double>(bytes.AsSpan().Slice(++i, 8));
+                            sb.Append(doubleValue[0]);
+                            i += 8;
+                            i--;
+                            break;
+                        default:
+                            throw new NotImplementedException();
+                    }
+
+                    lastAppend = i + 1;
+                }
+            }
+        }
+
+        sb.Append(Encoding.UTF8.GetString(bytes, lastAppend, i - lastAppend));
+        return sb.ToString();
     }
 
     public void WithAuth(string keyId, string publicKeyX, string publicKeyY)
     {
-        _keyId = keyId;
+        _keyId      = keyId;
         _publicKeyX = publicKeyX;
         _publicKeyY = publicKeyY;
     }

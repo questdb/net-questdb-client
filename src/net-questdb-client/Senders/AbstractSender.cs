@@ -1,21 +1,45 @@
+/*******************************************************************************
+ *     ___                  _   ____  ____
+ *    / _ \ _   _  ___  ___| |_|  _ \| __ )
+ *   | | | | | | |/ _ \/ __| __| | | |  _ \
+ *   | |_| | |_| |  __/\__ \ |_| |_| | |_) |
+ *    \__\_\\__,_|\___||___/\__|____/|____/
+ *
+ *  Copyright (c) 2014-2019 Appsicle
+ *  Copyright (c) 2019-2024 QuestDB
+ *
+ *  Licensed under the Apache License, Version 2.0 (the "License");
+ *  you may not use this file except in compliance with the License.
+ *  You may obtain a copy of the License at
+ *
+ *  http://www.apache.org/licenses/LICENSE-2.0
+ *
+ *  Unless required by applicable law or agreed to in writing, software
+ *  distributed under the License is distributed on an "AS IS" BASIS,
+ *  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ *  See the License for the specific language governing permissions and
+ *  limitations under the License.
+ *
+ ******************************************************************************/
+
 using System.Runtime.CompilerServices;
+using QuestDB.Buffers;
 using QuestDB.Enums;
 using QuestDB.Utils;
-using Buffer = QuestDB.Buffers.Buffer;
 
 namespace QuestDB.Senders;
 
 internal abstract class AbstractSender : ISender
 {
-    protected Buffer _buffer = null!;
+    protected IBuffer Buffer = null!;
     protected bool CommittingTransaction { get; set; }
 
     /// <inheritdoc />
-    public SenderOptions Options { get; protected init; }
+    public SenderOptions Options { get; protected init; } = null!;
 
-    public int Length => _buffer.Length;
-    public int RowCount => _buffer.RowCount;
-    public bool WithinTransaction => _buffer.WithinTransaction;
+    public int Length => Buffer.Length;
+    public int RowCount => Buffer.RowCount;
+    public bool WithinTransaction => Buffer.WithinTransaction;
     public DateTime LastFlush { get; protected set; } = DateTime.MinValue;
 
     /// <inheritdoc />
@@ -45,56 +69,74 @@ internal abstract class AbstractSender : ISender
     /// <inheritdoc />
     public ISender Table(ReadOnlySpan<char> name)
     {
-        _buffer.Table(name);
+        Buffer.Table(name);
         return this;
     }
 
     /// <inheritdoc />
     public ISender Symbol(ReadOnlySpan<char> name, ReadOnlySpan<char> value)
     {
-        _buffer.Symbol(name, value);
+        Buffer.Symbol(name, value);
         return this;
     }
 
     /// <inheritdoc />
     public ISender Column(ReadOnlySpan<char> name, ReadOnlySpan<char> value)
     {
-        _buffer.Column(name, value);
+        ((BufferV1)Buffer).Column(name, value);
         return this;
     }
 
     /// <inheritdoc />
     public ISender Column(ReadOnlySpan<char> name, long value)
     {
-        _buffer.Column(name, value);
+        Buffer.Column(name, value);
         return this;
     }
 
     /// <inheritdoc />
     public ISender Column(ReadOnlySpan<char> name, bool value)
     {
-        _buffer.Column(name, value);
+        Buffer.Column(name, value);
         return this;
     }
 
     /// <inheritdoc />
     public ISender Column(ReadOnlySpan<char> name, double value)
     {
-        _buffer.Column(name, value);
+        Buffer.Column(name, value);
         return this;
     }
 
     /// <inheritdoc />
     public ISender Column(ReadOnlySpan<char> name, DateTime value)
     {
-        _buffer.Column(name, value);
+        Buffer.Column(name, value);
         return this;
     }
 
     /// <inheritdoc />
     public ISender Column(ReadOnlySpan<char> name, DateTimeOffset value)
     {
-        _buffer.Column(name, value);
+        Buffer.Column(name, value);
+        return this;
+    }
+
+    public ISender Column<T>(ReadOnlySpan<char> name, IEnumerable<T> value, IEnumerable<int> shape) where T : struct
+    {
+        Buffer.Column(name, value, shape);
+        return this;
+    }
+
+    public ISender Column(ReadOnlySpan<char> name, Array? value)
+    {
+        Buffer.Column(name, value);
+        return this;
+    }
+
+    public ISender Column<T>(ReadOnlySpan<char> name, ReadOnlySpan<T> value) where T : struct
+    {
+        Buffer.Column(name, value);
         return this;
     }
 
@@ -102,7 +144,7 @@ internal abstract class AbstractSender : ISender
     public ValueTask AtAsync(DateTime value, CancellationToken ct = default)
     {
         GuardLastFlushNotSet();
-        _buffer.At(value);
+        Buffer.At(value);
         return FlushIfNecessaryAsync(ct);
     }
 
@@ -110,7 +152,7 @@ internal abstract class AbstractSender : ISender
     public ValueTask AtAsync(DateTimeOffset value, CancellationToken ct = default)
     {
         GuardLastFlushNotSet();
-        _buffer.At(value);
+        Buffer.At(value);
         return FlushIfNecessaryAsync(ct);
     }
 
@@ -118,7 +160,7 @@ internal abstract class AbstractSender : ISender
     public ValueTask AtAsync(long value, CancellationToken ct = default)
     {
         GuardLastFlushNotSet();
-        _buffer.At(value);
+        Buffer.At(value);
         return FlushIfNecessaryAsync(ct);
     }
 
@@ -126,7 +168,7 @@ internal abstract class AbstractSender : ISender
     public ValueTask AtNowAsync(CancellationToken ct = default)
     {
         GuardLastFlushNotSet();
-        _buffer.AtNow();
+        Buffer.AtNow();
         return FlushIfNecessaryAsync(ct);
     }
 
@@ -134,7 +176,7 @@ internal abstract class AbstractSender : ISender
     public void At(DateTime value, CancellationToken ct = default)
     {
         GuardLastFlushNotSet();
-        _buffer.At(value);
+        Buffer.At(value);
         FlushIfNecessary(ct);
     }
 
@@ -142,7 +184,7 @@ internal abstract class AbstractSender : ISender
     public void At(DateTimeOffset value, CancellationToken ct = default)
     {
         GuardLastFlushNotSet();
-        _buffer.At(value);
+        Buffer.At(value);
         FlushIfNecessary(ct);
     }
 
@@ -150,7 +192,7 @@ internal abstract class AbstractSender : ISender
     public void At(long value, CancellationToken ct = default)
     {
         GuardLastFlushNotSet();
-        _buffer.At(value);
+        Buffer.At(value);
         FlushIfNecessary(ct);
     }
 
@@ -158,26 +200,26 @@ internal abstract class AbstractSender : ISender
     public void AtNow(CancellationToken ct = default)
     {
         GuardLastFlushNotSet();
-        _buffer.AtNow();
+        Buffer.AtNow();
         FlushIfNecessary(ct);
     }
 
     /// <inheritdoc />
     public void Truncate()
     {
-        _buffer.TrimExcessBuffers();
+        Buffer.TrimExcessBuffers();
     }
 
     /// <inheritdoc />
     public void CancelRow()
     {
-        _buffer.CancelRow();
+        Buffer.CancelRow();
     }
 
     /// <inheritdoc />
     public void Clear()
     {
-        _buffer.Clear();
+        Buffer.Clear();
     }
 
     /// <inheritdoc />
@@ -188,6 +230,12 @@ internal abstract class AbstractSender : ISender
 
     /// <inheritdoc />
     public abstract void Send(CancellationToken ct = default);
+
+    public ISender Column<T>(ReadOnlySpan<char> name, T[] value) where T : struct
+    {
+        Buffer.Column(name, value);
+        return this;
+    }
 
     /// <summary>
     ///     Handles auto-flushing logic.
@@ -206,32 +254,39 @@ internal abstract class AbstractSender : ISender
     ///     to <see cref="AutoFlushType.off" />, or individually by setting their values to `-1`.
     /// </remarks>
     /// <param name="ct">A user-provided cancellation token.</param>
-    public ValueTask FlushIfNecessaryAsync(CancellationToken ct = default)
+    private ValueTask FlushIfNecessaryAsync(CancellationToken ct = default)
     {
         if (Options.auto_flush == AutoFlushType.on && !WithinTransaction &&
             ((Options.auto_flush_rows > 0 && RowCount >= Options.auto_flush_rows)
              || (Options.auto_flush_bytes > 0 && Length >= Options.auto_flush_bytes)
              || (Options.auto_flush_interval > TimeSpan.Zero &&
                  DateTime.UtcNow - LastFlush >= Options.auto_flush_interval)))
+        {
             return new ValueTask(SendAsync(ct));
+        }
 
         return ValueTask.CompletedTask;
     }
 
     /// <inheritdoc cref="FlushIfNecessaryAsync" />
-    public void FlushIfNecessary(CancellationToken ct = default)
+    private void FlushIfNecessary(CancellationToken ct = default)
     {
         if (Options.auto_flush == AutoFlushType.on && !WithinTransaction &&
             ((Options.auto_flush_rows > 0 && RowCount >= Options.auto_flush_rows)
              || (Options.auto_flush_bytes > 0 && Length >= Options.auto_flush_bytes)
              || (Options.auto_flush_interval > TimeSpan.Zero &&
                  DateTime.UtcNow - LastFlush >= Options.auto_flush_interval)))
+        {
             Send(ct);
+        }
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void GuardLastFlushNotSet()
     {
-        if (LastFlush == DateTime.MinValue) LastFlush = DateTime.UtcNow;
+        if (LastFlush == DateTime.MinValue)
+        {
+            LastFlush = DateTime.UtcNow;
+        }
     }
 }

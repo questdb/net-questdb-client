@@ -23,16 +23,11 @@
  ******************************************************************************/
 
 
-using System;
-using System.Net.Http;
+using System.Diagnostics;
+using System.Runtime.InteropServices;
 using System.Text;
-using System.Threading.Tasks;
 using FastEndpoints;
 using FastEndpoints.Security;
-using Microsoft.AspNetCore.Builder;
-using Microsoft.AspNetCore.Hosting;
-using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Logging;
 
 namespace dummy_http_server;
 
@@ -41,30 +36,32 @@ public class DummyHttpServer : IDisposable
     private static readonly string SigningKey = Guid.NewGuid().ToString("N") + Guid.NewGuid().ToString("N");
     private static readonly string Username = "admin";
     private static readonly string Password = "quest";
-    private int _port = 29743;
     private readonly WebApplication _app;
+    private int _port = 29743;
+    private readonly TimeSpan? _withStartDelay;
 
-    public DummyHttpServer(bool withTokenAuth = false, bool withBasicAuth = false, bool withRetriableError=false, bool withErrorMessage = false)
+    public DummyHttpServer(bool withTokenAuth = false, bool withBasicAuth = false, bool withRetriableError = false,
+                           bool withErrorMessage = false, TimeSpan? withStartDelay = null)
     {
         var bld = WebApplication.CreateBuilder();
 
-        bld.Services.AddLogging(
-            builder =>
-            {
-                builder.AddFilter("Microsoft", LogLevel.Warning)
-                    .AddFilter("System", LogLevel.Warning)
-                    .AddConsole();
-            });
+        bld.Services.AddLogging(builder =>
+        {
+            builder.AddFilter("Microsoft", LogLevel.Warning)
+                   .AddFilter("System", LogLevel.Warning)
+                   .AddConsole();
+        });
 
-        IlpEndpoint.WithTokenAuth = withTokenAuth;
-        IlpEndpoint.WithBasicAuth = withBasicAuth;
+        IlpEndpoint.WithTokenAuth      = withTokenAuth;
+        IlpEndpoint.WithBasicAuth      = withBasicAuth;
         IlpEndpoint.WithRetriableError = withRetriableError;
-        IlpEndpoint.WithErrorMessage = withErrorMessage;
+        IlpEndpoint.WithErrorMessage   = withErrorMessage;
+        _withStartDelay = withStartDelay;
 
         if (withTokenAuth)
         {
             bld.Services.AddAuthenticationJwtBearer(s => s.SigningKey = SigningKey)
-                .AddAuthorization();
+               .AddAuthorization();
         }
 
 
@@ -75,7 +72,7 @@ public class DummyHttpServer : IDisposable
         {
             o.Limits.MaxRequestBodySize = 1073741824;
             o.ListenLocalhost(29474,
-                options => { options.UseHttps(); });
+                              options => { options.UseHttps(); });
             o.ListenLocalhost(29473);
         });
 
@@ -103,15 +100,21 @@ public class DummyHttpServer : IDisposable
     public void Clear()
     {
         IlpEndpoint.ReceiveBuffer.Clear();
+        IlpEndpoint.ReceiveBytes.Clear();
         IlpEndpoint.LastError = null;
-        IlpEndpoint.Counter = 0;
+        IlpEndpoint.Counter   = 0;
     }
 
-    public Task StartAsync(int port = 29743)
+    public async Task StartAsync(int port = 29743, int[]? versions = null)
     {
-        _port = port;
+        if (_withStartDelay.HasValue)
+        {
+            await Task.Delay(_withStartDelay.Value);
+        }
+        versions                  ??= new[] { 1, 2, };
+        SettingsEndpoint.Versions =   versions;
+        _port                     =   port;
         _app.RunAsync($"http://localhost:{port}");
-        return Task.CompletedTask;
     }
 
     public async Task RunAsync()
@@ -127,6 +130,11 @@ public class DummyHttpServer : IDisposable
     public StringBuilder GetReceiveBuffer()
     {
         return IlpEndpoint.ReceiveBuffer;
+    }
+
+    public List<byte> GetReceiveBytes()
+    {
+        return IlpEndpoint.ReceiveBytes;
     }
 
     public Exception? GetLastError()
@@ -148,7 +156,7 @@ public class DummyHttpServer : IDisposable
             var jwtToken = JwtBearer.CreateToken(o =>
             {
                 o.SigningKey = SigningKey;
-                o.ExpireAt = DateTime.UtcNow.AddDays(1);
+                o.ExpireAt   = DateTime.UtcNow.AddDays(1);
             });
             return jwtToken;
         }
@@ -159,5 +167,89 @@ public class DummyHttpServer : IDisposable
     public int GetCounter()
     {
         return IlpEndpoint.Counter;
+    }
+
+    public string PrintBuffer()
+    {
+        var bytes      = GetReceiveBytes().ToArray();
+        var sb         = new StringBuilder();
+        var lastAppend = 0;
+
+        var i = 0;
+        for (; i < bytes.Length; i++)
+        {
+            if (bytes[i] == (byte)'=')
+            {
+                if (bytes[i - 1] == (byte)'=')
+                {
+                    sb.Append(Encoding.UTF8.GetString(bytes, lastAppend, i + 1 - lastAppend));
+                    switch (bytes[++i])
+                    {
+                        case 14:
+                            sb.Append("ARRAY<");
+                            var type = bytes[++i];
+
+                            Debug.Assert(type == 10);
+                            var dims = bytes[++i];
+
+                            ++i;
+
+                            long length = 0;
+                            for (var j = 0; j < dims; j++)
+                            {
+                                var lengthBytes = bytes.AsSpan()[i..(i + 4)];
+                                var lengthValue = MemoryMarshal.Cast<byte, uint>(lengthBytes)[0];
+                                if (length == 0)
+                                {
+                                    length = lengthValue;
+                                }
+                                else
+                                {
+                                    length *= lengthValue;
+                                }
+
+                                sb.Append(lengthValue);
+                                sb.Append(',');
+                                i += 4;
+                            }
+
+                            sb.Remove(sb.Length - 1, 1);
+                            sb.Append('>');
+
+                            var doubleBytes =
+                                MemoryMarshal.Cast<byte, double>(bytes.AsSpan().Slice(i, (int)(length * 8)));
+
+
+                            sb.Append('[');
+                            for (var j = 0; j < length; j++)
+                            {
+                                sb.Append(doubleBytes[j]);
+                                sb.Append(',');
+                            }
+
+                            sb.Remove(sb.Length - 1, 1);
+                            sb.Append(']');
+
+                            i += (int)(length * 8);
+                            i--;
+                            break;
+                        case 16:
+                            sb.Remove(sb.Length - 1, 1);
+                            var doubleValue = MemoryMarshal.Cast<byte, double>(bytes.AsSpan().Slice(++i, 8));
+                            sb.Append(doubleValue[0]);
+                            i += 8;
+                            i--;
+                            break;
+                        default:
+                            throw new NotImplementedException();
+                    }
+
+                    lastAppend = i + 1;
+                }
+            }
+        }
+
+        sb.Append(Encoding.UTF8.GetString(bytes, lastAppend, i - lastAppend));
+        return sb.ToString();
     }
 }

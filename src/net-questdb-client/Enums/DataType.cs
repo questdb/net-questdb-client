@@ -22,24 +22,18 @@
  *
  ******************************************************************************/
 
-// ReSharper disable CommentTypo
-// ReSharper disable InconsistentNaming
+using System.Diagnostics.CodeAnalysis;
+
+// ReSharper disable UnusedType.Global
 
 namespace QuestDB.Enums;
 
 /// <summary>
-///     Enum for auto_flush
-///     Defaults to 'on'.
+///     Binary protocol data type definitions
 /// </summary>
-public enum AutoFlushType
+public enum DataType : byte
 {
-    /// <summary>
-    ///     Disable auto-flushing
-    /// </summary>
-    off,
-
-    /// <summary>
-    ///     Enable auto-flushing. (default)
-    /// </summary>
-    on,
+    /// <summary />
+    [SuppressMessage("ReSharper", "InconsistentNaming")]
+    DOUBLE = 10,
 }

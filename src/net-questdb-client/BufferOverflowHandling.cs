@@ -1,4 +1,3 @@
-// ReSharper disable CommentTypo
 /*******************************************************************************
  *     ___                  _   ____  ____
  *    / _ \ _   _  ___  ___| |_|  _ \| __ )
@@ -23,14 +22,20 @@
  *
  ******************************************************************************/
 
+// ReSharper disable CommentTypo
+
+
 namespace QuestDB;
 
 /// <summary>
-///     Deprecated enum. 
+///     Deprecated enum.
 /// </summary>
 [Obsolete]
 public enum BufferOverflowHandling
 {
+    /// <summary />
     SendImmediately,
-    Extend
+
+    /// <summary />
+    Extend,
 }

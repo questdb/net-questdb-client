@@ -22,24 +22,13 @@
  *
  ******************************************************************************/
 
-// ReSharper disable CommentTypo
 // ReSharper disable InconsistentNaming
 
+#pragma warning disable CS1591 // Missing XML comment for publicly visible type or member
 namespace QuestDB.Enums;
 
-/// <summary>
-///     Enum for auto_flush
-///     Defaults to 'on'.
-/// </summary>
-public enum AutoFlushType
+public enum BinaryFormatType : byte
 {
-    /// <summary>
-    ///     Disable auto-flushing
-    /// </summary>
-    off,
-
-    /// <summary>
-    ///     Enable auto-flushing. (default)
-    /// </summary>
-    on,
+    DOUBLE = 16,
+    ARRAY = 14,
 }

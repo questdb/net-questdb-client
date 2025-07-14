@@ -1,4 +1,3 @@
-// ReSharper disable CommentTypo
 /*******************************************************************************
  *     ___                  _   ____  ____
  *    / _ \ _   _  ___  ___| |_|  _ \| __ )
@@ -23,8 +22,9 @@
  *
  ******************************************************************************/
 
+// ReSharper disable CommentTypo
 
-using System.Collections.Immutable;
+
 using System.Data.Common;
 using System.Reflection;
 using System.Runtime.CompilerServices;
@@ -42,6 +42,19 @@ namespace QuestDB.Utils;
 /// </summary>
 public record SenderOptions
 {
+    /// <summary>
+    ///     Max number of dimensions an array is allowed.
+    /// </summary>
+    public const int ARRAY_MAX_DIMENSIONS = 32;
+
+    private static readonly HashSet<string> keySet = new()
+    {
+        "protocol", "protocol_version", "addr", "auto_flush", "auto_flush_rows", "auto_flush_bytes",
+        "auto_flush_interval", "init_buf_size", "max_buf_size", "max_name_len", "username", "password", "token",
+        "request_min_throughput", "auth_timeout", "request_timeout", "retry_timeout",
+        "pool_timeout", "tls_verify", "tls_roots", "tls_roots_password", "own_socket",
+    };
+
     private string _addr = "localhost:9000";
     private TimeSpan _authTimeout = TimeSpan.FromMilliseconds(15000);
     private AutoFlushType _autoFlush = AutoFlushType.on;
@@ -56,6 +69,7 @@ public record SenderOptions
     private string? _password;
     private TimeSpan _poolTimeout = TimeSpan.FromMinutes(2);
     private ProtocolType _protocol = ProtocolType.http;
+    private ProtocolVersion _protocol_version = ProtocolVersion.Auto;
     private int _requestMinThroughput = 102400;
     private TimeSpan _requestTimeout = TimeSpan.FromMilliseconds(10000);
     private TimeSpan _retryTimeout = TimeSpan.FromMilliseconds(10000);
@@ -75,7 +89,6 @@ public record SenderOptions
     {
     }
 
-
     /// <summary>
     ///     Construct a <see cref="SenderOptions" /> object from a config string.
     /// </summary>
@@ -84,6 +97,7 @@ public record SenderOptions
     {
         ReadConfigStringIntoBuilder(confStr);
         ParseEnumWithDefault(nameof(protocol), "http", out _protocol);
+        ParseEnumWithDefault(nameof(protocol_version), "auto", out _protocol_version);
         ParseStringWithDefault(nameof(addr), "localhost:9000", out _addr!);
         ParseEnumWithDefault(nameof(auto_flush), "on", out _autoFlush);
         ParseIntThatMayBeOff(nameof(auto_flush_rows), IsHttp() ? "75000" : "600", out _autoFlushRows);
@@ -119,6 +133,15 @@ public record SenderOptions
     {
         get => _protocol;
         set => _protocol = value;
+    }
+
+    /// <summary>
+    ///     Protocol Version to connect with.
+    /// </summary>
+    public ProtocolVersion protocol_version
+    {
+        get => _protocol_version;
+        set => _protocol_version = value;
     }
 
     /// <summary>
@@ -316,7 +339,7 @@ public record SenderOptions
     ///     To account for this, the user can specify the expected data transfer speed.
     ///     This is then used to calculate an appropriate timeout value with the following equation:
     ///     <para />
-    ///     <see cref="HttpClient.Timeout" /> = (<see cref="Buffers.Buffer.Length" /> /
+    ///     <see cref="HttpClient.Timeout" /> = (<see cref="Buffers.IBuffer.Length" /> /
     ///     <see cref="SenderOptions.request_min_throughput" />) + <see cref="SenderOptions.request_timeout" />
     /// </remarks>
     public int request_min_throughput
@@ -431,7 +454,10 @@ public record SenderOptions
     {
         get
         {
-            if (addr.Contains(':')) return int.Parse(addr.Split(':')[1]);
+            if (addr.Contains(':'))
+            {
+                return int.Parse(addr.Split(':')[1]);
+            }
 
             switch (protocol)
             {
@@ -450,7 +476,9 @@ public record SenderOptions
     private void ParseIntWithDefault(string name, string defaultValue, out int field)
     {
         if (!int.TryParse(ReadOptionFromBuilder(name) ?? defaultValue, out field))
+        {
             throw new IngressError(ErrorCode.ConfigError, $"`{name}` should be convertible to an int.");
+        }
     }
 
     private void ParseMillisecondsWithDefault(string name, string defaultValue, out TimeSpan field)
@@ -461,15 +489,19 @@ public record SenderOptions
 
     private void ParseEnumWithDefault<T>(string name, string defaultValue, out T field) where T : struct, Enum
     {
-        if (!Enum.TryParse(ReadOptionFromBuilder(name) ?? defaultValue, false, out field))
+        if (!Enum.TryParse(ReadOptionFromBuilder(name) ?? defaultValue, true, out field))
+        {
             throw new IngressError(ErrorCode.ConfigError,
-                $"`{name}` must be one of: " + string.Join(", ", typeof(T).GetEnumNames()));
+                                   $"`{name}` must be one of: " + string.Join(", ", typeof(T).GetEnumNames()));
+        }
     }
 
     private void ParseBoolWithDefault(string name, string defaultValue, out bool field)
     {
         if (!bool.TryParse(ReadOptionFromBuilder(name) ?? defaultValue, out field))
+        {
             throw new IngressError(ErrorCode.ConfigError, $"`{name}` should be convertible to an bool.");
+        }
     }
 
     private void ParseStringWithDefault(string name, string? defaultValue, out string? field)
@@ -481,30 +513,40 @@ public record SenderOptions
     {
         var option = ReadOptionFromBuilder(name) ?? defaultValue;
         if (option is "off")
+        {
             field = -1;
+        }
         else
+        {
             ParseIntWithDefault(name, defaultValue!, out field);
+        }
     }
 
     private void ParseMillisecondsThatMayBeOff(string name, string? defaultValue, out TimeSpan field)
     {
         var option = ReadOptionFromBuilder(name) ?? defaultValue;
         if (option is "off")
+        {
             field = TimeSpan.FromMilliseconds(-1);
+        }
         else
+        {
             ParseMillisecondsWithDefault(name, defaultValue!, out field);
+        }
     }
 
     private void ReadConfigStringIntoBuilder(string confStr)
     {
         if (!confStr.Contains("::"))
+        {
             throw new IngressError(ErrorCode.ConfigError, "Config string must contain a protocol, separated by `::`");
+        }
 
         var splits = confStr.Split("::");
 
         _connectionStringBuilder = new DbConnectionStringBuilder
         {
-            ConnectionString = splits[1]
+            ConnectionString = splits[1],
         };
 
         VerifyCorrectKeysInConfigString();
@@ -545,9 +587,15 @@ public record SenderOptions
         foreach (var prop in GetType().GetProperties(BindingFlags.Instance | BindingFlags.Public).OrderBy(x => x.Name))
         {
             // exclude properties
-            if (prop.IsDefined(typeof(CompilerGeneratedAttribute), false)) continue;
+            if (prop.IsDefined(typeof(CompilerGeneratedAttribute), false))
+            {
+                continue;
+            }
 
-            if (prop.IsDefined(typeof(JsonIgnoreAttribute), false)) continue;
+            if (prop.IsDefined(typeof(JsonIgnoreAttribute), false))
+            {
+                continue;
+            }
 
             object? value;
             try
@@ -562,11 +610,17 @@ public record SenderOptions
             if (value != null)
             {
                 if (value is TimeSpan span)
+                {
                     builder.Add(prop.Name, span.TotalMilliseconds);
+                }
                 else if (value is string str && !string.IsNullOrEmpty(str))
+                {
                     builder.Add(prop.Name, value);
+                }
                 else
+                {
                     builder.Add(prop.Name, value);
+                }
             }
         }
 
@@ -575,11 +629,13 @@ public record SenderOptions
 
     private void VerifyCorrectKeysInConfigString()
     {
-        var props = GetType().GetProperties(BindingFlags.Instance | BindingFlags.Public).Select(x => x.Name)
-            .ToImmutableHashSet();
         foreach (string key in _connectionStringBuilder.Keys)
-            if (!props.Contains(key))
+        {
+            if (!keySet.Contains(key))
+            {
                 throw new IngressError(ErrorCode.ConfigError, $"Invalid property: `{key}`");
+            }
+        }
     }
 
     /// <summary>

@@ -1,4 +1,3 @@
-// ReSharper disable CommentTypo
 /*******************************************************************************
  *     ___                  _   ____  ____
  *    / _ \ _   _  ___  ___| |_|  _ \| __ )
@@ -23,27 +22,28 @@
  *
  ******************************************************************************/
 
+// ReSharper disable CommentTypo
+
 using System.Buffers.Text;
 using System.Net.Security;
 using System.Net.Sockets;
 using QuestDB.Enums;
 using QuestDB.Utils;
-using Buffer = QuestDB.Buffers.Buffer;
 using ProtocolType = QuestDB.Enums.ProtocolType;
 
 
 namespace QuestDB.Senders;
 
 /// <summary>
-///     An implementation of <see cref="ISender"/> for TCP transport.
+///     An implementation of <see cref="ISender" /> for TCP transport.
 /// </summary>
 internal class TcpSender : AbstractSender
 {
-    private Socket _underlyingSocket = null!;
-    private Stream _dataStream = null!;
     private static readonly RemoteCertificateValidationCallback AllowAllCertCallback = (_, _, _, _) => true;
     private bool _authenticated;
+    private Stream _dataStream = null!;
     private ISignatureGenerator? _signatureGenerator;
+    private Socket _underlyingSocket = null!;
 
     public TcpSender(SenderOptions options)
     {
@@ -57,11 +57,16 @@ internal class TcpSender : AbstractSender
 
     private void Build()
     {
-        _buffer = new Buffer(Options.init_buf_size, Options.max_name_len, Options.max_buf_size);
+        Buffer = Buffers.Buffer.Create(
+            Options.init_buf_size,
+            Options.max_name_len,
+            Options.max_buf_size,
+            Options.protocol_version == ProtocolVersion.Auto ? ProtocolVersion.V1 : Options.protocol_version
+        );
 
-        var socket = new Socket(AddressFamily.InterNetwork, SocketType.Stream, System.Net.Sockets.ProtocolType.Tcp);
+        var            socket        = new Socket(AddressFamily.InterNetwork, SocketType.Stream, System.Net.Sockets.ProtocolType.Tcp);
         NetworkStream? networkStream = null;
-        SslStream? sslStream = null;
+        SslStream?     sslStream     = null;
         try
         {
             socket.ConnectAsync(Options.Host, Options.Port).Wait();
@@ -75,7 +80,7 @@ internal class TcpSender : AbstractSender
                 {
                     TargetHost = Options.Host,
                     RemoteCertificateValidationCallback =
-                        Options.tls_verify == TlsVerifyType.unsafe_off ? AllowAllCertCallback : null
+                        Options.tls_verify == TlsVerifyType.unsafe_off ? AllowAllCertCallback : null,
                 };
 
                 sslStream.AuthenticateAsClient(sslOptions);
@@ -88,12 +93,11 @@ internal class TcpSender : AbstractSender
             }
 
             _underlyingSocket = socket;
-            _dataStream = dataStream;
-
-            var authTimeout = new CancellationTokenSource();
-            authTimeout.CancelAfter(Options.auth_timeout);
+            _dataStream       = dataStream;
             if (!string.IsNullOrEmpty(Options.token))
             {
+                var authTimeout = new CancellationTokenSource();
+                authTimeout.CancelAfter(Options.auth_timeout);
                 _signatureGenerator = Signatures.CreateSignatureGenerator();
                 AuthenticateAsync(authTimeout.Token).AsTask().Wait(authTimeout.Token);
             }
@@ -123,9 +127,9 @@ internal class TcpSender : AbstractSender
         }
 
         _authenticated = true;
-        _buffer.EncodeUtf8(Options.username); // key_id
+        Buffer.EncodeUtf8(Options.username); // key_id
 
-        _buffer.Put('\n');
+        Buffer.PutAscii('\n');
         await SendAsync(ct);
 
         var bufferLen = await ReceiveUntil('\n', ct);
@@ -133,12 +137,13 @@ internal class TcpSender : AbstractSender
         var privateKey =
             FromBase64String(Options.token!);
 
-        var signature = _signatureGenerator!.GenerateSignature(privateKey, _buffer.SendBuffer, bufferLen);
-        Base64.EncodeToUtf8(signature, _buffer.SendBuffer, out _, out _buffer.Position);
-        _buffer.Put('\n');
+        var signature = _signatureGenerator!.GenerateSignature(privateKey, Buffer.Chunk, bufferLen);
+        Base64.EncodeToUtf8(signature, Buffer.Chunk, out _, out var bytesWritten);
+        Buffer.Position = bytesWritten;
+        Buffer.PutAscii('\n');
 
-        await _dataStream.WriteAsync(_buffer.SendBuffer, 0, _buffer.Position, ct);
-        _buffer.Clear();
+        await _dataStream.WriteAsync(Buffer.Chunk, 0, Buffer.Position, ct);
+        Buffer.Clear();
     }
 
     /// <summary>
@@ -151,14 +156,14 @@ internal class TcpSender : AbstractSender
     private async ValueTask<int> ReceiveUntil(char endChar, CancellationToken cancellationToken)
     {
         var totalReceived = 0;
-        while (totalReceived < _buffer.SendBuffer.Length)
+        while (totalReceived < Buffer.Chunk.Length)
         {
-            var received = await _dataStream.ReadAsync(_buffer.SendBuffer, totalReceived,
-                _buffer.SendBuffer.Length - totalReceived, cancellationToken);
+            var received = await _dataStream.ReadAsync(Buffer.Chunk, totalReceived,
+                                                       Buffer.Chunk.Length - totalReceived, cancellationToken);
             if (received > 0)
             {
                 totalReceived += received;
-                if (_buffer.SendBuffer[totalReceived - 1] == endChar)
+                if (Buffer.Chunk[totalReceived - 1] == endChar)
                 {
                     return totalReceived - 1;
                 }
@@ -176,7 +181,7 @@ internal class TcpSender : AbstractSender
     private static byte[] FromBase64String(string encodedPrivateKey)
     {
         var urlUnsafe = encodedPrivateKey.Replace('-', '+').Replace('_', '/');
-        var padding = 3 - (urlUnsafe.Length + 3) % 4;
+        var padding   = 3 - (urlUnsafe.Length + 3) % 4;
         if (padding != 0)
         {
             urlUnsafe += new string('=', padding);
@@ -185,16 +190,16 @@ internal class TcpSender : AbstractSender
         return Convert.FromBase64String(urlUnsafe);
     }
 
-    /// <inheritdoc cref="SendAsync"/>
+    /// <inheritdoc cref="SendAsync" />
     public override void Send(CancellationToken ct = default)
     {
         try
         {
-            if (_buffer.Length != 0)
+            if (Buffer.Length != 0)
             {
-                _buffer.WriteToStream(_dataStream, ct);
+                Buffer.WriteToStream(_dataStream, ct);
                 LastFlush = DateTime.UtcNow;
-                _buffer.Clear();
+                Buffer.Clear();
             }
         }
         catch (Exception ex)
@@ -209,7 +214,7 @@ internal class TcpSender : AbstractSender
         finally
         {
             LastFlush = DateTime.UtcNow;
-            _buffer.Clear();
+            Buffer.Clear();
         }
     }
 
@@ -218,9 +223,9 @@ internal class TcpSender : AbstractSender
     {
         try
         {
-            if (_buffer.Length != 0)
+            if (Buffer.Length != 0)
             {
-                await _buffer.WriteToStreamAsync(_dataStream, ct);
+                await Buffer.WriteToStreamAsync(_dataStream, ct);
             }
         }
         catch (Exception ex)
@@ -235,7 +240,7 @@ internal class TcpSender : AbstractSender
         finally
         {
             LastFlush = DateTime.UtcNow;
-            _buffer.Clear();
+            Buffer.Clear();
         }
     }
 
@@ -245,7 +250,7 @@ internal class TcpSender : AbstractSender
         _dataStream.Close();
         _dataStream.Dispose();
         _underlyingSocket.Dispose();
-        _buffer.Clear();
-        _buffer.TrimExcessBuffers();
+        Buffer.Clear();
+        Buffer.TrimExcessBuffers();
     }
 }

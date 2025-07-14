@@ -25,6 +25,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "net-questdb-client-tcp-auth
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "net-questdb-client-tcp-auth-test", "src\net-questdb-client-tcp-auth-tests\net-questdb-client-tcp-auth-tests.csproj", "{628A6AE1-C0D4-4A40-98DF-1F094BD60203}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "example-aot", "example-aot\example-aot.csproj", "{5341FCF0-F71D-4160-8D6E-B5EFDF92E9E8}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -78,5 +80,9 @@ Global
 		{628A6AE1-C0D4-4A40-98DF-1F094BD60203}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{628A6AE1-C0D4-4A40-98DF-1F094BD60203}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{628A6AE1-C0D4-4A40-98DF-1F094BD60203}.Release|Any CPU.Build.0 = Release|Any CPU
+		{5341FCF0-F71D-4160-8D6E-B5EFDF92E9E8}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{5341FCF0-F71D-4160-8D6E-B5EFDF92E9E8}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{5341FCF0-F71D-4160-8D6E-B5EFDF92E9E8}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{5341FCF0-F71D-4160-8D6E-B5EFDF92E9E8}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 EndGlobal

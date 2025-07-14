@@ -26,6 +26,8 @@
 using BenchmarkDotNet.Attributes;
 using QuestDB;
 
+#pragma warning disable CS8618 // Non-nullable field must contain a non-null value when exiting constructor. Consider adding the 'required' modifier or declaring as nullable.
+
 namespace net_questdb_client_benchmarks;
 
 [MarkdownExporterAttribute.GitHub]
@@ -68,13 +70,13 @@ public class BenchConnectionChurnVsServer2
     public async Task HttpRandomTableEveryRow()
     {
         var sender =
-           Sender.New(
+            Sender.New(
                 $"http::addr=localhost:{_httpPort};auto_flush=on;auto_flush_rows={BatchSize};auto_flush_interval=-1;pool_limit={ConnectionLimit};");
 
         for (var i = 0; i < RowsPerIteration; i++)
         {
             await sender.Table($"random_table_{Random.Shared.NextInt64(0, NumberOfTables - 1)}").Column("number", i)
-                .AtNowAsync();
+                        .AtNowAsync();
         }
 
         await sender.SendAsync();
@@ -90,7 +92,7 @@ public class BenchConnectionChurnVsServer2
         for (var i = 0; i < RowsPerIteration; i++)
         {
             await sender.Table($"random_table_{Random.Shared.NextInt64(0, NumberOfTables - 1)}").Column("number", i)
-                .AtNowAsync();
+                        .AtNowAsync();
         }
 
         await sender.SendAsync();

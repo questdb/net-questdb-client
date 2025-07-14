@@ -405,7 +405,7 @@ public class BufferV1 : IBuffer
     }
 
     /// <summary />
-    public virtual IBuffer Column(ReadOnlySpan<char> name, Array value)
+    public virtual IBuffer Column(ReadOnlySpan<char> name, Array? value)
     {
         throw new IngressError(ErrorCode.ProtocolVersionError, "Protocol Version V1 does not support ARRAY types");
     }

@@ -52,7 +52,15 @@ public class BufferV2 : BufferV1
         var expectedLength = 1;
         foreach (var i in shape)
         {
-            PutBinary(Convert.ToUInt32(i));
+            try
+            {
+                PutBinary(Convert.ToUInt32(i));
+            }
+            catch (OverflowException)
+            {
+                throw new IngressError(ErrorCode.InvalidArrayShapeError, "array shape is invalid");
+            }
+
             dimsSlot[0]++;
             expectedLength *= i;
         }
@@ -184,14 +192,20 @@ public class BufferV2 : BufferV1
     }
 
     /// <summary />
-    public override IBuffer Column(ReadOnlySpan<char> name, Array value)
+    public override IBuffer Column(ReadOnlySpan<char> name, Array? value)
     {
+        if (value == null)
+        {
+            // The value is null, do not include the column in the message
+            return this;
+        }
+        
         var type = value.GetType().GetElementType();
         GuardAgainstNonDoubleTypes(type ?? throw new InvalidOperationException());
         if (value.Rank == 1)
         {
             // Fast path, one dim array
-            return PutDoubleArray(name, (ReadOnlySpan<double>)value);
+            return PutDoubleArray(name, (ReadOnlySpan<double>)value!);
         }
         
         SetTableIfAppropriate();

@@ -94,11 +94,10 @@ internal class TcpSender : AbstractSender
 
             _underlyingSocket = socket;
             _dataStream       = dataStream;
-
-            var authTimeout = new CancellationTokenSource();
-            authTimeout.CancelAfter(Options.auth_timeout);
             if (!string.IsNullOrEmpty(Options.token))
             {
+                var authTimeout = new CancellationTokenSource();
+                authTimeout.CancelAfter(Options.auth_timeout);
                 _signatureGenerator = Signatures.CreateSignatureGenerator();
                 AuthenticateAsync(authTimeout.Token).AsTask().Wait(authTimeout.Token);
             }

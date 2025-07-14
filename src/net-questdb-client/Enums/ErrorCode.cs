@@ -92,4 +92,9 @@ public enum ErrorCode
     ///     Issues relating to protocol version mismatch.
     /// </summary>
     ProtocolVersionError,
+
+    /// <summary>
+    ///     Bad configuration.
+    /// </summary>
+    InvalidArrayShapeError,
 }

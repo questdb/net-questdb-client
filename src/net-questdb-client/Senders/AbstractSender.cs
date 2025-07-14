@@ -128,7 +128,7 @@ internal abstract class AbstractSender : ISender
         return this;
     }
 
-    public ISender Column(ReadOnlySpan<char> name, Array value)
+    public ISender Column(ReadOnlySpan<char> name, Array? value)
     {
         Buffer.Column(name, value);
         return this;

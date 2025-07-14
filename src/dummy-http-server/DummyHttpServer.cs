@@ -38,9 +38,10 @@ public class DummyHttpServer : IDisposable
     private static readonly string Password = "quest";
     private readonly WebApplication _app;
     private int _port = 29743;
+    private readonly TimeSpan? _withStartDelay;
 
     public DummyHttpServer(bool withTokenAuth = false, bool withBasicAuth = false, bool withRetriableError = false,
-                           bool withErrorMessage = false)
+                           bool withErrorMessage = false, TimeSpan? withStartDelay = null)
     {
         var bld = WebApplication.CreateBuilder();
 
@@ -55,6 +56,7 @@ public class DummyHttpServer : IDisposable
         IlpEndpoint.WithBasicAuth      = withBasicAuth;
         IlpEndpoint.WithRetriableError = withRetriableError;
         IlpEndpoint.WithErrorMessage   = withErrorMessage;
+        _withStartDelay = withStartDelay;
 
         if (withTokenAuth)
         {
@@ -103,13 +105,16 @@ public class DummyHttpServer : IDisposable
         IlpEndpoint.Counter   = 0;
     }
 
-    public Task StartAsync(int port = 29743, int[]? versions = null)
+    public async Task StartAsync(int port = 29743, int[]? versions = null)
     {
+        if (_withStartDelay.HasValue)
+        {
+            await Task.Delay(_withStartDelay.Value);
+        }
         versions                  ??= new[] { 1, 2, };
         SettingsEndpoint.Versions =   versions;
         _port                     =   port;
         _app.RunAsync($"http://localhost:{port}");
-        return Task.CompletedTask;
     }
 
     public async Task RunAsync()

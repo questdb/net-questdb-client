@@ -103,7 +103,7 @@ public class HttpTests
             expectedArray.Append("1.5");
         }
 
-        await sender.Column("array", (ReadOnlySpan<double>) aray.AsSpan())
+        await sender.Column("array", (ReadOnlySpan<double>)aray.AsSpan())
                     .AtAsync(new DateTime(1970, 01, 01, 0, 0, 1));
 
         await sender.SendAsync();
@@ -114,22 +114,76 @@ public class HttpTests
     }
 
     [Test]
-    public async Task BasicArrayDoubleNegotiationFailed()
+    public async Task BasicArrayDoubleNegotiationVersion2NotSupported()
     {
-        using var server = new DummyHttpServer(withBasicAuth: false);
-        await server.StartAsync(HttpPort, new[] { 1 });
-        using var sender =
-            Sender.New(
-                $"http::addr={Host}:{HttpPort};username=asdasdada;password=asdadad;tls_verify=unsafe_off;auto_flush=off;");
-        sender.Table("metrics")
-              .Symbol("tag", "value")
-              .Column("number", 10)
-              .Column("string", "abc");
+        {
+            using var server = new DummyHttpServer(withBasicAuth: false);
+            await server.StartAsync(HttpPort, new[] { 1 });
+            using var sender =
+                Sender.New(
+                    $"http::addr={Host}:{HttpPort};username=asdasdada;password=asdadad;tls_verify=unsafe_off;auto_flush=off;");
 
-        Assert.That(
-            () => sender.Column("array", new[] { 1.2, 2.6, 3.1 }),
-            Throws.TypeOf<IngressError>().With.Message.Contains("does not support ARRAY types"));
-        await server.StopAsync();
+            sender.Table("metrics")
+                  .Symbol("tag", "value")
+                  .Column("number", 10)
+                  .Column("string", "abc");
+
+            Assert.That(
+                () => sender.Column("array", new[] { 1.2, 2.6, 3.1 }),
+                Throws.TypeOf<IngressError>().With.Message.Contains("does not support ARRAY types"));
+            await server.StopAsync();
+        }
+
+        {
+            using var server = new DummyHttpServer(withBasicAuth: false);
+            await server.StartAsync(HttpPort, new[] { 3, 4, 5 });
+            using var sender =
+                Sender.New(
+                    $"http::addr={Host}:{HttpPort};username=asdasdada;password=asdadad;tls_verify=unsafe_off;auto_flush=off;");
+
+            sender.Table("metrics")
+                  .Symbol("tag", "value")
+                  .Column("number", 10)
+                  .Column("string", "abc");
+
+            Assert.That(
+                () => sender.Column("array", new[] { 1.2, 2.6, 3.1 }),
+                Throws.TypeOf<IngressError>().With.Message.Contains("does not support ARRAY types"));
+            await server.StopAsync();
+        }
+    }
+
+    [Test]
+    public async Task ArrayNegotiationConnectionIsRetried()
+    {
+        {
+            using var server = new DummyHttpServer(withBasicAuth: false, withStartDelay: TimeSpan.FromSeconds(0.5));
+
+            // Do not wait for the server start
+            Task delayedStart = server.StartAsync(HttpPort, new[] { 2 });
+
+            using var sender =
+                Sender.New(
+                    $"http::addr={Host}:{HttpPort};username=asdasdada;password=asdadad;tls_verify=unsafe_off;auto_flush=off;");
+
+            await delayedStart;
+
+            await sender.Table("metrics")
+                        .Symbol("tag", "value")
+                        .Column("number", 10)
+                        .Column("string", "abc")
+                        .Column("array", new[] { 1.2, 2.6, 3.1 })
+                        .AtAsync(new DateTime(1970, 01, 01, 0, 0, 1));
+
+            await sender.SendAsync();
+
+
+            Assert.That(
+                server.PrintBuffer(),
+                Is.EqualTo("metrics,tag=value number=10i,string=\"abc\",array==ARRAY<3>[1.2,2.6,3.1] 1000000000\n"));
+
+            await server.StopAsync();
+        }
     }
 
     [Test]
@@ -172,6 +226,29 @@ public class HttpTests
             server.PrintBuffer(),
             Is.EqualTo("metrics,tag=value number=10i,string=\"abc\",array==ARRAY<2,2>[1.2,2.6,3.1,4.6] 1000000000\n"));
         await server.StopAsync();
+    }
+
+    [Test]
+    public void InvalidShapedEnumerableDouble()
+    {
+        using var sender =
+            Sender.New(
+                $"http::addr={Host}:{HttpPort};username=asdasdada;password=asdadad;tls_verify=unsafe_off;auto_flush=off;protocol_version=2;");
+
+        sender.Table("metrics")
+              .Symbol("tag", "value")
+              .Column("number", 10)
+              .Column("string", "abc");
+
+        Assert.That(
+            () => sender.Column("array", new[] { 1.2, 2.6, 3.1, 4.6 }.AsEnumerable(), new[] { 0, 0 }.AsEnumerable()),
+            Throws.TypeOf<IngressError>().With.Message.Contains("shape does not match enumerable length")
+        );
+        
+        Assert.That(
+            () => sender.Column("array", new[] { 1.2, 2.6, 3.1, 4.6 }.AsEnumerable(), new[] { -1, 4 }.AsEnumerable()),
+            Throws.TypeOf<IngressError>().With.Message.Contains("array shape is invalid")
+        );
     }
 
     [Test]
@@ -332,7 +409,7 @@ public class HttpTests
         Assert.That(
             () =>
             {
-                var sender = Sender.New($"http::addr={Host}:{HttpPort};auto_flush=off;");
+                var sender = Sender.New($"http::addr={Host}:{HttpPort};auto_flush=off;protocol_version=1;");
                 sender.Table("metric name")
                       .Symbol("t ,a g", "v alu, e");
             },
@@ -346,7 +423,7 @@ public class HttpTests
         Assert.That(
             () =>
             {
-                var sender = Sender.New($"http::addr={Host}:{HttpPort};auto_flush=off;");
+                var sender = Sender.New($"http::addr={Host}:{HttpPort};auto_flush=off;protocol_version=1;");
                 sender.Table("metric name")
                       .Column("t a, g", "v alu e");
             },
@@ -919,7 +996,7 @@ public class HttpTests
     [Test]
     public async Task CannotConnect()
     {
-        var sender = Sender.New($"http::addr={Host}:{HttpPort};auto_flush=off;");
+        var sender = Sender.New($"http::addr={Host}:{HttpPort};auto_flush=off;protocol_version=1;");
         await sender.Table("foo").Symbol("a", "b").AtAsync(DateTime.UtcNow);
 
         Assert.That(
@@ -1090,7 +1167,7 @@ public class HttpTests
     {
         using var sender =
             Sender.New(
-                $"http::addr={Host}:{HttpPort};auto_flush=off;");
+                $"http::addr={Host}:{HttpPort};auto_flush=off;protocol_version=1;");
         Assert.That(
             () => sender.Commit(),
             Throws.TypeOf<IngressError>().With.Message.Contains("No transaction")
@@ -1108,7 +1185,7 @@ public class HttpTests
     {
         using var sender =
             Sender.New(
-                $"http::addr={Host}:{HttpPort};auto_flush=off;");
+                $"http::addr={Host}:{HttpPort};auto_flush=off;protocol_version=1;");
 
         sender.Table("foo").Symbol("bah", "baz");
 
@@ -1126,7 +1203,7 @@ public class HttpTests
     {
         using var sender =
             Sender.New(
-                $"http::addr={Host}:{HttpPort};auto_flush=off;");
+                $"http::addr={Host}:{HttpPort};auto_flush=off;protocol_version=1;");
 
         sender.Table("foo").Symbol("bah", "baz");
 
@@ -1143,7 +1220,7 @@ public class HttpTests
     {
         using var sender =
             Sender.New(
-                $"http::addr={Host}:{HttpPort};auto_flush=off;");
+                $"http::addr={Host}:{HttpPort};auto_flush=off;protocol_version=1;");
 
         await sender.Transaction("foo").Symbol("bah", "baz").AtAsync(DateTime.UtcNow);
 
@@ -1291,7 +1368,7 @@ public class HttpTests
     [Test]
     public async Task ClearSender()
     {
-        using var sender = Sender.New($"http::addr={Host}:{HttpPort};auto_flush=off;");
+        using var sender = Sender.New($"http::addr={Host}:{HttpPort};auto_flush=off;protocol_version=1;");
 
         await sender.Table("foo").Symbol("bah", "baz").AtAsync(DateTime.UtcNow);
         Assert.That(sender.Length, Is.GreaterThan(0));
@@ -1334,7 +1411,7 @@ public class HttpTests
         using var srv = new DummyHttpServer();
 
         using var sender =
-            Sender.New($"http::addr=localhost:{HttpPort};");
+            Sender.New($"http::addr=localhost:{HttpPort};protocol_version=1;");
         var lineCount = 10000;
         for (var i = 0; i < lineCount; i++)
         {

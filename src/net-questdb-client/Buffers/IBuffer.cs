@@ -215,7 +215,7 @@ public interface IBuffer
     public IBuffer Column<T>(ReadOnlySpan<char> name, ReadOnlySpan<T> value) where T : struct;
 
     /// <summary />
-    public IBuffer Column(ReadOnlySpan<char> name, Array value);
+    public IBuffer Column(ReadOnlySpan<char> name, Array? value);
     
     /// <summary />
     public IBuffer Column<T>(ReadOnlySpan<char> name, IEnumerable<T> value, IEnumerable<int> shape) where T : struct;

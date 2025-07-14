@@ -63,6 +63,48 @@ public class TcpTests
     }
 
     [Test]
+    public async Task SendLineWithArrayProtocolV2()
+    {
+        using var srv = CreateTcpListener(_port);
+        srv.AcceptAsync();
+
+        using var sender = Sender.New($"tcp::addr={_host}:{_port};protocol_version=2;");
+        await sender.Table("metric name")
+                    .Symbol("t a g", "v alu, e")
+                    .Column("number", 10)
+                    .Column("string", " -=\"")
+                    .Column("array", new[] { 1.2 })
+                    .AtAsync(new DateTime(1970, 01, 01, 0, 0, 1));
+        await sender.SendAsync();
+
+
+        var expected = "metric\\ name,t\\ a\\ g=v\\ alu\\,\\ e number=10i,string=\" -=\\\"\",array==ARRAY<1>[1.2] 1000000000\n";
+        WaitAssert(srv, expected);
+    }
+
+    [Test]
+    public void SendLineWithArrayProtocolV1Exception()
+    {
+        using var srv = CreateTcpListener(_port);
+        srv.AcceptAsync();
+
+        using var sender = Sender.New($"tcp::addr={_host}:{_port};");
+
+        try
+        {
+            sender.Table("metric name")
+                  .Symbol("t a g", "v alu, e")
+                  .Column("number", 10)
+                  .Column("string", " -=\"")
+                  .Column("array", new[] { 1.2 });
+        }
+        catch (IngressError err)
+        {
+            Assert.That(err.Message, Contains.Substring("Protocol Version V1 does not support ARRAY types"));
+        }
+    }
+
+    [Test]
     public void EcdsaSignatureLoop()
     {
         var privateKey = Convert.FromBase64String("NgdiOWDoQNUP18WOnb1xkkEG5TzPYMda5SiUOvT1K0U=");

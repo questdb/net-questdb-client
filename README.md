@@ -122,8 +122,6 @@ using var sender = Sender.New("https::addr=localhost:9009;tls_verify=unsafe_off;
 
 #### TCP Authentication
 
-💥 From net-questdb-client Version 2.1.0, if you want to use TCP Authentication, you must add a reference to [https://www.nuget.org/packages/net-questdb-client-tcp-auth/](https://www.nuget.org/packages/net-questdb-client-tcp-auth/).
-
 ```csharp
 using var sender = Sender.New("tcps::addr=localhost:9009;tls_verify=unsafe_off;username=admin;token=NgdiOWDoQNUP18WOnb1xkkEG5TzPYMda5SiUOvT1K0U=;");
 ```

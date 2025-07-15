@@ -73,7 +73,10 @@ public class TcpTests
                     .Symbol("t a g", "v alu, e")
                     .Column("number", 10)
                     .Column("string", " -=\"")
-                    .Column("array", new[] { 1.2 })
+                    .Column("array", new[]
+                    {
+                        1.2
+                    })
                     .AtAsync(new DateTime(1970, 01, 01, 0, 0, 1));
         await sender.SendAsync();
 
@@ -96,7 +99,10 @@ public class TcpTests
                   .Symbol("t a g", "v alu, e")
                   .Column("number", 10)
                   .Column("string", " -=\"")
-                  .Column("array", new[] { 1.2 });
+                  .Column("array", new[]
+                  {
+                      1.2
+                  });
         }
         catch (IngressError err)
         {
@@ -366,29 +372,6 @@ public class TcpTests
         var expected =
             "name ts=1645660800000000t 1645660800000000000\n";
         WaitAssert(srv, expected);
-    }
-
-    [Test]
-    public Task AuthFailsNeedToReferenceAssembly()
-    {
-        using var srv = CreateTcpListener(_port, true);
-        srv.WithAuth("testUser1", "Vs4e-cOLsVCntsMrZiAGAZtrkPXO00uoRLuA3d7gEcI=",
-                     "ANhR2AZSs4ar9urE5AZrJqu469X0r7gZ1BBEdcrAuL_6");
-        srv.AcceptAsync();
-
-        try
-        {
-            using var sender =
-                Sender.New(
-                    $"tcps::addr={_host}:{_port};username=testUser1;token=NgdiOWDoQNUP18WOnb1xkkEG5TzPYMda5SiUOvT1K0U=;tls_verify=unsafe_off;");
-            Assert.Fail("Expected exception");
-        }
-        catch (TypeLoadException ex)
-        {
-            Assert.That(ex.Message.Contains("Could not load QuestDB.Secp256r1SignatureGenerator"), Is.True);
-        }
-
-        return Task.CompletedTask;
     }
 
     [Test]
@@ -890,6 +873,126 @@ public class TcpTests
         Assert.That(sender.Length, Is.EqualTo(0));
     }
 
+
+    private readonly IPAddress _host2117045082 = IPAddress.Loopback;
+    private readonly int _port461822680 = 29472;
+
+    [Test]
+    public async Task Authenticate1618076422()
+    {
+        using var srv = CreateTcpListener(_port);
+        srv.WithAuth("testUser1", "Vs4e-cOLsVCntsMrZiAGAZtrkPXO00uoRLuA3d7gEcI=",
+                     "ANhR2AZSs4ar9urE5AZrJqu469X0r7gZ1BBEdcrAuL_6");
+        srv.AcceptAsync();
+
+        using var sender =
+            Sender.New(
+                $"tcp::addr={_host}:{_port};username=testUser1;token=NgdiOWDoQNUP18WOnb1xkkEG5TzPYMda5SiUOvT1K0U=;");
+
+        await sender.Table("metric name")
+                    .Symbol("t a g", "v alu, e")
+                    .Column("number", 10)
+                    .Column("string", " -=\"")
+                    .AtAsync(new DateTime(1970, 01, 01, 0, 0, 1));
+        await sender.SendAsync();
+
+        var expected = "metric\\ name,t\\ a\\ g=v\\ alu\\,\\ e number=10i,string=\" -=\\\"\" 1000000000\n";
+        WaitAssert(srv, expected);
+    }
+
+    [Test]
+    public Task AuthFailWrongKid1643819539()
+    {
+        using var srv = CreateTcpListener(_port);
+        srv.WithAuth("testUser1", "Vs4e-cOLsVCntsMrZiAGAZtrkPXO00uoRLuA3d7gEcI=",
+                     "ANhR2AZSs4ar9urE5AZrJqu469X0r7gZ1BBEdcrAuL_6");
+        srv.AcceptAsync();
+
+        Assert.That(
+            () => Sender.New($"tcp::addr={_host}:{_port};username=invalid;token=foo=;")
+           ,
+            Throws.TypeOf<AggregateException>().With.InnerException.TypeOf<IngressError>().With.Message
+                  .Contains("Authentication failed")
+        );
+        return Task.CompletedTask;
+    }
+
+    [Test]
+    public Task AuthFailBadKey1865251992()
+    {
+        using var srv = CreateTcpListener(_port);
+        srv.WithAuth("testUser1", "Vs4e-cOLsVCntsMrZiAGAZtrkPXO00uoRLuA3d7gEcI=",
+                     "ANhR2AZSs4ar9urE5AZrJqu469X0r7gZ1BBEdcrAuL_6");
+        srv.AcceptAsync();
+
+        using var sender = Sender.New(
+            $"tcp::addr={_host}:{_port};username=testUser1;token=ZOvHHNQBGvZuiCLt7CmWt0tTlsnjm9F3O3C749wGT_M=;");
+
+        Assert.That(
+            async () =>
+            {
+                for (var i = 0; i < 10; i++)
+                {
+                    await sender.Table("metric name")
+                                .Symbol("t a g", "v alu, e")
+                                .Column("number", 10)
+                                .Column("string", " -=\"")
+                                .AtAsync(new DateTime(1970, 01, 01, 0, 0, 1));
+                    await sender.SendAsync();
+                    Thread.Sleep(10);
+                }
+
+                Assert.Fail();
+            },
+            Throws.TypeOf<IngressError>().With.Message
+                  .Contains("Could not write data to server.")
+        );
+        return Task.CompletedTask;
+    }
+
+    [Test]
+    public void EcdsaSignatureLoop553747026()
+    {
+        var privateKey = Convert.FromBase64String("NgdiOWDoQNUP18WOnb1xkkEG5TzPYMda5SiUOvT1K0U=");
+        var p          = SecNamedCurves.GetByName("secp256r1");
+        var parameters = new ECDomainParameters(p.Curve, p.G, p.N, p.H);
+        var priKey = new ECPrivateKeyParameters(
+            "ECDSA",
+            new BigInteger(privateKey), // d
+            parameters);
+
+        var m = new byte[512];
+        for (var i = 0; i < m.Length; i++)
+        {
+            m[i] = (byte)i;
+        }
+
+        var signature = new Secp256r1SignatureGenerator().GenerateSignature(privateKey, m, m.Length);
+
+        var pubKey1 = FromBase64String("Vs4e-cOLsVCntsMrZiAGAZtrkPXO00uoRLuA3d7gEcI=");
+        var pubKey2 = FromBase64String("ANhR2AZSs4ar9urE5AZrJqu469X0r7gZ1BBEdcrAuL_6");
+
+        // Verify the signature
+        var pubKey = new ECPublicKeyParameters(
+            parameters.Curve.CreatePoint(new BigInteger(pubKey1), new BigInteger(pubKey2)),
+            parameters);
+
+        var ecdsa = SignerUtilities.GetSigner("SHA-256withECDSA");
+        ecdsa.Init(false, pubKey);
+        ecdsa.BlockUpdate(m, 0, m.Length);
+        Assert.That(ecdsa.VerifySignature(signature));
+    }
+
+    private DummyIlpServer CreateTcpListener611045875(int port, bool tls = false)
+    {
+        return new DummyIlpServer(port, tls);
+    }
+
+    private byte[] FromBase64String1266502629(string text)
+    {
+        return DummyIlpServer.FromBase64String(text);
+    }
+
     private static void WaitAssert(DummyIlpServer srv, string expected)
     {
         var expectedLen = Encoding.UTF8.GetBytes(expected).Length;
@@ -910,4 +1013,5 @@ public class TcpTests
     {
         return DummyIlpServer.FromBase64String(text);
     }
+
 }

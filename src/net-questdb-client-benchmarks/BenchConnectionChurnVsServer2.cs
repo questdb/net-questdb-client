@@ -71,7 +71,7 @@ public class BenchConnectionChurnVsServer2
     {
         var sender =
             Sender.New(
-                $"http::addr=localhost:{_httpPort};auto_flush=on;auto_flush_rows={BatchSize};auto_flush_interval=-1;pool_limit={ConnectionLimit};");
+                $"http::addr=localhost:{_httpPort};auto_flush=on;auto_flush_rows={BatchSize};auto_flush_interval=-1;");
 
         for (var i = 0; i < RowsPerIteration; i++)
         {

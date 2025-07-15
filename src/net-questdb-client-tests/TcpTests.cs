@@ -111,41 +111,6 @@ public class TcpTests
     }
 
     [Test]
-    public void EcdsaSignatureLoop()
-    {
-        var privateKey = Convert.FromBase64String("NgdiOWDoQNUP18WOnb1xkkEG5TzPYMda5SiUOvT1K0U=");
-        var p          = SecNamedCurves.GetByName("secp256r1");
-        var parameters = new ECDomainParameters(p.Curve, p.G, p.N, p.H);
-        var priKey = new ECPrivateKeyParameters(
-            "ECDSA",
-            new BigInteger(privateKey), // d
-            parameters);
-
-        var m = new byte[512];
-        for (var i = 0; i < m.Length; i++)
-        {
-            m[i] = (byte)i;
-        }
-
-        var ecdsa = SignerUtilities.GetSigner("SHA-256withECDSA");
-        ecdsa.Init(true, priKey);
-        ecdsa.BlockUpdate(m, 0, m.Length);
-        var signature = ecdsa.GenerateSignature();
-
-        var pubKey1 = FromBase64String("Vs4e-cOLsVCntsMrZiAGAZtrkPXO00uoRLuA3d7gEcI=");
-        var pubKey2 = FromBase64String("ANhR2AZSs4ar9urE5AZrJqu469X0r7gZ1BBEdcrAuL_6");
-
-        // Verify the signature
-        var pubKey = new ECPublicKeyParameters(
-            parameters.Curve.CreatePoint(new BigInteger(pubKey1), new BigInteger(pubKey2)),
-            parameters);
-
-        ecdsa.Init(false, pubKey);
-        ecdsa.BlockUpdate(m, 0, m.Length);
-        Assert.That(ecdsa.VerifySignature(signature));
-    }
-
-    [Test]
     public async Task SendLineExceedsBuffer()
     {
         using var srv = CreateTcpListener(_port);
@@ -874,11 +839,8 @@ public class TcpTests
     }
 
 
-    private readonly IPAddress _host2117045082 = IPAddress.Loopback;
-    private readonly int _port461822680 = 29472;
-
     [Test]
-    public async Task Authenticate1618076422()
+    public async Task Authenticate()
     {
         using var srv = CreateTcpListener(_port);
         srv.WithAuth("testUser1", "Vs4e-cOLsVCntsMrZiAGAZtrkPXO00uoRLuA3d7gEcI=",
@@ -901,7 +863,7 @@ public class TcpTests
     }
 
     [Test]
-    public Task AuthFailWrongKid1643819539()
+    public Task AuthFailWrongKid()
     {
         using var srv = CreateTcpListener(_port);
         srv.WithAuth("testUser1", "Vs4e-cOLsVCntsMrZiAGAZtrkPXO00uoRLuA3d7gEcI=",
@@ -918,7 +880,7 @@ public class TcpTests
     }
 
     [Test]
-    public Task AuthFailBadKey1865251992()
+    public Task AuthFailBadKey()
     {
         using var srv = CreateTcpListener(_port);
         srv.WithAuth("testUser1", "Vs4e-cOLsVCntsMrZiAGAZtrkPXO00uoRLuA3d7gEcI=",
@@ -951,15 +913,11 @@ public class TcpTests
     }
 
     [Test]
-    public void EcdsaSignatureLoop553747026()
+    public void EcdsaSignatureLoop()
     {
         var privateKey = Convert.FromBase64String("NgdiOWDoQNUP18WOnb1xkkEG5TzPYMda5SiUOvT1K0U=");
         var p          = SecNamedCurves.GetByName("secp256r1");
         var parameters = new ECDomainParameters(p.Curve, p.G, p.N, p.H);
-        var priKey = new ECPrivateKeyParameters(
-            "ECDSA",
-            new BigInteger(privateKey), // d
-            parameters);
 
         var m = new byte[512];
         for (var i = 0; i < m.Length; i++)
@@ -981,16 +939,6 @@ public class TcpTests
         ecdsa.Init(false, pubKey);
         ecdsa.BlockUpdate(m, 0, m.Length);
         Assert.That(ecdsa.VerifySignature(signature));
-    }
-
-    private DummyIlpServer CreateTcpListener611045875(int port, bool tls = false)
-    {
-        return new DummyIlpServer(port, tls);
-    }
-
-    private byte[] FromBase64String1266502629(string text)
-    {
-        return DummyIlpServer.FromBase64String(text);
     }
 
     private static void WaitAssert(DummyIlpServer srv, string expected)

@@ -42,7 +42,7 @@ internal class TcpSender : AbstractSender
     private static readonly RemoteCertificateValidationCallback AllowAllCertCallback = (_, _, _, _) => true;
     private bool _authenticated;
     private Stream _dataStream = null!;
-    private ISignatureGenerator? _signatureGenerator;
+    private Secp256r1SignatureGenerator? _signatureGenerator;
     private Socket _underlyingSocket = null!;
 
     public TcpSender(SenderOptions options)
@@ -98,7 +98,7 @@ internal class TcpSender : AbstractSender
             {
                 var authTimeout = new CancellationTokenSource();
                 authTimeout.CancelAfter(Options.auth_timeout);
-                _signatureGenerator = Signatures.CreateSignatureGenerator();
+                _signatureGenerator = Secp256r1SignatureGenerator.Instance.Value;
                 AuthenticateAsync(authTimeout.Token).AsTask().Wait(authTimeout.Token);
             }
         }

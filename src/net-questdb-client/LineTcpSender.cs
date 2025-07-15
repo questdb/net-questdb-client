@@ -59,7 +59,7 @@ public class LineTcpSender : IDisposable
     private int _position;
     private bool _quoted;
     private byte[] _sendBuffer;
-    public ISignatureGenerator? _signatureGenerator;
+    public Secp256r1SignatureGenerator? _signatureGenerator;
     private Socket? _underlyingSocket;
 
     private LineTcpSender(Stream networkStream, int bufferSize,
@@ -229,7 +229,7 @@ public class LineTcpSender : IDisposable
         var privateKey = FromBase64String(encodedPrivateKey);
         if (_signatureGenerator == null)
         {
-            _signatureGenerator = Signatures.CreateSignatureGenerator();
+            _signatureGenerator = Secp256r1SignatureGenerator.Instance.Value;
         }
 
         var signature = _signatureGenerator.GenerateSignature(privateKey, _sendBuffer, bufferLen);

@@ -50,14 +50,22 @@ public class HttpTests
                     .Symbol("tag", "value")
                     .Column("number", 10)
                     .Column("string", "abc")
-                    .Column("array", new[] { 1.2, 2.6, 3.1 })
+                    .Column("array", new[]
+                    {
+                        1.2, 2.6,
+                        3.1,
+                    })
                     .AtAsync(new DateTime(1970, 01, 01, 0, 0, 1));
 
         await sender.Table("metrics")
                     .Symbol("tag", "value")
                     .Column("number", 10)
                     .Column("string", "abc")
-                    .Column("array", (ReadOnlySpan<double>)(new[] { 1.5, 2.1, 3.1 }))
+                    .Column("array", (ReadOnlySpan<double>)new[]
+                    {
+                        1.5, 2.1,
+                        3.1,
+                    })
                     .AtAsync(new DateTime(1970, 01, 01, 0, 0, 2));
 
         await sender.Table("metrics")
@@ -90,16 +98,17 @@ public class HttpTests
               .Column("number", 10)
               .Column("string", "abc");
 
-        int           arrayLen      = (1024 - sender.Length) / 8 + 1;
-        double[]      aray          = new double[arrayLen];
-        StringBuilder expectedArray = new StringBuilder();
-        for (int i = 0; i < arrayLen; i++)
+        var arrayLen      = (1024 - sender.Length) / 8 + 1;
+        var aray          = new double[arrayLen];
+        var expectedArray = new StringBuilder();
+        for (var i = 0; i < arrayLen; i++)
         {
             aray[i] = 1.5;
             if (i > 0)
             {
                 expectedArray.Append(",");
             }
+
             expectedArray.Append("1.5");
         }
 
@@ -118,7 +127,10 @@ public class HttpTests
     {
         {
             using var server = new DummyHttpServer(withBasicAuth: false);
-            await server.StartAsync(HttpPort, new[] { 1 });
+            await server.StartAsync(HttpPort, new[]
+            {
+                1,
+            });
             using var sender =
                 Sender.New(
                     $"http::addr={Host}:{HttpPort};username=asdasdada;password=asdadad;tls_verify=unsafe_off;auto_flush=off;");
@@ -129,14 +141,22 @@ public class HttpTests
                   .Column("string", "abc");
 
             Assert.That(
-                () => sender.Column("array", new[] { 1.2, 2.6, 3.1 }),
+                () => sender.Column("array", new[]
+                {
+                    1.2, 2.6,
+                    3.1,
+                }),
                 Throws.TypeOf<IngressError>().With.Message.Contains("does not support ARRAY types"));
             await server.StopAsync();
         }
 
         {
             using var server = new DummyHttpServer(withBasicAuth: false);
-            await server.StartAsync(HttpPort, new[] { 3, 4, 5 });
+            await server.StartAsync(HttpPort, new[]
+            {
+                3, 4,
+                5,
+            });
             using var sender =
                 Sender.New(
                     $"http::addr={Host}:{HttpPort};username=asdasdada;password=asdadad;tls_verify=unsafe_off;auto_flush=off;");
@@ -147,7 +167,11 @@ public class HttpTests
                   .Column("string", "abc");
 
             Assert.That(
-                () => sender.Column("array", new[] { 1.2, 2.6, 3.1 }),
+                () => sender.Column("array", new[]
+                {
+                    1.2, 2.6,
+                    3.1,
+                }),
                 Throws.TypeOf<IngressError>().With.Message.Contains("does not support ARRAY types"));
             await server.StopAsync();
         }
@@ -160,7 +184,10 @@ public class HttpTests
             using var server = new DummyHttpServer(withBasicAuth: false, withStartDelay: TimeSpan.FromSeconds(0.5));
 
             // Do not wait for the server start
-            Task delayedStart = server.StartAsync(HttpPort, new[] { 2 });
+            var delayedStart = server.StartAsync(HttpPort, new[]
+            {
+                2,
+            });
 
             using var sender =
                 Sender.New(
@@ -172,7 +199,11 @@ public class HttpTests
                         .Symbol("tag", "value")
                         .Column("number", 10)
                         .Column("string", "abc")
-                        .Column("array", new[] { 1.2, 2.6, 3.1 })
+                        .Column("array", new[]
+                        {
+                            1.2, 2.6,
+                            3.1,
+                        })
                         .AtAsync(new DateTime(1970, 01, 01, 0, 0, 1));
 
             await sender.SendAsync();
@@ -218,7 +249,14 @@ public class HttpTests
                     .Symbol("tag", "value")
                     .Column("number", 10)
                     .Column("string", "abc")
-                    .Column("array", new[] { 1.2, 2.6, 3.1, 4.6 }.AsEnumerable(), new[] { 2, 2 }.AsEnumerable())
+                    .Column("array", new[]
+                    {
+                        1.2, 2.6,
+                        3.1, 4.6,
+                    }.AsEnumerable(), new[]
+                    {
+                        2, 2,
+                    }.AsEnumerable())
                     .AtAsync(new DateTime(1970, 01, 01, 0, 0, 1));
 
         await sender.SendAsync();
@@ -241,12 +279,26 @@ public class HttpTests
               .Column("string", "abc");
 
         Assert.That(
-            () => sender.Column("array", new[] { 1.2, 2.6, 3.1, 4.6 }.AsEnumerable(), new[] { 0, 0 }.AsEnumerable()),
+            () => sender.Column("array", new[]
+            {
+                1.2, 2.6,
+                3.1, 4.6,
+            }.AsEnumerable(), new[]
+            {
+                0, 0,
+            }.AsEnumerable()),
             Throws.TypeOf<IngressError>().With.Message.Contains("shape does not match enumerable length")
         );
-        
+
         Assert.That(
-            () => sender.Column("array", new[] { 1.2, 2.6, 3.1, 4.6 }.AsEnumerable(), new[] { -1, 4 }.AsEnumerable()),
+            () => sender.Column("array", new[]
+            {
+                1.2, 2.6,
+                3.1, 4.6,
+            }.AsEnumerable(), new[]
+            {
+                -1, 4,
+            }.AsEnumerable()),
             Throws.TypeOf<IngressError>().With.Message.Contains("array shape is invalid")
         );
     }
@@ -263,7 +315,11 @@ public class HttpTests
                     .Symbol("tag", "value")
                     .Column("number", 10)
                     .Column("string", "abc")
-                    .Column("array", new[] { 1.2, 2.6, 3.1, 4.6 })
+                    .Column("array", new[]
+                    {
+                        1.2, 2.6,
+                        3.1, 4.6,
+                    })
                     .AtAsync(new DateTime(1970, 01, 01, 0, 0, 1));
 
         await sender.SendAsync();
@@ -622,7 +678,10 @@ public class HttpTests
             }
 
             // ReSharper disable once DisposeOnUsingVariable
-            if (i == 1) srv.Dispose();
+            if (i == 1)
+            {
+                srv.Dispose();
+            }
         }
     }
 
@@ -840,7 +899,10 @@ public class HttpTests
                         .AtAsync(new DateTime(2021, 1, 1, i / 360 / 1000 % 60, i / 60 / 1000 % 60, i / 1000 % 60,
                                               i % 1000));
 
-            if (i % 100 == 0) await sender.SendAsync();
+            if (i % 100 == 0)
+            {
+                await sender.SendAsync();
+            }
         }
 
         await sender.SendAsync();
@@ -993,7 +1055,7 @@ public class HttpTests
         Assert.That(srv.PrintBuffer(), Is.EqualTo(expected));
     }
 
-    
+
     [Test]
     public async Task CancelLineAfterClear()
     {
@@ -1019,7 +1081,33 @@ public class HttpTests
         var expected = "good 86400000000000\n";
         Assert.That(srv.PrintBuffer(), Is.EqualTo(expected));
     }
-    
+
+
+    [Test]
+    public async Task CancelLineAfterError()
+    {
+        using var srv = new DummyHttpServer();
+
+        var sender = Sender.New($"http::addr={Host}:{HttpPort};auto_flush=off;protocol_version=1;");
+        await sender.Table("foo").Symbol("a", "b").AtNowAsync();
+        await sender.Table("foo123").Symbol("a", "b").AtNowAsync();
+
+        Assert.That(
+            async () => { await sender.SendAsync(); },
+            Throws.TypeOf<IngressError>().With.Message.Contains("Cannot connect")
+        );
+
+        sender.CancelRow();
+        await srv.StartAsync(HttpPort);
+
+        await sender.Table("good").Symbol("a", "b").AtAsync(86400000000000);
+        await sender.SendAsync();
+
+        var expected = "good,a=b 86400000000000\n";
+        Assert.That(srv.PrintBuffer(), Is.EqualTo(expected));
+    }
+
+
     [Test]
     public async Task CannotConnect()
     {
@@ -1276,7 +1364,10 @@ public class HttpTests
 
         for (var i = 0; i < 100000; i++)
         {
-            if ((i - 1) % 100 == 0 && i != 0) Assert.That(sender.Length == 32);
+            if ((i - 1) % 100 == 0 && i != 0)
+            {
+                Assert.That(sender.Length == 32);
+            }
 
             await sender.Table("foo").Symbol("bah", "baz").AtAsync(DateTime.UtcNow);
         }
@@ -1292,7 +1383,10 @@ public class HttpTests
                 $"http::addr={Host}:{HttpPort};auto_flush=on;auto_flush_bytes=3200;auto_flush_interval=off;auto_flush_rows=off;");
         for (var i = 0; i < 100000; i++)
         {
-            if (i % 100 == 0) Assert.That(sender.Length == 0);
+            if (i % 100 == 0)
+            {
+                Assert.That(sender.Length == 0);
+            }
 
             await sender.Table("foo").Symbol("bah", "baz").AtAsync(DateTime.UtcNow);
         }

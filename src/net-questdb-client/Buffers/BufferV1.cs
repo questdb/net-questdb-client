@@ -135,11 +135,13 @@ public class BufferV1 : IBuffer
             _buffers[i] = (_buffers[i].Buffer, 0);
         }
 
-        Position          = 0;
-        RowCount          = 0;
-        Length            = 0;
-        WithinTransaction = false;
-        _currentTableName = "";
+        Position              = 0;
+        RowCount              = 0;
+        Length                = 0;
+        WithinTransaction     = false;
+        _currentTableName     = "";
+        _lineStartBufferIndex = 0;
+        _lineStartBufferPosition = 0;
     }
 
     /// <inheritdoc />

@@ -993,6 +993,33 @@ public class HttpTests
         Assert.That(srv.PrintBuffer(), Is.EqualTo(expected));
     }
 
+    
+    [Test]
+    public async Task CancelLineAfterClear()
+    {
+        using var srv = new DummyHttpServer();
+        await srv.StartAsync(HttpPort);
+        using var sender = Sender.New($"http::addr={Host}:{HttpPort};auto_flush=off;");
+
+        sender.Table("good");
+        sender.Symbol("asdf", "sdfad");
+        sender.Column("ddd", 123);
+        sender.At(new DateTime(1970, 1, 2));
+
+        sender.Table("bad");
+        sender.Symbol("asdf", "sdfad");
+        sender.Column("asdf", 123);
+        sender.Clear();
+        sender.CancelRow();
+
+        sender.Table("good");
+        await sender.AtAsync(new DateTime(1970, 1, 2));
+        await sender.SendAsync();
+
+        var expected = "good 86400000000000\n";
+        Assert.That(srv.PrintBuffer(), Is.EqualTo(expected));
+    }
+    
     [Test]
     public async Task CannotConnect()
     {

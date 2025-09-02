@@ -16,7 +16,7 @@
         <RepositoryUrl>https://github.com/questdb/net-questdb-client</RepositoryUrl>
         <PackageTags>QuestDB, ILP</PackageTags>
         <Company>QuestDB Limited</Company>
-        <PackageVersion>3.0.0</PackageVersion>
+        <PackageVersion>3.0.1</PackageVersion>
         <GenerateDocumentationFile>true</GenerateDocumentationFile>
         <TargetFrameworks>net6.0;net7.0;net8.0;net9.0</TargetFrameworks>
     </PropertyGroup>

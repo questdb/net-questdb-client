@@ -376,7 +376,7 @@ public class LineTcpSenderTests
         ls.Send();
 
         var expected =
-            "name ts=1645660800000000t 1645660800000000000\n";
+            "name ts=1645660800000000000n 1645660800000000000\n";
         WaitAssert(srv, expected);
     }
 
@@ -746,7 +746,7 @@ public class LineTcpSenderTests
         ls.Send();
 
         var expected =
-            "name ts=1645660800000000t 1645660800000000000\n";
+            "name ts=1645660800000000000n 1645660800000000000\n";
         WaitAssert(srv, expected);
     }
 

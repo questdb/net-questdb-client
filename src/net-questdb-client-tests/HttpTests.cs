@@ -747,7 +747,7 @@ public class HttpTests
         await sender.SendAsync();
 
         var expected =
-            "name ts=1645660800000000t 1645660800000000000\n";
+            "name ts=1645660800000000000n 1645660800000000000\n";
         Assert.That(srv.PrintBuffer(), Is.EqualTo(expected));
     }
 
@@ -1163,7 +1163,7 @@ public class HttpTests
         await sender.CommitAsync();
 
         var expected =
-            "tableName,foo=bah 86400000000000\ntableName foo=123i 86400000000000\ntableName foo=123 86400000000000\ntableName foo=0t 86400000000000\ntableName foo=-3600000000t 86400000000000\ntableName foo=f 86400000000000\n";
+            "tableName,foo=bah 86400000000000\ntableName foo=123i 86400000000000\ntableName foo=123 86400000000000\ntableName foo=0n 86400000000000\ntableName foo=-3600000000000n 86400000000000\ntableName foo=f 86400000000000\n";
         Assert.That(srv.PrintBuffer(), Is.EqualTo(expected));
     }
 

@@ -317,7 +317,7 @@ public class BufferV1 : IBuffer
         }
 
         var epoch = timestamp.Ticks - EpochTicks;
-        Column(name).Put(epoch / 10).PutAscii('t');
+        Column(name).Put(epoch * 100).PutAscii('n');
         return this;
     }
 

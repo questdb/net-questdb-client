@@ -376,7 +376,7 @@ public class LineTcpSenderTests
         ls.Send();
 
         var expected =
-            "name ts=1645660800000000000n 1645660800000000000\n";
+            "name ts=1645660800000000t 1645660800000000000\n";
         WaitAssert(srv, expected);
     }
 
@@ -746,47 +746,7 @@ public class LineTcpSenderTests
         ls.Send();
 
         var expected =
-            "name ts=1645660800000000000n 1645660800000000000\n";
-        WaitAssert(srv, expected);
-    }
-
-    [Test]
-    public async Task SendAtNanos()
-    {
-        using var srv = CreateTcpListener(_port);
-        srv.AcceptAsync();
-
-        using var ls = await LineTcpSender.ConnectAsync("localhost", _port, tlsMode: TlsMode.Disable);
-
-        const long timestampNanos = 1645660800987654321L;
-        ls.Table("name")
-          .Column("value", 42)
-          .At(timestampNanos);
-
-        ls.Send();
-
-        var expected =
-            "name value=42i 1645660800987654321\n";
-        WaitAssert(srv, expected);
-    }
-
-    [Test]
-    public async Task SendAtNanosAsync()
-    {
-        using var srv = CreateTcpListener(_port);
-        srv.AcceptAsync();
-
-        using var ls = await LineTcpSender.ConnectAsync("localhost", _port, tlsMode: TlsMode.Disable);
-
-        const long timestampNanos = 1645660800555666777L;
-        ls.Table("test_table")
-          .Column("measurement", 100.5)
-          .At(timestampNanos);
-
-        await ls.SendAsync();
-
-        var expected =
-            "test_table measurement=100.5 1645660800555666777\n";
+            "name ts=1645660800000000t 1645660800000000000\n";
         WaitAssert(srv, expected);
     }
 

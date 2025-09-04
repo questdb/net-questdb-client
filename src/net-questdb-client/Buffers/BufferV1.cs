@@ -108,7 +108,7 @@ public class BufferV1 : IBuffer
     public void At(DateTime timestamp)
     {
         var epoch = timestamp.Ticks - EpochTicks;
-        PutAscii(' ').Put(epoch).PutAscii('0').PutAscii('0');
+        PutAscii(' ').Put(epoch * 100);
         FinishLine();
     }
 
@@ -324,7 +324,7 @@ public class BufferV1 : IBuffer
         }
 
         var epoch = timestamp.Ticks - EpochTicks;
-        Column(name).Put(epoch).PutAscii('0').PutAscii('0').PutAscii('n');
+        Column(name).Put(epoch * 100).PutAscii('n');
         return this;
     }
 

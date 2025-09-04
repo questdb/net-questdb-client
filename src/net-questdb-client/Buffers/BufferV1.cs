@@ -108,7 +108,7 @@ public class BufferV1 : IBuffer
     public void At(DateTime timestamp)
     {
         var epoch = timestamp.Ticks - EpochTicks;
-        PutAscii(' ').Put(epoch).PutAscii('0').PutAscii('0');
+        PutAscii(' ').Put(epoch * 100);
         FinishLine();
     }
 
@@ -122,6 +122,13 @@ public class BufferV1 : IBuffer
     public void At(long epochNano)
     {
         PutAscii(' ').Put(epochNano);
+        FinishLine();
+    }
+
+    /// <inheritdoc />
+    public void AtNanos(long timestampNanos)
+    {
+        PutAscii(' ').Put(timestampNanos);
         FinishLine();
     }
 
@@ -317,7 +324,7 @@ public class BufferV1 : IBuffer
         }
 
         var epoch = timestamp.Ticks - EpochTicks;
-        Column(name).Put(epoch / 10).PutAscii('t');
+        Column(name).Put(epoch * 100).PutAscii('n');
         return this;
     }
 
@@ -330,6 +337,18 @@ public class BufferV1 : IBuffer
         }
 
         Column(name, timestamp.UtcDateTime);
+        return this;
+    }
+
+    /// <inheritdoc />
+    public IBuffer ColumnNanos(ReadOnlySpan<char> name, long timestampNanos)
+    {
+        if (WithinTransaction && !_hasTable)
+        {
+            Table(_currentTableName);
+        }
+
+        Column(name).Put(timestampNanos).PutAscii('n');
         return this;
     }
 

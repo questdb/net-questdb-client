@@ -150,6 +150,14 @@ public interface ISenderV1 : IDisposable
     public ISender Column(ReadOnlySpan<char> name, DateTimeOffset value);
 
     /// <summary>
+    ///     Adds a timestamp column with exact nanosecond precision.
+    /// </summary>
+    /// <param name="name">The name of the column</param>
+    /// <param name="timestampNanos">Nanoseconds since Unix epoch</param>
+    /// <returns>Itself</returns>
+    public ISender ColumnNanos(ReadOnlySpan<char> name, long timestampNanos);
+
+    /// <summary>
     ///     Adds a value for the designated timestamp column.
     /// </summary>
     /// <param name="value">A timestamp</param>
@@ -179,6 +187,17 @@ public interface ISenderV1 : IDisposable
 
     /// <inheritdoc cref="AtAsync(DateTime, CancellationToken)" />
     public void At(long value, CancellationToken ct = default);
+
+    /// <summary>
+    ///     Adds exact nanosecond precision timestamp for the designated timestamp column.
+    /// </summary>
+    /// <param name="timestampNanos">Nanoseconds since Unix epoch</param>
+    /// <param name="ct">A cancellation token applied requests caused by auto-flushing</param>
+    /// <returns>Itself</returns>
+    public ValueTask AtNanosAsync(long timestampNanos, CancellationToken ct = default);
+
+    /// <inheritdoc cref="AtNanosAsync" />
+    public void AtNanos(long timestampNanos, CancellationToken ct = default);
 
     /// <inheritdoc cref="AtNowAsync" />
     [Obsolete("Not compatible with deduplication. Please use `At(DateTime.UtcNow)` instead.")]

@@ -122,6 +122,13 @@ internal abstract class AbstractSender : ISender
         return this;
     }
 
+    /// <inheritdoc />
+    public ISender ColumnNanos(ReadOnlySpan<char> name, long timestampNanos)
+    {
+        Buffer.ColumnNanos(name, timestampNanos);
+        return this;
+    }
+
     public ISender Column<T>(ReadOnlySpan<char> name, IEnumerable<T> value, IEnumerable<int> shape) where T : struct
     {
         Buffer.Column(name, value, shape);
@@ -193,6 +200,22 @@ internal abstract class AbstractSender : ISender
     {
         GuardLastFlushNotSet();
         Buffer.At(value);
+        FlushIfNecessary(ct);
+    }
+
+    /// <inheritdoc />
+    public ValueTask AtNanosAsync(long timestampNanos, CancellationToken ct = default)
+    {
+        GuardLastFlushNotSet();
+        Buffer.AtNanos(timestampNanos);
+        return FlushIfNecessaryAsync(ct);
+    }
+
+    /// <inheritdoc />
+    public void AtNanos(long timestampNanos, CancellationToken ct = default)
+    {
+        GuardLastFlushNotSet();
+        Buffer.AtNanos(timestampNanos);
         FlushIfNecessary(ct);
     }
 

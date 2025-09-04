@@ -747,7 +747,45 @@ public class HttpTests
         await sender.SendAsync();
 
         var expected =
-            "name ts=1645660800000000t 1645660800000000000\n";
+            "name ts=1645660800000000000n 1645660800000000000\n";
+        Assert.That(srv.PrintBuffer(), Is.EqualTo(expected));
+    }
+
+    [Test]
+    public async Task SendColumnNanos()
+    {
+        using var srv = new DummyHttpServer();
+        await srv.StartAsync(HttpPort);
+        using var sender = Sender.New($"http::addr={Host}:{HttpPort};auto_flush=off;");
+
+        const long timestampNanos = 1645660800123456789L;
+        await sender.Table("name")
+                    .ColumnNanos("ts", timestampNanos)
+                    .AtAsync(timestampNanos);
+
+        await sender.SendAsync();
+
+        var expected =
+            "name ts=1645660800123456789n 1645660800123456789\n";
+        Assert.That(srv.PrintBuffer(), Is.EqualTo(expected));
+    }
+
+    [Test]
+    public async Task SendAtNanos()
+    {
+        using var srv = new DummyHttpServer();
+        await srv.StartAsync(HttpPort);
+        using var sender = Sender.New($"http::addr={Host}:{HttpPort};auto_flush=off;");
+
+        const long timestampNanos = 1645660800987654321L;
+        await sender.Table("name")
+                    .Column("value", 42)
+                    .AtNanosAsync(timestampNanos);
+
+        await sender.SendAsync();
+
+        var expected =
+            "name value=42i 1645660800987654321\n";
         Assert.That(srv.PrintBuffer(), Is.EqualTo(expected));
     }
 
@@ -1163,7 +1201,7 @@ public class HttpTests
         await sender.CommitAsync();
 
         var expected =
-            "tableName,foo=bah 86400000000000\ntableName foo=123i 86400000000000\ntableName foo=123 86400000000000\ntableName foo=0t 86400000000000\ntableName foo=-3600000000t 86400000000000\ntableName foo=f 86400000000000\n";
+            "tableName,foo=bah 86400000000000\ntableName foo=123i 86400000000000\ntableName foo=123 86400000000000\ntableName foo=0n 86400000000000\ntableName foo=-3600000000000n 86400000000000\ntableName foo=f 86400000000000\n";
         Assert.That(srv.PrintBuffer(), Is.EqualTo(expected));
     }
 

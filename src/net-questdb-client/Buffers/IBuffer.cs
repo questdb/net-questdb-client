@@ -141,6 +141,14 @@ public interface IBuffer
     public IBuffer Column(ReadOnlySpan<char> name, DateTimeOffset timestamp);
 
     /// <summary>
+    ///     Set value of TIMESTAMP column with exact nanosecond precision.
+    /// </summary>
+    /// <param name="name">Column name</param>
+    /// <param name="timestampNanos">Nanoseconds since Unix epoch</param>
+    /// <returns>Itself</returns>
+    public IBuffer ColumnNanos(ReadOnlySpan<char> name, long timestampNanos);
+
+    /// <summary>
     ///     Finishes the line without specifying Designated Timestamp. QuestDB will set the timestamp at the time of writing to
     ///     the table.
     /// </summary>
@@ -163,6 +171,12 @@ public interface IBuffer
     /// </summary>
     /// <param name="epochNano">Nanoseconds since Unix epoch</param>
     public void At(long epochNano);
+
+    /// <summary>
+    ///     Finishes the line setting timestamp with exact nanosecond precision.
+    /// </summary>
+    /// <param name="timestampNanos">Nanoseconds since Unix epoch</param>
+    public void AtNanos(long timestampNanos);
 
     /// <summary>
     ///     Clears the buffer.

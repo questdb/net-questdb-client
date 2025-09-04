@@ -126,6 +126,13 @@ public class BufferV1 : IBuffer
     }
 
     /// <inheritdoc />
+    public void AtNanos(long timestampNanos)
+    {
+        PutAscii(' ').Put(timestampNanos);
+        FinishLine();
+    }
+
+    /// <inheritdoc />
     public void Clear()
     {
         _currentBufferIndex = 0;
@@ -317,7 +324,7 @@ public class BufferV1 : IBuffer
         }
 
         var epoch = timestamp.Ticks - EpochTicks;
-        Column(name).Put(epoch * 100).PutAscii('n');
+        Column(name).Put(epoch).PutAscii('0').PutAscii('0').PutAscii('n');
         return this;
     }
 
@@ -330,6 +337,18 @@ public class BufferV1 : IBuffer
         }
 
         Column(name, timestamp.UtcDateTime);
+        return this;
+    }
+
+    /// <inheritdoc />
+    public IBuffer ColumnNanos(ReadOnlySpan<char> name, long timestampNanos)
+    {
+        if (WithinTransaction && !_hasTable)
+        {
+            Table(_currentTableName);
+        }
+
+        Column(name).Put(timestampNanos).PutAscii('n');
         return this;
     }
 

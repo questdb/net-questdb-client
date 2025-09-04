@@ -752,6 +752,44 @@ public class HttpTests
     }
 
     [Test]
+    public async Task SendColumnNanos()
+    {
+        using var srv = new DummyHttpServer();
+        await srv.StartAsync(HttpPort);
+        using var sender = Sender.New($"http::addr={Host}:{HttpPort};auto_flush=off;");
+
+        const long timestampNanos = 1645660800123456789L;
+        await sender.Table("name")
+                    .ColumnNanos("ts", timestampNanos)
+                    .AtAsync(timestampNanos);
+
+        await sender.SendAsync();
+
+        var expected =
+            "name ts=1645660800123456789n 1645660800123456789\n";
+        Assert.That(srv.PrintBuffer(), Is.EqualTo(expected));
+    }
+
+    [Test]
+    public async Task SendAtNanos()
+    {
+        using var srv = new DummyHttpServer();
+        await srv.StartAsync(HttpPort);
+        using var sender = Sender.New($"http::addr={Host}:{HttpPort};auto_flush=off;");
+
+        const long timestampNanos = 1645660800987654321L;
+        await sender.Table("name")
+                    .Column("value", 42)
+                    .AtNanosAsync(timestampNanos);
+
+        await sender.SendAsync();
+
+        var expected =
+            "name value=42i 1645660800987654321\n";
+        Assert.That(srv.PrintBuffer(), Is.EqualTo(expected));
+    }
+
+    [Test]
     public async Task InvalidState()
     {
         using var srv = new DummyHttpServer();

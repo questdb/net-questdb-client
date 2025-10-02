@@ -27,6 +27,7 @@
 using System.Buffers.Text;
 using System.Net.Security;
 using System.Net.Sockets;
+using System.Security.Cryptography.X509Certificates;
 using QuestDB.Enums;
 using QuestDB.Utils;
 using ProtocolType = QuestDB.Enums.ProtocolType;
@@ -82,6 +83,12 @@ internal class TcpSender : AbstractSender
                     RemoteCertificateValidationCallback =
                         Options.tls_verify == TlsVerifyType.unsafe_off ? AllowAllCertCallback : null,
                 };
+
+                if (Options.client_cert is not null)
+                {
+                    sslOptions.ClientCertificates ??= new X509CertificateCollection();
+                    sslOptions.ClientCertificates.Add(Options.client_cert);
+                }
 
                 sslStream.AuthenticateAsClient(sslOptions);
                 if (!sslStream.IsEncrypted)

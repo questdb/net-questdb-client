@@ -28,6 +28,7 @@
 using System.Data.Common;
 using System.Reflection;
 using System.Runtime.CompilerServices;
+using System.Security.Cryptography.X509Certificates;
 using System.Text.Json.Serialization;
 using QuestDB.Enums;
 using QuestDB.Senders;
@@ -81,6 +82,7 @@ public record SenderOptions
     private string? _tokenX;
     private string? _tokenY;
     private string? _username;
+    private X509Certificate2? _clientCert;
 
     /// <summary>
     ///     Construct a <see cref="SenderOptions" /> object with default values.
@@ -473,6 +475,15 @@ public record SenderOptions
         }
     }
 
+    /// <summary>
+    ///     Specifies a client certificate to be used for TLS authentication.
+    /// </summary>
+    public X509Certificate2? client_cert
+    {
+        get => _clientCert;
+        set => _clientCert = value;
+    }
+
     private void ParseIntWithDefault(string name, string defaultValue, out int field)
     {
         if (!int.TryParse(ReadOptionFromBuilder(name) ?? defaultValue, out field))
@@ -647,5 +658,18 @@ public record SenderOptions
     public ISender Build()
     {
         return Sender.New(this);
+    }
+
+    /// <summary>
+    ///     Sets a client certificate to be used for TLS authentication.
+    /// </summary>
+    /// <param name="cert"></param>
+    /// <returns></returns>
+    public SenderOptions WithClientCert(X509Certificate2 cert)
+    {
+        return this with
+        {
+            _clientCert = cert,
+        };
     }
 }

@@ -708,7 +708,7 @@ public class HttpTests
     }
 
     [Test]
-    public async Task SerialiseDoubles()
+    public async Task SerialiseDoublesV2()
     {
         using var srv = new DummyHttpServer();
         await srv.StartAsync(HttpPort);
@@ -728,7 +728,32 @@ public class HttpTests
         await ls.SendAsync();
 
         var expected =
-            "doubles d0=0,dm0=-0,d1=1,dE100=1E+100,d0000001=1E-06,dNaN=NaN,dInf=∞,dNInf=-∞ 86400000000000\n";
+            "doubles d0=0,dm0=-0,d1=1,dE100=1E+100,d0000001=1E-06,dNaN=NaN,dInf=Infinity,dNInf=-Infinity 86400000000000\n";
+        Assert.That(srv.PrintBuffer(), Is.EqualTo(expected));
+    }
+    
+    [Test]
+    public async Task SerialiseDoublesV1()
+    {
+        using var srv = new DummyHttpServer();
+        await srv.StartAsync(HttpPort);
+
+        using var ls = Sender.New($"http::addr={Host}:{HttpPort};auto_flush=off;protocol_version=1;");
+
+        await ls.Table("doubles")
+                .Column("d0", 0.0)
+                .Column("dm0", -0.0)
+                .Column("d1", 1.0)
+                .Column("dE100", 1E100)
+                .Column("d0000001", 0.000001)
+                .Column("dNaN", double.NaN)
+                .Column("dInf", double.PositiveInfinity)
+                .Column("dNInf", double.NegativeInfinity)
+                .AtAsync(86400000000000);
+        await ls.SendAsync();
+
+        var expected =
+            "doubles d0=0,dm0=-0,d1=1,dE100=1E+100,d0000001=1E-06,dNaN=NaN,dInf=Infinity,dNInf=-Infinity 86400000000000\n";
         Assert.That(srv.PrintBuffer(), Is.EqualTo(expected));
     }
 
@@ -1193,15 +1218,14 @@ public class HttpTests
         await sender.Transaction("tableName").Symbol("foo", "bah").AtAsync(86400000000000);
         await sender.Column("foo", 123).AtAsync(86400000000000);
         await sender.Column("foo", 123d).AtAsync(86400000000000);
-        await sender.Column("foo", new DateTime(1970, 1, 1)).AtAsync(86400000000000);
-        await sender.Column("foo", new DateTimeOffset(new DateTime(1970, 1, 1))).AtAsync(86400000000000);
+        await sender.Column("foo", new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc)).AtAsync(86400000000000);
+        await sender.Column("foo", new DateTimeOffset(new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc))).AtAsync(86400000000000);
         await sender.Column("foo", false).AtAsync(86400000000000);
-
 
         await sender.CommitAsync();
 
         var expected =
-            "tableName,foo=bah 86400000000000\ntableName foo=123i 86400000000000\ntableName foo=123 86400000000000\ntableName foo=0n 86400000000000\ntableName foo=-3600000000000n 86400000000000\ntableName foo=f 86400000000000\n";
+            "tableName,foo=bah 86400000000000\ntableName foo=123i 86400000000000\ntableName foo=123 86400000000000\ntableName foo=0n 86400000000000\ntableName foo=0n 86400000000000\ntableName foo=f 86400000000000\n";
         Assert.That(srv.PrintBuffer(), Is.EqualTo(expected));
     }
 

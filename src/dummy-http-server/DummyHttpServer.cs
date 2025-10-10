@@ -24,6 +24,7 @@
 
 
 using System.Diagnostics;
+using System.Globalization;
 using System.Runtime.InteropServices;
 using System.Text;
 using FastEndpoints;
@@ -236,7 +237,7 @@ public class DummyHttpServer : IDisposable
                         case 16:
                             sb.Remove(sb.Length - 1, 1);
                             var doubleValue = MemoryMarshal.Cast<byte, double>(bytes.AsSpan().Slice(++i, 8));
-                            sb.Append(doubleValue[0]);
+                            sb.Append(doubleValue[0].ToString(CultureInfo.InvariantCulture));
                             i += 8;
                             i--;
                             break;

@@ -73,6 +73,18 @@ steps:
     projects: 'net-questdb-client.sln'
     arguments: '--configuration $(buildConfiguration) --no-restore'
 
+- script: dotnet dev-certs https --trust
+  displayName: 'Trust HTTPS dev certificate'
+  condition: eq(variables['Agent.OS'], 'Windows_NT')
+  continueOnError: true
+
+- script: |
+    dotnet dev-certs https --clean
+    dotnet dev-certs https
+  displayName: 'Setup HTTPS dev certificate (Linux/macOS)'
+  condition: ne(variables['Agent.OS'], 'Windows_NT')
+  continueOnError: true
+
 - task: DotNetCoreCLI@2
   displayName: 'Run tests on $(osName)'
   inputs:

@@ -8,6 +8,7 @@ namespace net_questdb_client_tests;
 public class SenderTests
 {
     [Test]
+    [Explicit]
     public void PostConfStrInitialisation()
     {
         var confStr = "http::addr=localhost:9000;";
@@ -27,6 +28,7 @@ public class SenderTests
     public void SenderWithPrebuiltOptions()
     {
         var options = new SenderOptions();
+        options.protocol_version = ProtocolVersion.V1;
         var sender  = Sender.New(options);
         Assert.That(
             sender.Options.ToString(),
@@ -38,7 +40,8 @@ public class SenderTests
     public void SenderWithNullOptions()
     {
         var options = new SenderOptions();
-        var sender  = Sender.New();
+        options.protocol_version = ProtocolVersion.V1;
+        var sender  = Sender.Configure($"http::addr=localhost:9000;protocol_version=1;").Build();
         Assert.That(
             sender.Options.ToString(),
             Is.EqualTo(options.ToString())

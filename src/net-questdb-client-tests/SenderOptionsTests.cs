@@ -99,11 +99,11 @@ public class SenderOptionsTests
     [Test]
     public void UseOffInAutoFlushSettings()
     {
-        var sender =
-            Sender.New(
+        var senderOptions =
+            new SenderOptions(
                 "http::addr=localhost:9000;auto_flush=on;auto_flush_rows=off;auto_flush_bytes=off;auto_flush_interval=off;");
 
-        Assert.That(sender.Options.ToString(),
+        Assert.That(senderOptions.ToString(),
                     Is.EqualTo(
                         "http::addr=localhost:9000;auth_timeout=15000;auto_flush=on;auto_flush_bytes=-1;auto_flush_interval=-1;auto_flush_rows=-1;init_buf_size=65536;max_buf_size=104857600;max_name_len=127;pool_timeout=120000;protocol_version=Auto;request_min_throughput=102400;request_timeout=10000;retry_timeout=10000;tls_verify=on;"));
     }

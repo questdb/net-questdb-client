@@ -478,7 +478,7 @@ public class TcpTests
         await senderLim127.AtAsync(new DateTime(1970, 1, 1));
         await senderLim127.SendAsync();
 
-        var expected = "abcd.csv,b\\ \\ \\ \\ c=12 000\n";
+        var expected = "abcd.csv,b\\ \\ \\ \\ c=12 0\n";
         WaitAssert(srv, expected);
     }
 

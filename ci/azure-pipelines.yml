@@ -1,0 +1,89 @@
+# Azure Pipeline for net-questdb-client
+# Triggers on pull requests to main branch
+
+trigger: none
+
+pr:
+  branches:
+    include:
+      - main
+
+variables:
+  buildConfiguration: 'Release'
+  dotnetVersion: '9.0.x'
+
+strategy:
+  matrix:
+    Linux:
+      vmImage: 'ubuntu-latest'
+      osName: 'Linux'
+    Windows:
+      vmImage: 'windows-latest'
+      osName: 'Windows'
+    macOS:
+      vmImage: 'macOS-latest'
+      osName: 'macOS'
+
+pool:
+  vmImage: $(vmImage)
+
+steps:
+- checkout: self
+  submodules: true
+  displayName: 'Checkout code with submodules'
+
+- task: UseDotNet@2
+  displayName: 'Install .NET 6.0 SDK'
+  inputs:
+    packageType: 'sdk'
+    version: '6.0.x'
+    installationPath: $(Agent.ToolsDirectory)/dotnet
+
+- task: UseDotNet@2
+  displayName: 'Install .NET 7.0 SDK'
+  inputs:
+    packageType: 'sdk'
+    version: '7.0.x'
+    installationPath: $(Agent.ToolsDirectory)/dotnet
+
+- task: UseDotNet@2
+  displayName: 'Install .NET 8.0 SDK'
+  inputs:
+    packageType: 'sdk'
+    version: '8.0.x'
+    installationPath: $(Agent.ToolsDirectory)/dotnet
+
+- task: UseDotNet@2
+  displayName: 'Install .NET 9.0 SDK'
+  inputs:
+    packageType: 'sdk'
+    version: $(dotnetVersion)
+    installationPath: $(Agent.ToolsDirectory)/dotnet
+
+- task: DotNetCoreCLI@2
+  displayName: 'Restore dependencies'
+  inputs:
+    command: 'restore'
+    projects: 'net-questdb-client.sln'
+
+- task: DotNetCoreCLI@2
+  displayName: 'Build solution'
+  inputs:
+    command: 'build'
+    projects: 'net-questdb-client.sln'
+    arguments: '--configuration $(buildConfiguration) --no-restore'
+
+- task: DotNetCoreCLI@2
+  displayName: 'Run tests on $(osName)'
+  inputs:
+    command: 'test'
+    projects: 'src/net-questdb-client-tests/net-questdb-client-tests.csproj'
+    arguments: '--configuration $(buildConfiguration) --framework net9.0 --no-build --verbosity normal --logger trx --collect:"XPlat Code Coverage"'
+    publishTestResults: true
+
+- task: PublishCodeCoverageResults@2
+  displayName: 'Publish code coverage'
+  inputs:
+    summaryFileLocation: '$(Agent.TempDirectory)/**/coverage.cobertura.xml'
+    codecoverageTool: 'cobertura'
+  condition: succeededOrFailed()

@@ -33,7 +33,28 @@ steps:
   displayName: 'Checkout code with submodules'
 
 - task: UseDotNet@2
-  displayName: 'Install .NET SDK on $(osName)'
+  displayName: 'Install .NET 6.0 SDK'
+  inputs:
+    packageType: 'sdk'
+    version: '6.0.x'
+    installationPath: $(Agent.ToolsDirectory)/dotnet
+
+- task: UseDotNet@2
+  displayName: 'Install .NET 7.0 SDK'
+  inputs:
+    packageType: 'sdk'
+    version: '7.0.x'
+    installationPath: $(Agent.ToolsDirectory)/dotnet
+
+- task: UseDotNet@2
+  displayName: 'Install .NET 8.0 SDK'
+  inputs:
+    packageType: 'sdk'
+    version: '8.0.x'
+    installationPath: $(Agent.ToolsDirectory)/dotnet
+
+- task: UseDotNet@2
+  displayName: 'Install .NET 9.0 SDK'
   inputs:
     packageType: 'sdk'
     version: $(dotnetVersion)
@@ -57,7 +78,7 @@ steps:
   inputs:
     command: 'test'
     projects: 'src/net-questdb-client-tests/net-questdb-client-tests.csproj'
-    arguments: '--configuration $(buildConfiguration) --no-build --verbosity normal --logger trx --collect:"XPlat Code Coverage"'
+    arguments: '--configuration $(buildConfiguration) --framework net9.0 --no-build --verbosity normal --logger trx --collect:"XPlat Code Coverage"'
     publishTestResults: true
 
 - task: PublishCodeCoverageResults@2

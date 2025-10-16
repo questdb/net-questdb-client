@@ -42,15 +42,13 @@ public static class Buffer
     /// <exception cref="NotImplementedException"></exception>
     public static IBuffer Create(int bufferSize, int maxNameLen, int maxBufSize, ProtocolVersion version)
     {
-        switch (version)
+        return version switch
         {
-            case ProtocolVersion.V1:
-                return new BufferV1(bufferSize, maxNameLen, maxBufSize);
-            case ProtocolVersion.V2:
-            case ProtocolVersion.Auto:
-                return new BufferV2(bufferSize, maxNameLen, maxBufSize);
-        }
-
-        throw new NotImplementedException();
+            ProtocolVersion.V1 => new BufferV1(bufferSize, maxNameLen, maxBufSize),
+            ProtocolVersion.V2 => new BufferV2(bufferSize, maxNameLen, maxBufSize),
+            ProtocolVersion.V3 => new BufferV3(bufferSize, maxNameLen, maxBufSize),
+            ProtocolVersion.Auto => new BufferV2(bufferSize, maxNameLen, maxBufSize),
+            _ => throw new NotImplementedException(),
+        };
     }
 }

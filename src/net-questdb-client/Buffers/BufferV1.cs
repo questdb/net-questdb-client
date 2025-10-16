@@ -136,17 +136,17 @@ public class BufferV1 : IBuffer
     public void Clear()
     {
         _currentBufferIndex = 0;
-        Chunk               = _buffers[_currentBufferIndex].Buffer;
+        Chunk = _buffers[_currentBufferIndex].Buffer;
         for (var i = 0; i < _buffers.Count; i++)
         {
             _buffers[i] = (_buffers[i].Buffer, 0);
         }
 
-        Position              = 0;
-        RowCount              = 0;
-        Length                = 0;
-        WithinTransaction     = false;
-        _currentTableName     = "";
+        Position = 0;
+        RowCount = 0;
+        Length = 0;
+        WithinTransaction = false;
+        _currentTableName = "";
         _lineStartBufferIndex = 0;
         _lineStartBufferPosition = 0;
     }
@@ -164,10 +164,10 @@ public class BufferV1 : IBuffer
     /// <inheritdoc />
     public void CancelRow()
     {
-        _currentBufferIndex =  _lineStartBufferIndex;
-        Length              -= Position - _lineStartBufferPosition;
-        Position            =  _lineStartBufferPosition;
-        _hasTable           =  false;
+        _currentBufferIndex = _lineStartBufferIndex;
+        Length -= Position - _lineStartBufferPosition;
+        Position = _lineStartBufferPosition;
+        _hasTable = false;
     }
 
     /// <inheritdoc />
@@ -236,10 +236,10 @@ public class BufferV1 : IBuffer
         GuardTableAlreadySet();
         GuardInvalidTableName(name);
 
-        _quoted   = false;
+        _quoted = false;
         _hasTable = true;
 
-        _lineStartBufferIndex    = _currentBufferIndex;
+        _lineStartBufferIndex = _currentBufferIndex;
         _lineStartBufferPosition = Position;
 
         EncodeUtf8(name);
@@ -394,14 +394,14 @@ public class BufferV1 : IBuffer
                                    new ArgumentOutOfRangeException());
         }
 
-        Span<byte> num       = stackalloc byte[20];
-        var        pos       = num.Length;
-        var        remaining = Math.Abs(value);
+        Span<byte> num = stackalloc byte[20];
+        var pos = num.Length;
+        var remaining = Math.Abs(value);
         do
         {
             var digit = remaining % 10;
-            num[--pos] =  (byte)('0' + digit);
-            remaining  /= 10;
+            num[--pos] = (byte)('0' + digit);
+            remaining /= 10;
         } while (remaining != 0);
 
         if (value < 0)
@@ -414,7 +414,7 @@ public class BufferV1 : IBuffer
 
         num.Slice(pos, len).CopyTo(Chunk.AsSpan(Position));
         Position += len;
-        Length   += len;
+        Length += len;
 
         return this;
     }
@@ -457,7 +457,7 @@ public class BufferV1 : IBuffer
     internal void Advance(int by)
     {
         Position += by;
-        Length   += by;
+        Length += by;
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -474,8 +474,8 @@ public class BufferV1 : IBuffer
     {
         PutAscii('\n');
         RowCount++;
-        _hasTable  = false;
-        _noFields  = true;
+        _hasTable = false;
+        _noFields = true;
         _noSymbols = true;
         GuardExceededMaxBufferSize();
     }
@@ -540,9 +540,9 @@ public class BufferV1 : IBuffer
             NextBuffer();
         }
 
-        var        bytes      = Chunk.AsSpan(Position);
-        Span<char> chars      = stackalloc char[1] { c, };
-        var        byteLength = Encoding.UTF8.GetBytes(chars, bytes);
+        var bytes = Chunk.AsSpan(Position);
+        Span<char> chars = stackalloc char[1] { c, };
+        var byteLength = Encoding.UTF8.GetBytes(chars, bytes);
         Advance(byteLength);
     }
 
@@ -788,5 +788,10 @@ public class BufferV1 : IBuffer
             throw new IngressError(ErrorCode.InvalidApiCall,
                                    $"Name is too long, must be under {_maxNameLen} bytes.");
         }
+    }
+
+    public virtual IBuffer Column(ReadOnlySpan<char> name, decimal? value)
+    {
+        throw new IngressError(ErrorCode.ProtocolVersionError, "Protocol Version does not support DECIMAL types");
     }
 }

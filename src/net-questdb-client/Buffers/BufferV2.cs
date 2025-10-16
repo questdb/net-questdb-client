@@ -95,10 +95,9 @@ public class BufferV2 : BufferV1
     {
         var size = Marshal.SizeOf<T>();
         EnsureCapacity(size);
-        var length = Marshal.SizeOf<T>();
-        var mem    = MemoryMarshal.Cast<byte, T>(Chunk.AsSpan(Position, length));
+        var mem = MemoryMarshal.Cast<byte, T>(Chunk.AsSpan(Position, size));
         mem[0] = value;
-        Advance(length);
+        Advance(size);
     }
 
     // ReSharper disable once InconsistentNaming
@@ -114,16 +113,16 @@ public class BufferV2 : BufferV1
     // ReSharper disable once InconsistentNaming
     private void PutBinaryManyLE<T>(ReadOnlySpan<T> value) where T : struct
     {
-        var srcSpan  = MemoryMarshal.Cast<T, byte>(value);
+        var srcSpan = MemoryMarshal.Cast<T, byte>(value);
         var byteSize = Marshal.SizeOf<T>();
 
         while (srcSpan.Length > 0)
         {
-            var dstLength   = GetSpareCapacity();               // length
+            var dstLength = GetSpareCapacity();               // length
             if (dstLength < byteSize)
             {
                 NextBuffer();
-                dstLength   = GetSpareCapacity();
+                dstLength = GetSpareCapacity();
             }
             var availLength = dstLength - dstLength % byteSize; // rounded length
 
@@ -133,7 +132,7 @@ public class BufferV2 : BufferV1
                 Advance(srcSpan.Length);
                 return;
             }
-            var dstSpan     = Chunk.AsSpan(Position, availLength);
+            var dstSpan = Chunk.AsSpan(Position, availLength);
             srcSpan.Slice(0, availLength).CopyTo(dstSpan);
             Advance(availLength);
             srcSpan = srcSpan.Slice(availLength);
@@ -180,7 +179,7 @@ public class BufferV2 : BufferV1
         return PutDoubleArray(name, value);
     }
 
-    private IBuffer PutDoubleArray<T>(ReadOnlySpan<char> name, ReadOnlySpan<T> value)  where T : struct
+    private IBuffer PutDoubleArray<T>(ReadOnlySpan<char> name, ReadOnlySpan<T> value) where T : struct
     {
         SetTableIfAppropriate();
         PutArrayOfDoubleHeader(name);
@@ -199,7 +198,7 @@ public class BufferV2 : BufferV1
             // The value is null, do not include the column in the message
             return this;
         }
-        
+
         var type = value.GetType().GetElementType();
         GuardAgainstNonDoubleTypes(type ?? throw new InvalidOperationException());
         if (value.Rank == 1)
@@ -207,7 +206,7 @@ public class BufferV2 : BufferV1
             // Fast path, one dim array
             return PutDoubleArray(name, (ReadOnlySpan<double>)value!);
         }
-        
+
         SetTableIfAppropriate();
         PutArrayOfDoubleHeader(name);
 

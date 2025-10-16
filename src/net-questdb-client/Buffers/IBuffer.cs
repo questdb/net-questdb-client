@@ -230,7 +230,14 @@ public interface IBuffer
 
     /// <summary />
     public IBuffer Column(ReadOnlySpan<char> name, Array? value);
-    
+
     /// <summary />
     public IBuffer Column<T>(ReadOnlySpan<char> name, IEnumerable<T> value, IEnumerable<int> shape) where T : struct;
+
+    /// <summary>
+    ///     Records a DECIMAL column value using the ILP binary decimal layout:
+    ///     '=' marker, decimal type id (23), scale byte, mantissa length, and a big-endian
+    ///     two's complement mantissa sourced from <see cref="decimal.GetBits(decimal)" />.
+    /// </summary>
+    public IBuffer Column(ReadOnlySpan<char> name, decimal? value);
 }

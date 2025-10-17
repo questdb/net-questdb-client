@@ -94,7 +94,12 @@ internal abstract class AbstractSender : ISender
         return this;
     }
 
-    /// <inheritdoc />
+    /// <summary>
+    /// Appends an integer-valued column with the specified name to the current buffered row.
+    /// </summary>
+    /// <param name="name">The column name.</param>
+    /// <param name="value">The integer value to append for the column.</param>
+    /// <returns>The same <see cref="ISender"/> instance to allow fluent chaining.</returns>
     public ISender Column(ReadOnlySpan<char> name, int value)
     {
         Buffer.Column(name, value);
@@ -311,6 +316,9 @@ internal abstract class AbstractSender : ISender
         }
     }
 
+    /// <summary>
+    /// Sets <see cref="LastFlush"/> to the current UTC time if it has not been initialized.
+    /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void GuardLastFlushNotSet()
     {
@@ -320,6 +328,12 @@ internal abstract class AbstractSender : ISender
         }
     }
 
+    /// <summary>
+    /// Adds a nullable decimal column value to the current row in the buffer.
+    /// </summary>
+    /// <param name="name">The column name.</param>
+    /// <param name="value">The decimal value to write, or <c>null</c> to emit a null for the column.</param>
+    /// <returns>The same <see cref="ISender"/> instance for fluent chaining.</returns>
     public ISender Column(ReadOnlySpan<char> name, decimal? value)
     {
         Buffer.Column(name, value);

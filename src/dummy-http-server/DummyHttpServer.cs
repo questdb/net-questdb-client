@@ -42,6 +42,15 @@ public class DummyHttpServer : IDisposable
     private int _port = 29743;
     private readonly TimeSpan? _withStartDelay;
 
+    /// <summary>
+    /// Initializes a configurable in-process dummy HTTP server used for testing endpoints.
+    /// </summary>
+    /// <param name="withTokenAuth">If true, enable JWT bearer authentication and authorization.</param>
+    /// <param name="withBasicAuth">If true, enable basic authentication behavior in the test endpoint.</param>
+    /// <param name="withRetriableError">If true, configure the test endpoint to produce retriable error responses.</param>
+    /// <param name="withErrorMessage">If true, include error messages in test error responses.</param>
+    /// <param name="withStartDelay">Optional delay applied when starting the server.</param>
+    /// <param name="requireClientCert">If true, require client TLS certificates for HTTPS connections.</param>
     public DummyHttpServer(bool withTokenAuth = false, bool withBasicAuth = false, bool withRetriableError = false,
                            bool withErrorMessage = false, TimeSpan? withStartDelay = null, bool requireClientCert = false)
     {
@@ -108,6 +117,13 @@ public class DummyHttpServer : IDisposable
         _app.StopAsync().Wait();
     }
 
+    /// <summary>
+    /// Clears the in-memory receive buffers and resets the endpoint error state and counter.
+    /// </summary>
+    /// <remarks>
+    /// Empties IlpEndpoint.ReceiveBuffer and IlpEndpoint.ReceiveBytes, sets IlpEndpoint.LastError to null,
+    /// and sets IlpEndpoint.Counter to zero.
+    /// </remarks>
     public void Clear()
     {
         IlpEndpoint.ReceiveBuffer.Clear();
@@ -116,6 +132,12 @@ public class DummyHttpServer : IDisposable
         IlpEndpoint.Counter = 0;
     }
 
+    /// <summary>
+    /// Starts the HTTP server on the specified port and configures the supported protocol versions.
+    /// </summary>
+    /// <param name="port">Port to listen on (defaults to 29743).</param>
+    /// <param name="versions">Array of supported protocol versions; defaults to {1, 2, 3} when null.</param>
+    /// <returns>A task that completes after any configured startup delay has elapsed and the server's background run task has been initiated.</returns>
     public async Task StartAsync(int port = 29743, int[]? versions = null)
     {
         if (_withStartDelay.HasValue)
@@ -128,6 +150,9 @@ public class DummyHttpServer : IDisposable
         _ = _app.RunAsync($"http://localhost:{port}");
     }
 
+    /// <summary>
+    /// Starts the web application and listens for HTTP requests on http://localhost:{_port}.
+    /// </summary>
     public async Task RunAsync()
     {
         await _app.RunAsync($"http://localhost:{_port}");
@@ -138,11 +163,19 @@ public class DummyHttpServer : IDisposable
         await _app.StopAsync();
     }
 
+    /// <summary>
+    /// Gets the server's in-memory text buffer of received data.
+    /// </summary>
+    /// <returns>The mutable <see cref="StringBuilder"/> containing the accumulated received text; modifying it updates the server's buffer.</returns>
     public StringBuilder GetReceiveBuffer()
     {
         return IlpEndpoint.ReceiveBuffer;
     }
 
+    /// <summary>
+    /// Gets the in-memory list of bytes received by the ILP endpoint.
+    /// </summary>
+    /// <returns>The mutable list of bytes received by the endpoint.</returns>
     public List<byte> GetReceivedBytes()
     {
         return IlpEndpoint.ReceiveBytes;
@@ -160,6 +193,10 @@ public class DummyHttpServer : IDisposable
     }
 
 
+    /// <summary>
+    /// Generates a JWT for the test server when the provided credentials match the server's static username and password.
+    /// </summary>
+    /// <returns>The JWT string when credentials are valid; <c>null</c> otherwise. The issued token is valid for one day.</returns>
     public string? GetJwtToken(string username, string password)
     {
         if (username == Username && password == Password)
@@ -180,6 +217,11 @@ public class DummyHttpServer : IDisposable
         return IlpEndpoint.Counter;
     }
 
+    /// <summary>
+    /// Produces a human-readable string representation of the server's received-bytes buffer, interpreting embedded markers and formatting arrays and numeric values.
+    /// </summary>
+    /// <returns>The formatted textual representation of the received bytes buffer.</returns>
+    /// <exception cref="NotImplementedException">Thrown when the buffer contains an unsupported type code.</exception>
     public string PrintBuffer()
     {
         var bytes = GetReceivedBytes().ToArray();

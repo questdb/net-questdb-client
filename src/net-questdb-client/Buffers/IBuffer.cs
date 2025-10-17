@@ -228,14 +228,30 @@ public interface IBuffer
     /// <summary />
     public IBuffer Column<T>(ReadOnlySpan<char> name, ReadOnlySpan<T> value) where T : struct;
 
-    /// <summary />
+    /// <summary>
+    /// Writes an array column value for the current row.
+    /// </summary>
+    /// <param name="name">The column name.</param>
+    /// <param name="value">The array to write as the column value, or null to record a NULL value.</param>
+    /// <returns>The same buffer instance for fluent chaining.</returns>
     public IBuffer Column(ReadOnlySpan<char> name, Array? value);
 
-    /// <summary />
+    /// <summary>
+    /// Writes a column with the specified name using the provided enumerable of values and shape information.
+    /// </summary>
+    /// <param name="name">The column name.</param>
+    /// <param name="value">An enumerable of values for the column; elements are of the value type `T`.</param>
+    /// <param name="shape">An enumerable of integers describing the multidimensional shape/length(s) for the values.</param>
+    /// <returns>The same <see cref="IBuffer"/> instance for call chaining.</returns>
     public IBuffer Column<T>(ReadOnlySpan<char> name, IEnumerable<T> value, IEnumerable<int> shape) where T : struct;
 
     /// <summary>
     ///     Records a DECIMAL column value using the ILP binary decimal layout.
+    /// <summary>
+    /// Writes a DECIMAL column with the specified name using the ILP binary decimal layout.
     /// </summary>
+    /// <param name="name">The column name.</param>
+    /// <param name="value">The decimal value to write, or `null` to write a NULL column.</param>
+    /// <returns>The buffer instance for method chaining.</returns>
     public IBuffer Column(ReadOnlySpan<char> name, decimal? value);
 }

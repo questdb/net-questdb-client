@@ -236,8 +236,6 @@ public interface ISender : IDisposable
     public void CancelRow();
 
     /// <summary>
-    ///     Clears the sender's buffer.
-    /// <summary>
     /// Clears the sender's internal buffer and resets buffer-related state, removing all pending rows.
     /// </summary>
     public void Clear();

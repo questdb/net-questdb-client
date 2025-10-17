@@ -47,7 +47,7 @@ public static class Buffer
             ProtocolVersion.V1 => new BufferV1(bufferSize, maxNameLen, maxBufSize),
             ProtocolVersion.V2 => new BufferV2(bufferSize, maxNameLen, maxBufSize),
             ProtocolVersion.V3 => new BufferV3(bufferSize, maxNameLen, maxBufSize),
-            ProtocolVersion.Auto => new BufferV2(bufferSize, maxNameLen, maxBufSize),
+            ProtocolVersion.Auto => new BufferV3(bufferSize, maxNameLen, maxBufSize),
             _ => throw new NotImplementedException(),
         };
     }

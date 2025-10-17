@@ -95,6 +95,13 @@ internal abstract class AbstractSender : ISender
     }
 
     /// <inheritdoc />
+    public ISender Column(ReadOnlySpan<char> name, int value)
+    {
+        Buffer.Column(name, value);
+        return this;
+    }
+
+    /// <inheritdoc />
     public ISender Column(ReadOnlySpan<char> name, bool value)
     {
         Buffer.Column(name, value);
@@ -311,5 +318,11 @@ internal abstract class AbstractSender : ISender
         {
             LastFlush = DateTime.UtcNow;
         }
+    }
+
+    public ISender Column(ReadOnlySpan<char> name, decimal? value)
+    {
+        Buffer.Column(name, value);
+        return this;
     }
 }

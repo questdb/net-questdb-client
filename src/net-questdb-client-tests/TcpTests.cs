@@ -51,15 +51,59 @@ public class TcpTests
 
         using var sender = Sender.New($"tcp::addr={_host}:{_port};");
         await sender.Table("metric name")
-                    .Symbol("t a g", "v alu, e")
-                    .Column("number", 10)
-                    .Column("string", " -=\"")
-                    .AtAsync(new DateTime(1970, 01, 01, 0, 0, 1));
+            .Symbol("t a g", "v alu, e")
+            .Column("number", 10)
+            .Column("string", " -=\"")
+            .AtAsync(new DateTime(1970, 01, 01, 0, 0, 1));
         await sender.SendAsync();
 
 
         var expected = "metric\\ name,t\\ a\\ g=v\\ alu\\,\\ e number=10i,string=\" -=\\\"\" 1000000000\n";
         WaitAssert(srv, expected);
+    }
+
+    [Test]
+    public async Task SendLineWithDecimalBinaryEncoding()
+    {
+        using var srv = CreateTcpListener(_port);
+        srv.AcceptAsync();
+
+        using var sender = Sender.New($"tcp::addr={_host}:{_port};protocol_version=3;");
+        await sender.Table("metrics")
+            .Symbol("tag", "value")
+            .Column("dec_pos", 123.45m)
+            .Column("dec_neg", -123.45m)
+            .Column("dec_null", (decimal?)null)
+            .Column("dec_max", decimal.MaxValue)
+            .Column("dec_min", decimal.MinValue)
+            .AtAsync(new DateTime(1970, 01, 01, 0, 0, 1));
+
+        await sender.SendAsync();
+
+        var buffer = WaitForLineBytes(srv);
+        DecimalTestHelpers.AssertDecimalField(buffer, "dec_pos", 2, new byte[]
+        {
+            0x30, 0x39,
+        });
+        DecimalTestHelpers.AssertDecimalField(buffer, "dec_neg", 2, new byte[]
+        {
+            0xCF, 0xC7,
+        });
+        DecimalTestHelpers.AssertDecimalNullField(buffer, "dec_null");
+        DecimalTestHelpers.AssertDecimalField(buffer, "dec_max", 0, new byte[]
+        {
+            0x00,
+            0xFF, 0xFF, 0xFF, 0xFF,
+            0xFF, 0xFF, 0xFF, 0xFF,
+            0xFF, 0xFF, 0xFF, 0xFF,
+        });
+        DecimalTestHelpers.AssertDecimalField(buffer, "dec_min", 0, new byte[]
+        {
+            0xFF,
+            0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x01,
+        });
     }
 
     [Test]
@@ -70,18 +114,19 @@ public class TcpTests
 
         using var sender = Sender.New($"tcp::addr={_host}:{_port};protocol_version=2;");
         await sender.Table("metric name")
-                    .Symbol("t a g", "v alu, e")
-                    .Column("number", 10)
-                    .Column("string", " -=\"")
-                    .Column("array", new[]
-                    {
-                        1.2
-                    })
-                    .AtAsync(new DateTime(1970, 01, 01, 0, 0, 1));
+            .Symbol("t a g", "v alu, e")
+            .Column("number", 10)
+            .Column("string", " -=\"")
+            .Column("array", new[]
+            {
+                1.2
+            })
+            .AtAsync(new DateTime(1970, 01, 01, 0, 0, 1));
         await sender.SendAsync();
 
 
-        var expected = "metric\\ name,t\\ a\\ g=v\\ alu\\,\\ e number=10i,string=\" -=\\\"\",array==ARRAY<1>[1.2] 1000000000\n";
+        var expected =
+            "metric\\ name,t\\ a\\ g=v\\ alu\\,\\ e number=10i,string=\" -=\\\"\",array==ARRAY<1>[1.2] 1000000000\n";
         WaitAssert(srv, expected);
     }
 
@@ -96,13 +141,13 @@ public class TcpTests
         try
         {
             sender.Table("metric name")
-                  .Symbol("t a g", "v alu, e")
-                  .Column("number", 10)
-                  .Column("string", " -=\"")
-                  .Column("array", new[]
-                  {
-                      1.2
-                  });
+                .Symbol("t a g", "v alu, e")
+                .Column("number", 10)
+                .Column("string", " -=\"")
+                .Column("array", new[]
+                {
+                    1.2
+                });
         }
         catch (IngressError err)
         {
@@ -125,12 +170,12 @@ public class TcpTests
         for (var i = 0; i < lineCount; i++)
         {
             await sender.Table("table name")
-                        .Symbol("t a g", "v alu, e")
-                        .Column("number", 10)
-                        .Column("db l", 123.12)
-                        .Column("string", " -=\"")
-                        .Column("при вед", "медвед")
-                        .AtAsync(new DateTime(1970, 01, 01, 0, 0, 1));
+                .Symbol("t a g", "v alu, e")
+                .Column("number", 10)
+                .Column("db l", 123.12)
+                .Column("string", " -=\"")
+                .Column("при вед", "медвед")
+                .AtAsync(new DateTime(1970, 01, 01, 0, 0, 1));
             totalExpectedSb.Append(expected);
         }
 
@@ -155,12 +200,12 @@ public class TcpTests
         for (var i = 0; i < lineCount; i++)
         {
             await sender.Table("table name")
-                        .Symbol("t a g", "v alu, e")
-                        .Column("number", 10)
-                        .Column("db l", 123.12)
-                        .Column("string", " -=\"")
-                        .Column("при вед", "медвед")
-                        .AtAsync(new DateTime(1970, 01, 01, 0, 0, 1));
+                .Symbol("t a g", "v alu, e")
+                .Column("number", 10)
+                .Column("db l", 123.12)
+                .Column("string", " -=\"")
+                .Column("при вед", "медвед")
+                .AtAsync(new DateTime(1970, 01, 01, 0, 0, 1));
             totalExpectedSb.Append(expected);
         }
 
@@ -169,12 +214,12 @@ public class TcpTests
         for (var i = 0; i < lineCount; i++)
         {
             await sender.Table("table name")
-                        .Symbol("t a g", "v alu, e")
-                        .Column("number", 10)
-                        .Column("db l", 123.12)
-                        .Column("string", " -=\"")
-                        .Column("при вед", "медвед")
-                        .AtAsync(new DateTime(1970, 01, 01, 0, 0, 1));
+                .Symbol("t a g", "v alu, e")
+                .Column("number", 10)
+                .Column("db l", 123.12)
+                .Column("string", " -=\"")
+                .Column("при вед", "медвед")
+                .AtAsync(new DateTime(1970, 01, 01, 0, 0, 1));
             totalExpectedSb.Append(expected);
         }
 
@@ -199,12 +244,12 @@ public class TcpTests
         for (var i = 0; i < lineCount; i++)
         {
             await sender.Table("table name")
-                        .Symbol("t a g", "v alu, e")
-                        .Column("number", 10)
-                        .Column("db l", 123.12)
-                        .Column("string", " -=\"")
-                        .Column("при вед", "медвед")
-                        .AtAsync(new DateTime(1970, 01, 01, 0, 0, 1));
+                .Symbol("t a g", "v alu, e")
+                .Column("number", 10)
+                .Column("db l", 123.12)
+                .Column("string", " -=\"")
+                .Column("при вед", "медвед")
+                .AtAsync(new DateTime(1970, 01, 01, 0, 0, 1));
             totalExpectedSb.Append(expected);
         }
 
@@ -214,12 +259,12 @@ public class TcpTests
         for (var i = 0; i < lineCount; i++)
         {
             await sender.Table("table name")
-                        .Symbol("t a g", "v alu, e")
-                        .Column("number", 10)
-                        .Column("db l", 123.12)
-                        .Column("string", " -=\"")
-                        .Column("при вед", "медвед")
-                        .AtAsync(new DateTime(1970, 01, 01, 0, 0, 1));
+                .Symbol("t a g", "v alu, e")
+                .Column("number", 10)
+                .Column("db l", 123.12)
+                .Column("string", " -=\"")
+                .Column("при вед", "медвед")
+                .AtAsync(new DateTime(1970, 01, 01, 0, 0, 1));
             totalExpectedSb.Append(expected);
         }
 
@@ -245,12 +290,12 @@ public class TcpTests
         for (var i = 0; i < lineCount; i++)
         {
             await sender.Table("table name")
-                        .Symbol("t a g", "v alu, e")
-                        .Column("number", 10)
-                        .Column("db l", 123.12)
-                        .Column("string", " -=\"")
-                        .Column("при вед", "медвед")
-                        .AtAsync(new DateTime(1970, 01, 01, 0, 0, 1));
+                .Symbol("t a g", "v alu, e")
+                .Column("number", 10)
+                .Column("db l", 123.12)
+                .Column("string", " -=\"")
+                .Column("при вед", "медвед")
+                .AtAsync(new DateTime(1970, 01, 01, 0, 0, 1));
             totalExpectedSb.Append(expected);
             try
             {
@@ -279,11 +324,11 @@ public class TcpTests
 
 #pragma warning disable CS0618 // Type or member is obsolete
         await sender.Table("neg name")
-                    .Column("number1", long.MinValue + 1)
-                    .Column("number2", long.MaxValue)
-                    .Column("number3", double.MinValue)
-                    .Column("number4", double.MaxValue)
-                    .AtNowAsync();
+            .Column("number1", long.MinValue + 1)
+            .Column("number2", long.MaxValue)
+            .Column("number3", double.MinValue)
+            .Column("number4", double.MaxValue)
+            .AtNowAsync();
 #pragma warning restore CS0618 // Type or member is obsolete
         await sender.SendAsync();
 
@@ -302,15 +347,15 @@ public class TcpTests
 
 #pragma warning disable CS0618 // Type or member is obsolete
         await sender.Table("doubles")
-                    .Column("d0", 0.0)
-                    .Column("dm0", -0.0)
-                    .Column("d1", 1.0)
-                    .Column("dE100", 1E100)
-                    .Column("d0000001", 0.000001)
-                    .Column("dNaN", double.NaN)
-                    .Column("dInf", double.PositiveInfinity)
-                    .Column("dNInf", double.NegativeInfinity)
-                    .AtNowAsync();
+            .Column("d0", 0.0)
+            .Column("dm0", -0.0)
+            .Column("d1", 1.0)
+            .Column("dE100", 1E100)
+            .Column("d0000001", 0.000001)
+            .Column("dNaN", double.NaN)
+            .Column("dInf", double.PositiveInfinity)
+            .Column("dNInf", double.NegativeInfinity)
+            .AtNowAsync();
 #pragma warning restore CS0618 // Type or member is obsolete
         await sender.SendAsync();
 
@@ -329,8 +374,8 @@ public class TcpTests
 
         var ts = new DateTime(2022, 2, 24);
         await sender.Table("name")
-                    .Column("ts", ts)
-                    .AtAsync(ts);
+            .Column("ts", ts)
+            .AtAsync(ts);
 
         await sender.SendAsync();
 
@@ -349,8 +394,8 @@ public class TcpTests
 
         const long timestampNanos = 1645660800123456789L;
         await sender.Table("name")
-                    .ColumnNanos("ts", timestampNanos)
-                    .AtAsync(timestampNanos);
+            .ColumnNanos("ts", timestampNanos)
+            .AtAsync(timestampNanos);
 
         await sender.SendAsync();
 
@@ -369,8 +414,8 @@ public class TcpTests
 
         const long timestampNanos = 1645660800987654321L;
         await sender.Table("name")
-                    .Column("value", 42)
-                    .AtNanosAsync(timestampNanos);
+            .Column("value", 42)
+            .AtNanosAsync(timestampNanos);
 
         await sender.SendAsync();
 
@@ -385,8 +430,8 @@ public class TcpTests
         using var srv = CreateTcpListener(_port);
         srv.AcceptAsync();
 
-        using var sender     = Sender.New($"tcp::addr={_host}:{_port};");
-        string?   nullString = null;
+        using var sender = Sender.New($"tcp::addr={_host}:{_port};");
+        string? nullString = null;
 
         Assert.That(
             () => sender.Table(nullString),
@@ -488,8 +533,8 @@ public class TcpTests
         using var srv = CreateTcpListener(_port);
         srv.AcceptAsync();
 
-        using var sender     = Sender.New($"tcp::addr={_host}:{_port};");
-        string?   nullString = null;
+        using var sender = Sender.New($"tcp::addr={_host}:{_port};");
+        string? nullString = null;
 
         Assert.Throws<IngressError>(() => sender.Table(nullString));
         Assert.Throws<IngressError>(() => sender.Column("abc", 123));
@@ -546,19 +591,19 @@ public class TcpTests
         srv.AcceptAsync();
 
         var nowMillisecond = DateTime.Now.Millisecond;
-        var metric         = "metric_name" + nowMillisecond;
+        var metric = "metric_name" + nowMillisecond;
 
         using var sender = Sender.New($"tcp::addr={_host}:{_port};init_buf_size={256 * 1024};");
 
         for (var i = 0; i < 1E6; i++)
         {
             await sender.Table(metric)
-                        .Symbol("nopoint", "tag" + i % 100)
-                        .Column("counter", i * 1111.1)
-                        .Column("int", i)
-                        .Column("привед", "мед вед")
-                        .AtAsync(new DateTime(2021, 1, 1, i / 360 / 1000 % 60, i / 60 / 1000 % 60, i / 1000 % 60,
-                                              i % 1000));
+                .Symbol("nopoint", "tag" + i % 100)
+                .Column("counter", i * 1111.1)
+                .Column("int", i)
+                .Column("привед", "мед вед")
+                .AtAsync(new DateTime(2021, 1, 1, i / 360 / 1000 % 60, i / 60 / 1000 % 60, i / 1000 % 60,
+                    i % 1000));
 
             if (i % 100 == 0)
             {
@@ -576,7 +621,7 @@ public class TcpTests
         srv.AcceptAsync();
 
         var nowMillisecond = DateTime.Now.Millisecond;
-        var metric         = "metric_name" + nowMillisecond;
+        var metric = "metric_name" + nowMillisecond;
 
         using var sender =
             Sender.New(
@@ -585,12 +630,12 @@ public class TcpTests
         for (var i = 0; i < 1E6; i++)
         {
             await sender.Table(metric)
-                        .Symbol("nopoint", "tag" + i % 100)
-                        .Column("counter", i * 1111.1)
-                        .Column("int", i)
-                        .Column("привед", "мед вед")
-                        .AtAsync(new DateTime(2021, 1, 1, i / 360 / 1000 % 60, i / 60 / 1000 % 60, i / 1000 % 60,
-                                              i % 1000));
+                .Symbol("nopoint", "tag" + i % 100)
+                .Column("counter", i * 1111.1)
+                .Column("int", i)
+                .Column("привед", "мед вед")
+                .AtAsync(new DateTime(2021, 1, 1, i / 360 / 1000 % 60, i / 60 / 1000 % 60, i / 1000 % 60,
+                    i % 1000));
         }
 
         await sender.SendAsync();
@@ -618,8 +663,8 @@ public class TcpTests
         Assert.That(
 #pragma warning disable CS0618 // Type or member is obsolete
             () => sender.Table("name")
-                        .Column("number1", long.MinValue)
-                        .AtNowAsync(),
+                .Column("number1", long.MinValue)
+                .AtNowAsync(),
 #pragma warning restore CS0618 // Type or member is obsolete
             Throws.TypeOf<IngressError>().With.Message.Contains("Special case")
         );
@@ -637,8 +682,8 @@ public class TcpTests
                 $"tcp::addr={_host}:{_port};");
 #pragma warning disable CS0618 // Type or member is obsolete
         await sender.Table("neg name")
-                    .Column("привед", " мед\rве\n д")
-                    .AtNowAsync();
+            .Column("привед", " мед\rве\n д")
+            .AtNowAsync();
 #pragma warning restore CS0618 // Type or member is obsolete
         await sender.SendAsync();
 
@@ -659,9 +704,9 @@ public class TcpTests
         Assert.That(
 #pragma warning disable CS0618 // Type or member is obsolete
             async () => await sender.Table("name")
-                                    .Column("number1", 123)
-                                    .Symbol("nand", "asdfa")
-                                    .AtNowAsync(),
+                .Column("number1", 123)
+                .Symbol("nand", "asdfa")
+                .AtNowAsync(),
 #pragma warning restore CS0618 // Type or member is obsolete
             Throws.TypeOf<IngressError>()
         );
@@ -681,9 +726,9 @@ public class TcpTests
         Assert.That(
 #pragma warning disable CS0618 // Type or member is obsolete
             async () => await sender.Table("name")
-                                    .Column("number1", 123)
-                                    .Table("nand")
-                                    .AtNowAsync(),
+                .Column("number1", 123)
+                .Table("nand")
+                .AtNowAsync(),
 #pragma warning restore CS0618 // Type or member is obsolete
             Throws.TypeOf<IngressError>()
         );
@@ -703,7 +748,7 @@ public class TcpTests
         Assert.That(
 #pragma warning disable CS0618 // Type or member is obsolete
             async () => await sender.Column("number1", 123)
-                                    .AtNowAsync(),
+                .AtNowAsync(),
 #pragma warning restore CS0618 // Type or member is obsolete
             Throws.TypeOf<IngressError>()
         );
@@ -711,7 +756,7 @@ public class TcpTests
         Assert.That(
 #pragma warning disable CS0618 // Type or member is obsolete
             async () => await sender.Symbol("number1", "1234")
-                                    .AtNowAsync(),
+                .AtNowAsync(),
 #pragma warning restore CS0618 // Type or member is obsolete
             Throws.TypeOf<IngressError>()
         );
@@ -824,39 +869,39 @@ public class TcpTests
 
 #pragma warning disable CS0618 // Type or member is obsolete
         await sender.Table("foo")
-                    .Symbol("bah", "baz")
-                    .AtNowAsync();
+            .Symbol("bah", "baz")
+            .AtNowAsync();
 #pragma warning restore CS0618 // Type or member is obsolete
 
         await sender.Table("foo")
-                    .Symbol("bah", "baz")
-                    .AtAsync(DateTime.UtcNow);
+            .Symbol("bah", "baz")
+            .AtAsync(DateTime.UtcNow);
 
         await sender.Table("foo")
-                    .Symbol("bah", "baz")
-                    .AtAsync(DateTimeOffset.UtcNow);
+            .Symbol("bah", "baz")
+            .AtAsync(DateTimeOffset.UtcNow);
 
         await sender.Table("foo")
-                    .Symbol("bah", "baz")
-                    .AtAsync(DateTime.UtcNow.Ticks / 100);
+            .Symbol("bah", "baz")
+            .AtAsync(DateTime.UtcNow.Ticks / 100);
 
 #pragma warning disable CS0618 // Type or member is obsolete
         sender.Table("foo")
-              .Symbol("bah", "baz")
-              .AtNow();
+            .Symbol("bah", "baz")
+            .AtNow();
 #pragma warning restore CS0618 // Type or member is obsolete
 
         sender.Table("foo")
-              .Symbol("bah", "baz")
-              .At(DateTime.UtcNow);
+            .Symbol("bah", "baz")
+            .At(DateTime.UtcNow);
 
         sender.Table("foo")
-              .Symbol("bah", "baz")
-              .At(DateTimeOffset.UtcNow);
+            .Symbol("bah", "baz")
+            .At(DateTimeOffset.UtcNow);
 
         sender.Table("foo")
-              .Symbol("bah", "baz")
-              .At(DateTime.UtcNow.Ticks / 100);
+            .Symbol("bah", "baz")
+            .At(DateTime.UtcNow.Ticks / 100);
 
         await sender.SendAsync();
     }
@@ -884,7 +929,7 @@ public class TcpTests
     {
         using var srv = CreateTcpListener(_port);
         srv.WithAuth("testUser1", "Vs4e-cOLsVCntsMrZiAGAZtrkPXO00uoRLuA3d7gEcI=",
-                     "ANhR2AZSs4ar9urE5AZrJqu469X0r7gZ1BBEdcrAuL_6");
+            "ANhR2AZSs4ar9urE5AZrJqu469X0r7gZ1BBEdcrAuL_6");
         srv.AcceptAsync();
 
         using var sender =
@@ -892,10 +937,10 @@ public class TcpTests
                 $"tcp::addr={_host}:{_port};username=testUser1;token=NgdiOWDoQNUP18WOnb1xkkEG5TzPYMda5SiUOvT1K0U=;");
 
         await sender.Table("metric name")
-                    .Symbol("t a g", "v alu, e")
-                    .Column("number", 10)
-                    .Column("string", " -=\"")
-                    .AtAsync(new DateTime(1970, 01, 01, 0, 0, 1));
+            .Symbol("t a g", "v alu, e")
+            .Column("number", 10)
+            .Column("string", " -=\"")
+            .AtAsync(new DateTime(1970, 01, 01, 0, 0, 1));
         await sender.SendAsync();
 
         var expected = "metric\\ name,t\\ a\\ g=v\\ alu\\,\\ e number=10i,string=\" -=\\\"\" 1000000000\n";
@@ -907,14 +952,14 @@ public class TcpTests
     {
         using var srv = CreateTcpListener(_port);
         srv.WithAuth("testUser1", "Vs4e-cOLsVCntsMrZiAGAZtrkPXO00uoRLuA3d7gEcI=",
-                     "ANhR2AZSs4ar9urE5AZrJqu469X0r7gZ1BBEdcrAuL_6");
+            "ANhR2AZSs4ar9urE5AZrJqu469X0r7gZ1BBEdcrAuL_6");
         srv.AcceptAsync();
 
         Assert.That(
             () => Sender.New($"tcp::addr={_host}:{_port};username=invalid;token=foo=;")
-           ,
+            ,
             Throws.TypeOf<AggregateException>().With.InnerException.TypeOf<IngressError>().With.Message
-                  .Contains("Authentication failed")
+                .Contains("Authentication failed")
         );
         return Task.CompletedTask;
     }
@@ -924,7 +969,7 @@ public class TcpTests
     {
         using var srv = CreateTcpListener(_port);
         srv.WithAuth("testUser1", "Vs4e-cOLsVCntsMrZiAGAZtrkPXO00uoRLuA3d7gEcI=",
-                     "ANhR2AZSs4ar9urE5AZrJqu469X0r7gZ1BBEdcrAuL_6");
+            "ANhR2AZSs4ar9urE5AZrJqu469X0r7gZ1BBEdcrAuL_6");
         srv.AcceptAsync();
 
         using var sender = Sender.New(
@@ -933,13 +978,13 @@ public class TcpTests
         Assert.That(
             async () =>
             {
-                for (var i = 0; i < 10; i++)
+                for (var i = 0; i < 100; i++)
                 {
                     await sender.Table("metric name")
-                                .Symbol("t a g", "v alu, e")
-                                .Column("number", 10)
-                                .Column("string", " -=\"")
-                                .AtAsync(new DateTime(1970, 01, 01, 0, 0, 1));
+                        .Symbol("t a g", "v alu, e")
+                        .Column("number", 10)
+                        .Column("string", " -=\"")
+                        .AtAsync(new DateTime(1970, 01, 01, 0, 0, 1));
                     await sender.SendAsync();
                     Thread.Sleep(10);
                 }
@@ -947,7 +992,7 @@ public class TcpTests
                 Assert.Fail();
             },
             Throws.TypeOf<IngressError>().With.Message
-                  .Contains("Could not write data to server.")
+                .Contains("Could not write data to server.")
         );
         return Task.CompletedTask;
     }
@@ -956,7 +1001,7 @@ public class TcpTests
     public void EcdsaSignatureLoop()
     {
         var privateKey = Convert.FromBase64String("NgdiOWDoQNUP18WOnb1xkkEG5TzPYMda5SiUOvT1K0U=");
-        var p          = SecNamedCurves.GetByName("secp256r1");
+        var p = SecNamedCurves.GetByName("secp256r1");
         var parameters = new ECDomainParameters(p.Curve, p.G, p.N, p.H);
 
         var m = new byte[512];
@@ -997,9 +1042,25 @@ public class TcpTests
         return new DummyIlpServer(port, tls);
     }
 
+    private static byte[] WaitForLineBytes(DummyIlpServer server)
+    {
+        for (var i = 0; i < 500; i++)
+        {
+            var bytes = server.GetReceivedBytes();
+            if (bytes.Length > 0 && bytes[^1] == (byte)'\n')
+            {
+                return bytes;
+            }
+
+            Thread.Sleep(10);
+        }
+
+        Assert.Fail("Timed out waiting for decimal ILP payload.");
+        return Array.Empty<byte>();
+    }
+
     private byte[] FromBase64String(string text)
     {
         return DummyIlpServer.FromBase64String(text);
     }
-
 }

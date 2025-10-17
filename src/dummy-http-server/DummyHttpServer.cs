@@ -53,10 +53,10 @@ public class DummyHttpServer : IDisposable
                    .AddConsole();
         });
 
-        IlpEndpoint.WithTokenAuth      = withTokenAuth;
-        IlpEndpoint.WithBasicAuth      = withBasicAuth;
+        IlpEndpoint.WithTokenAuth = withTokenAuth;
+        IlpEndpoint.WithBasicAuth = withBasicAuth;
         IlpEndpoint.WithRetriableError = withRetriableError;
-        IlpEndpoint.WithErrorMessage   = withErrorMessage;
+        IlpEndpoint.WithErrorMessage = withErrorMessage;
         _withStartDelay = withStartDelay;
 
         if (withTokenAuth)
@@ -103,7 +103,7 @@ public class DummyHttpServer : IDisposable
         IlpEndpoint.ReceiveBuffer.Clear();
         IlpEndpoint.ReceiveBytes.Clear();
         IlpEndpoint.LastError = null;
-        IlpEndpoint.Counter   = 0;
+        IlpEndpoint.Counter = 0;
     }
 
     public async Task StartAsync(int port = 29743, int[]? versions = null)
@@ -112,10 +112,10 @@ public class DummyHttpServer : IDisposable
         {
             await Task.Delay(_withStartDelay.Value);
         }
-        versions                  ??= new[] { 1, 2, };
-        SettingsEndpoint.Versions =   versions;
-        _port                     =   port;
-        _app.RunAsync($"http://localhost:{port}");
+        versions ??= new[] { 1, 2, 3, };
+        SettingsEndpoint.Versions = versions;
+        _port = port;
+        _ = _app.RunAsync($"http://localhost:{port}");
     }
 
     public async Task RunAsync()
@@ -133,7 +133,7 @@ public class DummyHttpServer : IDisposable
         return IlpEndpoint.ReceiveBuffer;
     }
 
-    public List<byte> GetReceiveBytes()
+    public List<byte> GetReceivedBytes()
     {
         return IlpEndpoint.ReceiveBytes;
     }
@@ -157,7 +157,7 @@ public class DummyHttpServer : IDisposable
             var jwtToken = JwtBearer.CreateToken(o =>
             {
                 o.SigningKey = SigningKey;
-                o.ExpireAt   = DateTime.UtcNow.AddDays(1);
+                o.ExpireAt = DateTime.UtcNow.AddDays(1);
             });
             return jwtToken;
         }
@@ -172,8 +172,8 @@ public class DummyHttpServer : IDisposable
 
     public string PrintBuffer()
     {
-        var bytes      = GetReceiveBytes().ToArray();
-        var sb         = new StringBuilder();
+        var bytes = GetReceivedBytes().ToArray();
+        var sb = new StringBuilder();
         var lastAppend = 0;
 
         var i = 0;
@@ -242,7 +242,7 @@ public class DummyHttpServer : IDisposable
                             i--;
                             break;
                         default:
-                            throw new NotImplementedException();
+                            throw new NotImplementedException($"Type {bytes[i]} not implemented");
                     }
 
                     lastAppend = i + 1;

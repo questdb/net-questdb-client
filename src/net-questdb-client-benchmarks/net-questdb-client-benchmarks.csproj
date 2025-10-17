@@ -15,8 +15,8 @@
 
     <ItemGroup>
         <ProjectReference Include="..\dummy-http-server\dummy-http-server.csproj"/>
+        <ProjectReference Include="..\net-questdb-client-tests\net-questdb-client-tests.csproj" />
         <ProjectReference Include="..\net-questdb-client\net-questdb-client.csproj"/>
-        <ProjectReference Include="..\tcp-client-test\tcp-client-test.csproj"/>
     </ItemGroup>
 
     <ItemGroup>

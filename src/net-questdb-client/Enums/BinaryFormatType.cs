@@ -31,4 +31,5 @@ public enum BinaryFormatType : byte
 {
     DOUBLE = 16,
     ARRAY = 14,
+    DECIMAL = 23,
 }

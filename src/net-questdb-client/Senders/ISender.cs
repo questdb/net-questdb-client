@@ -33,14 +33,7 @@ namespace QuestDB.Senders;
 /// <summary>
 ///     Interface representing <see cref="Sender" /> implementations.
 /// </summary>
-public interface ISender : ISenderV2
-{
-}
-
-/// <summary>
-///     Version 1 of the Sender API.
-/// </summary>
-public interface ISenderV1 : IDisposable
+public interface ISender : IDisposable
 {
     /// <summary>
     ///     Represents the current length of the buffer in UTF-8 bytes.
@@ -134,19 +127,22 @@ public interface ISenderV1 : IDisposable
     /// <returns>Itself</returns>
     public ISender Column(ReadOnlySpan<char> name, ReadOnlySpan<char> value);
 
-    /// <inheritdoc cref="Column(System.ReadOnlySpan{char},System.ReadOnlySpan{char})" />
+    /// <inheritdoc cref="Column(ReadOnlySpan{char},ReadOnlySpan{char})" />
     public ISender Column(ReadOnlySpan<char> name, long value);
 
-    /// <inheritdoc cref="Column(System.ReadOnlySpan{char},System.ReadOnlySpan{char})" />
+    /// <inheritdoc cref="Column(ReadOnlySpan{char},ReadOnlySpan{char})" />
+    public ISender Column(ReadOnlySpan<char> name, int value);
+
+    /// <inheritdoc cref="Column(ReadOnlySpan{char},ReadOnlySpan{char})" />
     public ISender Column(ReadOnlySpan<char> name, bool value);
 
-    /// <inheritdoc cref="Column(System.ReadOnlySpan{char},System.ReadOnlySpan{char})" />
+    /// <inheritdoc cref="Column(ReadOnlySpan{char},ReadOnlySpan{char})" />
     public ISender Column(ReadOnlySpan<char> name, double value);
 
-    /// <inheritdoc cref="Column(System.ReadOnlySpan{char},System.ReadOnlySpan{char})" />
+    /// <inheritdoc cref="Column(ReadOnlySpan{char},ReadOnlySpan{char})" />
     public ISender Column(ReadOnlySpan<char> name, DateTime value);
 
-    /// <inheritdoc cref="Column(System.ReadOnlySpan{char},System.ReadOnlySpan{char})" />
+    /// <inheritdoc cref="Column(ReadOnlySpan{char},ReadOnlySpan{char})" />
     public ISender Column(ReadOnlySpan<char> name, DateTimeOffset value);
 
     /// <summary>
@@ -217,15 +213,9 @@ public interface ISenderV1 : IDisposable
     ///     Clears the sender's buffer.
     /// </summary>
     public void Clear();
-}
 
-/// <summary>
-///     Version 2 of the Sender API, adding ARRAY and binary DOUBLE support.
-/// </summary>
-public interface ISenderV2 : ISenderV1
-{
     /// <inheritdoc
-    ///     cref="Column{T}(System.ReadOnlySpan{char},System.Collections.Generic.IEnumerable{T},System.Collections.Generic.IEnumerable{int})" />
+    ///     cref="Column{T}(ReadOnlySpan{char},IEnumerable{T},IEnumerable{int})" />
     public ISender Column<T>(ReadOnlySpan<char> name, IEnumerable<T> value, IEnumerable<int> shape) where T : struct;
 
     /// <summary>
@@ -238,7 +228,7 @@ public interface ISenderV2 : ISenderV1
     public ISender Column(ReadOnlySpan<char> name, Array value);
 
     /// <inheritdoc
-    ///     cref="Column{T}(System.ReadOnlySpan{char},System.Collections.Generic.IEnumerable{T},System.Collections.Generic.IEnumerable{int})" />
+    ///     cref="Column{T}(ReadOnlySpan{char},IEnumerable{T},IEnumerable{int})" />
     public ISender Column<T>(ReadOnlySpan<char> name, ReadOnlySpan<T> value) where T : struct;
 
     /// <summary>
@@ -249,7 +239,7 @@ public interface ISenderV2 : ISenderV1
     /// <returns>Itself</returns>
     public ISender Column(ReadOnlySpan<char> name, string? value)
     {
-        return ((ISenderV1)this).Column(name, value);
+        return Column(name, value.AsSpan());
     }
 
     /// <summary />
@@ -261,7 +251,7 @@ public interface ISenderV2 : ISenderV1
             Column(name, value, shape);
         }
 
-        return (ISender)this;
+        return this;
     }
 
     /// <summary />
@@ -272,7 +262,7 @@ public interface ISenderV2 : ISenderV1
             Column(name, value);
         }
 
-        return (ISender)this;
+        return this;
     }
 
     /// <summary />
@@ -283,7 +273,7 @@ public interface ISenderV2 : ISenderV1
             Column(name, value);
         }
 
-        return (ISender)this;
+        return this;
     }
 
     /// <summary />
@@ -294,7 +284,7 @@ public interface ISenderV2 : ISenderV1
             return Column(name, value ?? throw new InvalidOperationException());
         }
 
-        return (ISender)this;
+        return this;
     }
 
     /// <summary />
@@ -305,7 +295,7 @@ public interface ISenderV2 : ISenderV1
             return Column(name, value ?? throw new InvalidOperationException());
         }
 
-        return (ISender)this;
+        return this;
     }
 
     /// <summary />
@@ -316,7 +306,7 @@ public interface ISenderV2 : ISenderV1
             return Column(name, value ?? throw new InvalidOperationException());
         }
 
-        return (ISender)this;
+        return this;
     }
 
     /// <summary />
@@ -327,7 +317,7 @@ public interface ISenderV2 : ISenderV1
             return Column(name, value ?? throw new InvalidOperationException());
         }
 
-        return (ISender)this;
+        return this;
     }
 
     /// <summary />
@@ -338,6 +328,11 @@ public interface ISenderV2 : ISenderV1
             return Column(name, value ?? throw new InvalidOperationException());
         }
 
-        return (ISender)this;
+        return this;
     }
+
+    /// <summary>
+    ///     Adds a DECIMAL column in the binary format.
+    /// </summary>
+    public ISender Column(ReadOnlySpan<char> name, decimal? value);
 }

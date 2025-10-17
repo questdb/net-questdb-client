@@ -25,7 +25,6 @@
 using System.Buffers.Binary;
 using System.Runtime.InteropServices;
 using QuestDB.Enums;
-using QuestDB.Utils;
 
 namespace QuestDB.Buffers;
 
@@ -65,61 +64,58 @@ public class BufferV3 : BufferV2
             .Put((byte)BinaryFormatType.DECIMAL);
         if (value is null)
         {
-            Put((byte)0); // Scale
-            Put((byte)0); // Length
+            Put(0); // Scale
+            Put(0); // Length
             return this;
         }
 
         Span<int> parts = stackalloc int[4];
         decimal.GetBits(value.Value, parts);
 
-        int flags = parts[3];
-        byte scale = (byte)((flags & ScaleMask) >> ScaleShift);
+        var flags = parts[3];
+        var scale = (byte)((flags & ScaleMask) >> ScaleShift);
 
         // 3. Scale
         Put(scale);
 
-        int low = parts[0];
-        int mid = parts[1];
-        int high = parts[2];
-        bool bitSign = false;
-        bool negative = (flags & SignMask) != 0;
+        var low = parts[0];
+        var mid = parts[1];
+        var high = parts[2];
+        var negative = (flags & SignMask) != 0 && value != 0;
 
         if (negative)
         {
             // QuestDB expects negative mantissas in two's complement.
             low = ~low + 1;
-            int c = low == 0 ? 1 : 0;
+            var c = low == 0 ? 1 : 0;
             mid = ~mid + c;
             c = mid == 0 && c == 1 ? 1 : 0;
             high = ~high + c;
-            // We may overflow, we need an extra byte to convey the sign.
-            bitSign = high == 0 && c == 1;
-        }
-        else if ((high & 0x80000000) != 0)
-        {
-            // If the highest bit is set, we need an extra byte of 0 to convey the sign.
-            bitSign = true;
         }
 
-        var size = bitSign ? 13 : 12;
-
+        // We write the byte array on the stack first so that we can compress (remove unnecessary bytes) it later.
+        Span<byte> span = stackalloc byte[13];
+        var signByte = (byte)(negative ? 255 : 0);
+        span[0] = signByte;
+        BinaryPrimitives.WriteInt32BigEndian(span.Slice(1, 4), high);
+        BinaryPrimitives.WriteInt32BigEndian(span.Slice(5, 4), mid);
+        BinaryPrimitives.WriteInt32BigEndian(span.Slice(9, 4), low);
+        
+        // Compress
+        var start = 0;
+        for (;
+             // We can strip prefix bits that are 0 (if positive) or 1 (if negative) as long as we keep at least
+             // one of it in front to convey the sign.
+             start < span.Length - 1 && span[start] == signByte && ((span[start + 1] ^ signByte) & 0x80) == 0;
+             start++) ;
+        
         // 4. Length
+        var size = span.Length - start;
         Put((byte)size);
 
         // 5. Unscaled value
         EnsureCapacity(size);
-        var span = Chunk.AsSpan(Position, size);
-        var offset = 0;
-        if (bitSign)
-        {
-            span[offset++] = (byte)(negative ? 255 : 0);
-        }
-        BinaryPrimitives.WriteInt32BigEndian(span.Slice(offset, 4), high);
-        offset += 4;
-        BinaryPrimitives.WriteInt32BigEndian(span.Slice(offset, 4), mid);
-        offset += 4;
-        BinaryPrimitives.WriteInt32BigEndian(span.Slice(offset, 4), low);
+        span.Slice(start, size).CopyTo(Chunk.AsSpan(Position, size));
         Advance(size);
 
         return this;

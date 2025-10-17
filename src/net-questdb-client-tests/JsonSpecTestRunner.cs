@@ -116,9 +116,8 @@ public class JsonSpecTestRunner
         {
             if (testCase.Result.BinaryBase64 != null)
             {
-                var received = srv.GetReceivedBytes();
                 var expected = Convert.FromBase64String(testCase.Result.BinaryBase64);
-                Assert.That(received, Is.EqualTo(expected));
+                WaitAssert(srv, expected);
             }
             else if (testCase.Result.AnyLines == null || testCase.Result.AnyLines.Length == 0)
             {
@@ -234,6 +233,17 @@ public class JsonSpecTestRunner
         }
 
         Assert.That(srv.GetTextReceived(), Is.EqualTo(expected));
+    }
+
+    private static void WaitAssert(DummyIlpServer srv, byte[] expected)
+    {
+        var expectedLen = expected.Length;
+        for (var i = 0; i < 500 && srv.TotalReceived < expectedLen; i++)
+        {
+            Thread.Sleep(10);
+        }
+
+        Assert.That(srv.GetReceivedBytes(), Is.EqualTo(expected));
     }
 
     private DummyIlpServer CreateTcpListener(int port, bool tls = false)

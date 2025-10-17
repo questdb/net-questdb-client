@@ -52,15 +52,15 @@ public class DummyHttpServer : IDisposable
     /// <param name="withStartDelay">Optional delay applied when starting the server.</param>
     /// <param name="requireClientCert">If true, require client TLS certificates for HTTPS connections.</param>
     public DummyHttpServer(bool withTokenAuth = false, bool withBasicAuth = false, bool withRetriableError = false,
-                           bool withErrorMessage = false, TimeSpan? withStartDelay = null, bool requireClientCert = false)
+        bool withErrorMessage = false, TimeSpan? withStartDelay = null, bool requireClientCert = false)
     {
         var bld = WebApplication.CreateBuilder();
 
         bld.Services.AddLogging(builder =>
         {
             builder.AddFilter("Microsoft", LogLevel.Warning)
-                   .AddFilter("System", LogLevel.Warning)
-                   .AddConsole();
+                .AddFilter("System", LogLevel.Warning)
+                .AddConsole();
         });
 
         IlpEndpoint.WithTokenAuth = withTokenAuth;
@@ -72,7 +72,7 @@ public class DummyHttpServer : IDisposable
         if (withTokenAuth)
         {
             bld.Services.AddAuthenticationJwtBearer(s => s.SigningKey = SigningKey)
-               .AddAuthorization();
+                .AddAuthorization();
         }
 
 
@@ -92,7 +92,7 @@ public class DummyHttpServer : IDisposable
 
             o.Limits.MaxRequestBodySize = 1073741824;
             o.ListenLocalhost(29474,
-                              options => { options.UseHttps(); });
+                options => { options.UseHttps(); });
             o.ListenLocalhost(29473);
         });
 
@@ -144,6 +144,7 @@ public class DummyHttpServer : IDisposable
         {
             await Task.Delay(_withStartDelay.Value);
         }
+
         versions ??= new[] { 1, 2, 3, };
         SettingsEndpoint.Versions = versions;
         _port = port;
@@ -231,74 +232,71 @@ public class DummyHttpServer : IDisposable
         var i = 0;
         for (; i < bytes.Length; i++)
         {
-            if (bytes[i] == (byte)'=')
+            if (bytes[i] == (byte)'=' && i > 0 && bytes[i - 1] == (byte)'=')
             {
-                if (bytes[i - 1] == (byte)'=')
+                sb.Append(Encoding.UTF8.GetString(bytes, lastAppend, i + 1 - lastAppend));
+                switch (bytes[++i])
                 {
-                    sb.Append(Encoding.UTF8.GetString(bytes, lastAppend, i + 1 - lastAppend));
-                    switch (bytes[++i])
-                    {
-                        case 14:
-                            sb.Append("ARRAY<");
-                            var type = bytes[++i];
+                    case 14:
+                        sb.Append("ARRAY<");
+                        var type = bytes[++i];
 
-                            Debug.Assert(type == 10);
-                            var dims = bytes[++i];
+                        Debug.Assert(type == 10);
+                        var dims = bytes[++i];
 
-                            ++i;
+                        ++i;
 
-                            long length = 0;
-                            for (var j = 0; j < dims; j++)
+                        long length = 0;
+                        for (var j = 0; j < dims; j++)
+                        {
+                            var lengthBytes = bytes.AsSpan()[i..(i + 4)];
+                            var lengthValue = MemoryMarshal.Cast<byte, uint>(lengthBytes)[0];
+                            if (length == 0)
                             {
-                                var lengthBytes = bytes.AsSpan()[i..(i + 4)];
-                                var lengthValue = MemoryMarshal.Cast<byte, uint>(lengthBytes)[0];
-                                if (length == 0)
-                                {
-                                    length = lengthValue;
-                                }
-                                else
-                                {
-                                    length *= lengthValue;
-                                }
-
-                                sb.Append(lengthValue);
-                                sb.Append(',');
-                                i += 4;
+                                length = lengthValue;
+                            }
+                            else
+                            {
+                                length *= lengthValue;
                             }
 
-                            sb.Remove(sb.Length - 1, 1);
-                            sb.Append('>');
+                            sb.Append(lengthValue);
+                            sb.Append(',');
+                            i += 4;
+                        }
 
-                            var doubleBytes =
-                                MemoryMarshal.Cast<byte, double>(bytes.AsSpan().Slice(i, (int)(length * 8)));
+                        sb.Remove(sb.Length - 1, 1);
+                        sb.Append('>');
+
+                        var doubleBytes =
+                            MemoryMarshal.Cast<byte, double>(bytes.AsSpan().Slice(i, (int)(length * 8)));
 
 
-                            sb.Append('[');
-                            for (var j = 0; j < length; j++)
-                            {
-                                sb.Append(doubleBytes[j]);
-                                sb.Append(',');
-                            }
+                        sb.Append('[');
+                        for (var j = 0; j < length; j++)
+                        {
+                            sb.Append(doubleBytes[j].ToString(CultureInfo.InvariantCulture));
+                            sb.Append(',');
+                        }
 
-                            sb.Remove(sb.Length - 1, 1);
-                            sb.Append(']');
+                        sb.Remove(sb.Length - 1, 1);
+                        sb.Append(']');
 
-                            i += (int)(length * 8);
-                            i--;
-                            break;
-                        case 16:
-                            sb.Remove(sb.Length - 1, 1);
-                            var doubleValue = MemoryMarshal.Cast<byte, double>(bytes.AsSpan().Slice(++i, 8));
-                            sb.Append(doubleValue[0].ToString(CultureInfo.InvariantCulture));
-                            i += 8;
-                            i--;
-                            break;
-                        default:
-                            throw new NotImplementedException($"Type {bytes[i]} not implemented");
-                    }
-
-                    lastAppend = i + 1;
+                        i += (int)(length * 8);
+                        i--;
+                        break;
+                    case 16:
+                        sb.Remove(sb.Length - 1, 1);
+                        var doubleValue = MemoryMarshal.Cast<byte, double>(bytes.AsSpan().Slice(++i, 8));
+                        sb.Append(doubleValue[0].ToString(CultureInfo.InvariantCulture));
+                        i += 8;
+                        i--;
+                        break;
+                    default:
+                        throw new NotImplementedException($"Type {bytes[i]} not implemented");
                 }
+
+                lastAppend = i + 1;
             }
         }
 

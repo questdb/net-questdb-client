@@ -23,6 +23,7 @@
  ******************************************************************************/
 
 
+using System.Globalization;
 using System.Net;
 using System.Text;
 using System.Text.Json;
@@ -68,12 +69,20 @@ public class JsonSpecTestRunner
                     break;
 
                 case "LONG":
-                    sender.Column(column.Name, (long)((JsonElement)column.Value).GetDouble());
+                    sender.Column(column.Name, ((JsonElement)column.Value).GetInt64());
                     break;
 
                 case "DECIMAL":
-                    var d = decimal.Parse(((JsonElement)column.Value).GetString()!);
-                    sender.Column(column.Name, d);
+                    var value = ((JsonElement)column.Value).GetString();
+                    if (value is null)
+                    {
+                        sender.Column(column.Name, (decimal?)null);
+                    }
+                    else
+                    {
+                        var d = decimal.Parse(value, NumberStyles.Number, CultureInfo.InvariantCulture);
+                        sender.Column(column.Name, d);
+                    }
                     break;
 
                 default:

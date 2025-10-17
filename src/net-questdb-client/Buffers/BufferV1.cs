@@ -779,7 +779,7 @@ public class BufferV1 : IBuffer
                         $"Bad string {tableName}. Table names can't contain a {c} character, which was found at byte position {i}");
                 case '\xfeff':
                     throw new IngressError(ErrorCode.InvalidName,
-                        $"Bad string {tableName}. Table names can't contain a UTF-8 BOM character, was was found at byte position {i}.");
+                        $"Bad string {tableName}. Table names can't contain a UTF-8 BOM character, which was found at byte position {i}.");
             }
 
             prev = c;
@@ -840,7 +840,7 @@ public class BufferV1 : IBuffer
                         $"Bad string {columnName}. Column names can't contain a {c} character, which was found at byte position {i}");
                 case '\xfeff':
                     throw new IngressError(ErrorCode.InvalidName,
-                        $"Bad string {columnName}. Column names can't contain a UTF-8 BOM character, was was found at byte position {i}.");
+                        $"Bad string {columnName}. Column names can't contain a UTF-8 BOM character, which was found at byte position {i}.");
             }
         }
     }

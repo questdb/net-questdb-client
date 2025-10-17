@@ -564,7 +564,7 @@ public class TcpTests
             .Table("good")
             .Symbol("asdf", "sdfad")
             .Column("ddd", 123)
-            .AtAsync(DateTime.UtcNow);
+            .AtAsync(new DateTime(1970, 1, 2));
 
         await sender
             .Table("bad")

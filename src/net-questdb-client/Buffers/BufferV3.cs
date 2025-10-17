@@ -23,7 +23,6 @@
  ******************************************************************************/
 
 using System.Buffers.Binary;
-using System.Runtime.InteropServices;
 using QuestDB.Enums;
 
 namespace QuestDB.Buffers;

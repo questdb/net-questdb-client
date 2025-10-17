@@ -31,7 +31,12 @@ namespace QuestDB.Buffers;
 /// <summary />
 public class BufferV3 : BufferV2
 {
-    /// <summary />
+    /// <summary>
+    /// Initializes a new instance of BufferV3 with the specified buffer and name length limits.
+    /// </summary>
+    /// <param name="bufferSize">Initial size of the internal write buffer, in bytes.</param>
+    /// <param name="maxNameLen">Maximum allowed length for column names, in characters.</param>
+    /// <param name="maxBufSize">Maximum allowed internal buffer size, in bytes.</param>
     public BufferV3(int bufferSize, int maxNameLen, int maxBufSize) : base(bufferSize, maxNameLen, maxBufSize)
     {
     }
@@ -49,7 +54,12 @@ public class BufferV3 : BufferV2
     // Number of bits scale is shifted by.
     private const int ScaleShift = 16;
 
-    /// <inheritdoc />
+    /// <summary>
+    /// Writes a decimal column in QuestDB's binary column format (scale, length, and two's-complement big-endian unscaled value).
+    /// </summary>
+    /// <param name="name">Column name to write.</param>
+    /// <param name="value">Nullable decimal value to encode; when null writes zero scale and zero length.</param>
+    /// <returns>The buffer instance for call chaining.</returns>
     public override IBuffer Column(ReadOnlySpan<char> name, decimal? value)
     {
         // # Binary Format

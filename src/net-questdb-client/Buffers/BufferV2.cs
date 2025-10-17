@@ -90,7 +90,10 @@ public class BufferV2 : BufferV1
         }
     }
 
-    // ReSharper disable once InconsistentNaming
+    /// <summary>
+    /// Writes the provided value into the buffer as little-endian raw bytes and advances the buffer position by the value's size.
+    /// </summary>
+    /// <param name="value">A value whose raw bytes will be written into the buffer in little-endian order.</param>
     private void PutBinaryLE<T>(T value) where T : struct
     {
         var size = Marshal.SizeOf<T>();
@@ -110,7 +113,10 @@ public class BufferV2 : BufferV1
         MemoryMarshal.Cast<T, byte>(slot).Reverse();
     }
 
-    // ReSharper disable once InconsistentNaming
+    /// <summary>
+    /// Writes a sequence of values into the buffer in little-endian binary form, handling chunk boundaries and advancing the buffer position.
+    /// </summary>
+    /// <param name="value">A span of values whose raw bytes will be written as little-endian binary (elements are written whole; partial element writes are not performed).</param>
     private void PutBinaryManyLE<T>(ReadOnlySpan<T> value) where T : struct
     {
         var srcSpan = MemoryMarshal.Cast<T, byte>(value);
@@ -172,13 +178,22 @@ public class BufferV2 : BufferV1
         }
     }
 
-    /// <summary />
+    /// <summary>
+    /// Writes a column whose value is the provided span of doubles encoded as a binary double array.
+    /// </summary>
+    /// <returns>The current buffer instance.</returns>
     public override IBuffer Column<T>(ReadOnlySpan<char> name, ReadOnlySpan<T> value) where T : struct
     {
         GuardAgainstNonDoubleTypes(typeof(T));
         return PutDoubleArray(name, value);
     }
 
+    /// <summary>
+    /// Writes a one-dimensional double array column encoded in the buffer's binary double-array format.
+    /// </summary>
+    /// <param name="name">The column name.</param>
+    /// <param name="value">A span of elements representing the array; elements must be of type `double`.</param>
+    /// <returns>The current buffer instance.</returns>
     private IBuffer PutDoubleArray<T>(ReadOnlySpan<char> name, ReadOnlySpan<T> value) where T : struct
     {
         SetTableIfAppropriate();
@@ -190,7 +205,13 @@ public class BufferV2 : BufferV1
         return this;
     }
 
-    /// <summary />
+    /// <summary>
+    /// Add a column with the given name whose value is provided by the specified double array (1D or multi-dimensional).
+    /// </summary>
+    /// <param name="name">The column name to write.</param>
+    /// <param name="value">An array of doubles to write. If null the column is omitted. For a 1D array the values are written as a single-dimension double array; for multi-dimensional arrays the rank and each dimension length are written followed by the elements in row-major order.</param>
+    /// <returns>This buffer instance.</returns>
+    /// <exception cref="InvalidOperationException">Thrown when the array's element type cannot be determined.</exception>
     public override IBuffer Column(ReadOnlySpan<char> name, Array? value)
     {
         if (value == null)

@@ -57,6 +57,10 @@ internal class HttpSender : AbstractSender
     private readonly Func<HttpRequestMessage> _sendRequestFactory;
     private readonly Func<HttpRequestMessage> _settingRequestFactory;
 
+    /// <summary>
+    /// Initializes a new HttpSender configured according to the provided options.
+    /// </summary>
+    /// <param name="options">Configuration for the sender, including connection endpoint, TLS and certificate settings, buffering and protocol parameters, authentication, and timeouts.</param>
     public HttpSender(SenderOptions options)
     {
         _sendRequestFactory = GenerateRequest;
@@ -70,6 +74,17 @@ internal class HttpSender : AbstractSender
     {
     }
 
+    /// <summary>
+    /// Configure and initialize the SocketsHttpHandler and HttpClient, set TLS and authentication options, determine the Line Protocol version (probing /settings when set to Auto), and create the internal send buffer.
+    /// </summary>
+    /// <remarks>
+    /// - Applies pool and connection settings from Options.
+    /// - When using HTTPS, configures TLS protocols, optional remote-certificate validation override (when tls_verify is unsafe_off), optional custom root CA installation, and optional client certificates.
+    /// - Sets connection timeout, PreAuthenticate, BaseAddress, and disables HttpClient timeout.
+    /// - Adds Basic or Bearer Authorization header when credentials or token are provided.
+    /// - If protocol_version is Auto, probes the server's /settings with a 1-second retry window to select the highest mutually supported protocol up to V3, falling back to V1 on errors or unexpected responses.
+    /// - Initializes the Buffer with init_buf_size, max_name_len, max_buf_size, and the chosen protocol version.
+    /// </remarks>
     private void Build()
     {
         _handler = new SocketsHttpHandler
@@ -211,7 +226,10 @@ internal class HttpSender : AbstractSender
     /// <summary>
     ///     Creates a new HTTP request with appropriate encoding.
     /// </summary>
-    /// <returns></returns>
+    /// <summary>
+    /// Create an HTTP POST request targeting "/write" with the sender's buffer as the request body.
+    /// </summary>
+    /// <returns>An <see cref="HttpRequestMessage"/> configured with the buffer as the request body, Content-Type set to "text/plain" with charset "utf-8", and Content-Length set to the buffer length.</returns>
     private HttpRequestMessage GenerateRequest()
     {
         var request = new HttpRequestMessage(HttpMethod.Post, "/write")
@@ -307,7 +325,15 @@ internal class HttpSender : AbstractSender
         Buffer.Clear();
     }
 
-    /// <inheritdoc cref="SendAsync" />
+    /// <summary>
+    /// Sends the current buffer synchronously to the server, applying configured retries and handling server-side errors.
+    /// </summary>
+    /// <remarks>
+    /// Validates that a pending transaction is being committed before sending. If the buffer is empty this method returns immediately.
+    /// On success updates <see cref="LastFlush"/> from the server response date; on failure sets <see cref="LastFlush"/> to now. The buffer is always cleared after the operation.
+    /// </remarks>
+    /// <param name="ct">Cancellation token to cancel the send operation.</param>
+    /// <exception cref="IngressError">Thrown with <see cref="ErrorCode.InvalidApiCall"/> if a transaction is open but not committing, or with <see cref="ErrorCode.ServerFlushError"/> for server/transport errors.</exception>
     public override void Send(CancellationToken ct = default)
     {
         if (WithinTransaction && !CommittingTransaction)
@@ -361,6 +387,15 @@ internal class HttpSender : AbstractSender
         }
     }
 
+    /// <summary>
+    /// Sends an HTTP request produced by <paramref name="requestFactory"/> and retries on transient connection or server errors until a successful response is received or <paramref name="retryTimeout"/> elapses.
+    /// </summary>
+    /// <param name="ct">Cancellation token used to cancel the overall operation and linked to per-request timeouts.</param>
+    /// <param name="requestFactory">Factory that produces a fresh <see cref="HttpRequestMessage"/> for each attempt.</param>
+    /// <param name="retryTimeout">Maximum duration to keep retrying transient failures; retries are skipped if this is zero.</param>
+    /// <returns>The final <see cref="HttpResponseMessage"/> returned by the server for a successful request.</returns>
+    /// <exception cref="IngressError">Thrown with <see cref="ErrorCode.ServerFlushError"/> when a connection could not be established within the allowed retries.</exception>
+    /// <remarks>The caller is responsible for disposing the returned <see cref="HttpResponseMessage"/>./// </remarks>
     private HttpResponseMessage SendWithRetries(CancellationToken ct, Func<HttpRequestMessage> requestFactory, TimeSpan retryTimeout)
     {
         HttpResponseMessage? response = null;
@@ -452,6 +487,11 @@ internal class HttpSender : AbstractSender
         }
     }
 
+    /// <summary>
+    /// Read an error payload from the HTTP response (JSON if possible, otherwise raw text) and throw an IngressError containing the server reason and the parsed error details.
+    /// </summary>
+    /// <param name="response">The HTTP response containing a JSON or plain-text error body.</param>
+    /// <exception cref="IngressError">Always thrown with <see cref="ErrorCode.ServerFlushError"/>; the message contains <c>response.ReasonPhrase</c> followed by the deserialized JSON error or the raw response body.</exception>
     private async Task HandleErrorJsonAsync(HttpResponseMessage response)
     {
         await using var respStream = await response.Content.ReadAsStreamAsync();

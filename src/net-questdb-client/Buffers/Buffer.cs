@@ -39,7 +39,15 @@ public static class Buffer
     /// <param name="maxBufSize"></param>
     /// <param name="version"></param>
     /// <returns></returns>
-    /// <exception cref="NotImplementedException"></exception>
+    /// <summary>
+    /// Creates a concrete IBuffer implementation configured for the specified protocol version.
+    /// </summary>
+    /// <param name="bufferSize">Size in bytes of each buffer segment.</param>
+    /// <param name="maxNameLen">Maximum allowed length for names stored in the buffer.</param>
+    /// <param name="maxBufSize">Maximum total buffer capacity.</param>
+    /// <param name="version">Protocol version that determines which concrete buffer implementation to create.</param>
+    /// <returns>An <see cref="IBuffer"/> instance corresponding to the specified protocol version.</returns>
+    /// <exception cref="NotImplementedException">Thrown when an unsupported protocol version is provided.</exception>
     public static IBuffer Create(int bufferSize, int maxNameLen, int maxBufSize, ProtocolVersion version)
     {
         return version switch

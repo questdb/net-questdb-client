@@ -70,6 +70,10 @@ internal class HttpSender : AbstractSender
         Build();
     }
 
+    /// <summary>
+    /// Initializes a new instance of <see cref="HttpSender"/> by parsing a configuration string.
+    /// </summary>
+    /// <param name="confStr">Configuration string in QuestDB connection string format.</param>
     public HttpSender(string confStr) : this(new SenderOptions(confStr))
     {
     }
@@ -207,15 +211,20 @@ internal class HttpSender : AbstractSender
         );
     }
 
+    /// <summary>
+    /// Creates an HTTP GET request to the /settings endpoint for querying server capabilities.
+    /// </summary>
+    /// <returns>A new <see cref="HttpRequestMessage"/> configured for the /settings endpoint.</returns>
     private static HttpRequestMessage GenerateSettingsRequest()
     {
         return new HttpRequestMessage(HttpMethod.Get, "/settings");
     }
 
     /// <summary>
-    ///     Creates a new HTTP request with appropriate encoding and timeout.
+    /// Creates a new cancellation token source linked to the provided token and configured with the calculated request timeout.
     /// </summary>
-    /// <returns></returns>
+    /// <param name="ct">Optional cancellation token to link.</param>
+    /// <returns>A <see cref="CancellationTokenSource"/> configured with the request timeout.</returns>
     private CancellationTokenSource GenerateRequestCts(CancellationToken ct = default)
     {
         var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
@@ -469,6 +478,11 @@ internal class HttpSender : AbstractSender
         }
     }
 
+    /// <summary>
+    /// Reads and deserializes a JSON error response from the HTTP response, then throws an <see cref="IngressError"/> with the error details.
+    /// </summary>
+    /// <param name="response">The HTTP response containing a JSON error body.</param>
+    /// <exception cref="IngressError">Always thrown with <see cref="ErrorCode.ServerFlushError"/>; the message combines the response reason phrase with the deserialized JSON error or raw response text.</exception>
     private void HandleErrorJson(HttpResponseMessage response)
     {
         using var respStream = response.Content.ReadAsStream();
@@ -623,10 +637,10 @@ internal class HttpSender : AbstractSender
     }
 
     /// <summary>
-    ///     Specifies whether a negative <see cref="HttpResponseMessage" /> will lead to a retry or to an exception.
+    /// Determines whether the specified HTTP status code represents a transient error that should be retried.
     /// </summary>
-    /// <param name="code">The <see cref="HttpStatusCode" /></param>
-    /// <returns></returns>
+    /// <param name="code">The HTTP status code to check.</param>
+    /// <returns><c>true</c> if the error is transient and retriable (e.g., 500, 503, 504, 509, 523, 524, 529, 599); otherwise, <c>false</c>.</returns>
     // ReSharper disable once IdentifierTypo
     private static bool IsRetriableError(HttpStatusCode code)
     {

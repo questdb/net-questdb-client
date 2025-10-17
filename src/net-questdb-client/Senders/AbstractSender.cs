@@ -303,7 +303,19 @@ internal abstract class AbstractSender : ISender
         return ValueTask.CompletedTask;
     }
 
-    /// <inheritdoc cref="FlushIfNecessaryAsync" />
+    /// <summary>
+    /// Synchronously checks auto-flush conditions and sends the buffer if thresholds are met.
+    /// </summary>
+    /// <param name="ct">A user-provided cancellation token.</param>
+    /// <remarks>
+    /// Auto-flushing is triggered based on:
+    /// <list type="bullet">
+    /// <item><see cref="SenderOptions.auto_flush_rows"/> - the number of buffered ILP rows.</item>
+    /// <item><see cref="SenderOptions.auto_flush_bytes"/> - the current length of the buffer in UTF-8 bytes.</item>
+    /// <item><see cref="SenderOptions.auto_flush_interval"/> - the elapsed time interval since the last flush.</item>
+    /// </list>
+    /// Has no effect within a transaction or if <see cref="SenderOptions.auto_flush"/> is set to <see cref="AutoFlushType.off"/>.
+    /// </remarks>
     private void FlushIfNecessary(CancellationToken ct = default)
     {
         if (Options.auto_flush == AutoFlushType.on && !WithinTransaction &&

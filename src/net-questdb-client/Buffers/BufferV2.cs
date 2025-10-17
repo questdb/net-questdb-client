@@ -32,12 +32,25 @@ namespace QuestDB.Buffers;
 /// <summary />
 public class BufferV2 : BufferV1
 {
-    /// <summary />
+    /// <summary>
+    /// Initializes a new instance of BufferV2 supporting ARRAY and binary DOUBLE types.
+    /// </summary>
+    /// <param name="bufferSize">Initial size of the internal write buffer, in bytes.</param>
+    /// <param name="maxNameLen">Maximum allowed length for column names, in characters.</param>
+    /// <param name="maxBufSize">Maximum allowed internal buffer size, in bytes.</param>
     public BufferV2(int bufferSize, int maxNameLen, int maxBufSize) : base(bufferSize, maxNameLen, maxBufSize)
     {
     }
 
-    /// <summary />
+    /// <summary>
+    /// Writes a multidimensional double array column with the specified name, elements, and shape to the buffer.
+    /// </summary>
+    /// <typeparam name="T">The element type (must be double).</typeparam>
+    /// <param name="name">The column name.</param>
+    /// <param name="value">An enumerable of double values forming the array elements.</param>
+    /// <param name="shape">An enumerable of integers describing the dimensions; product must equal the element count.</param>
+    /// <returns>The buffer instance for fluent chaining.</returns>
+    /// <exception cref="IngressError">Thrown if T is not double, shape is invalid, or shape does not match element count.</exception>
     public override IBuffer Column<T>(ReadOnlySpan<char> name, IEnumerable<T> value, IEnumerable<int> shape)
         where T : struct
     {
@@ -81,6 +94,11 @@ public class BufferV2 : BufferV1
         return this;
     }
 
+    /// <summary>
+    /// Validates that the provided type is double; throws if not.
+    /// </summary>
+    /// <param name="t">The type to validate.</param>
+    /// <exception cref="IngressError">Thrown with <see cref="ErrorCode.InvalidApiCall"/> if the type is not double.</exception>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void GuardAgainstNonDoubleTypes(Type t)
     {
@@ -103,6 +121,11 @@ public class BufferV2 : BufferV1
         Advance(size);
     }
 
+    /// <summary>
+    /// Writes the provided value into the buffer as big-endian raw bytes and advances the buffer position by the value's size.
+    /// </summary>
+    /// <typeparam name="T">A value type.</typeparam>
+    /// <param name="value">The value to write in big-endian byte order.</param>
     // ReSharper disable once InconsistentNaming
     private void PutBinaryBE<T>(T value) where T : struct
     {
@@ -124,12 +147,13 @@ public class BufferV2 : BufferV1
 
         while (srcSpan.Length > 0)
         {
-            var dstLength = GetSpareCapacity();               // length
+            var dstLength = GetSpareCapacity(); // length
             if (dstLength < byteSize)
             {
                 NextBuffer();
                 dstLength = GetSpareCapacity();
             }
+
             var availLength = dstLength - dstLength % byteSize; // rounded length
 
             if (srcSpan.Length < availLength)
@@ -138,6 +162,7 @@ public class BufferV2 : BufferV1
                 Advance(srcSpan.Length);
                 return;
             }
+
             var dstSpan = Chunk.AsSpan(Position, availLength);
             srcSpan.Slice(0, availLength).CopyTo(dstSpan);
             Advance(availLength);
@@ -145,6 +170,11 @@ public class BufferV2 : BufferV1
         }
     }
 
+    /// <summary>
+    /// Writes a sequence of values into the buffer in big-endian binary form by writing each element individually.
+    /// </summary>
+    /// <typeparam name="T">A value type.</typeparam>
+    /// <param name="value">A span of values to write in big-endian byte order.</param>
     // ReSharper disable once InconsistentNaming
     private void PutBinaryManyBE<T>(ReadOnlySpan<T> value) where T : struct
     {
@@ -154,6 +184,11 @@ public class BufferV2 : BufferV1
         }
     }
 
+    /// <summary>
+    /// Writes a sequence of values into the buffer in the platform's native byte order (little-endian or big-endian).
+    /// </summary>
+    /// <typeparam name="T">A value type.</typeparam>
+    /// <param name="value">A span of values to write.</param>
     private void PutBinaryMany<T>(ReadOnlySpan<T> value) where T : struct
     {
         if (BitConverter.IsLittleEndian)
@@ -166,6 +201,11 @@ public class BufferV2 : BufferV1
         }
     }
 
+    /// <summary>
+    /// Writes a single value into the buffer in the platform's native byte order (little-endian or big-endian).
+    /// </summary>
+    /// <typeparam name="T">A value type.</typeparam>
+    /// <param name="value">The value to write.</param>
     private void PutBinary<T>(T value) where T : struct
     {
         if (BitConverter.IsLittleEndian)
@@ -246,6 +286,11 @@ public class BufferV2 : BufferV1
         return this;
     }
 
+    /// <summary>
+    /// Reserves space in the buffer for a value of type T and returns a span to write the value later, advancing the buffer position.
+    /// </summary>
+    /// <typeparam name="T">A value type.</typeparam>
+    /// <param name="span">An out parameter that receives a span covering the reserved space for writing.</param>
     private void PutBinaryDeferred<T>(out Span<T> span) where T : struct
     {
         var length = Marshal.SizeOf<T>();
@@ -254,6 +299,10 @@ public class BufferV2 : BufferV1
         Advance(length);
     }
 
+    /// <summary>
+    /// Writes the ILP binary format header for a double array column.
+    /// </summary>
+    /// <param name="name">The column name.</param>
     private void PutArrayOfDoubleHeader(ReadOnlySpan<char> name)
     {
         Column(name)
@@ -263,6 +312,10 @@ public class BufferV2 : BufferV1
     }
 
 
+    /// <summary>
+    /// Writes the ILP binary format header for a double column.
+    /// </summary>
+    /// <param name="name">The column name.</param>
     private void PutDoubleHeader(ReadOnlySpan<char> name)
     {
         Column(name)
@@ -270,6 +323,10 @@ public class BufferV2 : BufferV1
             .Put((byte)BinaryFormatType.DOUBLE);
     }
 
+    /// <summary>
+    /// Calculates the remaining available space in the current buffer chunk.
+    /// </summary>
+    /// <returns>The number of bytes remaining in the current chunk.</returns>
     private int GetSpareCapacity()
     {
         return Chunk.Length - Position;

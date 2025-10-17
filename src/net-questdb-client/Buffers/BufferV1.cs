@@ -46,7 +46,12 @@ public class BufferV1 : IBuffer
     private bool _noSymbols = true;
     private bool _quoted;
 
-    /// <summary />
+    /// <summary>
+    /// Initializes a new instance of BufferV1 for writing ILP (InfluxDB Line Protocol) messages.
+    /// </summary>
+    /// <param name="bufferSize">Initial size of each buffer chunk, in bytes.</param>
+    /// <param name="maxNameLen">Maximum allowed UTF-8 byte length for table and column names.</param>
+    /// <param name="maxBufSize">Maximum total buffer size across all chunks, in bytes.</param>
     public BufferV1(int bufferSize, int maxNameLen, int maxBufSize)
     {
         Chunk = new byte[bufferSize];
@@ -76,13 +81,13 @@ public class BufferV1 : IBuffer
         if (WithinTransaction)
         {
             throw new IngressError(ErrorCode.InvalidApiCall,
-                                   "Cannot start another transaction - only one allowed at a time.");
+                "Cannot start another transaction - only one allowed at a time.");
         }
 
         if (Length > 0)
         {
             throw new IngressError(ErrorCode.InvalidApiCall,
-                                   "Buffer must be clear before you can start a transaction.");
+                "Buffer must be clear before you can start a transaction.");
         }
 
         GuardInvalidTableName(tableName);
@@ -250,7 +255,7 @@ public class BufferV1 : IBuffer
         if (WithinTransaction && name != _currentTableName)
         {
             throw new IngressError(ErrorCode.InvalidApiCall,
-                                   "Transactions can only be for one table.");
+                "Transactions can only be for one table.");
         }
 
         GuardTableAlreadySet();
@@ -372,7 +377,7 @@ public class BufferV1 : IBuffer
         return this;
     }
 
-    /// <summary />
+    /// <inheritdoc />
     public IBuffer EncodeUtf8(ReadOnlySpan<char> name)
     {
         foreach (var c in name)
@@ -390,7 +395,7 @@ public class BufferV1 : IBuffer
         return this;
     }
 
-    /// <summary />
+    /// <inheritdoc />
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public IBuffer PutAscii(char c)
     {
@@ -398,7 +403,7 @@ public class BufferV1 : IBuffer
         return this;
     }
 
-    /// <summary />
+    /// <inheritdoc />
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public void Put(ReadOnlySpan<char> chars)
     {
@@ -415,7 +420,7 @@ public class BufferV1 : IBuffer
         if (value == long.MinValue)
         {
             throw new IngressError(ErrorCode.InvalidApiCall, "Special case, long.MinValue cannot be handled by QuestDB",
-                                   new ArgumentOutOfRangeException());
+                new ArgumentOutOfRangeException());
         }
 
         Span<byte> num = stackalloc byte[20];
@@ -443,26 +448,26 @@ public class BufferV1 : IBuffer
         return this;
     }
 
-    /// <summary />
+    /// <inheritdoc />
     public virtual IBuffer Column<T>(ReadOnlySpan<char> name, ReadOnlySpan<T> value) where T : struct
     {
         throw new IngressError(ErrorCode.ProtocolVersionError, "Protocol Version V1 does not support ARRAY types");
     }
 
-    /// <summary />
+    /// <inheritdoc />
     public virtual IBuffer Column(ReadOnlySpan<char> name, Array? value)
     {
         throw new IngressError(ErrorCode.ProtocolVersionError, "Protocol Version V1 does not support ARRAY types");
     }
 
-    /// <summary />
+    /// <inheritdoc />
     public virtual IBuffer Column<T>(ReadOnlySpan<char> name, IEnumerable<T> value, IEnumerable<int> shape)
         where T : struct
     {
         throw new IngressError(ErrorCode.ProtocolVersionError, "Protocol Version V1 does not support ARRAY types");
     }
 
-    /// <summary />
+    /// <inheritdoc />
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public IBuffer Put(byte value)
     {
@@ -527,10 +532,16 @@ public class BufferV1 : IBuffer
         if (Length > _maxBufSize)
         {
             throw new IngressError(ErrorCode.InvalidApiCall,
-                                   $"Exceeded maximum buffer size. Current: {Length} Maximum: {_maxBufSize}");
+                $"Exceeded maximum buffer size. Current: {Length} Maximum: {_maxBufSize}");
         }
     }
 
+    /// <summary>
+    /// Writes the column name to the buffer and prepares for writing the column value by appending the appropriate separator and equals sign.
+    /// </summary>
+    /// <param name="columnName">The column name to write.</param>
+    /// <returns>The buffer instance for fluent chaining.</returns>
+    /// <exception cref="IngressError">Thrown if the table is not set, the column name is invalid, or the name exceeds the maximum length.</exception>
     internal IBuffer Column(ReadOnlySpan<char> columnName)
     {
         GuardFsFileNameLimit(columnName);
@@ -550,16 +561,26 @@ public class BufferV1 : IBuffer
         return EncodeUtf8(columnName).PutAscii('=');
     }
 
+    /// <summary>
+    /// Validates that the requested additional byte count does not exceed the chunk size.
+    /// </summary>
+    /// <param name="additional">The number of additional bytes requested.</param>
+    /// <exception cref="IngressError">Thrown with <see cref="ErrorCode.InvalidApiCall"/> if the requested size exceeds the chunk length.</exception>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal void GuardAgainstOversizedChunk(int additional)
     {
         if (additional > Chunk.Length)
         {
             throw new IngressError(ErrorCode.InvalidApiCall,
-                                   "tried to allocate oversized chunk: " + additional + " bytes");
+                "tried to allocate oversized chunk: " + additional + " bytes");
         }
     }
 
+    /// <summary>
+    /// Ensures that the current chunk has enough space to write the specified number of additional bytes; switches to the next buffer chunk if needed.
+    /// </summary>
+    /// <param name="additional">The number of additional bytes required.</param>
+    /// <exception cref="IngressError">Thrown if the requested size exceeds the chunk size.</exception>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal void EnsureCapacity(int additional)
     {
@@ -571,11 +592,9 @@ public class BufferV1 : IBuffer
     }
 
     /// <summary>
-    /// Encodes the specified character as UTF-8 into the current chunk and advances the write position by the number of bytes written.
+    /// Writes a non-ASCII character as UTF-8 to the buffer, switching to the next buffer chunk if insufficient space remains.
     /// </summary>
-    /// <remarks>
-    /// If the current chunk has fewer than four bytes free, switches to the next buffer before writing.
-    /// </remarks>
+    /// <param name="c">The character to encode and write.</param>
     private void PutUtf8(char c)
     {
         if (Position + 4 >= Chunk.Length)
@@ -589,6 +608,13 @@ public class BufferV1 : IBuffer
         Advance(byteLength);
     }
 
+    /// <summary>
+    /// Writes an ASCII character to the buffer, applying ILP escaping rules based on context (quoted or unquoted).
+    /// </summary>
+    /// <param name="c">The ASCII character to write.</param>
+    /// <remarks>
+    /// Escapes space, comma, equals, newline, carriage return, quote, and backslash characters according to ILP protocol requirements.
+    /// </remarks>
     private void PutSpecial(char c)
     {
         switch (c)
@@ -702,7 +728,7 @@ public class BufferV1 : IBuffer
         if (tableName.IsEmpty)
         {
             throw new IngressError(ErrorCode.InvalidName,
-                                   "Table names must have a non-zero length.");
+                "Table names must have a non-zero length.");
         }
 
         var prev = '\0';
@@ -715,7 +741,7 @@ public class BufferV1 : IBuffer
                     if (i == 0 || i == tableName.Length - 1 || prev == '.')
                     {
                         throw new IngressError(ErrorCode.InvalidName,
-                                               $"Bad string {tableName}. Found invalid dot `.` at position {i}.");
+                            $"Bad string {tableName}. Found invalid dot `.` at position {i}.");
                     }
 
                     break;
@@ -750,10 +776,10 @@ public class BufferV1 : IBuffer
                 case '\x000f':
                 case '\x007f':
                     throw new IngressError(ErrorCode.InvalidName,
-                                           $"Bad string {tableName}. Table names can't contain a {c} character, which was found at byte position {i}");
+                        $"Bad string {tableName}. Table names can't contain a {c} character, which was found at byte position {i}");
                 case '\xfeff':
                     throw new IngressError(ErrorCode.InvalidName,
-                                           $"Bad string {tableName}. Table names can't contain a UTF-8 BOM character, was was found at byte position {i}.");
+                        $"Bad string {tableName}. Table names can't contain a UTF-8 BOM character, was was found at byte position {i}.");
             }
 
             prev = c;
@@ -770,7 +796,7 @@ public class BufferV1 : IBuffer
         if (columnName.IsEmpty)
         {
             throw new IngressError(ErrorCode.InvalidName,
-                                   "Column names must have a non-zero length.");
+                "Column names must have a non-zero length.");
         }
 
         for (var i = 0; i < columnName.Length; i++)
@@ -811,10 +837,10 @@ public class BufferV1 : IBuffer
                 case '\x000f':
                 case '\x007f':
                     throw new IngressError(ErrorCode.InvalidName,
-                                           $"Bad string {columnName}. Column names can't contain a {c} character, which was found at byte position {i}");
+                        $"Bad string {columnName}. Column names can't contain a {c} character, which was found at byte position {i}");
                 case '\xfeff':
                     throw new IngressError(ErrorCode.InvalidName,
-                                           $"Bad string {columnName}. Column names can't contain a UTF-8 BOM character, was was found at byte position {i}.");
+                        $"Bad string {columnName}. Column names can't contain a UTF-8 BOM character, was was found at byte position {i}.");
             }
         }
     }
@@ -833,7 +859,7 @@ public class BufferV1 : IBuffer
         if (Encoding.UTF8.GetBytes(name.ToString()).Length > _maxNameLen)
         {
             throw new IngressError(ErrorCode.InvalidApiCall,
-                                   $"Name is too long, must be under {_maxNameLen} bytes.");
+                $"Name is too long, must be under {_maxNameLen} bytes.");
         }
     }
 

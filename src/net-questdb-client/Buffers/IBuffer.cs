@@ -58,7 +58,11 @@ public interface IBuffer
     // ReSharper disable once InconsistentNaming
     public int RowCount { get; protected set; }
 
-    /// <summary />
+    /// <summary>
+    ///     Encodes the specified character span to UTF-8 and appends it to the buffer.
+    /// </summary>
+    /// <param name="name">The character span to encode and append.</param>
+    /// <returns>The buffer instance for fluent chaining.</returns>
     public IBuffer EncodeUtf8(ReadOnlySpan<char> name);
 
     /// <summary>
@@ -194,7 +198,10 @@ public interface IBuffer
     /// <exception cref="InvalidOperationException"></exception>
     public void CancelRow();
 
-    /// <summary />
+    /// <summary>
+    ///     Gets the current chunk of the buffer as a read-only byte span for sending.
+    /// </summary>
+    /// <returns>A read-only span of bytes representing the current chunk.</returns>
     public ReadOnlySpan<byte> GetSendBuffer();
 
     /// <summary>
@@ -213,19 +220,43 @@ public interface IBuffer
     /// <exception cref="IngressError">When writing to stream fails.</exception>
     public void WriteToStream(Stream stream, CancellationToken ct = default);
 
-    /// <summary />
+    /// <summary>
+    ///     Appends a single ASCII character to the buffer.
+    /// </summary>
+    /// <param name="c">The ASCII character to append.</param>
+    /// <returns>The buffer instance for fluent chaining.</returns>
     public IBuffer PutAscii(char c);
 
-    /// <summary />
+    /// <summary>
+    ///     Appends a 64-bit integer value in ASCII decimal representation to the buffer.
+    /// </summary>
+    /// <param name="value">The long value to append.</param>
+    /// <returns>The buffer instance for fluent chaining.</returns>
     public IBuffer Put(long value);
 
-    /// <summary />
+    /// <summary>
+    ///     Appends a character span to the buffer by encoding it as UTF-8.
+    /// </summary>
+    /// <param name="chars">The character span to encode and append.</param>
     public void Put(ReadOnlySpan<char> chars);
 
-    /// <summary />
+    /// <summary>
+    ///     Appends a single byte to the buffer.
+    /// </summary>
+    /// <param name="value">The byte value to append.</param>
+    /// <returns>The buffer instance for fluent chaining.</returns>
     public IBuffer Put(byte value);
 
-    /// <summary />
+    /// <summary>
+    ///     Adds a column with the specified name and a span of value-type elements.
+    /// </summary>
+    /// <typeparam name="T">The element type; must be a value type.</typeparam>
+    /// <param name="name">The column name.</param>
+    /// <param name="value">A span of value-type elements representing the column data.</param>
+    /// <returns>The buffer instance for fluent chaining.</returns>
+    /// <remarks>
+    ///     This method requires protocol version 2 or later. It will throw an <see cref="IngressError"/> with <see cref="ErrorCode.ProtocolVersionError"/> if used with protocol version 1.
+    /// </remarks>
     public IBuffer Column<T>(ReadOnlySpan<char> name, ReadOnlySpan<T> value) where T : struct;
 
     /// <summary>
@@ -234,6 +265,9 @@ public interface IBuffer
     /// <param name="name">The column name.</param>
     /// <param name="value">The array to write as the column value, or null to record a NULL value.</param>
     /// <returns>The same buffer instance for fluent chaining.</returns>
+    /// <remarks>
+    ///     This method requires protocol version 2 or later. It will throw an <see cref="IngressError"/> with <see cref="ErrorCode.ProtocolVersionError"/> if used with protocol version 1.
+    /// </remarks>
     public IBuffer Column(ReadOnlySpan<char> name, Array? value);
 
     /// <summary>
@@ -243,15 +277,19 @@ public interface IBuffer
     /// <param name="value">An enumerable of values for the column; elements are of the value type `T`.</param>
     /// <param name="shape">An enumerable of integers describing the multidimensional shape/length(s) for the values.</param>
     /// <returns>The same <see cref="IBuffer"/> instance for call chaining.</returns>
+    /// <remarks>
+    ///     This method requires protocol version 2 or later. It will throw an <see cref="IngressError"/> with <see cref="ErrorCode.ProtocolVersionError"/> if used with protocol version 1.
+    /// </remarks>
     public IBuffer Column<T>(ReadOnlySpan<char> name, IEnumerable<T> value, IEnumerable<int> shape) where T : struct;
 
-    /// <summary>
-    ///     Records a DECIMAL column value using the ILP binary decimal layout.
     /// <summary>
     /// Writes a DECIMAL column with the specified name using the ILP binary decimal layout.
     /// </summary>
     /// <param name="name">The column name.</param>
     /// <param name="value">The decimal value to write, or `null` to write a NULL column.</param>
     /// <returns>The buffer instance for method chaining.</returns>
+    /// <remarks>
+    ///     This method requires protocol version 3 or later. It will throw an <see cref="IngressError"/> with <see cref="ErrorCode.ProtocolVersionError"/> if used with protocol version 1 or 2.
+    /// </remarks>
     public IBuffer Column(ReadOnlySpan<char> name, decimal? value);
 }

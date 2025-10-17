@@ -239,6 +239,7 @@ public interface ISender : IDisposable
     /// <returns>Itself</returns>
     public ISender Column(ReadOnlySpan<char> name, string? value)
     {
+        if (value is null) return this;
         return Column(name, value.AsSpan());
     }
 

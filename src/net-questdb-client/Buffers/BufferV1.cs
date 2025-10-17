@@ -40,6 +40,7 @@ public class BufferV1 : IBuffer
     private int _currentBufferIndex;
     private string _currentTableName = null!;
     private bool _hasTable;
+    private int _lineStartLength;
     private int _lineStartBufferIndex;
     private int _lineStartBufferPosition;
     private bool _noFields = true;
@@ -158,6 +159,7 @@ public class BufferV1 : IBuffer
         Length = 0;
         WithinTransaction = false;
         _currentTableName = "";
+        _lineStartLength = 0;
         _lineStartBufferIndex = 0;
         _lineStartBufferPosition = 0;
     }
@@ -182,9 +184,11 @@ public class BufferV1 : IBuffer
     public void CancelRow()
     {
         _currentBufferIndex = _lineStartBufferIndex;
-        Length -= Position - _lineStartBufferPosition;
+        Chunk = _buffers[_currentBufferIndex].Buffer;
+        Length = _lineStartLength;
         Position = _lineStartBufferPosition;
         _hasTable = false;
+        
     }
 
     /// <inheritdoc />
@@ -264,6 +268,7 @@ public class BufferV1 : IBuffer
         _quoted = false;
         _hasTable = true;
 
+        _lineStartLength = Length;
         _lineStartBufferIndex = _currentBufferIndex;
         _lineStartBufferPosition = Position;
 

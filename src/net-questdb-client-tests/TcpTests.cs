@@ -560,23 +560,23 @@ public class TcpTests
 
         using var sender = Sender.New($"tcp::addr={_host}:{_port};");
 
-        sender.Table("good");
-        sender.Symbol("asdf", "sdfad");
-        sender.Column("ddd", 123);
-#pragma warning disable CS0618 // Type or member is obsolete
-        await sender.AtNowAsync();
-#pragma warning restore CS0618 // Type or member is obsolete
+        await sender
+            .Table("good")
+            .Symbol("asdf", "sdfad")
+            .Column("ddd", 123)
+            .AtAsync(DateTime.UtcNow);
 
-        sender.Table("bad");
-        sender.Symbol("asdf", "sdfad");
-        sender.Column("asdf", 123);
-#pragma warning disable CS0618 // Type or member is obsolete
-        await sender.AtNowAsync();
-#pragma warning restore CS0618 // Type or member is obsolete
+        await sender
+            .Table("bad")
+            .Symbol("asdf", "sdfad")
+            .Column("asdf", 123)
+            .AtAsync(DateTime.UtcNow);
+
         sender.CancelRow();
 
-        sender.Table("good");
-        await sender.AtAsync(new DateTime(1970, 1, 2));
+        await sender
+            .Table("good")
+            .AtAsync(new DateTime(1970, 1, 2));
         await sender.SendAsync();
 
         var expected = "good,asdf=sdfad ddd=123i\n" +

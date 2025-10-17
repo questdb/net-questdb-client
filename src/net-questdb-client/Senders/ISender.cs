@@ -22,11 +22,7 @@
  *
  ******************************************************************************/
 
-// ReSharper disable CommentTypo
-
 using QuestDB.Utils;
-
-// ReSharper disable InconsistentNaming
 
 namespace QuestDB.Senders;
 
@@ -46,7 +42,7 @@ public interface ISender : IDisposable
     public int RowCount { get; }
 
     /// <summary>
-    ///     Represents whether or not the Sender is in a transactional state.
+    ///     Represents whether the Sender is in a transactional state.
     /// </summary>
     public bool WithinTransaction { get; }
 
@@ -125,54 +121,54 @@ public interface ISender : IDisposable
     /// <param name="name">The name of the column</param>
     /// <param name="value">The value for the column</param>
     /// <summary>
-/// Adds a column (field) with the specified string value to the current row.
-/// </summary>
-/// <param name="name">The column name.</param>
-/// <param name="value">The column value as a character span.</param>
-/// <returns>The sender instance for fluent chaining.</returns>
+    /// Adds a column (field) with the specified string value to the current row.
+    /// </summary>
+    /// <param name="name">The column name.</param>
+    /// <param name="value">The column value as a character span.</param>
+    /// <returns>The sender instance for fluent chaining.</returns>
     public ISender Column(ReadOnlySpan<char> name, ReadOnlySpan<char> value);
 
     /// <summary>
-/// Adds a column with the specified name and 64-bit integer value to the current row.
-/// </summary>
-/// <param name="name">The column (field) name.</param>
-/// <param name="value">The 64-bit integer value for the column.</param>
-/// <returns>The current sender instance for method chaining.</returns>
+    /// Adds a column with the specified name and 64-bit integer value to the current row.
+    /// </summary>
+    /// <param name="name">The column (field) name.</param>
+    /// <param name="value">The 64-bit integer value for the column.</param>
+    /// <returns>The current sender instance for method chaining.</returns>
     public ISender Column(ReadOnlySpan<char> name, long value);
 
     /// <inheritdoc cref="Column(ReadOnlySpan{char},ReadOnlySpan{char})" />
     public ISender Column(ReadOnlySpan<char> name, int value);
 
     /// <summary>
-/// Adds a boolean field column with the specified name and value to the current row.
-/// </summary>
-/// <param name="name">The column (field) name.</param>
-/// <param name="value">The boolean value to store in the column.</param>
-/// <returns>The same <see cref="ISender"/> instance to allow fluent chaining.</returns>
+    /// Adds a boolean field column with the specified name and value to the current row.
+    /// </summary>
+    /// <param name="name">The column (field) name.</param>
+    /// <param name="value">The boolean value to store in the column.</param>
+    /// <returns>The same <see cref="ISender"/> instance to allow fluent chaining.</returns>
     public ISender Column(ReadOnlySpan<char> name, bool value);
 
     /// <summary>
-/// Adds a double-precision field column to the current row.
-/// </summary>
-/// <param name="name">The column (field) name.</param>
-/// <param name="value">The column's double-precision value.</param>
-/// <returns>The same <see cref="ISender"/> instance for fluent chaining.</returns>
+    /// Adds a double-precision field column to the current row.
+    /// </summary>
+    /// <param name="name">The column (field) name.</param>
+    /// <param name="value">The column's double-precision value.</param>
+    /// <returns>The same <see cref="ISender"/> instance for fluent chaining.</returns>
     public ISender Column(ReadOnlySpan<char> name, double value);
 
     /// <summary>
-/// Adds a column (field) with the specified DateTime value to the current row.
-/// </summary>
-/// <param name="name">The column name.</param>
-/// <param name="value">The DateTime value to add.</param>
-/// <returns>The same <see cref="ISender"/> instance for fluent chaining.</returns>
+    /// Adds a column (field) with the specified DateTime value to the current row.
+    /// </summary>
+    /// <param name="name">The column name.</param>
+    /// <param name="value">The DateTime value to add.</param>
+    /// <returns>The same <see cref="ISender"/> instance for fluent chaining.</returns>
     public ISender Column(ReadOnlySpan<char> name, DateTime value);
 
     /// <summary>
-/// Adds a column with the specified name and DateTimeOffset value to the current row.
-/// </summary>
-/// <param name="name">The column name.</param>
-/// <param name="value">The DateTimeOffset value to store for the column (used as a timestamp value).</param>
-/// <returns>The sender instance for fluent chaining.</returns>
+    /// Adds a column with the specified name and DateTimeOffset value to the current row.
+    /// </summary>
+    /// <param name="name">The column name.</param>
+    /// <param name="value">The DateTimeOffset value to store for the column (used as a timestamp value).</param>
+    /// <returns>The sender instance for fluent chaining.</returns>
     public ISender Column(ReadOnlySpan<char> name, DateTimeOffset value);
 
     /// <summary>
@@ -242,49 +238,36 @@ public interface ISender : IDisposable
     /// <summary>
     ///     Clears the sender's buffer.
     /// <summary>
-/// Clears the sender's internal buffer and resets buffer-related state, removing all pending rows.
-/// </summary>
+    /// Clears the sender's internal buffer and resets buffer-related state, removing all pending rows.
+    /// </summary>
     public void Clear();
 
-    /// <inheritdoc
     /// <summary>
-/// Adds a column to the current row using a sequence of value-type elements and an explicit multidimensional shape.
-/// </summary>
-/// <typeparam name="T">The element value type stored in the column.</typeparam>
-/// <param name="name">The column name.</param>
-/// <param name="value">A sequence of elements that form the column's data.</param>
-/// <param name="shape">A sequence of integers describing the dimensions of the array representation; dimension lengths must match the number of elements in <paramref name="value"/> when multiplied together.</param>
-/// <returns>The same <see cref="ISender"/> instance for fluent chaining.</returns>
+    /// Adds a column to the current row using a sequence of value-type elements and an explicit multidimensional shape.
+    /// </summary>
+    /// <typeparam name="T">The element value type stored in the column.</typeparam>
+    /// <param name="name">The column name.</param>
+    /// <param name="value">A sequence of elements that form the column's data.</param>
+    /// <param name="shape">A sequence of integers describing the dimensions of the array representation; dimension lengths must match the number of elements in <paramref name="value"/> when multiplied together.</param>
+    /// <returns>The same <see cref="ISender"/> instance for fluent chaining.</returns>
     public ISender Column<T>(ReadOnlySpan<char> name, IEnumerable<T> value, IEnumerable<int> shape) where T : struct;
 
     /// <summary>
-    ///     Adds an ARRAY to the current row.
-    ///     Arrays are n-dimensional non-jagged arrays.
+    /// Adds a column whose value is provided as a native array; multidimensional (non-jagged) arrays are supported.
     /// </summary>
-    /// <param name="name"></param>
-    /// <param name="value"></param>
-    /// <summary>
-/// Adds a column whose value is provided as a native array; multidimensional (non-jagged) arrays are supported.
-/// </summary>
-/// <param name="name">The column name.</param>
-/// <param name="value">A native array containing the column data. Multidimensional arrays are treated as shaped data (do not pass jagged arrays).</param>
-/// <returns>The sender instance for fluent chaining.</returns>
+    /// <param name="name">The column name.</param>
+    /// <param name="value">A native array containing the column data. Multidimensional arrays are treated as shaped data (do not pass jagged arrays).</param>
+    /// <returns>The sender instance for fluent chaining.</returns>
     public ISender Column(ReadOnlySpan<char> name, Array value);
 
-    /// <inheritdoc
     /// <summary>
-/// Adds a column with the specified name and a sequence of value-type elements from a span to the current row.
-/// </summary>
-/// <param name="name">The column (field) name.</param>
-/// <param name="value">A contiguous sequence of value-type elements representing the column data.</param>
-/// <returns>The same <see cref="ISender"/> instance to allow fluent chaining.</returns>
+    /// Adds a column with the specified name and a sequence of value-type elements from a span to the current row.
+    /// </summary>
+    /// <param name="name">The column (field) name.</param>
+    /// <param name="value">A contiguous sequence of value-type elements representing the column data.</param>
+    /// <returns>The same <see cref="ISender"/> instance to allow fluent chaining.</returns>
     public ISender Column<T>(ReadOnlySpan<char> name, ReadOnlySpan<T> value) where T : struct;
 
-    /// <summary>
-    ///     Adds a column (field) to the current row.
-    /// </summary>
-    /// <param name="name">The name of the column</param>
-    /// <param name="value">The value for the column</param>
     /// <summary>
     /// Adds a column with the specified string value to the current row.
     /// </summary>
@@ -427,12 +410,10 @@ public interface ISender : IDisposable
     }
 
     /// <summary>
-    ///     Adds a DECIMAL column in the binary format.
-    /// <summary>
-/// Adds a decimal column in binary format to the current row.
-/// </summary>
-/// <param name="name">The column name.</param>
-/// <param name="value">The decimal value to add; may be null to represent a NULL field.</param>
-/// <returns>The sender instance for fluent call chaining.</returns>
+    /// Adds a decimal column in binary format to the current row.
+    /// </summary>
+    /// <param name="name">The column name.</param>
+    /// <param name="value">The decimal value to add; may be null to represent a NULL field.</param>
+    /// <returns>The sender instance for fluent call chaining.</returns>
     public ISender Column(ReadOnlySpan<char> name, decimal? value);
 }

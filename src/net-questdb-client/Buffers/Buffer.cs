@@ -32,14 +32,6 @@ namespace QuestDB.Buffers;
 public static class Buffer
 {
     /// <summary>
-    ///     Creates an IBuffer instance, based on the provided protocol version.
-    /// </summary>
-    /// <param name="bufferSize"></param>
-    /// <param name="maxNameLen"></param>
-    /// <param name="maxBufSize"></param>
-    /// <param name="version"></param>
-    /// <returns></returns>
-    /// <summary>
     /// Creates a concrete IBuffer implementation configured for the specified protocol version.
     /// </summary>
     /// <param name="bufferSize">Size in bytes of each buffer segment.</param>

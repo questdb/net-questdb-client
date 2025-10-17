@@ -149,9 +149,9 @@ internal class HttpSender : AbstractSender
         {
             _client.DefaultRequestHeaders.Authorization
                 = new AuthenticationHeaderValue("Basic",
-                                                Convert.ToBase64String(
-                                                    Encoding.ASCII.GetBytes(
-                                                        $"{Options.username}:{Options.password}")));
+                    Convert.ToBase64String(
+                        Encoding.ASCII.GetBytes(
+                            $"{Options.username}:{Options.password}")));
         }
         else if (!string.IsNullOrEmpty(Options.token))
         {
@@ -224,16 +224,13 @@ internal class HttpSender : AbstractSender
     }
 
     /// <summary>
-    ///     Creates a new HTTP request with appropriate encoding.
-    /// </summary>
-    /// <summary>
     /// Create an HTTP POST request targeting "/write" with the sender's buffer as the request body.
     /// </summary>
     /// <returns>An <see cref="HttpRequestMessage"/> configured with the buffer as the request body, Content-Type set to "text/plain" with charset "utf-8", and Content-Length set to the buffer length.</returns>
     private HttpRequestMessage GenerateRequest()
     {
         var request = new HttpRequestMessage(HttpMethod.Post, "/write")
-        { Content = new BufferStreamContent(Buffer), };
+            { Content = new BufferStreamContent(Buffer), };
         request.Content.Headers.ContentType = new MediaTypeHeaderValue("text/plain") { CharSet = "utf-8", };
         request.Content.Headers.ContentLength = Buffer.Length;
         return request;
@@ -260,13 +257,13 @@ internal class HttpSender : AbstractSender
         if (WithinTransaction)
         {
             throw new IngressError(ErrorCode.InvalidApiCall,
-                                   "Cannot start another transaction - only one allowed at a time.");
+                "Cannot start another transaction - only one allowed at a time.");
         }
 
         if (Length > 0)
         {
             throw new IngressError(ErrorCode.InvalidApiCall,
-                                   "Buffer must be clear before you can start a transaction.");
+                "Buffer must be clear before you can start a transaction.");
         }
 
         Buffer.Transaction(tableName);
@@ -274,7 +271,6 @@ internal class HttpSender : AbstractSender
     }
 
     /// <inheritdoc cref="CommitAsync" />
-    /// />
     public override void Commit(CancellationToken ct = default)
     {
         try
@@ -396,7 +392,8 @@ internal class HttpSender : AbstractSender
     /// <returns>The final <see cref="HttpResponseMessage"/> returned by the server for a successful request.</returns>
     /// <exception cref="IngressError">Thrown with <see cref="ErrorCode.ServerFlushError"/> when a connection could not be established within the allowed retries.</exception>
     /// <remarks>The caller is responsible for disposing the returned <see cref="HttpResponseMessage"/>./// </remarks>
-    private HttpResponseMessage SendWithRetries(CancellationToken ct, Func<HttpRequestMessage> requestFactory, TimeSpan retryTimeout)
+    private HttpResponseMessage SendWithRetries(CancellationToken ct, Func<HttpRequestMessage> requestFactory,
+        TimeSpan retryTimeout)
     {
         HttpResponseMessage? response = null;
         CancellationTokenSource cts = GenerateRequestCts(ct);
@@ -414,9 +411,9 @@ internal class HttpSender : AbstractSender
             }
 
             if (retryTimeout > TimeSpan.Zero)
-            // retry if appropriate - error that's retriable, and retries are enabled
+                // retry if appropriate - error that's retriable, and retries are enabled
             {
-                if (response == null                  // if it was a cannot correct error
+                if (response == null // if it was a cannot correct error
                     || (!response.IsSuccessStatusCode // or some other http error
                         && IsRetriableError(response.StatusCode)))
                 {
@@ -426,9 +423,9 @@ internal class HttpSender : AbstractSender
 
                     while (retryTimer.Elapsed < retryTimeout // whilst we can still retry
                            && (
-                                  response == null ||               // either we can't connect
-                                  (!response.IsSuccessStatusCode && // or we have another http error
-                                   IsRetriableError(response.StatusCode)))
+                               response == null || // either we can't connect
+                               (!response.IsSuccessStatusCode && // or we have another http error
+                                IsRetriableError(response.StatusCode)))
                           )
                     {
                         retryInterval = TimeSpan.FromMilliseconds(Math.Min(retryInterval.TotalMilliseconds * 2, 1000));
@@ -460,7 +457,7 @@ internal class HttpSender : AbstractSender
             if (response == null)
             {
                 throw new IngressError(ErrorCode.ServerFlushError,
-                                       $"Cannot connect to `{Options.Host}:{Options.Port}`");
+                    $"Cannot connect to `{Options.Host}:{Options.Port}`");
             }
 
             return response;
@@ -542,7 +539,7 @@ internal class HttpSender : AbstractSender
             // retry if appropriate - error that's retriable, and retries are enabled
             if (Options.retry_timeout > TimeSpan.Zero)
             {
-                if (response == null                  // if it was a cannot correct error
+                if (response == null // if it was a cannot correct error
                     || (!response.IsSuccessStatusCode // or some other http error
                         && IsRetriableError(response.StatusCode)))
                 {
@@ -552,9 +549,9 @@ internal class HttpSender : AbstractSender
 
                     while (retryTimer.Elapsed < Options.retry_timeout // whilst we can still retry
                            && (
-                                  response == null ||               // either we can't connect
-                                  (!response.IsSuccessStatusCode && // or we have another http error
-                                   IsRetriableError(response.StatusCode)))
+                               response == null || // either we can't connect
+                               (!response.IsSuccessStatusCode && // or we have another http error
+                                IsRetriableError(response.StatusCode)))
                           )
                     {
                         retryInterval = TimeSpan.FromMilliseconds(Math.Min(retryInterval.TotalMilliseconds * 2, 1000));
@@ -574,7 +571,7 @@ internal class HttpSender : AbstractSender
                         try
                         {
                             response = await _client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead,
-                                                               cts.Token);
+                                cts.Token);
                         }
                         catch (HttpRequestException)
                         {
@@ -588,7 +585,7 @@ internal class HttpSender : AbstractSender
             if (response == null)
             {
                 throw new IngressError(ErrorCode.ServerFlushError,
-                                       $"Cannot connect to `{Options.Host}:{Options.Port}`");
+                    $"Cannot connect to `{Options.Host}:{Options.Port}`");
             }
 
             // return if ok

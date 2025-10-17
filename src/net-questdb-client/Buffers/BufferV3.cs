@@ -90,7 +90,7 @@ public class BufferV3 : BufferV2
         var low = parts[0];
         var mid = parts[1];
         var high = parts[2];
-        var negative = (flags & SignMask) != 0 && value != 0;
+        var negative = (flags & SignMask) != 0 && value.Value != 0m;
 
         if (negative)
         {
@@ -109,7 +109,7 @@ public class BufferV3 : BufferV2
         BinaryPrimitives.WriteInt32BigEndian(span.Slice(1, 4), high);
         BinaryPrimitives.WriteInt32BigEndian(span.Slice(5, 4), mid);
         BinaryPrimitives.WriteInt32BigEndian(span.Slice(9, 4), low);
-        
+
         // Compress
         var start = 0;
         for (;
@@ -117,7 +117,7 @@ public class BufferV3 : BufferV2
              // one of it in front to convey the sign.
              start < span.Length - 1 && span[start] == signByte && ((span[start + 1] ^ signByte) & 0x80) == 0;
              start++) ;
-        
+
         // 4. Length
         var size = span.Length - start;
         Put((byte)size);

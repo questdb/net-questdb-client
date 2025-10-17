@@ -64,7 +64,7 @@ public class BufferV3 : BufferV2
         // # Binary Format
         // 1. Binary format marker: `'='` (0x3D)
         // 2. Type identifier: BinaryFormatType.DECIMAL byte
-        // 3. Scale: 1 byte (0-76 inclusive) - number of decimal places
+        // 3. Scale: 1 byte (0-28 for .NET decimal) - number of decimal places
         // 4. Length: 1 byte - number of bytes in the unscaled value
         // 5. Unscaled value: variable-length byte array in two's complement format, big-endian
         SetTableIfAppropriate();

@@ -95,11 +95,14 @@ public class BufferV3 : BufferV2
         if (negative)
         {
             // QuestDB expects negative mantissas in two's complement.
-            low = ~low + 1;
-            var c = low == 0 ? 1 : 0;
-            mid = ~mid + c;
-            c = mid == 0 && c == 1 ? 1 : 0;
-            high = ~high + c;
+            unchecked
+            {
+                low = ~low + 1;
+                var c = low == 0 ? 1 : 0;
+                mid = ~mid + c;
+                c = mid == 0 && c == 1 ? 1 : 0;
+                high = ~high + c;
+            }
         }
 
         // We write the byte array on the stack first so that we can compress (remove unnecessary bytes) it later.

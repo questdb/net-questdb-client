@@ -445,7 +445,7 @@ internal class HttpSender : AbstractSender
                         cts.Dispose();
 
                         request = requestFactory();
-                        cts = GenerateRequestCts();
+                        cts = GenerateRequestCts(ct);
 
                         var jitter = TimeSpan.FromMilliseconds(Random.Shared.Next(0, 10) - 10 / 2.0);
                         Thread.Sleep(retryInterval + jitter);

@@ -23,6 +23,7 @@
  ******************************************************************************/
 
 
+using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using dummy_http_server;
 using NUnit.Framework;
@@ -1675,5 +1676,48 @@ public class HttpTests
         Assert.That(srv.GetCounter(), Is.EqualTo(lineCount));
         // ReSharper disable once DisposeOnUsingVariable
         srv.Dispose();
+    }
+
+    [Test]
+    public async Task SendWithCert()
+    {
+#if NET9_0_OR_GREATER
+        using var cert = X509CertificateLoader.LoadPkcs12FromFile("certificate.pfx", null);
+#else
+        using var cert = new X509Certificate2("certificate.pfx", (string?)null);
+#endif
+
+        Assert.NotNull(cert);
+
+        using var server = new DummyHttpServer(requireClientCert: true);
+        await server.StartAsync(HttpsPort);
+        using var sender = Sender.Configure($"https::addr=localhost:{HttpsPort};tls_verify=unsafe_off;")
+            .WithClientCert(cert)
+            .Build();
+
+        await sender.Table("metrics")
+            .Symbol("tag", "value")
+            .Column("number", 12.2)
+            .AtAsync(new DateTime(1970, 01, 01, 0, 0, 1));
+
+        await sender.SendAsync();
+        Assert.That(
+            server.PrintBuffer(),
+            Is.EqualTo("metrics,tag=value number=12.2 1000000000\n"));
+        await server.StopAsync();
+    }
+
+    [Test]
+    public async Task FailsWhenExpectingCert()
+    {
+        using var server = new DummyHttpServer(requireClientCert: true);
+        await server.StartAsync(HttpsPort);
+
+        Assert.That(
+            () => Sender.Configure($"https::addr=localhost:{HttpsPort};tls_verify=unsafe_off;").Build(),
+            Throws.TypeOf<IngressError>().With.Message.Contains("ServerFlushError")
+        );
+
+        await server.StopAsync();
     }
 }

@@ -29,6 +29,7 @@ using System.Runtime.InteropServices;
 using System.Text;
 using FastEndpoints;
 using FastEndpoints.Security;
+using Microsoft.AspNetCore.Server.Kestrel.Https;
 
 namespace dummy_http_server;
 
@@ -42,7 +43,7 @@ public class DummyHttpServer : IDisposable
     private readonly TimeSpan? _withStartDelay;
 
     public DummyHttpServer(bool withTokenAuth = false, bool withBasicAuth = false, bool withRetriableError = false,
-                           bool withErrorMessage = false, TimeSpan? withStartDelay = null)
+                           bool withErrorMessage = false, TimeSpan? withStartDelay = null, bool requireClientCert = false)
     {
         var bld = WebApplication.CreateBuilder();
 
@@ -71,6 +72,15 @@ public class DummyHttpServer : IDisposable
         bld.Services.AddHealthChecks();
         bld.WebHost.ConfigureKestrel(o =>
         {
+            if (requireClientCert)
+            {
+                o.ConfigureHttpsDefaults(https =>
+                {
+                    https.ClientCertificateMode = ClientCertificateMode.RequireCertificate;
+                    https.AllowAnyClientCertificate();
+                });
+            }
+
             o.Limits.MaxRequestBodySize = 1073741824;
             o.ListenLocalhost(29474,
                               options => { options.UseHttps(); });

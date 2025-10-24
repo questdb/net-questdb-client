@@ -89,7 +89,8 @@ public class TcpTests
         {
             0xCF, 0xC7,
         });
-        DecimalTestHelpers.AssertDecimalNullField(buffer, "dec_null");
+        var prefix = Encoding.UTF8.GetBytes("dec_null=");
+        Assert.That(buffer.AsSpan().IndexOf(prefix), Is.EqualTo(-1));
         DecimalTestHelpers.AssertDecimalField(buffer, "dec_max", 0, new byte[]
         {
             0x00,

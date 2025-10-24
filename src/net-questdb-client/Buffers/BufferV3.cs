@@ -61,6 +61,11 @@ public class BufferV3 : BufferV2
     /// <returns>The buffer instance for call chaining.</returns>
     public override IBuffer Column(ReadOnlySpan<char> name, decimal? value)
     {
+        if (value is null)
+        {
+            return this;
+        }
+
         // # Binary Format
         // 1. Binary format marker: `'='` (0x3D)
         // 2. Type identifier: BinaryFormatType.DECIMAL byte
@@ -71,12 +76,6 @@ public class BufferV3 : BufferV2
         Column(name)
             .PutAscii(Constants.BINARY_FORMAT_FLAG)
             .Put((byte)BinaryFormatType.DECIMAL);
-        if (value is null)
-        {
-            Put(0); // Scale
-            Put(0); // Length
-            return this;
-        }
 
         Span<int> parts = stackalloc int[4];
         decimal.GetBits(value.Value, parts);

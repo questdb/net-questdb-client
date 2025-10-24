@@ -57,26 +57,6 @@ internal static class DecimalTestHelpers
     }
 
     /// <summary>
-    /// Asserts that the buffer contains a null decimal field payload for the specified column.
-    /// </summary>
-    /// <param name="buffer">Buffer containing the encoded record(s) to inspect.</param>
-    /// <param name="columnName">Name of the column whose decimal payload should be null.</param>
-    /// <remarks>
-    /// Verifies the payload starts with '=' then the DECIMAL type marker, and that both scale and mantissa length are zero.
-    /// </remarks>
-    internal static void AssertDecimalNullField(ReadOnlySpan<byte> buffer, string columnName)
-    {
-        var payload = ExtractDecimalPayload(buffer, columnName);
-        Assert.That(payload.Length,
-            Is.GreaterThanOrEqualTo(4),
-            $"Decimal field `{columnName}` payload shorter than expected.");
-        Assert.That(payload[0], Is.EqualTo((byte)'='));
-        Assert.That(payload[1], Is.EqualTo((byte)BinaryFormatType.DECIMAL));
-        Assert.That(payload[2], Is.EqualTo(0), $"Unexpected scale for `{columnName}`.");
-        Assert.That(payload[3], Is.EqualTo(0), $"Unexpected mantissa length for `{columnName}`.");
-    }
-
-    /// <summary>
     /// Locate and return the payload bytes for a decimal column identified by name.
     /// </summary>
     /// <param name="buffer">The byte span containing the encoded record payload to search.</param>

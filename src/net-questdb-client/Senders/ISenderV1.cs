@@ -22,30 +22,13 @@
  *
  ******************************************************************************/
 
-namespace QuestDB.Enums;
+// ReSharper disable InconsistentNaming
+
+namespace QuestDB.Senders;
 
 /// <summary>
-///     Represents the protocol version to use.
+///     Version 1 of the Sender API.
 /// </summary>
-public enum ProtocolVersion
+public interface ISenderV1 : ISender
 {
-    /// <summary>
-    ///     Unset, defaults to highest
-    /// </summary>
-    Auto,
-
-    /// <summary>
-    ///     Vanilla, text ILP
-    /// </summary>
-    V1,
-
-    /// <summary>
-    ///     Text ILP with binary for DOUBLE and support for the ARRAY[DOUBLE] datatype
-    /// </summary>
-    V2,
-
-    /// <summary>
-    ///     Support for the DECIMAL datatype
-    /// </summary>
-    V3,
 }

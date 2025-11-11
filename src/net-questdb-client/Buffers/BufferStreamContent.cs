@@ -32,6 +32,10 @@ namespace QuestDB.Buffers;
 /// </summary>
 internal class BufferStreamContent : HttpContent
 {
+    /// <summary>
+    /// Initializes a new instance of the <see cref="BufferStreamContent"/> class.
+    /// </summary>
+    /// <param name="buffer">The buffer to wrap for HTTP streaming.</param>
     public BufferStreamContent(IBuffer buffer)
     {
         Buffer = buffer;

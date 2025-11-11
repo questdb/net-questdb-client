@@ -24,6 +24,7 @@
 
 
 using System.Diagnostics;
+using System.Globalization;
 using System.Net;
 using System.Net.Security;
 using System.Net.Sockets;
@@ -49,9 +50,14 @@ public class DummyIlpServer : IDisposable
     private string? _publicKeyY;
     private volatile int _totalReceived;
 
+    /// <summary>
+    /// Initializes the dummy ILP server and starts a TCP listener bound to the loopback interface.
+    /// </summary>
+    /// <param name="port">TCP port to listen on.</param>
+    /// <param name="tls">If true, enables TLS for incoming connections.</param>
     public DummyIlpServer(int port, bool tls)
     {
-        _tls    = tls;
+        _tls = tls;
         _server = new TcpListener(IPAddress.Loopback, port);
         _server.Start();
     }
@@ -69,6 +75,12 @@ public class DummyIlpServer : IDisposable
         Task.Run(AcceptConnections);
     }
 
+    /// <summary>
+    /// Accepts a single incoming connection, optionally negotiates TLS and performs server authentication, then reads and saves data from the client.
+    /// </summary>
+    /// <remarks>
+    /// Handles one client socket from the listener, wraps the connection with TLS if configured, invokes server-auth when credentials are set, and delegates continuous data receipt to the save routine. Socket errors are caught and the client socket is disposed on exit.
+    /// </remarks>
     private async Task AcceptConnections()
     {
         Socket? clientSocket = null;
@@ -77,7 +89,7 @@ public class DummyIlpServer : IDisposable
             using var socket = await _server.AcceptSocketAsync();
             clientSocket = socket;
             await using var connection = new NetworkStream(socket, true);
-            Stream          dataStream = connection;
+            Stream dataStream = connection;
             if (_tls)
             {
                 var sslStream = new SslStream(connection);
@@ -107,6 +119,11 @@ public class DummyIlpServer : IDisposable
         return X509Certificate.CreateFromCertFile("certificate.pfx");
     }
 
+    /// <summary>
+    /// Performs the server-side authentication handshake over the given stream using a challenge-response ECDSA verification.
+    /// </summary>
+    /// <param name="connection">Stream used for the authentication handshake; the method may write to it and will close it if the requested key id mismatches or the signature verification fails.</param>
+    /// <exception cref="InvalidOperationException">Thrown when the configured public key coordinates are not set.</exception>
     private async Task RunServerAuth(Stream connection)
     {
         var receivedLen = await ReceiveUntilEol(connection);
@@ -137,7 +154,7 @@ public class DummyIlpServer : IDisposable
         var pubKey1 = FromBase64String(_publicKeyX);
         var pubKey2 = FromBase64String(_publicKeyY);
 
-        var p          = SecNamedCurves.GetByName("secp256r1");
+        var p = SecNamedCurves.GetByName("secp256r1");
         var parameters = new ECDomainParameters(p.Curve, p.G, p.N, p.H);
 
         // Verify the signature
@@ -165,20 +182,30 @@ public class DummyIlpServer : IDisposable
         return text + new string('=', padding);
     }
 
+    /// <summary>
+    /// Decode a Base64 string that may use URL-safe characters and missing padding into its raw byte representation.
+    /// </summary>
+    /// <param name="encodedPrivateKey">A Base64-encoded string which may use '-' and '_' instead of '+' and '/' and may omit padding.</param>
+    /// <returns>The decoded bytes represented by the normalized Base64 input.</returns>
     public static byte[] FromBase64String(string encodedPrivateKey)
     {
         var replace = encodedPrivateKey
-                      .Replace('-', '+')
-                      .Replace('_', '/');
+            .Replace('-', '+')
+            .Replace('_', '/');
         return Convert.FromBase64String(Pad(replace));
     }
 
+    /// <summary>
+    /// Reads bytes from the provided stream until a newline ('\n') byte is encountered, storing any bytes that follow the newline from the final read into the server's receive buffer.
+    /// </summary>
+    /// <param name="connection">The stream to read incoming bytes from.</param>
+    /// <returns>The index position of the newline byte within the internal read buffer.</returns>
     private async Task<int> ReceiveUntilEol(Stream connection)
     {
         var len = 0;
         while (true)
         {
-            var n        = await connection.ReadAsync(_buffer.AsMemory(len));
+            var n = await connection.ReadAsync(_buffer.AsMemory(len));
             var inBuffer = len + n;
             for (var i = len; i < inBuffer; i++)
             {
@@ -223,89 +250,109 @@ public class DummyIlpServer : IDisposable
         }
     }
 
+    /// <summary>
+    /// Produces a human-readable representation of the data received from the connected client.
+    /// </summary>
+    /// <returns>A formatted string containing the contents of the server's received buffer.</returns>
     public string GetTextReceived()
     {
         return PrintBuffer();
-        // return Encoding.UTF8.GetString(_received.GetBuffer(), 0, (int)_received.Length);
     }
 
+    /// <summary>
+    /// Gets a copy of all bytes received so far.
+    /// </summary>
+    /// <returns>A byte array containing the raw bytes received up to this point.</returns>
+    public byte[] GetReceivedBytes()
+    {
+        return _received.ToArray();
+    }
+
+    /// <summary>
+    /// Converts the server's accumulated receive buffer into a human-readable string by decoding UTF-8 text and expanding embedded binary markers into readable representations.
+    /// </summary>
+    /// <remarks>
+    /// The method scans the internal receive buffer for the marker sequence "==". After the marker a type byte determines how the following bytes are interpreted:
+    /// - type 14: formats a multi-dimensional array of doubles as "ARRAY&lt;dim1,dim2,...&gt;[v1,v2,...]".
+    /// - type 16: formats a single double value.
+    /// All bytes outside these marked sections are decoded as UTF-8 text and included verbatim.
+    /// </remarks>
+    /// <returns>A formatted string containing the decoded UTF-8 text and expanded representations of any detected binary markers.</returns>
+    /// <exception cref="NotImplementedException">Thrown when an unknown type marker is encountered after the marker sequence.</exception>
     public string PrintBuffer()
     {
-        var bytes      = _received.GetBuffer().AsSpan().Slice(0, (int)_received.Length).ToArray();
-        var sb         = new StringBuilder();
+        var bytes = _received.ToArray();
+        var sb = new StringBuilder();
         var lastAppend = 0;
 
         var i = 0;
         for (; i < bytes.Length; i++)
         {
-            if (bytes[i] == (byte)'=')
+            if (bytes[i] == (byte)'=' && i > 0 && bytes[i - 1] == (byte)'=')
             {
-                if (bytes[i - 1] == (byte)'=')
+                sb.Append(Encoding.UTF8.GetString(bytes, lastAppend, i + 1 - lastAppend));
+                switch (bytes[++i])
                 {
-                    sb.Append(Encoding.UTF8.GetString(bytes, lastAppend, i + 1 - lastAppend));
-                    switch (bytes[++i])
-                    {
-                        case 14:
-                            sb.Append("ARRAY<");
-                            var type = bytes[++i];
+                    case 14:
+                        sb.Append("ARRAY<");
+                        var type = bytes[++i];
 
-                            Debug.Assert(type == 10);
-                            var dims = bytes[++i];
+                        Debug.Assert(type == 10);
+                        var dims = bytes[++i];
 
-                            ++i;
+                        ++i;
 
-                            long length = 0;
-                            for (var j = 0; j < dims; j++)
+                        long length = 0;
+                        for (var j = 0; j < dims; j++)
+                        {
+                            var lengthBytes = bytes.AsSpan()[i..(i + 4)];
+                            var _length = MemoryMarshal.Cast<byte, uint>(lengthBytes)[0];
+                            if (length == 0)
                             {
-                                var lengthBytes = bytes.AsSpan()[i..(i + 4)];
-                                var _length     = MemoryMarshal.Cast<byte, uint>(lengthBytes)[0];
-                                if (length == 0)
-                                {
-                                    length = _length;
-                                }
-                                else
-                                {
-                                    length *= _length;
-                                }
-
-                                sb.Append(_length);
-                                sb.Append(',');
-                                i += 4;
+                                length = _length;
+                            }
+                            else
+                            {
+                                length *= _length;
                             }
 
-                            sb.Remove(sb.Length - 1, 1);
-                            sb.Append('>');
+                            sb.Append(_length);
+                            sb.Append(',');
+                            i += 4;
+                        }
 
-                            var doubleBytes =
-                                MemoryMarshal.Cast<byte, double>(bytes.AsSpan().Slice(i, (int)(length * 8)));
+                        sb.Remove(sb.Length - 1, 1);
+                        sb.Append('>');
+
+                        var doubleBytes =
+                            MemoryMarshal.Cast<byte, double>(bytes.AsSpan().Slice(i, (int)(length * 8)));
 
 
-                            sb.Append('[');
-                            for (var j = 0; j < length; j++)
-                            {
-                                sb.Append(doubleBytes[j]);
-                                sb.Append(',');
-                            }
+                        sb.Append('[');
+                        for (var j = 0; j < length; j++)
+                        {
+                            sb.Append(doubleBytes[j].ToString(CultureInfo.InvariantCulture));
+                            sb.Append(',');
+                        }
 
-                            sb.Remove(sb.Length - 1, 1);
-                            sb.Append(']');
+                        sb.Remove(sb.Length - 1, 1);
+                        sb.Append(']');
 
-                            i += (int)(length * 8);
-                            i--;
-                            break;
-                        case 16:
-                            sb.Remove(sb.Length - 1, 1);
-                            var doubleValue = MemoryMarshal.Cast<byte, double>(bytes.AsSpan().Slice(++i, 8));
-                            sb.Append(doubleValue[0]);
-                            i += 8;
-                            i--;
-                            break;
-                        default:
-                            throw new NotImplementedException();
-                    }
-
-                    lastAppend = i + 1;
+                        i += (int)(length * 8);
+                        i--;
+                        break;
+                    case 16:
+                        sb.Remove(sb.Length - 1, 1);
+                        var doubleValue = MemoryMarshal.Cast<byte, double>(bytes.AsSpan().Slice(++i, 8));
+                        sb.Append(doubleValue[0].ToString(CultureInfo.InvariantCulture));
+                        i += 8;
+                        i--;
+                        break;
+                    default:
+                        throw new NotImplementedException($"Type {bytes[i]} not implemented");
                 }
+
+                lastAppend = i + 1;
             }
         }
 
@@ -313,9 +360,15 @@ public class DummyIlpServer : IDisposable
         return sb.ToString();
     }
 
+    /// <summary>
+    /// Enables server-side authentication by configuring the expected key identifier and the ECDSA public key coordinates.
+    /// </summary>
+    /// <param name="keyId">The key identifier expected from the client during authentication.</param>
+    /// <param name="publicKeyX">Base64-encoded X coordinate of the ECDSA public key (secp256r1).</param>
+    /// <param name="publicKeyY">Base64-encoded Y coordinate of the ECDSA public key (secp256r1).</param>
     public void WithAuth(string keyId, string publicKeyX, string publicKeyY)
     {
-        _keyId      = keyId;
+        _keyId = keyId;
         _publicKeyX = publicKeyX;
         _publicKeyY = publicKeyY;
     }

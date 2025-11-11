@@ -45,7 +45,7 @@ using var sender =  Sender.New("http::addr=localhost:9000;");
 await sender.Table("trades")
     .Symbol("symbol", "ETH-USD")
     .Symbol("side", "sell")
-    .Column("price", 2615.54)
+    .Column("price", 2615.54m)
     .Column("amount", 0.00044)
     .AtAsync(new DateTime(2021, 11, 25, 0, 46, 26));
 await sender.SendAsync();
@@ -60,7 +60,7 @@ for(int i = 0; i < 100; i++)
     sender.Table("trades")
       .Symbol("symbol", "ETH-USD")
       .Symbol("side", "sell")
-      .Column("price", 2615.54)
+      .Column("price", 2615.54m)
       .Column("amount", 0.00044)
       .At(DateTime.UtcNow);
 }
@@ -136,53 +136,54 @@ The config string format is:
 {http/https/tcp/tcps}::addr={host}:{port};key1=val1;key2=val2;keyN=valN;
 ```
 
-| Name                     | Default                    | Description                                                                                                                                                                                           |
-|--------------------------|----------------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `protocol` (schema)      | `http`                     | The transport protocol to use. Options are http(s)/tcp(s).                                                                                                                                            |
-| `addr`                   | `localhost:9000`           | The {host}:{port} pair denoting the QuestDB server. By default, port 9000 for HTTP, port 9009 for TCP.                                                                                                |
-| `auto_flush`             | `on`                       | Enables or disables auto-flushing functionality. By default, the buffer will be flushed every 75,000 rows, or every 1000ms, whichever comes first.                                                    |
-| `auto_flush_rows`        | `75000 (HTTP)` `600 (TCP)` | The row count after which the buffer will be flushed. Effectively a batch size.                                                                                                                       |
-| `auto_flush_bytes`       | `Int.MaxValue`             | The byte buffer length which when exceeded, will trigger a flush.                                                                                                                                     |
-| `auto_flush_interval`    | `1000`                     | The millisecond interval, which once has elapsed, the next row triggers a flush.                                                                                                                      |
-| `init_buf_size`          | `65536`                    | The starting byte buffer length. Overflowing this buffer will cause the allocation `init_buf_size` bytes (an additional buffer).                                                                      |
-| `max_buf_size`           | `104857600`                | Maximum size of the byte buffer in bytes. If exceeded, an exception will be thrown.                                                                                                                   |
-| `username`               |                            | The username for authentication. Used for Basic Authentication and TCP JWK Authentication.                                                                                                            |
-| `password`               |                            | The password for authentication. Used for Basic Authentication.                                                                                                                                       |
-| `token`                  |                            | The token for authentication. Used for Token Authentication and TCP JWK Authentication.                                                                                                               |
-| `token_x`                |                            | Un-used.                                                                                                                                                                                              |
-| `token_y`                |                            | Un-used.                                                                                                                                                                                              |
-| `tls_verify`             | `on`                       | Denotes whether TLS certificates should or should not be verifed. Options are on/unsafe_off.                                                                                                          |
-| `tls_ca`                 |                            | Un-used.                                                                                                                                                                                              |
-| `tls_roots`              |                            | Used to specify the filepath for a custom .pem certificate.                                                                                                                                           |
-| `tls_roots_password`     |                            | Used to specify the filepath for the private key/password corresponding to the `tls_roots` certificate.                                                                                               |
-| `auth_timeout`           | `15000`                    | The time period to wait for authenticating requests, in milliseconds.                                                                                                                                 |
-| `request_timeout`        | `10000`                    | Base timeout for HTTP requests before any additional time is added.                                                                                                                                   |
-| `request_min_throughput` | `102400`                   | Expected minimum throughput of requests in bytes per second. Used to add additional time to `request_timeout` to prevent large requests timing out prematurely.                                       |
-| `retry_timeout`          | `10000`                    | The time period during which retries will be attempted, in milliseconds.                                                                                                                              |
-| `max_name_len`           | `127`                      | The maximum allowed bytes, in UTF-8 format, for column and table names.                                                                                                                               |
-| `protocol_version`       |                            | Explicitly specifies the version of InfluxDB Line Protocol to use for sender. Valid options are:<br>• protocol_version=1<br>• protocol_version=2<br>• protocol_version=auto (default, if unspecified) |
+| Name                     | Default                    | Description                                                                                                                                                                                                                   |
+| ------------------------ | -------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `protocol` (schema)      | `http`                     | The transport protocol to use. Options are http(s)/tcp(s).                                                                                                                                                                    |
+| `addr`                   | `localhost:9000`           | The {host}:{port} pair denoting the QuestDB server. By default, port 9000 for HTTP, port 9009 for TCP.                                                                                                                        |
+| `auto_flush`             | `on`                       | Enables or disables auto-flushing functionality. By default, the buffer will be flushed every 75,000 rows, or every 1000ms, whichever comes first.                                                                            |
+| `auto_flush_rows`        | `75000 (HTTP)` `600 (TCP)` | The row count after which the buffer will be flushed. Effectively a batch size.                                                                                                                                               |
+| `auto_flush_bytes`       | `Int.MaxValue`             | The byte buffer length which when exceeded, will trigger a flush.                                                                                                                                                             |
+| `auto_flush_interval`    | `1000`                     | The millisecond interval, which once has elapsed, the next row triggers a flush.                                                                                                                                              |
+| `init_buf_size`          | `65536`                    | The starting byte buffer length. Overflowing this buffer will cause the allocation `init_buf_size` bytes (an additional buffer).                                                                                              |
+| `max_buf_size`           | `104857600`                | Maximum size of the byte buffer in bytes. If exceeded, an exception will be thrown.                                                                                                                                           |
+| `username`               |                            | The username for authentication. Used for Basic Authentication and TCP JWK Authentication.                                                                                                                                    |
+| `password`               |                            | The password for authentication. Used for Basic Authentication.                                                                                                                                                               |
+| `token`                  |                            | The token for authentication. Used for Token Authentication and TCP JWK Authentication.                                                                                                                                       |
+| `token_x`                |                            | Un-used.                                                                                                                                                                                                                      |
+| `token_y`                |                            | Un-used.                                                                                                                                                                                                                      |
+| `tls_verify`             | `on`                       | Denotes whether TLS certificates should or should not be verified. Options are on/unsafe_off.                                                                                                                                  |
+| `tls_ca`                 |                            | Un-used.                                                                                                                                                                                                                      |
+| `tls_roots`              |                            | Used to specify the filepath for a custom .pem certificate.                                                                                                                                                                   |
+| `tls_roots_password`     |                            | Used to specify the filepath for the private key/password corresponding to the `tls_roots` certificate.                                                                                                                       |
+| `auth_timeout`           | `15000`                    | The time period to wait for authenticating requests, in milliseconds.                                                                                                                                                         |
+| `request_timeout`        | `10000`                    | Base timeout for HTTP requests before any additional time is added.                                                                                                                                                           |
+| `request_min_throughput` | `102400`                   | Expected minimum throughput of requests in bytes per second. Used to add additional time to `request_timeout` to prevent large requests timing out prematurely.                                                               |
+| `retry_timeout`          | `10000`                    | The time period during which retries will be attempted, in milliseconds.                                                                                                                                                      |
+| `max_name_len`           | `127`                      | The maximum allowed bytes, in UTF-8 format, for column and table names.                                                                                                                                                       |
+| `protocol_version`       |                            | Explicitly specifies the version of InfluxDB Line Protocol to use for sender. Valid options are:<br>• protocol_version=1<br>• protocol_version=2<br>• protocol_version=3<br>• protocol_version=auto (default, if unspecified) |
 
 ### Protocol Version
 
 Behavior details:
 
-| Value  | Behavior                                                                                                                                                | 
-|--------|---------------------------------------------------------------------------------------------------------------------------------------------------------|
-| 1      | - Plain text serialization<br>- Compatible with InfluxDB servers<br>- No array type support                                                             |
-| 2      | - Binary encoding for double arrays<br>- Full support for array                                                                                         |
+| Value  | Behavior                                                                                                                                                    |
+| ------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1      | - Plain text serialization<br>- Compatible with InfluxDB servers<br>- No array type support                                                                 |
+| 2      | - Binary encoding for double arrays<br>- Full support for array                                                                                             |
+| 3      | - Support for decimal                                                                                                                                       |
 | `auto` | - **HTTP/HTTPS**: Auto-detects server capability during handshake (supports version negotiation)<br>- **TCP/TCPS**: Defaults to version 1 for compatibility |
 
 ### net-questdb-client specific parameters
 
 | Name           | Default  | Description                                                                           |
-|----------------|----------|---------------------------------------------------------------------------------------|
+| -------------- | -------- | ------------------------------------------------------------------------------------- |
 | `own_socket`   | `true`   | Specifies whether the internal TCP data stream will own the underlying socket or not. |
 | `pool_timeout` | `120000` | Sets the idle timeout for HTTP connections in SocketsHttpHandler.                     |
 
 ## Properties and methods
 
 | Name                                                                                                  | Returns         | Description                                                                |
-|-------------------------------------------------------------------------------------------------------|-----------------|----------------------------------------------------------------------------|
+| ----------------------------------------------------------------------------------------------------- | --------------- | -------------------------------------------------------------------------- |
 | `Length`                                                                                              | `int`           | Current length in bytes of the buffer (not capacity!)                      |
 | `RowCount`                                                                                            | `int`           | Current row count of the buffer                                            |
 | `LastFlush`                                                                                           | `DateTime`      | Returns the UTC DateTime of the last flush sending data to the server.     |

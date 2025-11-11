@@ -46,16 +46,31 @@ internal class TcpSender : AbstractSender
     private Secp256r1SignatureGenerator? _signatureGenerator;
     private Socket _underlyingSocket = null!;
 
+    /// <summary>
+    /// Initializes a new instance of <see cref="TcpSender"/> configured with the provided options.
+    /// </summary>
+    /// <param name="options">Configuration options for the TCP sender including host, port, TLS settings, and authentication.</param>
     public TcpSender(SenderOptions options)
     {
         Options = options;
         Build();
     }
 
+    /// <summary>
+    /// Initializes a new instance of <see cref="TcpSender"/> by parsing a configuration string.
+    /// </summary>
+    /// <param name="confStr">Configuration string in QuestDB connection string format.</param>
     public TcpSender(string confStr) : this(new SenderOptions(confStr))
     {
     }
 
+    /// <summary>
+    /// Initializes the TCP connection, configures TLS if required, creates the buffer, and performs authentication if credentials are provided.
+    /// </summary>
+    /// <remarks>
+    /// Establishes the TCP socket connection, wraps it in SSL/TLS if protocol is tcps, validates certificates according to options, performs ECDSA authentication if a token is provided, and initializes the ILP buffer.
+    /// </remarks>
+    /// <exception cref="IngressError">Thrown if TLS handshake fails, authentication fails, or connection cannot be established.</exception>
     private void Build()
     {
         Buffer = Buffers.Buffer.Create(
@@ -65,9 +80,9 @@ internal class TcpSender : AbstractSender
             Options.protocol_version == ProtocolVersion.Auto ? ProtocolVersion.V1 : Options.protocol_version
         );
 
-        var            socket        = new Socket(AddressFamily.InterNetwork, SocketType.Stream, System.Net.Sockets.ProtocolType.Tcp);
+        var socket = new Socket(AddressFamily.InterNetwork, SocketType.Stream, System.Net.Sockets.ProtocolType.Tcp);
         NetworkStream? networkStream = null;
-        SslStream?     sslStream     = null;
+        SslStream? sslStream = null;
         try
         {
             socket.ConnectAsync(Options.Host, Options.Port).Wait();
@@ -100,7 +115,7 @@ internal class TcpSender : AbstractSender
             }
 
             _underlyingSocket = socket;
-            _dataStream       = dataStream;
+            _dataStream = dataStream;
             if (!string.IsNullOrEmpty(Options.token))
             {
                 var authTimeout = new CancellationTokenSource();
@@ -154,19 +169,19 @@ internal class TcpSender : AbstractSender
     }
 
     /// <summary>
-    ///     Receives a chunk of data from the TCP stream.
+    /// Asynchronously reads bytes from the TCP stream until the specified terminator character is received or the buffer is full.
     /// </summary>
-    /// <param name="endChar"></param>
-    /// <param name="cancellationToken"></param>
-    /// <returns></returns>
-    /// <exception cref="IngressError"></exception>
+    /// <param name="endChar">The terminator character indicating the end of the message.</param>
+    /// <param name="cancellationToken">Cancellation token to cancel the read operation.</param>
+    /// <returns>The number of bytes read, excluding the terminator character.</returns>
+    /// <exception cref="IngressError">Thrown with <see cref="ErrorCode.SocketError"/> if the connection is closed before the terminator is received or if the buffer is too small.</exception>
     private async ValueTask<int> ReceiveUntil(char endChar, CancellationToken cancellationToken)
     {
         var totalReceived = 0;
         while (totalReceived < Buffer.Chunk.Length)
         {
             var received = await _dataStream.ReadAsync(Buffer.Chunk, totalReceived,
-                                                       Buffer.Chunk.Length - totalReceived, cancellationToken);
+                Buffer.Chunk.Length - totalReceived, cancellationToken);
             if (received > 0)
             {
                 totalReceived += received;
@@ -185,10 +200,15 @@ internal class TcpSender : AbstractSender
         throw new IngressError(ErrorCode.SocketError, "Buffer is too small to receive the message.");
     }
 
+    /// <summary>
+    /// Decodes a URL-safe Base64-encoded string (using - and _ instead of + and /) and returns the decoded byte array.
+    /// </summary>
+    /// <param name="encodedPrivateKey">The URL-safe Base64-encoded private key string.</param>
+    /// <returns>The decoded byte array.</returns>
     private static byte[] FromBase64String(string encodedPrivateKey)
     {
         var urlUnsafe = encodedPrivateKey.Replace('-', '+').Replace('_', '/');
-        var padding   = 3 - (urlUnsafe.Length + 3) % 4;
+        var padding = 3 - (urlUnsafe.Length + 3) % 4;
         if (padding != 0)
         {
             urlUnsafe += new string('=', padding);

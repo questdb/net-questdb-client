@@ -42,28 +42,37 @@ public class DummyHttpServer : IDisposable
     private int _port = 29743;
     private readonly TimeSpan? _withStartDelay;
 
+    /// <summary>
+    /// Initializes a configurable in-process dummy HTTP server used for testing endpoints.
+    /// </summary>
+    /// <param name="withTokenAuth">If true, enable JWT bearer authentication and authorization.</param>
+    /// <param name="withBasicAuth">If true, enable basic authentication behavior in the test endpoint.</param>
+    /// <param name="withRetriableError">If true, configure the test endpoint to produce retriable error responses.</param>
+    /// <param name="withErrorMessage">If true, include error messages in test error responses.</param>
+    /// <param name="withStartDelay">Optional delay applied when starting the server.</param>
+    /// <param name="requireClientCert">If true, require client TLS certificates for HTTPS connections.</param>
     public DummyHttpServer(bool withTokenAuth = false, bool withBasicAuth = false, bool withRetriableError = false,
-                           bool withErrorMessage = false, TimeSpan? withStartDelay = null, bool requireClientCert = false)
+        bool withErrorMessage = false, TimeSpan? withStartDelay = null, bool requireClientCert = false)
     {
         var bld = WebApplication.CreateBuilder();
 
         bld.Services.AddLogging(builder =>
         {
             builder.AddFilter("Microsoft", LogLevel.Warning)
-                   .AddFilter("System", LogLevel.Warning)
-                   .AddConsole();
+                .AddFilter("System", LogLevel.Warning)
+                .AddConsole();
         });
 
-        IlpEndpoint.WithTokenAuth      = withTokenAuth;
-        IlpEndpoint.WithBasicAuth      = withBasicAuth;
+        IlpEndpoint.WithTokenAuth = withTokenAuth;
+        IlpEndpoint.WithBasicAuth = withBasicAuth;
         IlpEndpoint.WithRetriableError = withRetriableError;
-        IlpEndpoint.WithErrorMessage   = withErrorMessage;
+        IlpEndpoint.WithErrorMessage = withErrorMessage;
         _withStartDelay = withStartDelay;
 
         if (withTokenAuth)
         {
             bld.Services.AddAuthenticationJwtBearer(s => s.SigningKey = SigningKey)
-               .AddAuthorization();
+                .AddAuthorization();
         }
 
 
@@ -83,7 +92,7 @@ public class DummyHttpServer : IDisposable
 
             o.Limits.MaxRequestBodySize = 1073741824;
             o.ListenLocalhost(29474,
-                              options => { options.UseHttps(); });
+                options => { options.UseHttps(); });
             o.ListenLocalhost(29473);
         });
 
@@ -108,26 +117,43 @@ public class DummyHttpServer : IDisposable
         _app.StopAsync().Wait();
     }
 
+    /// <summary>
+    /// Clears the in-memory receive buffers and resets the endpoint error state and counter.
+    /// </summary>
+    /// <remarks>
+    /// Empties IlpEndpoint.ReceiveBuffer and IlpEndpoint.ReceiveBytes, sets IlpEndpoint.LastError to null,
+    /// and sets IlpEndpoint.Counter to zero.
+    /// </remarks>
     public void Clear()
     {
         IlpEndpoint.ReceiveBuffer.Clear();
         IlpEndpoint.ReceiveBytes.Clear();
         IlpEndpoint.LastError = null;
-        IlpEndpoint.Counter   = 0;
+        IlpEndpoint.Counter = 0;
     }
 
+    /// <summary>
+    /// Starts the HTTP server on the specified port and configures the supported protocol versions.
+    /// </summary>
+    /// <param name="port">Port to listen on (defaults to 29743).</param>
+    /// <param name="versions">Array of supported protocol versions; defaults to {1, 2, 3} when null.</param>
+    /// <returns>A task that completes after any configured startup delay has elapsed and the server's background run task has been initiated.</returns>
     public async Task StartAsync(int port = 29743, int[]? versions = null)
     {
         if (_withStartDelay.HasValue)
         {
             await Task.Delay(_withStartDelay.Value);
         }
-        versions                  ??= new[] { 1, 2, };
-        SettingsEndpoint.Versions =   versions;
-        _port                     =   port;
-        _app.RunAsync($"http://localhost:{port}");
+
+        versions ??= new[] { 1, 2, 3, };
+        SettingsEndpoint.Versions = versions;
+        _port = port;
+        _ = _app.RunAsync($"http://localhost:{port}");
     }
 
+    /// <summary>
+    /// Starts the web application and listens for HTTP requests on http://localhost:{_port}.
+    /// </summary>
     public async Task RunAsync()
     {
         await _app.RunAsync($"http://localhost:{_port}");
@@ -138,12 +164,20 @@ public class DummyHttpServer : IDisposable
         await _app.StopAsync();
     }
 
+    /// <summary>
+    /// Gets the server's in-memory text buffer of received data.
+    /// </summary>
+    /// <returns>The mutable <see cref="StringBuilder"/> containing the accumulated received text; modifying it updates the server's buffer.</returns>
     public StringBuilder GetReceiveBuffer()
     {
         return IlpEndpoint.ReceiveBuffer;
     }
 
-    public List<byte> GetReceiveBytes()
+    /// <summary>
+    /// Gets the in-memory list of bytes received by the ILP endpoint.
+    /// </summary>
+    /// <returns>The mutable list of bytes received by the endpoint.</returns>
+    public List<byte> GetReceivedBytes()
     {
         return IlpEndpoint.ReceiveBytes;
     }
@@ -160,6 +194,10 @@ public class DummyHttpServer : IDisposable
     }
 
 
+    /// <summary>
+    /// Generates a JWT for the test server when the provided credentials match the server's static username and password.
+    /// </summary>
+    /// <returns>The JWT string when credentials are valid; <c>null</c> otherwise. The issued token is valid for one day.</returns>
     public string? GetJwtToken(string username, string password)
     {
         if (username == Username && password == Password)
@@ -167,7 +205,7 @@ public class DummyHttpServer : IDisposable
             var jwtToken = JwtBearer.CreateToken(o =>
             {
                 o.SigningKey = SigningKey;
-                o.ExpireAt   = DateTime.UtcNow.AddDays(1);
+                o.ExpireAt = DateTime.UtcNow.AddDays(1);
             });
             return jwtToken;
         }
@@ -180,83 +218,85 @@ public class DummyHttpServer : IDisposable
         return IlpEndpoint.Counter;
     }
 
+    /// <summary>
+    /// Produces a human-readable string representation of the server's received-bytes buffer, interpreting embedded markers and formatting arrays and numeric values.
+    /// </summary>
+    /// <returns>The formatted textual representation of the received bytes buffer.</returns>
+    /// <exception cref="NotImplementedException">Thrown when the buffer contains an unsupported type code.</exception>
     public string PrintBuffer()
     {
-        var bytes      = GetReceiveBytes().ToArray();
-        var sb         = new StringBuilder();
+        var bytes = GetReceivedBytes().ToArray();
+        var sb = new StringBuilder();
         var lastAppend = 0;
 
         var i = 0;
         for (; i < bytes.Length; i++)
         {
-            if (bytes[i] == (byte)'=')
+            if (bytes[i] == (byte)'=' && i > 0 && bytes[i - 1] == (byte)'=')
             {
-                if (bytes[i - 1] == (byte)'=')
+                sb.Append(Encoding.UTF8.GetString(bytes, lastAppend, i + 1 - lastAppend));
+                switch (bytes[++i])
                 {
-                    sb.Append(Encoding.UTF8.GetString(bytes, lastAppend, i + 1 - lastAppend));
-                    switch (bytes[++i])
-                    {
-                        case 14:
-                            sb.Append("ARRAY<");
-                            var type = bytes[++i];
+                    case 14:
+                        sb.Append("ARRAY<");
+                        var type = bytes[++i];
 
-                            Debug.Assert(type == 10);
-                            var dims = bytes[++i];
+                        Debug.Assert(type == 10);
+                        var dims = bytes[++i];
 
-                            ++i;
+                        ++i;
 
-                            long length = 0;
-                            for (var j = 0; j < dims; j++)
+                        long length = 0;
+                        for (var j = 0; j < dims; j++)
+                        {
+                            var lengthBytes = bytes.AsSpan()[i..(i + 4)];
+                            var lengthValue = MemoryMarshal.Cast<byte, uint>(lengthBytes)[0];
+                            if (length == 0)
                             {
-                                var lengthBytes = bytes.AsSpan()[i..(i + 4)];
-                                var lengthValue = MemoryMarshal.Cast<byte, uint>(lengthBytes)[0];
-                                if (length == 0)
-                                {
-                                    length = lengthValue;
-                                }
-                                else
-                                {
-                                    length *= lengthValue;
-                                }
-
-                                sb.Append(lengthValue);
-                                sb.Append(',');
-                                i += 4;
+                                length = lengthValue;
+                            }
+                            else
+                            {
+                                length *= lengthValue;
                             }
 
-                            sb.Remove(sb.Length - 1, 1);
-                            sb.Append('>');
+                            sb.Append(lengthValue);
+                            sb.Append(',');
+                            i += 4;
+                        }
 
-                            var doubleBytes =
-                                MemoryMarshal.Cast<byte, double>(bytes.AsSpan().Slice(i, (int)(length * 8)));
+                        sb.Remove(sb.Length - 1, 1);
+                        sb.Append('>');
+
+                        var doubleBytes =
+                            MemoryMarshal.Cast<byte, double>(bytes.AsSpan().Slice(i, (int)(length * 8)));
 
 
-                            sb.Append('[');
-                            for (var j = 0; j < length; j++)
-                            {
-                                sb.Append(doubleBytes[j]);
-                                sb.Append(',');
-                            }
+                        sb.Append('[');
+                        for (var j = 0; j < length; j++)
+                        {
+                            sb.Append(doubleBytes[j].ToString(CultureInfo.InvariantCulture));
+                            sb.Append(',');
+                        }
 
-                            sb.Remove(sb.Length - 1, 1);
-                            sb.Append(']');
+                        sb.Remove(sb.Length - 1, 1);
+                        sb.Append(']');
 
-                            i += (int)(length * 8);
-                            i--;
-                            break;
-                        case 16:
-                            sb.Remove(sb.Length - 1, 1);
-                            var doubleValue = MemoryMarshal.Cast<byte, double>(bytes.AsSpan().Slice(++i, 8));
-                            sb.Append(doubleValue[0].ToString(CultureInfo.InvariantCulture));
-                            i += 8;
-                            i--;
-                            break;
-                        default:
-                            throw new NotImplementedException();
-                    }
-
-                    lastAppend = i + 1;
+                        i += (int)(length * 8);
+                        i--;
+                        break;
+                    case 16:
+                        sb.Remove(sb.Length - 1, 1);
+                        var doubleValue = MemoryMarshal.Cast<byte, double>(bytes.AsSpan().Slice(++i, 8));
+                        sb.Append(doubleValue[0].ToString(CultureInfo.InvariantCulture));
+                        i += 8;
+                        i--;
+                        break;
+                    default:
+                        throw new NotImplementedException($"Type {bytes[i]} not implemented");
                 }
+
+                lastAppend = i + 1;
             }
         }
 

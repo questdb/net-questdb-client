@@ -32,25 +32,23 @@ namespace QuestDB.Buffers;
 public static class Buffer
 {
     /// <summary>
-    ///     Creates an IBuffer instance, based on the provided protocol version.
+    /// Creates a concrete IBuffer implementation configured for the specified protocol version.
     /// </summary>
-    /// <param name="bufferSize"></param>
-    /// <param name="maxNameLen"></param>
-    /// <param name="maxBufSize"></param>
-    /// <param name="version"></param>
-    /// <returns></returns>
-    /// <exception cref="NotImplementedException"></exception>
+    /// <param name="bufferSize">Size in bytes of each buffer segment.</param>
+    /// <param name="maxNameLen">Maximum allowed length for names stored in the buffer.</param>
+    /// <param name="maxBufSize">Maximum total buffer capacity.</param>
+    /// <param name="version">Protocol version that determines which concrete buffer implementation to create.</param>
+    /// <returns>An <see cref="IBuffer"/> instance corresponding to the specified protocol version.</returns>
+    /// <exception cref="NotImplementedException">Thrown when an unsupported protocol version is provided.</exception>
     public static IBuffer Create(int bufferSize, int maxNameLen, int maxBufSize, ProtocolVersion version)
     {
-        switch (version)
+        return version switch
         {
-            case ProtocolVersion.V1:
-                return new BufferV1(bufferSize, maxNameLen, maxBufSize);
-            case ProtocolVersion.V2:
-            case ProtocolVersion.Auto:
-                return new BufferV2(bufferSize, maxNameLen, maxBufSize);
-        }
-
-        throw new NotImplementedException();
+            ProtocolVersion.V1 => new BufferV1(bufferSize, maxNameLen, maxBufSize),
+            ProtocolVersion.V2 => new BufferV2(bufferSize, maxNameLen, maxBufSize),
+            ProtocolVersion.V3 => new BufferV3(bufferSize, maxNameLen, maxBufSize),
+            ProtocolVersion.Auto => new BufferV3(bufferSize, maxNameLen, maxBufSize),
+            _ => throw new NotImplementedException(),
+        };
     }
 }

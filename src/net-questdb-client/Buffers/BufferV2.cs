@@ -32,12 +32,25 @@ namespace QuestDB.Buffers;
 /// <summary />
 public class BufferV2 : BufferV1
 {
-    /// <summary />
+    /// <summary>
+    /// Initializes a new instance of BufferV2 supporting ARRAY and binary DOUBLE types.
+    /// </summary>
+    /// <param name="bufferSize">Initial size of the internal write buffer, in bytes.</param>
+    /// <param name="maxNameLen">Maximum allowed length for column names, in characters.</param>
+    /// <param name="maxBufSize">Maximum allowed internal buffer size, in bytes.</param>
     public BufferV2(int bufferSize, int maxNameLen, int maxBufSize) : base(bufferSize, maxNameLen, maxBufSize)
     {
     }
 
-    /// <summary />
+    /// <summary>
+    /// Writes a multidimensional double array column with the specified name, elements, and shape to the buffer.
+    /// </summary>
+    /// <typeparam name="T">The element type (must be double).</typeparam>
+    /// <param name="name">The column name.</param>
+    /// <param name="value">An enumerable of double values forming the array elements.</param>
+    /// <param name="shape">An enumerable of integers describing the dimensions; product must equal the element count.</param>
+    /// <returns>The buffer instance for fluent chaining.</returns>
+    /// <exception cref="IngressError">Thrown if T is not double, shape is invalid, or shape does not match element count.</exception>
     public override IBuffer Column<T>(ReadOnlySpan<char> name, IEnumerable<T> value, IEnumerable<int> shape)
         where T : struct
     {
@@ -81,6 +94,11 @@ public class BufferV2 : BufferV1
         return this;
     }
 
+    /// <summary>
+    /// Validates that the provided type is double; throws if not.
+    /// </summary>
+    /// <param name="t">The type to validate.</param>
+    /// <exception cref="IngressError">Thrown with <see cref="ErrorCode.InvalidApiCall"/> if the type is not double.</exception>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void GuardAgainstNonDoubleTypes(Type t)
     {
@@ -90,17 +108,24 @@ public class BufferV2 : BufferV1
         }
     }
 
-    // ReSharper disable once InconsistentNaming
+    /// <summary>
+    /// Writes the provided value into the buffer as little-endian raw bytes and advances the buffer position by the value's size.
+    /// </summary>
+    /// <param name="value">A value whose raw bytes will be written into the buffer in little-endian order.</param>
     private void PutBinaryLE<T>(T value) where T : struct
     {
         var size = Marshal.SizeOf<T>();
         EnsureCapacity(size);
-        var length = Marshal.SizeOf<T>();
-        var mem    = MemoryMarshal.Cast<byte, T>(Chunk.AsSpan(Position, length));
+        var mem = MemoryMarshal.Cast<byte, T>(Chunk.AsSpan(Position, size));
         mem[0] = value;
-        Advance(length);
+        Advance(size);
     }
 
+    /// <summary>
+    /// Writes the provided value into the buffer as big-endian raw bytes and advances the buffer position by the value's size.
+    /// </summary>
+    /// <typeparam name="T">A value type.</typeparam>
+    /// <param name="value">The value to write in big-endian byte order.</param>
     // ReSharper disable once InconsistentNaming
     private void PutBinaryBE<T>(T value) where T : struct
     {
@@ -111,20 +136,24 @@ public class BufferV2 : BufferV1
         MemoryMarshal.Cast<T, byte>(slot).Reverse();
     }
 
-    // ReSharper disable once InconsistentNaming
+    /// <summary>
+    /// Writes a sequence of values into the buffer in little-endian binary form, handling chunk boundaries and advancing the buffer position.
+    /// </summary>
+    /// <param name="value">A span of values whose raw bytes will be written as little-endian binary (elements are written whole; partial element writes are not performed).</param>
     private void PutBinaryManyLE<T>(ReadOnlySpan<T> value) where T : struct
     {
-        var srcSpan  = MemoryMarshal.Cast<T, byte>(value);
+        var srcSpan = MemoryMarshal.Cast<T, byte>(value);
         var byteSize = Marshal.SizeOf<T>();
 
         while (srcSpan.Length > 0)
         {
-            var dstLength   = GetSpareCapacity();               // length
+            var dstLength = GetSpareCapacity(); // length
             if (dstLength < byteSize)
             {
                 NextBuffer();
-                dstLength   = GetSpareCapacity();
+                dstLength = GetSpareCapacity();
             }
+
             var availLength = dstLength - dstLength % byteSize; // rounded length
 
             if (srcSpan.Length < availLength)
@@ -133,13 +162,19 @@ public class BufferV2 : BufferV1
                 Advance(srcSpan.Length);
                 return;
             }
-            var dstSpan     = Chunk.AsSpan(Position, availLength);
+
+            var dstSpan = Chunk.AsSpan(Position, availLength);
             srcSpan.Slice(0, availLength).CopyTo(dstSpan);
             Advance(availLength);
             srcSpan = srcSpan.Slice(availLength);
         }
     }
 
+    /// <summary>
+    /// Writes a sequence of values into the buffer in big-endian binary form by writing each element individually.
+    /// </summary>
+    /// <typeparam name="T">A value type.</typeparam>
+    /// <param name="value">A span of values to write in big-endian byte order.</param>
     // ReSharper disable once InconsistentNaming
     private void PutBinaryManyBE<T>(ReadOnlySpan<T> value) where T : struct
     {
@@ -149,6 +184,11 @@ public class BufferV2 : BufferV1
         }
     }
 
+    /// <summary>
+    /// Writes a sequence of values into the buffer in the platform's native byte order (little-endian or big-endian).
+    /// </summary>
+    /// <typeparam name="T">A value type.</typeparam>
+    /// <param name="value">A span of values to write.</param>
     private void PutBinaryMany<T>(ReadOnlySpan<T> value) where T : struct
     {
         if (BitConverter.IsLittleEndian)
@@ -161,6 +201,11 @@ public class BufferV2 : BufferV1
         }
     }
 
+    /// <summary>
+    /// Writes a single value into the buffer in the platform's native byte order (little-endian or big-endian).
+    /// </summary>
+    /// <typeparam name="T">A value type.</typeparam>
+    /// <param name="value">The value to write.</param>
     private void PutBinary<T>(T value) where T : struct
     {
         if (BitConverter.IsLittleEndian)
@@ -173,14 +218,23 @@ public class BufferV2 : BufferV1
         }
     }
 
-    /// <summary />
+    /// <summary>
+    /// Writes a column whose value is the provided span of doubles encoded as a binary double array.
+    /// </summary>
+    /// <returns>The current buffer instance.</returns>
     public override IBuffer Column<T>(ReadOnlySpan<char> name, ReadOnlySpan<T> value) where T : struct
     {
         GuardAgainstNonDoubleTypes(typeof(T));
         return PutDoubleArray(name, value);
     }
 
-    private IBuffer PutDoubleArray<T>(ReadOnlySpan<char> name, ReadOnlySpan<T> value)  where T : struct
+    /// <summary>
+    /// Writes a one-dimensional double array column encoded in the buffer's binary double-array format.
+    /// </summary>
+    /// <param name="name">The column name.</param>
+    /// <param name="value">A span of elements representing the array; elements must be of type `double`.</param>
+    /// <returns>The current buffer instance.</returns>
+    private IBuffer PutDoubleArray<T>(ReadOnlySpan<char> name, ReadOnlySpan<T> value) where T : struct
     {
         SetTableIfAppropriate();
         PutArrayOfDoubleHeader(name);
@@ -191,7 +245,13 @@ public class BufferV2 : BufferV1
         return this;
     }
 
-    /// <summary />
+    /// <summary>
+    /// Add a column with the given name whose value is provided by the specified double array (1D or multi-dimensional).
+    /// </summary>
+    /// <param name="name">The column name to write.</param>
+    /// <param name="value">An array of doubles to write. If null the column is omitted. For a 1D array the values are written as a single-dimension double array; for multi-dimensional arrays the rank and each dimension length are written followed by the elements in row-major order.</param>
+    /// <returns>This buffer instance.</returns>
+    /// <exception cref="InvalidOperationException">Thrown when the array's element type cannot be determined.</exception>
     public override IBuffer Column(ReadOnlySpan<char> name, Array? value)
     {
         if (value == null)
@@ -199,7 +259,7 @@ public class BufferV2 : BufferV1
             // The value is null, do not include the column in the message
             return this;
         }
-        
+
         var type = value.GetType().GetElementType();
         GuardAgainstNonDoubleTypes(type ?? throw new InvalidOperationException());
         if (value.Rank == 1)
@@ -207,7 +267,7 @@ public class BufferV2 : BufferV1
             // Fast path, one dim array
             return PutDoubleArray(name, (ReadOnlySpan<double>)value!);
         }
-        
+
         SetTableIfAppropriate();
         PutArrayOfDoubleHeader(name);
 
@@ -226,6 +286,11 @@ public class BufferV2 : BufferV1
         return this;
     }
 
+    /// <summary>
+    /// Reserves space in the buffer for a value of type T and returns a span to write the value later, advancing the buffer position.
+    /// </summary>
+    /// <typeparam name="T">A value type.</typeparam>
+    /// <param name="span">An out parameter that receives a span covering the reserved space for writing.</param>
     private void PutBinaryDeferred<T>(out Span<T> span) where T : struct
     {
         var length = Marshal.SizeOf<T>();
@@ -234,6 +299,10 @@ public class BufferV2 : BufferV1
         Advance(length);
     }
 
+    /// <summary>
+    /// Writes the ILP binary format header for a double array column.
+    /// </summary>
+    /// <param name="name">The column name.</param>
     private void PutArrayOfDoubleHeader(ReadOnlySpan<char> name)
     {
         Column(name)
@@ -243,6 +312,10 @@ public class BufferV2 : BufferV1
     }
 
 
+    /// <summary>
+    /// Writes the ILP binary format header for a double column.
+    /// </summary>
+    /// <param name="name">The column name.</param>
     private void PutDoubleHeader(ReadOnlySpan<char> name)
     {
         Column(name)
@@ -250,6 +323,10 @@ public class BufferV2 : BufferV1
             .Put((byte)BinaryFormatType.DOUBLE);
     }
 
+    /// <summary>
+    /// Calculates the remaining available space in the current buffer chunk.
+    /// </summary>
+    /// <returns>The number of bytes remaining in the current chunk.</returns>
     private int GetSpareCapacity()
     {
         return Chunk.Length - Position;

@@ -23,12 +23,15 @@
  ******************************************************************************/
 
 
+using System.Globalization;
 using System.Net;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using dummy_http_server;
 using NUnit.Framework;
 using QuestDB;
+using QuestDB.Senders;
 
 // ReSharper disable InconsistentNaming
 
@@ -41,6 +44,68 @@ public class JsonSpecTestRunner
     private const int HttpPort = 29473;
     private static readonly TestCase[]? TestCases = ReadTestCases();
 
+    /// <summary>
+    /// Populate the provided sender with the test case's table, symbols, and columns, then send the prepared row.
+    /// </summary>
+    /// <param name="sender">The ISender to configure and use for sending the test case row.</param>
+    /// <param name="testCase">The test case containing table name, symbols, and typed columns to write.</param>
+    /// <returns>A task that completes when the prepared row has been sent.</returns>
+    private static async Task ExecuteTestCase(ISender sender, TestCase testCase)
+    {
+        sender.Table(testCase.Table);
+        foreach (var symbol in testCase.Symbols)
+        {
+            sender.Symbol(symbol.Name, symbol.Value);
+        }
+
+        foreach (var column in testCase.Columns)
+        {
+            switch (column.Type)
+            {
+                case "STRING":
+                    sender.Column(column.Name, ((JsonElement)column.Value).GetString());
+                    break;
+
+                case "DOUBLE":
+                    sender.Column(column.Name, ((JsonElement)column.Value).GetDouble());
+                    break;
+
+                case "BOOLEAN":
+                    sender.Column(column.Name, ((JsonElement)column.Value).GetBoolean());
+                    break;
+
+                case "LONG":
+                    sender.Column(column.Name, ((JsonElement)column.Value).GetInt64());
+                    break;
+
+                case "DECIMAL":
+                    var value = ((JsonElement)column.Value).GetString();
+                    if (value is null)
+                    {
+                        sender.Column(column.Name, (decimal?)null);
+                    }
+                    else
+                    {
+                        var d = decimal.Parse(value, NumberStyles.Number, CultureInfo.InvariantCulture);
+                        sender.Column(column.Name, d);
+                    }
+                    break;
+
+                default:
+                    throw new NotSupportedException("Column type not supported: " + column.Type);
+            }
+        }
+
+#pragma warning disable CS0618 // Type or member is obsolete
+        await sender.AtNowAsync();
+#pragma warning restore CS0618 // Type or member is obsolete
+        await sender.SendAsync();
+    }
+
+    /// <summary>
+    /// Executes the provided test case by sending its configured table, symbols, and columns to a local TCP listener and asserting the listener's received output against the test case's expected result.
+    /// </summary>
+    /// <param name="testCase">The test case to run; provides table, symbols, columns to send and a Result describing the expected validation (Status, Line, AnyLines, or BinaryBase64).</param>
     [TestCaseSource(nameof(TestCases))]
     public async Task RunTcp(TestCase testCase)
     {
@@ -48,51 +113,17 @@ public class JsonSpecTestRunner
         srv.AcceptAsync();
 
         using var sender = Sender.New(
-            $"tcp::addr={IPAddress.Loopback}:{TcpPort};");
+            $"tcp::addr={IPAddress.Loopback}:{TcpPort};protocol_version=3");
 
         Exception? exception = null;
 
         try
         {
-            sender.Table(testCase.table);
-            foreach (var symbol in testCase.symbols)
-            {
-                sender.Symbol(symbol.name, symbol.value);
-            }
-
-            foreach (var column in testCase.columns)
-            {
-                switch (column.type)
-                {
-                    case "STRING":
-                        sender.Column(column.name, ((JsonElement)column.value).GetString());
-                        break;
-
-                    case "DOUBLE":
-                        sender.Column(column.name, ((JsonElement)column.value).GetDouble());
-                        break;
-
-                    case "BOOLEAN":
-                        sender.Column(column.name, ((JsonElement)column.value).GetBoolean());
-                        break;
-
-                    case "LONG":
-                        sender.Column(column.name, (long)((JsonElement)column.value).GetDouble());
-                        break;
-
-                    default:
-                        throw new NotSupportedException("Column type not supported: " + column.type);
-                }
-            }
-
-#pragma warning disable CS0618 // Type or member is obsolete
-            await sender.AtNowAsync();
-#pragma warning restore CS0618 // Type or member is obsolete
-            await sender.SendAsync();
+            await ExecuteTestCase(sender, testCase);
         }
         catch (Exception? ex)
         {
-            if (testCase.result.status == "SUCCESS")
+            if (testCase.Result.Status == "SUCCESS")
             {
                 throw;
             }
@@ -100,18 +131,23 @@ public class JsonSpecTestRunner
             exception = ex;
         }
 
-        if (testCase.result.status == "SUCCESS")
+        if (testCase.Result.Status == "SUCCESS")
         {
-            if (testCase.result.anyLines == null || testCase.result.anyLines.Length == 0)
+            if (testCase.Result.BinaryBase64 != null)
             {
-                WaitAssert(srv, testCase.result.line + "\n");
+                var expected = Convert.FromBase64String(testCase.Result.BinaryBase64);
+                WaitAssert(srv, expected);
+            }
+            else if (testCase.Result.AnyLines == null || testCase.Result.AnyLines.Length == 0)
+            {
+                WaitAssert(srv, testCase.Result.Line + "\n");
             }
             else
             {
-                WaitAssert(srv, testCase.result.anyLines);
+                WaitAssert(srv, testCase.Result.AnyLines);
             }
         }
-        else if (testCase.result.status == "ERROR")
+        else if (testCase.Result.Status == "ERROR")
         {
             Assert.NotNull(exception, "Exception should be thrown");
             if (exception is NotSupportedException)
@@ -121,10 +157,14 @@ public class JsonSpecTestRunner
         }
         else
         {
-            Assert.Fail("Unsupported test case result status: " + testCase.result.status);
+            Assert.Fail("Unsupported test case result status: " + testCase.Result.Status);
         }
     }
 
+    /// <summary>
+    /// Executes the provided test case by sending data over HTTP to a dummy server using a QuestDB sender and validates the server's response according to the test case result.
+    /// </summary>
+    /// <param name="testCase">The test case describing table, symbols, columns, and expected result (status, line(s), or base64 binary) to execute and validate.</param>
     [TestCaseSource(nameof(TestCases))]
     public async Task RunHttp(TestCase testCase)
     {
@@ -134,52 +174,18 @@ public class JsonSpecTestRunner
         Assert.That(await server.Healthcheck());
 
         using var sender = Sender.New(
-            $"http::addr={IPAddress.Loopback}:{HttpPort};");
+            $"http::addr={IPAddress.Loopback}:{HttpPort};protocol_version=3");
 
         Exception? exception = null;
 
         try
         {
-            sender.Table(testCase.table);
-            foreach (var symbol in testCase.symbols)
-            {
-                sender.Symbol(symbol.name, symbol.value);
-            }
-
-            foreach (var column in testCase.columns)
-            {
-                switch (column.type)
-                {
-                    case "STRING":
-                        sender.Column(column.name, ((JsonElement)column.value).GetString());
-                        break;
-
-                    case "DOUBLE":
-                        sender.Column(column.name, ((JsonElement)column.value).GetDouble());
-                        break;
-
-                    case "BOOLEAN":
-                        sender.Column(column.name, ((JsonElement)column.value).GetBoolean());
-                        break;
-
-                    case "LONG":
-                        sender.Column(column.name, (long)((JsonElement)column.value).GetDouble());
-                        break;
-
-                    default:
-                        throw new NotSupportedException("Column type not supported: " + column.type);
-                }
-            }
-
-#pragma warning disable CS0618 // Type or member is obsolete
-            await sender.AtNowAsync();
-#pragma warning restore CS0618 // Type or member is obsolete
-            await sender.SendAsync();
+            await ExecuteTestCase(sender, testCase);
         }
         catch (Exception? ex)
         {
             TestContext.Write(server.GetLastError());
-            if (testCase.result.status == "SUCCESS")
+            if (testCase.Result.Status == "SUCCESS")
             {
                 throw;
             }
@@ -187,19 +193,26 @@ public class JsonSpecTestRunner
             exception = ex;
         }
 
-        if (testCase.result.status == "SUCCESS")
+        if (testCase.Result.Status == "SUCCESS")
         {
-            var textReceived = server.PrintBuffer();
-            if (testCase.result.anyLines == null || testCase.result.anyLines.Length == 0)
+            if (testCase.Result.BinaryBase64 != null)
             {
-                Assert.That(textReceived, Is.EqualTo(testCase.result.line + "\n"));
+                var received = server.GetReceivedBytes();
+                var expected = Convert.FromBase64String(testCase.Result.BinaryBase64);
+                Assert.That(received, Is.EqualTo(expected));
+            }
+            else if (testCase.Result.AnyLines == null || testCase.Result.AnyLines.Length == 0)
+            {
+                var textReceived = server.PrintBuffer();
+                Assert.That(textReceived, Is.EqualTo(testCase.Result.Line + "\n"));
             }
             else
             {
-                AssertMany(testCase.result.anyLines, textReceived);
+                var textReceived = server.PrintBuffer();
+                AssertMany(testCase.Result.AnyLines, textReceived);
             }
         }
-        else if (testCase.result.status == "ERROR")
+        else if (testCase.Result.Status == "ERROR")
         {
             Assert.NotNull(exception, "Exception should be thrown");
             if (exception is NotSupportedException)
@@ -209,7 +222,7 @@ public class JsonSpecTestRunner
         }
         else
         {
-            Assert.Fail("Unsupported test case result status: " + testCase.result.status);
+            Assert.Fail("Unsupported test case result status: " + testCase.Result.Status);
         }
     }
 
@@ -245,6 +258,17 @@ public class JsonSpecTestRunner
         Assert.That(srv.GetTextReceived(), Is.EqualTo(expected));
     }
 
+    private static void WaitAssert(DummyIlpServer srv, byte[] expected)
+    {
+        var expectedLen = expected.Length;
+        for (var i = 0; i < 500 && srv.TotalReceived < expectedLen; i++)
+        {
+            Thread.Sleep(10);
+        }
+
+        Assert.That(srv.GetReceivedBytes(), Is.EqualTo(expected));
+    }
+
     private DummyIlpServer CreateTcpListener(int port, bool tls = false)
     {
         return new DummyIlpServer(port, tls);
@@ -258,35 +282,44 @@ public class JsonSpecTestRunner
 
     public class TestCase
     {
-        public string testName { get; set; } = null!;
-        public string table { get; set; } = null!;
-        public TestCaseSymbol[] symbols { get; set; } = null!;
-        public TestCaseColumn[] columns { get; set; } = null!;
-        public TestCaseResult result { get; set; } = null!;
+        [JsonPropertyName("testName")] public string TestName { get; set; } = null!;
+        [JsonPropertyName("table")] public string Table { get; set; } = null!;
 
+        [JsonPropertyName("minimumProtocolVersion")]
+        public int? MinimumProtocolVersion { get; set; }
+
+        [JsonPropertyName("symbols")] public TestCaseSymbol[] Symbols { get; set; } = null!;
+        [JsonPropertyName("columns")] public TestCaseColumn[] Columns { get; set; } = null!;
+        [JsonPropertyName("result")] public TestCaseResult Result { get; set; } = null!;
+
+        /// <summary>
+        /// Provides the test case name for display and logging.
+        /// </summary>
+        /// <returns>The TestName of the test case.</returns>
         public override string ToString()
         {
-            return testName;
+            return TestName;
         }
     }
 
     public class TestCaseSymbol
     {
-        public string name { get; set; } = null!;
-        public string value { get; set; } = null!;
+        [JsonPropertyName("name")] public string Name { get; set; } = null!;
+        [JsonPropertyName("value")] public string Value { get; set; } = null!;
     }
 
     public class TestCaseColumn
     {
-        public string type { get; set; } = null!;
-        public string name { get; set; } = null!;
-        public object value { get; set; } = null!;
+        [JsonPropertyName("type")] public string Type { get; set; } = null!;
+        [JsonPropertyName("name")] public string Name { get; set; } = null!;
+        [JsonPropertyName("value")] public object Value { get; set; } = null!;
     }
 
     public class TestCaseResult
     {
-        public string status { get; set; } = null!;
-        public string line { get; set; } = null!;
-        public string[]? anyLines { get; set; } = null!;
+        [JsonPropertyName("status")] public string Status { get; set; } = null!;
+        [JsonPropertyName("line")] public string Line { get; set; } = null!;
+        [JsonPropertyName("anyLines")] public string[]? AnyLines { get; set; } = null!;
+        [JsonPropertyName("binaryBase64")] public string? BinaryBase64 { get; set; }
     }
 }

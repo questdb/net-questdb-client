@@ -40,7 +40,7 @@ using QuestDB;
 #pragma warning disable CS0612 // Type or member is obsolete
 #pragma warning disable CS0618 // Type or member is obsolete
 
-namespace tcp_client_test;
+namespace net_questdb_client_tests;
 
 [TestFixture]
 public class LineTcpSenderTests
@@ -56,10 +56,10 @@ public class LineTcpSenderTests
         using var ls = await LineTcpSender.ConnectAsync(IPAddress.Loopback.ToString(), _port, tlsMode: TlsMode.Disable);
 
         ls.Table("metric name")
-          .Symbol("t a g", "v alu, e")
-          .Column("number", 10)
-          .Column("string", " -=\"")
-          .At(new DateTime(1970, 01, 01, 0, 0, 1));
+            .Symbol("t a g", "v alu, e")
+            .Column("number", 10)
+            .Column("string", " -=\"")
+            .At(new DateTime(1970, 01, 01, 0, 0, 1));
         ls.Send();
 
 
@@ -72,17 +72,17 @@ public class LineTcpSenderTests
     {
         using var srv = CreateTcpListener(_port);
         srv.WithAuth("testUser1", "Vs4e-cOLsVCntsMrZiAGAZtrkPXO00uoRLuA3d7gEcI=",
-                     "ANhR2AZSs4ar9urE5AZrJqu469X0r7gZ1BBEdcrAuL_6");
+            "ANhR2AZSs4ar9urE5AZrJqu469X0r7gZ1BBEdcrAuL_6");
         srv.AcceptAsync();
 
         using var ls = await LineTcpSender.ConnectAsync(IPAddress.Loopback.ToString(), _port, tlsMode: TlsMode.Disable);
         await ls.AuthenticateAsync("testUser1", "NgdiOWDoQNUP18WOnb1xkkEG5TzPYMda5SiUOvT1K0U=", CancellationToken.None);
 
         ls.Table("metric name")
-          .Symbol("t a g", "v alu, e")
-          .Column("number", 10)
-          .Column("string", " -=\"")
-          .At(new DateTime(1970, 01, 01, 0, 0, 1));
+            .Symbol("t a g", "v alu, e")
+            .Column("number", 10)
+            .Column("string", " -=\"")
+            .At(new DateTime(1970, 01, 01, 0, 0, 1));
         ls.Send();
 
         var expected = "metric\\ name,t\\ a\\ g=v\\ alu\\,\\ e number=10i,string=\" -=\\\"\" 1000000000\n";
@@ -94,7 +94,7 @@ public class LineTcpSenderTests
     {
         using var srv = CreateTcpListener(_port);
         srv.WithAuth("testUser1", "Vs4e-cOLsVCntsMrZiAGAZtrkPXO00uoRLuA3d7gEcI=",
-                     "ANhR2AZSs4ar9urE5AZrJqu469X0r7gZ1BBEdcrAuL_6");
+            "ANhR2AZSs4ar9urE5AZrJqu469X0r7gZ1BBEdcrAuL_6");
         srv.AcceptAsync();
 
         using var ls = await LineTcpSender.ConnectAsync(IPAddress.Loopback.ToString(), _port, tlsMode: TlsMode.Disable);
@@ -113,7 +113,7 @@ public class LineTcpSenderTests
     public void EcdsaSingnatureLoop()
     {
         var privateKey = Convert.FromBase64String("NgdiOWDoQNUP18WOnb1xkkEG5TzPYMda5SiUOvT1K0U=");
-        var p          = SecNamedCurves.GetByName("secp256r1");
+        var p = SecNamedCurves.GetByName("secp256r1");
         var parameters = new ECDomainParameters(p.Curve, p.G, p.N, p.H);
         var priKey = new ECPrivateKeyParameters(
             "ECDSA",
@@ -164,12 +164,12 @@ public class LineTcpSenderTests
         for (var i = 0; i < lineCount; i++)
         {
             ls.Table("table name")
-              .Symbol("t a g", "v alu, e")
-              .Column("number", 10)
-              .Column("db l", 123.12)
-              .Column("string", " -=\"")
-              .Column("при вед", "медвед")
-              .At(new DateTime(1970, 01, 01, 0, 0, 1));
+                .Symbol("t a g", "v alu, e")
+                .Column("number", 10)
+                .Column("db l", 123.12)
+                .Column("string", " -=\"")
+                .Column("при вед", "медвед")
+                .At(new DateTime(1970, 01, 01, 0, 0, 1));
             totalExpectedSb.Append(expected);
         }
 
@@ -187,8 +187,8 @@ public class LineTcpSenderTests
         srv.AcceptAsync();
 
         using var ls = await LineTcpSender.ConnectAsync(IPAddress.Loopback.ToString(), _port, 2048,
-                                                        tlsMode: TlsMode.Disable,
-                                                        bufferOverflowHandling: BufferOverflowHandling.Extend);
+            tlsMode: TlsMode.Disable,
+            bufferOverflowHandling: BufferOverflowHandling.Extend);
         var lineCount = 500;
         var expected =
             "table\\ name,t\\ a\\ g=v\\ alu\\,\\ e number=10i,db\\ l=123.12,string=\" -=\\\"\",при\\ вед=\"медвед\" 1000000000\n";
@@ -196,12 +196,12 @@ public class LineTcpSenderTests
         for (var i = 0; i < lineCount; i++)
         {
             ls.Table("table name")
-              .Symbol("t a g", "v alu, e")
-              .Column("number", 10)
-              .Column("db l", 123.12)
-              .Column("string", " -=\"")
-              .Column("при вед", "медвед")
-              .At(new DateTime(1970, 01, 01, 0, 0, 1));
+                .Symbol("t a g", "v alu, e")
+                .Column("number", 10)
+                .Column("db l", 123.12)
+                .Column("string", " -=\"")
+                .Column("при вед", "медвед")
+                .At(new DateTime(1970, 01, 01, 0, 0, 1));
             totalExpectedSb.Append(expected);
         }
 
@@ -210,12 +210,12 @@ public class LineTcpSenderTests
         for (var i = 0; i < lineCount; i++)
         {
             ls.Table("table name")
-              .Symbol("t a g", "v alu, e")
-              .Column("number", 10)
-              .Column("db l", 123.12)
-              .Column("string", " -=\"")
-              .Column("при вед", "медвед")
-              .At(new DateTime(1970, 01, 01, 0, 0, 1));
+                .Symbol("t a g", "v alu, e")
+                .Column("number", 10)
+                .Column("db l", 123.12)
+                .Column("string", " -=\"")
+                .Column("при вед", "медвед")
+                .At(new DateTime(1970, 01, 01, 0, 0, 1));
             totalExpectedSb.Append(expected);
         }
 
@@ -240,12 +240,12 @@ public class LineTcpSenderTests
         for (var i = 0; i < lineCount; i++)
         {
             ls.Table("table name")
-              .Symbol("t a g", "v alu, e")
-              .Column("number", 10)
-              .Column("db l", 123.12)
-              .Column("string", " -=\"")
-              .Column("при вед", "медвед")
-              .At(new DateTime(1970, 01, 01, 0, 0, 1));
+                .Symbol("t a g", "v alu, e")
+                .Column("number", 10)
+                .Column("db l", 123.12)
+                .Column("string", " -=\"")
+                .Column("при вед", "медвед")
+                .At(new DateTime(1970, 01, 01, 0, 0, 1));
             totalExpectedSb.Append(expected);
         }
 
@@ -255,12 +255,12 @@ public class LineTcpSenderTests
         for (var i = 0; i < lineCount; i++)
         {
             ls.Table("table name")
-              .Symbol("t a g", "v alu, e")
-              .Column("number", 10)
-              .Column("db l", 123.12)
-              .Column("string", " -=\"")
-              .Column("при вед", "медвед")
-              .At(new DateTime(1970, 01, 01, 0, 0, 1));
+                .Symbol("t a g", "v alu, e")
+                .Column("number", 10)
+                .Column("db l", 123.12)
+                .Column("string", " -=\"")
+                .Column("при вед", "медвед")
+                .At(new DateTime(1970, 01, 01, 0, 0, 1));
             totalExpectedSb.Append(expected);
         }
 
@@ -291,12 +291,12 @@ public class LineTcpSenderTests
         for (var i = 0; i < lineCount; i++)
         {
             ls.Table("table name")
-              .Symbol("t a g", "v alu, e")
-              .Column("number", 10)
-              .Column("db l", 123.12)
-              .Column("string", " -=\"")
-              .Column("при вед", "медвед")
-              .At(new DateTime(1970, 01, 01, 0, 0, 1));
+                .Symbol("t a g", "v alu, e")
+                .Column("number", 10)
+                .Column("db l", 123.12)
+                .Column("string", " -=\"")
+                .Column("при вед", "медвед")
+                .At(new DateTime(1970, 01, 01, 0, 0, 1));
             totalExpectedSb.Append(expected);
             try
             {
@@ -323,11 +323,11 @@ public class LineTcpSenderTests
         using var ls = await LineTcpSender.ConnectAsync(IPAddress.Loopback.ToString(), _port, tlsMode: TlsMode.Disable);
 
         ls.Table("neg name")
-          .Column("number1", long.MinValue + 1)
-          .Column("number2", long.MaxValue)
-          .Column("number3", double.MinValue)
-          .Column("number4", double.MaxValue)
-          .AtNow();
+            .Column("number1", long.MinValue + 1)
+            .Column("number2", long.MaxValue)
+            .Column("number3", double.MinValue)
+            .Column("number4", double.MaxValue)
+            .AtNow();
         ls.Send();
 
         var expected =
@@ -344,15 +344,15 @@ public class LineTcpSenderTests
         using var ls = await LineTcpSender.ConnectAsync(IPAddress.Loopback.ToString(), _port, tlsMode: TlsMode.Disable);
 
         ls.Table("doubles")
-          .Column("d0", 0.0)
-          .Column("dm0", -0.0)
-          .Column("d1", 1.0)
-          .Column("dE100", 1E100)
-          .Column("d0000001", 0.000001)
-          .Column("dNaN", double.NaN)
-          .Column("dInf", double.PositiveInfinity)
-          .Column("dNInf", double.NegativeInfinity)
-          .AtNow();
+            .Column("d0", 0.0)
+            .Column("dm0", -0.0)
+            .Column("d1", 1.0)
+            .Column("dE100", 1E100)
+            .Column("d0000001", 0.000001)
+            .Column("dNaN", double.NaN)
+            .Column("dInf", double.PositiveInfinity)
+            .Column("dNInf", double.NegativeInfinity)
+            .AtNow();
         ls.Send();
 
         var expected =
@@ -370,8 +370,8 @@ public class LineTcpSenderTests
 
         var ts = new DateTime(2022, 2, 24);
         ls.Table("name")
-          .Column("ts", ts)
-          .At(ts);
+            .Column("ts", ts)
+            .At(ts);
 
         ls.Send();
 
@@ -385,18 +385,18 @@ public class LineTcpSenderTests
     {
         using var srv = CreateTcpListener(_port, true);
         srv.WithAuth("testUser1", "Vs4e-cOLsVCntsMrZiAGAZtrkPXO00uoRLuA3d7gEcI=",
-                     "ANhR2AZSs4ar9urE5AZrJqu469X0r7gZ1BBEdcrAuL_6");
+            "ANhR2AZSs4ar9urE5AZrJqu469X0r7gZ1BBEdcrAuL_6");
         srv.AcceptAsync();
 
         using var ls = await LineTcpSender.ConnectAsync("localhost", _port, tlsMode: TlsMode.AllowAnyServerCertificate);
         await ls.AuthenticateAsync("testUser1", "NgdiOWDoQNUP18WOnb1xkkEG5TzPYMda5SiUOvT1K0U=");
 
         ls.Table("table_name")
-          .Column("number1", long.MinValue + 1)
-          .Column("number2", long.MaxValue)
-          .Column("number3", double.MinValue)
-          .Column("number4", double.MaxValue)
-          .AtNow();
+            .Column("number1", long.MinValue + 1)
+            .Column("number2", long.MaxValue)
+            .Column("number3", double.MinValue)
+            .Column("number4", double.MaxValue)
+            .AtNow();
 
         await ls.SendAsync();
 
@@ -412,7 +412,7 @@ public class LineTcpSenderTests
         srv.AcceptAsync();
 
         using var ls = await LineTcpSender.ConnectAsync(IPAddress.Loopback.ToString(), _port, tlsMode: TlsMode.Disable);
-        string?   nullString = null;
+        string? nullString = null;
 
         Assert.Throws<ArgumentException>(() => ls.Table(nullString));
         Assert.Throws<InvalidOperationException>(() => ls.Column("abc", 123));
@@ -488,7 +488,7 @@ public class LineTcpSenderTests
         srv.AcceptAsync();
 
         using var ls = await LineTcpSender.ConnectAsync(IPAddress.Loopback.ToString(), _port, tlsMode: TlsMode.Disable);
-        string?   nullString = null;
+        string? nullString = null;
 
         Assert.Throws<ArgumentException>(() => ls.Table(nullString));
         Assert.Throws<InvalidOperationException>(() => ls.Column("abc", 123));
@@ -540,18 +540,18 @@ public class LineTcpSenderTests
         srv.AcceptAsync();
 
         var nowMillisecond = DateTime.Now.Millisecond;
-        var metric         = "metric_name" + nowMillisecond;
+        var metric = "metric_name" + nowMillisecond;
 
         using var ls = await LineTcpSender.ConnectAsync(IPAddress.Loopback.ToString(), _port, 256 * 1024,
-                                                        tlsMode: TlsMode.Disable);
+            tlsMode: TlsMode.Disable);
         for (var i = 0; i < 1E6; i++)
         {
             ls.Table(metric)
-              .Symbol("nopoint", "tag" + i % 100)
-              .Column("counter", i * 1111.1)
-              .Column("int", i)
-              .Column("привед", "мед вед")
-              .At(new DateTime(2021, 1, 1, i / 360 / 1000 % 60, i / 60 / 1000 % 60, i / 1000 % 60, i % 1000));
+                .Symbol("nopoint", "tag" + i % 100)
+                .Column("counter", i * 1111.1)
+                .Column("int", i)
+                .Column("привед", "мед вед")
+                .At(new DateTime(2021, 1, 1, i / 360 / 1000 % 60, i / 60 / 1000 % 60, i / 1000 % 60, i % 1000));
 
             if (i % 100 == 0)
             {
@@ -569,18 +569,18 @@ public class LineTcpSenderTests
         srv.AcceptAsync();
 
         var nowMillisecond = DateTime.Now.Millisecond;
-        var metric         = "metric_name" + nowMillisecond;
+        var metric = "metric_name" + nowMillisecond;
 
         using var ls = await LineTcpSender.ConnectAsync(IPAddress.Loopback.ToString(), _port, 64 * 1024,
-                                                        BufferOverflowHandling.SendImmediately, TlsMode.Disable);
+            BufferOverflowHandling.SendImmediately, TlsMode.Disable);
         for (var i = 0; i < 1E6; i++)
         {
             ls.Table(metric)
-              .Symbol("nopoint", "tag" + i % 100)
-              .Column("counter", i * 1111.1)
-              .Column("int", i)
-              .Column("привед", "мед вед")
-              .At(new DateTime(2021, 1, 1, i / 360 / 1000 % 60, i / 60 / 1000 % 60, i / 1000 % 60, i % 1000));
+                .Symbol("nopoint", "tag" + i % 100)
+                .Column("counter", i * 1111.1)
+                .Column("int", i)
+                .Column("привед", "мед вед")
+                .At(new DateTime(2021, 1, 1, i / 360 / 1000 % 60, i / 60 / 1000 % 60, i / 1000 % 60, i % 1000));
         }
 
         await ls.SendAsync();
@@ -605,7 +605,7 @@ public class LineTcpSenderTests
     {
         using var srv = CreateTcpListener(_port);
         srv.WithAuth("testUser1", "Vs4e-cOLsVCntsMrZiAGAZtrkPXO00uoRLuA3d7gEcI=",
-                     "ANhR2AZSs4ar9urE5AZrJqu469X0r7gZ1BBEdcrAuL_6");
+            "ANhR2AZSs4ar9urE5AZrJqu469X0r7gZ1BBEdcrAuL_6");
         srv.AcceptAsync();
 
         using var ls =
@@ -614,7 +614,7 @@ public class LineTcpSenderTests
         try
         {
             await ls.AuthenticateAsync("testUser1", "NgdiOWDoQNUP18WOnb1xkkEG5TzPYMda5SiUOvT1K0U=",
-                                       CancellationToken.None);
+                CancellationToken.None);
             Assert.Fail();
         }
         catch (IOException ex)
@@ -642,8 +642,8 @@ public class LineTcpSenderTests
 
         using var ls = await LineTcpSender.ConnectAsync(IPAddress.Loopback.ToString(), _port, tlsMode: TlsMode.Disable);
         Assert.Throws<ArgumentOutOfRangeException>(() => ls.Table("name")
-                                                           .Column("number1", long.MinValue)
-                                                           .AtNow()
+            .Column("number1", long.MinValue)
+            .AtNow()
         );
     }
 
@@ -655,8 +655,8 @@ public class LineTcpSenderTests
 
         using var ls = await LineTcpSender.ConnectAsync("127.0.0.1", _port, tlsMode: TlsMode.Disable);
         ls.Table("neg name")
-          .Column("привед", " мед\rве\n д")
-          .AtNow();
+            .Column("привед", " мед\rве\n д")
+            .AtNow();
         ls.Send();
 
         var expected = "neg\\ name привед=\" мед\\\rве\\\n д\"\n";
@@ -671,9 +671,9 @@ public class LineTcpSenderTests
 
         using var ls = await LineTcpSender.ConnectAsync(IPAddress.Loopback.ToString(), _port, tlsMode: TlsMode.Disable);
         Assert.Throws<InvalidOperationException>(() => ls.Table("name")
-                                                         .Column("number1", 123)
-                                                         .Symbol("nand", "asdfa")
-                                                         .AtNow()
+            .Column("number1", 123)
+            .Symbol("nand", "asdfa")
+            .AtNow()
         );
     }
 
@@ -685,9 +685,9 @@ public class LineTcpSenderTests
 
         using var ls = await LineTcpSender.ConnectAsync(IPAddress.Loopback.ToString(), _port, tlsMode: TlsMode.Disable);
         Assert.Throws<InvalidOperationException>(() => ls.Table("name")
-                                                         .Column("number1", 123)
-                                                         .Table("nand")
-                                                         .AtNow()
+            .Column("number1", 123)
+            .Table("nand")
+            .AtNow()
         );
     }
 
@@ -699,11 +699,11 @@ public class LineTcpSenderTests
 
         using var ls = await LineTcpSender.ConnectAsync(IPAddress.Loopback.ToString(), _port, tlsMode: TlsMode.Disable);
         Assert.Throws<InvalidOperationException>(() => ls.Column("number1", 123)
-                                                         .AtNow()
+            .AtNow()
         );
 
         Assert.Throws<InvalidOperationException>(() => ls.Symbol("number1", "1234")
-                                                         .AtNow()
+            .AtNow()
         );
     }
 
@@ -740,8 +740,8 @@ public class LineTcpSenderTests
 
         var ts = new DateTime(2022, 2, 24);
         ls.Table("name")
-          .Column("ts", ts)
-          .At((ts.Ticks - DateTime.UnixEpoch.Ticks) * 100);
+            .Column("ts", ts)
+            .At((ts.Ticks - DateTime.UnixEpoch.Ticks) * 100);
 
         ls.Send();
 

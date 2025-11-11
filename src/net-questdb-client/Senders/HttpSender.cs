@@ -57,30 +57,49 @@ internal class HttpSender : AbstractSender
     private readonly Func<HttpRequestMessage> _sendRequestFactory;
     private readonly Func<HttpRequestMessage> _settingRequestFactory;
 
+    /// <summary>
+    /// Initializes a new HttpSender configured according to the provided options.
+    /// </summary>
+    /// <param name="options">Configuration for the sender, including connection endpoint, TLS and certificate settings, buffering and protocol parameters, authentication, and timeouts.</param>
     public HttpSender(SenderOptions options)
     {
-        _sendRequestFactory    = GenerateRequest;
+        _sendRequestFactory = GenerateRequest;
         _settingRequestFactory = GenerateSettingsRequest;
 
         Options = options;
         Build();
     }
 
+    /// <summary>
+    /// Initializes a new instance of <see cref="HttpSender"/> by parsing a configuration string.
+    /// </summary>
+    /// <param name="confStr">Configuration string in QuestDB connection string format.</param>
     public HttpSender(string confStr) : this(new SenderOptions(confStr))
     {
     }
 
+    /// <summary>
+    /// Configure and initialize the SocketsHttpHandler and HttpClient, set TLS and authentication options, determine the Line Protocol version (probing /settings when set to Auto), and create the internal send buffer.
+    /// </summary>
+    /// <remarks>
+    /// - Applies pool and connection settings from Options.
+    /// - When using HTTPS, configures TLS protocols, optional remote-certificate validation override (when tls_verify is unsafe_off), optional custom root CA installation, and optional client certificates.
+    /// - Sets connection timeout, PreAuthenticate, BaseAddress, and disables HttpClient timeout.
+    /// - Adds Basic or Bearer Authorization header when credentials or token are provided.
+    /// - If protocol_version is Auto, probes the server's /settings with a 1-second retry window to select the highest mutually supported protocol up to V3, falling back to V1 on errors or unexpected responses.
+    /// - Initializes the Buffer with init_buf_size, max_name_len, max_buf_size, and the chosen protocol version.
+    /// </remarks>
     private void Build()
     {
         _handler = new SocketsHttpHandler
         {
             PooledConnectionIdleTimeout = Options.pool_timeout,
-            MaxConnectionsPerServer     = 1,
+            MaxConnectionsPerServer = 1,
         };
 
         if (Options.protocol == ProtocolType.https)
         {
-            _handler.SslOptions.TargetHost          = Options.Host;
+            _handler.SslOptions.TargetHost = Options.Host;
             _handler.SslOptions.EnabledSslProtocols = SslProtocols.Tls12 | SslProtocols.Tls13;
 
             if (Options.tls_verify == TlsVerifyType.unsafe_off)
@@ -122,21 +141,21 @@ internal class HttpSender : AbstractSender
             }
         }
 
-        _handler.ConnectTimeout  = Options.auth_timeout;
+        _handler.ConnectTimeout = Options.auth_timeout;
         _handler.PreAuthenticate = true;
 
         _client = new HttpClient(_handler);
         var uri = new UriBuilder(Options.protocol.ToString(), Options.Host, Options.Port);
         _client.BaseAddress = uri.Uri;
-        _client.Timeout     = Timeout.InfiniteTimeSpan;
+        _client.Timeout = Timeout.InfiniteTimeSpan;
 
         if (!string.IsNullOrEmpty(Options.username) && !string.IsNullOrEmpty(Options.password))
         {
             _client.DefaultRequestHeaders.Authorization
                 = new AuthenticationHeaderValue("Basic",
-                                                Convert.ToBase64String(
-                                                    Encoding.ASCII.GetBytes(
-                                                        $"{Options.username}:{Options.password}")));
+                    Convert.ToBase64String(
+                        Encoding.ASCII.GetBytes(
+                            $"{Options.username}:{Options.password}")));
         }
         else if (!string.IsNullOrEmpty(Options.token))
         {
@@ -147,7 +166,7 @@ internal class HttpSender : AbstractSender
 
         if (protocolVersion == ProtocolVersion.Auto)
         {
-            // We need to see if this will be a V1 or a V2
+            // We need to select the last version that both client and server support.
             // Other clients use 1 second timeout for "/settings", follow same practice here.
             using var response = SendWithRetries(default, _settingRequestFactory, TimeSpan.FromSeconds(1));
             if (!response.IsSuccessStatusCode)
@@ -168,17 +187,9 @@ internal class HttpSender : AbstractSender
             {
                 try
                 {
-                    var json     = response.Content.ReadFromJsonAsync<SettingsResponse>().Result!;
+                    var json = response.Content.ReadFromJsonAsync<SettingsResponse>().Result!;
                     var versions = json.Config?.LineProtoSupportVersions!;
-                    foreach (var element in versions)
-                    {
-                        if (element == (int)ProtocolVersion.V2)
-                        {
-                            // V2 is supported, use it.
-                            protocolVersion = ProtocolVersion.V2;
-                            break;
-                        }
-                    }
+                    protocolVersion = (ProtocolVersion)versions.Where(v => v <= (int)ProtocolVersion.V3).Max();
                 }
                 catch
                 {
@@ -200,15 +211,20 @@ internal class HttpSender : AbstractSender
         );
     }
 
+    /// <summary>
+    /// Creates an HTTP GET request to the /settings endpoint for querying server capabilities.
+    /// </summary>
+    /// <returns>A new <see cref="HttpRequestMessage"/> configured for the /settings endpoint.</returns>
     private static HttpRequestMessage GenerateSettingsRequest()
     {
         return new HttpRequestMessage(HttpMethod.Get, "/settings");
     }
 
     /// <summary>
-    ///     Creates a new HTTP request with appropriate encoding and timeout.
+    /// Creates a new cancellation token source linked to the provided token and configured with the calculated request timeout.
     /// </summary>
-    /// <returns></returns>
+    /// <param name="ct">Optional cancellation token to link.</param>
+    /// <returns>A <see cref="CancellationTokenSource"/> configured with the request timeout.</returns>
     private CancellationTokenSource GenerateRequestCts(CancellationToken ct = default)
     {
         var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
@@ -217,14 +233,14 @@ internal class HttpSender : AbstractSender
     }
 
     /// <summary>
-    ///     Creates a new HTTP request with appropriate encoding.
+    /// Create an HTTP POST request targeting "/write" with the sender's buffer as the request body.
     /// </summary>
-    /// <returns></returns>
+    /// <returns>An <see cref="HttpRequestMessage"/> configured with the buffer as the request body, Content-Type set to "text/plain" with charset "utf-8", and Content-Length set to the buffer length.</returns>
     private HttpRequestMessage GenerateRequest()
     {
         var request = new HttpRequestMessage(HttpMethod.Post, "/write")
             { Content = new BufferStreamContent(Buffer), };
-        request.Content.Headers.ContentType   = new MediaTypeHeaderValue("text/plain") { CharSet = "utf-8", };
+        request.Content.Headers.ContentType = new MediaTypeHeaderValue("text/plain") { CharSet = "utf-8", };
         request.Content.Headers.ContentLength = Buffer.Length;
         return request;
     }
@@ -250,13 +266,13 @@ internal class HttpSender : AbstractSender
         if (WithinTransaction)
         {
             throw new IngressError(ErrorCode.InvalidApiCall,
-                                   "Cannot start another transaction - only one allowed at a time.");
+                "Cannot start another transaction - only one allowed at a time.");
         }
 
         if (Length > 0)
         {
             throw new IngressError(ErrorCode.InvalidApiCall,
-                                   "Buffer must be clear before you can start a transaction.");
+                "Buffer must be clear before you can start a transaction.");
         }
 
         Buffer.Transaction(tableName);
@@ -264,7 +280,6 @@ internal class HttpSender : AbstractSender
     }
 
     /// <inheritdoc cref="CommitAsync" />
-    /// />
     public override void Commit(CancellationToken ct = default)
     {
         try
@@ -315,7 +330,15 @@ internal class HttpSender : AbstractSender
         Buffer.Clear();
     }
 
-    /// <inheritdoc cref="SendAsync" />
+    /// <summary>
+    /// Sends the current buffer synchronously to the server, applying configured retries and handling server-side errors.
+    /// </summary>
+    /// <remarks>
+    /// Validates that a pending transaction is being committed before sending. If the buffer is empty this method returns immediately.
+    /// On success updates <see cref="LastFlush"/> from the server response date; on failure sets <see cref="LastFlush"/> to now. The buffer is always cleared after the operation.
+    /// </remarks>
+    /// <param name="ct">Cancellation token to cancel the send operation.</param>
+    /// <exception cref="IngressError">Thrown with <see cref="ErrorCode.InvalidApiCall"/> if a transaction is open but not committing, or with <see cref="ErrorCode.ServerFlushError"/> for server/transport errors.</exception>
     public override void Send(CancellationToken ct = default)
     {
         if (WithinTransaction && !CommittingTransaction)
@@ -337,7 +360,7 @@ internal class HttpSender : AbstractSender
             if (response.IsSuccessStatusCode)
             {
                 LastFlush = (response.Headers.Date ?? DateTime.UtcNow).UtcDateTime;
-                success   = true;
+                success = true;
                 return;
             }
 
@@ -369,11 +392,21 @@ internal class HttpSender : AbstractSender
         }
     }
 
-    private HttpResponseMessage SendWithRetries(CancellationToken ct, Func<HttpRequestMessage> requestFactory, TimeSpan retryTimeout)
+    /// <summary>
+    /// Sends an HTTP request produced by <paramref name="requestFactory"/> and retries on transient connection or server errors until a successful response is received or <paramref name="retryTimeout"/> elapses.
+    /// </summary>
+    /// <param name="ct">Cancellation token used to cancel the overall operation and linked to per-request timeouts.</param>
+    /// <param name="requestFactory">Factory that produces a fresh <see cref="HttpRequestMessage"/> for each attempt.</param>
+    /// <param name="retryTimeout">Maximum duration to keep retrying transient failures; retries are skipped if this is zero.</param>
+    /// <returns>The final <see cref="HttpResponseMessage"/> returned by the server for a successful request.</returns>
+    /// <exception cref="IngressError">Thrown with <see cref="ErrorCode.ServerFlushError"/> when a connection could not be established within the allowed retries.</exception>
+    /// <remarks>The caller is responsible for disposing the returned <see cref="HttpResponseMessage"/>./// </remarks>
+    private HttpResponseMessage SendWithRetries(CancellationToken ct, Func<HttpRequestMessage> requestFactory,
+        TimeSpan retryTimeout)
     {
-        HttpResponseMessage?    response = null;
-        CancellationTokenSource cts      = GenerateRequestCts(ct);
-        HttpRequestMessage      request  = requestFactory();
+        HttpResponseMessage? response = null;
+        CancellationTokenSource cts = GenerateRequestCts(ct);
+        HttpRequestMessage request = requestFactory();
 
         try
         {
@@ -389,7 +422,7 @@ internal class HttpSender : AbstractSender
             if (retryTimeout > TimeSpan.Zero)
                 // retry if appropriate - error that's retriable, and retries are enabled
             {
-                if (response == null                  // if it was a cannot correct error
+                if (response == null // if it was a cannot correct error
                     || (!response.IsSuccessStatusCode // or some other http error
                         && IsRetriableError(response.StatusCode)))
                 {
@@ -399,9 +432,9 @@ internal class HttpSender : AbstractSender
 
                     while (retryTimer.Elapsed < retryTimeout // whilst we can still retry
                            && (
-                                  response == null ||               // either we can't connect
-                                  (!response.IsSuccessStatusCode && // or we have another http error
-                                   IsRetriableError(response.StatusCode)))
+                               response == null || // either we can't connect
+                               (!response.IsSuccessStatusCode && // or we have another http error
+                                IsRetriableError(response.StatusCode)))
                           )
                     {
                         retryInterval = TimeSpan.FromMilliseconds(Math.Min(retryInterval.TotalMilliseconds * 2, 1000));
@@ -412,7 +445,7 @@ internal class HttpSender : AbstractSender
                         cts.Dispose();
 
                         request = requestFactory();
-                        cts     = GenerateRequestCts();
+                        cts = GenerateRequestCts(ct);
 
                         var jitter = TimeSpan.FromMilliseconds(Random.Shared.Next(0, 10) - 10 / 2.0);
                         Thread.Sleep(retryInterval + jitter);
@@ -433,7 +466,7 @@ internal class HttpSender : AbstractSender
             if (response == null)
             {
                 throw new IngressError(ErrorCode.ServerFlushError,
-                                       $"Cannot connect to `{Options.Host}:{Options.Port}`");
+                    $"Cannot connect to `{Options.Host}:{Options.Port}`");
             }
 
             return response;
@@ -445,6 +478,11 @@ internal class HttpSender : AbstractSender
         }
     }
 
+    /// <summary>
+    /// Reads and deserializes a JSON error response from the HTTP response, then throws an <see cref="IngressError"/> with the error details.
+    /// </summary>
+    /// <param name="response">The HTTP response containing a JSON error body.</param>
+    /// <exception cref="IngressError">Always thrown with <see cref="ErrorCode.ServerFlushError"/>; the message combines the response reason phrase with the deserialized JSON error or raw response text.</exception>
     private void HandleErrorJson(HttpResponseMessage response)
     {
         using var respStream = response.Content.ReadAsStream();
@@ -460,6 +498,11 @@ internal class HttpSender : AbstractSender
         }
     }
 
+    /// <summary>
+    /// Read an error payload from the HTTP response (JSON if possible, otherwise raw text) and throw an IngressError containing the server reason and the parsed error details.
+    /// </summary>
+    /// <param name="response">The HTTP response containing a JSON or plain-text error body.</param>
+    /// <exception cref="IngressError">Always thrown with <see cref="ErrorCode.ServerFlushError"/>; the message contains <c>response.ReasonPhrase</c> followed by the deserialized JSON error or the raw response body.</exception>
     private async Task HandleErrorJsonAsync(HttpResponseMessage response)
     {
         await using var respStream = await response.Content.ReadAsStreamAsync();
@@ -471,7 +514,7 @@ internal class HttpSender : AbstractSender
         catch (JsonException)
         {
             using var strReader = new StreamReader(respStream);
-            var       errorStr  = await strReader.ReadToEndAsync();
+            var errorStr = await strReader.ReadToEndAsync();
             throw new IngressError(ErrorCode.ServerFlushError, $"{response.ReasonPhrase}. {errorStr}");
         }
     }
@@ -489,14 +532,14 @@ internal class HttpSender : AbstractSender
             return;
         }
 
-        HttpRequestMessage?      request  = null;
-        CancellationTokenSource? cts      = null;
-        HttpResponseMessage?     response = null;
+        HttpRequestMessage? request = null;
+        CancellationTokenSource? cts = null;
+        HttpResponseMessage? response = null;
 
         try
         {
             request = GenerateRequest();
-            cts     = GenerateRequestCts(ct);
+            cts = GenerateRequestCts(ct);
 
             try
             {
@@ -510,7 +553,7 @@ internal class HttpSender : AbstractSender
             // retry if appropriate - error that's retriable, and retries are enabled
             if (Options.retry_timeout > TimeSpan.Zero)
             {
-                if (response == null                  // if it was a cannot correct error
+                if (response == null // if it was a cannot correct error
                     || (!response.IsSuccessStatusCode // or some other http error
                         && IsRetriableError(response.StatusCode)))
                 {
@@ -520,9 +563,9 @@ internal class HttpSender : AbstractSender
 
                     while (retryTimer.Elapsed < Options.retry_timeout // whilst we can still retry
                            && (
-                                  response == null ||               // either we can't connect
-                                  (!response.IsSuccessStatusCode && // or we have another http error
-                                   IsRetriableError(response.StatusCode)))
+                               response == null || // either we can't connect
+                               (!response.IsSuccessStatusCode && // or we have another http error
+                                IsRetriableError(response.StatusCode)))
                           )
                     {
                         retryInterval = TimeSpan.FromMilliseconds(Math.Min(retryInterval.TotalMilliseconds * 2, 1000));
@@ -534,7 +577,7 @@ internal class HttpSender : AbstractSender
                         cts = null;
 
                         request = GenerateRequest();
-                        cts     = GenerateRequestCts(ct);
+                        cts = GenerateRequestCts(ct);
 
                         var jitter = TimeSpan.FromMilliseconds(Random.Shared.Next(0, 10) - 10 / 2.0);
                         await Task.Delay(retryInterval + jitter, cts.Token);
@@ -542,7 +585,7 @@ internal class HttpSender : AbstractSender
                         try
                         {
                             response = await _client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead,
-                                                               cts.Token);
+                                cts.Token);
                         }
                         catch (HttpRequestException)
                         {
@@ -556,7 +599,7 @@ internal class HttpSender : AbstractSender
             if (response == null)
             {
                 throw new IngressError(ErrorCode.ServerFlushError,
-                                       $"Cannot connect to `{Options.Host}:{Options.Port}`");
+                    $"Cannot connect to `{Options.Host}:{Options.Port}`");
             }
 
             // return if ok
@@ -594,10 +637,10 @@ internal class HttpSender : AbstractSender
     }
 
     /// <summary>
-    ///     Specifies whether a negative <see cref="HttpResponseMessage" /> will lead to a retry or to an exception.
+    /// Determines whether the specified HTTP status code represents a transient error that should be retried.
     /// </summary>
-    /// <param name="code">The <see cref="HttpStatusCode" /></param>
-    /// <returns></returns>
+    /// <param name="code">The HTTP status code to check.</param>
+    /// <returns><c>true</c> if the error is transient and retriable (e.g., 500, 503, 504, 509, 523, 524, 529, 599); otherwise, <c>false</c>.</returns>
     // ReSharper disable once IdentifierTypo
     private static bool IsRetriableError(HttpStatusCode code)
     {

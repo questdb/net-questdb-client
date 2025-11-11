@@ -26,7 +26,7 @@
 using BenchmarkDotNet.Attributes;
 using dummy_http_server;
 using QuestDB;
-using tcp_client_test;
+using net_questdb_client_tests;
 
 #pragma warning disable CS0414 // Field is assigned but its value is never used
 

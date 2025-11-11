@@ -155,7 +155,7 @@ public class BufferTests
         // Test a value where low=0xFFFFFFFF (all ones), which after negation becomes 1
         // This is the value 4294967295 (2^32 - 1)
         // After negation: low = ~0xFFFFFFFF + 1 = 0x00000000 + 1 = 0x00000001
-        // So -4294967295 should give us: 0xFF, 0xFF, 0xFF, 0xFF, 0x01
+        // So -4294967295 should give us: 0xFF, 0x00, 0x00, 0x00, 0x01
         var decimalValue = -4294967295m;
 
         buffer.Table("negation_test")
@@ -166,8 +166,7 @@ public class BufferTests
         // Two's complement of 4294967295: negates to 0xFFFFFFFF00000001 (represented in big-endian)
         DecimalTestHelpers.AssertDecimalField(buffer.GetSendBuffer(), "dec_boundary", 0, new byte[]
         {
-            0xFF,
-            0xFF, 0xFF, 0xFF, 0x01,
+            0xFF, 0x00, 0x00, 0x00, 0x01,
         });
     }
 

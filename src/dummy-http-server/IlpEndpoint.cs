@@ -25,6 +25,7 @@
 
 
 using System.Diagnostics.CodeAnalysis;
+using System.IO.Compression;
 using System.Text;
 using FastEndpoints;
 
@@ -61,6 +62,15 @@ public class Binder : IRequestBinder<Request>
         // populate and return a request dto object however you please...
         var ms = new MemoryStream();
         await ctx.HttpContext.Request.Body.CopyToAsync(ms, ct);
+        var encoding = ctx.HttpContext.Request.Headers.ContentEncoding.FirstOrDefault();
+        if (encoding != null && encoding == "gzip")
+        {
+            ms.Seek(0,  SeekOrigin.Begin);
+            using var gzipStream       = new GZipStream(ms, CompressionMode.Decompress);
+            using var outStream = new MemoryStream();
+            await gzipStream.CopyToAsync(outStream, ct);
+            ms = outStream;
+        }
         return new Request
         {
             ByteContent   = ms.ToArray(),

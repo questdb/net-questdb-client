@@ -235,13 +235,25 @@ internal class HttpSender : AbstractSender
     /// <summary>
     /// Create an HTTP POST request targeting "/write" with the sender's buffer as the request body.
     /// </summary>
-    /// <returns>An <see cref="HttpRequestMessage"/> configured with the buffer as the request body, Content-Type set to "text/plain" with charset "utf-8", and Content-Length set to the buffer length.</returns>
+    /// <returns>An <see cref="HttpRequestMessage"/> configured with the buffer as the request body, Content-Type set to "text/plain" with charset "utf-8", and optionally gzip-compressed.</returns>
     private HttpRequestMessage GenerateRequest()
     {
         var request = new HttpRequestMessage(HttpMethod.Post, "/write")
-            { Content = new BufferStreamContent(Buffer), };
+            { Content = new BufferStreamContent(Buffer, Options.gzip), };
         request.Content.Headers.ContentType = new MediaTypeHeaderValue("text/plain") { CharSet = "utf-8", };
-        request.Content.Headers.ContentLength = Buffer.Length;
+
+        // Only set Content-Length if not gzipping (we can compute the length)
+        if (!Options.gzip)
+        {
+            request.Content.Headers.ContentLength = Buffer.Length;
+        }
+
+        // Add Content-Encoding header if gzipping
+        if (Options.gzip)
+        {
+            request.Content.Headers.ContentEncoding.Add("gzip");
+        }
+
         return request;
     }
 

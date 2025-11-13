@@ -23,6 +23,7 @@
  *
  ******************************************************************************/
 
+using System.IO.Compression;
 using System.Net;
 
 namespace QuestDB.Buffers;
@@ -36,28 +37,54 @@ internal class BufferStreamContent : HttpContent
     /// Initializes a new instance of the <see cref="BufferStreamContent"/> class.
     /// </summary>
     /// <param name="buffer">The buffer to wrap for HTTP streaming.</param>
-    public BufferStreamContent(IBuffer buffer)
+    /// <param name="gzip">Whether to gzip compress the content.</param>
+    public BufferStreamContent(IBuffer buffer, bool gzip = false)
     {
         Buffer = buffer;
+        Gzip = gzip;
     }
 
     private IBuffer Buffer { get; }
+    private bool Gzip { get; }
 
     /// <inheritdoc />
     protected override async Task SerializeToStreamAsync(Stream stream, TransportContext? context)
     {
-        await Buffer.WriteToStreamAsync(stream);
+        if (Gzip)
+        {
+            using var gzipStream = new GZipStream(stream, CompressionMode.Compress, leaveOpen: true);
+            await Buffer.WriteToStreamAsync(gzipStream);
+        }
+        else
+        {
+            await Buffer.WriteToStreamAsync(stream);
+        }
     }
 
     /// <inheritdoc />
     protected override async Task SerializeToStreamAsync(Stream stream, TransportContext? context, CancellationToken ct)
     {
-        await Buffer.WriteToStreamAsync(stream, ct);
+        if (Gzip)
+        {
+            using var gzipStream = new GZipStream(stream, CompressionMode.Compress, leaveOpen: true);
+            await Buffer.WriteToStreamAsync(gzipStream, ct);
+        }
+        else
+        {
+            await Buffer.WriteToStreamAsync(stream, ct);
+        }
     }
 
     /// <inheritdoc />
     protected override bool TryComputeLength(out long length)
     {
+        // Cannot compute length when gzipping since we don't know the compressed size
+        if (Gzip)
+        {
+            length = -1;
+            return false;
+        }
+
         length = Buffer.Length;
         return true;
     }
@@ -67,6 +94,7 @@ internal class BufferStreamContent : HttpContent
     {
         var stream = new MemoryStream();
         await SerializeToStreamAsync(stream, null, default);
+        stream.Seek(0, SeekOrigin.Begin);
         return stream;
     }
 
@@ -74,6 +102,14 @@ internal class BufferStreamContent : HttpContent
     protected override void SerializeToStream(Stream stream, TransportContext? context, CancellationToken ct)
     {
         ct.ThrowIfCancellationRequested();
-        Buffer.WriteToStream(stream, ct);
+        if (Gzip)
+        {
+            using var gzipStream = new GZipStream(stream, CompressionMode.Compress, leaveOpen: true);
+            Buffer.WriteToStream(gzipStream, ct);
+        }
+        else
+        {
+            Buffer.WriteToStream(stream, ct);
+        }
     }
 }

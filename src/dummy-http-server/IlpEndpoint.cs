@@ -67,7 +67,7 @@ public class Binder : IRequestBinder<Request>
         {
             ms.Seek(0,  SeekOrigin.Begin);
             using var gzipStream       = new GZipStream(ms, CompressionMode.Decompress);
-            using var outStream = new MemoryStream();
+            var outStream = new MemoryStream();
             await gzipStream.CopyToAsync(outStream, ct);
             ms = outStream;
         }

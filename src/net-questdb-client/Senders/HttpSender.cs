@@ -54,6 +54,11 @@ internal class HttpSender : AbstractSender
     /// </summary>
     private SocketsHttpHandler _handler = null!;
 
+    /// <summary>
+    ///     Manages round-robin address rotation for failover.
+    /// </summary>
+    private AddressProvider _addressProvider = null!;
+
     private readonly Func<HttpRequestMessage> _sendRequestFactory;
     private readonly Func<HttpRequestMessage> _settingRequestFactory;
 
@@ -91,6 +96,8 @@ internal class HttpSender : AbstractSender
     /// </remarks>
     private void Build()
     {
+        _addressProvider = new AddressProvider(Options.addresses);
+
         _handler = new SocketsHttpHandler
         {
             PooledConnectionIdleTimeout = Options.pool_timeout,
@@ -99,7 +106,7 @@ internal class HttpSender : AbstractSender
 
         if (Options.protocol == ProtocolType.https)
         {
-            _handler.SslOptions.TargetHost = Options.Host;
+            _handler.SslOptions.TargetHost = _addressProvider.CurrentHost;
             _handler.SslOptions.EnabledSslProtocols = SslProtocols.Tls12 | SslProtocols.Tls13;
 
             if (Options.tls_verify == TlsVerifyType.unsafe_off)
@@ -145,7 +152,19 @@ internal class HttpSender : AbstractSender
         _handler.PreAuthenticate = true;
 
         _client = new HttpClient(_handler);
-        var uri = new UriBuilder(Options.protocol.ToString(), Options.Host, Options.Port);
+
+        // Set initial address from AddressProvider
+        var port = _addressProvider.CurrentPort;
+        if (port <= 0)
+        {
+            port = Options.protocol switch
+            {
+                ProtocolType.http or ProtocolType.https => 9000,
+                ProtocolType.tcp or ProtocolType.tcps => 9009,
+                _ => 9000
+            };
+        }
+        var uri = new UriBuilder(Options.protocol.ToString(), _addressProvider.CurrentHost, port);
         _client.BaseAddress = uri.Uri;
         _client.Timeout = Timeout.InfiniteTimeSpan;
 
@@ -209,6 +228,48 @@ internal class HttpSender : AbstractSender
             Options.max_buf_size,
             protocolVersion
         );
+    }
+
+    /// <summary>
+    /// Recreates the HttpClient with the current address from AddressProvider.
+    /// This is necessary when rotating to a different address during failover.
+    /// </summary>
+    private void RecreateHttpClient()
+    {
+        _client.Dispose();
+
+        _client = new HttpClient(_handler);
+
+        // Determine the port to use
+        var port = _addressProvider.CurrentPort;
+        if (port <= 0)
+        {
+            // Use protocol default if no port specified
+            port = Options.protocol switch
+            {
+                ProtocolType.http or ProtocolType.https => 9000,
+                ProtocolType.tcp or ProtocolType.tcps => 9009,
+                _ => 9000
+            };
+        }
+
+        var uri = new UriBuilder(Options.protocol.ToString(), _addressProvider.CurrentHost, port);
+        _client.BaseAddress = uri.Uri;
+        _client.Timeout = Timeout.InfiniteTimeSpan;
+
+        // Reapply authentication headers
+        if (!string.IsNullOrEmpty(Options.username) && !string.IsNullOrEmpty(Options.password))
+        {
+            _client.DefaultRequestHeaders.Authorization
+                = new AuthenticationHeaderValue("Basic",
+                    Convert.ToBase64String(
+                        Encoding.ASCII.GetBytes(
+                            $"{Options.username}:{Options.password}")));
+        }
+        else if (!string.IsNullOrEmpty(Options.token))
+        {
+            _client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", Options.token);
+        }
     }
 
     /// <summary>
@@ -394,6 +455,7 @@ internal class HttpSender : AbstractSender
 
     /// <summary>
     /// Sends an HTTP request produced by <paramref name="requestFactory"/> and retries on transient connection or server errors until a successful response is received or <paramref name="retryTimeout"/> elapses.
+    /// When multiple addresses are configured and a retriable error occurs, rotates to the next address and retries.
     /// </summary>
     /// <param name="ct">Cancellation token used to cancel the overall operation and linked to per-request timeouts.</param>
     /// <param name="requestFactory">Factory that produces a fresh <see cref="HttpRequestMessage"/> for each attempt.</param>
@@ -444,6 +506,13 @@ internal class HttpSender : AbstractSender
                         response = null;
                         cts.Dispose();
 
+                        // Rotate to next address if multiple are available
+                        if (_addressProvider.HasMultipleAddresses)
+                        {
+                            _addressProvider.RotateToNextAddress();
+                            RecreateHttpClient();
+                        }
+
                         request = requestFactory();
                         cts = GenerateRequestCts(ct);
 
@@ -466,7 +535,7 @@ internal class HttpSender : AbstractSender
             if (response == null)
             {
                 throw new IngressError(ErrorCode.ServerFlushError,
-                    $"Cannot connect to `{Options.Host}:{Options.Port}`");
+                    $"Cannot connect to `{_addressProvider.CurrentHost}:{_addressProvider.CurrentPort}`");
             }
 
             return response;
@@ -576,6 +645,13 @@ internal class HttpSender : AbstractSender
                         cts.Dispose();
                         cts = null;
 
+                        // Rotate to next address if multiple are available
+                        if (_addressProvider.HasMultipleAddresses)
+                        {
+                            _addressProvider.RotateToNextAddress();
+                            RecreateHttpClient();
+                        }
+
                         request = GenerateRequest();
                         cts = GenerateRequestCts(ct);
 
@@ -599,7 +675,7 @@ internal class HttpSender : AbstractSender
             if (response == null)
             {
                 throw new IngressError(ErrorCode.ServerFlushError,
-                    $"Cannot connect to `{Options.Host}:{Options.Port}`");
+                    $"Cannot connect to `{_addressProvider.CurrentHost}:{_addressProvider.CurrentPort}`");
             }
 
             // return if ok
@@ -640,12 +716,14 @@ internal class HttpSender : AbstractSender
     /// Determines whether the specified HTTP status code represents a transient error that should be retried.
     /// </summary>
     /// <param name="code">The HTTP status code to check.</param>
-    /// <returns><c>true</c> if the error is transient and retriable (e.g., 500, 503, 504, 509, 523, 524, 529, 599); otherwise, <c>false</c>.</returns>
+    /// <returns><c>true</c> if the error is transient and retriable (e.g., 404, 421, 500, 503, 504, 509, 523, 524, 529, 599); otherwise, <c>false</c>.</returns>
     // ReSharper disable once IdentifierTypo
     private static bool IsRetriableError(HttpStatusCode code)
     {
         switch (code)
         {
+            case HttpStatusCode.NotFound: // 404 - Can happen when instance doesn't have write access
+            case (HttpStatusCode)421: // Misdirected Request - Can indicate wrong server/instance
             case HttpStatusCode.InternalServerError:
             case HttpStatusCode.ServiceUnavailable:
             case HttpStatusCode.GatewayTimeout:

@@ -62,7 +62,7 @@ stages:
             inputs:
               command: 'build'
               projects: 'src/net-questdb-client/net-questdb-client.csproj'
-              configuration: '$(buildConfiguration)'
+              arguments: '--configuration $(buildConfiguration)'
 
           - task: DotNetCoreCLI@2
             displayName: 'Create NuGet package'

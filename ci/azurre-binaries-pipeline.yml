@@ -56,14 +56,21 @@ stages:
             inputs:
               command: 'restore'
               projects: 'net-questdb-client.sln'
-        
+
+          - task: DotNetCoreCLI@2
+            displayName: 'Build Release'
+            inputs:
+              command: 'build'
+              projects: 'src/net-questdb-client/net-questdb-client.csproj'
+              configuration: '$(buildConfiguration)'
+
           - task: DotNetCoreCLI@2
             displayName: 'Create NuGet package'
             inputs:
               command: 'pack'
               packagesToPack: 'src/net-questdb-client/net-questdb-client.csproj'
               configuration: '$(buildConfiguration)'
-              nobuild: false
+              nobuild: true
               outputDir: '$(nugetPackageDirectory)'
               versioningScheme: 'off'
 

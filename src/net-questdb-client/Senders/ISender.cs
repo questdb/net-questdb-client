@@ -22,6 +22,7 @@
  *
  ******************************************************************************/
 
+using QuestDB.Enums;
 using QuestDB.Utils;
 
 namespace QuestDB.Senders;
@@ -121,7 +122,7 @@ public interface ISender : IDisposable
     /// <param name="name">The name of the column</param>
     /// <param name="value">The value for the column</param>
     /// <summary>
-    /// Adds a column (field) with the specified string value to the current row.
+    ///     Adds a column (field) with the specified string value to the current row.
     /// </summary>
     /// <param name="name">The column name.</param>
     /// <param name="value">The column value as a character span.</param>
@@ -129,7 +130,7 @@ public interface ISender : IDisposable
     public ISender Column(ReadOnlySpan<char> name, ReadOnlySpan<char> value);
 
     /// <summary>
-    /// Adds a column with the specified name and 64-bit integer value to the current row.
+    ///     Adds a column with the specified name and 64-bit integer value to the current row.
     /// </summary>
     /// <param name="name">The column (field) name.</param>
     /// <param name="value">The 64-bit integer value for the column.</param>
@@ -140,31 +141,31 @@ public interface ISender : IDisposable
     public ISender Column(ReadOnlySpan<char> name, int value);
 
     /// <summary>
-    /// Adds a boolean field column with the specified name and value to the current row.
+    ///     Adds a boolean field column with the specified name and value to the current row.
     /// </summary>
     /// <param name="name">The column (field) name.</param>
     /// <param name="value">The boolean value to store in the column.</param>
-    /// <returns>The same <see cref="ISender"/> instance to allow fluent chaining.</returns>
+    /// <returns>The same <see cref="ISender" /> instance to allow fluent chaining.</returns>
     public ISender Column(ReadOnlySpan<char> name, bool value);
 
     /// <summary>
-    /// Adds a double-precision field column to the current row.
+    ///     Adds a double-precision field column to the current row.
     /// </summary>
     /// <param name="name">The column (field) name.</param>
     /// <param name="value">The column's double-precision value.</param>
-    /// <returns>The same <see cref="ISender"/> instance for fluent chaining.</returns>
+    /// <returns>The same <see cref="ISender" /> instance for fluent chaining.</returns>
     public ISender Column(ReadOnlySpan<char> name, double value);
 
     /// <summary>
-    /// Adds a column (field) with the specified DateTime value to the current row.
+    ///     Adds a column (field) with the specified DateTime value to the current row.
     /// </summary>
     /// <param name="name">The column name.</param>
     /// <param name="value">The DateTime value to add.</param>
-    /// <returns>The same <see cref="ISender"/> instance for fluent chaining.</returns>
+    /// <returns>The same <see cref="ISender" /> instance for fluent chaining.</returns>
     public ISender Column(ReadOnlySpan<char> name, DateTime value);
 
     /// <summary>
-    /// Adds a column with the specified name and DateTimeOffset value to the current row.
+    ///     Adds a column with the specified name and DateTimeOffset value to the current row.
     /// </summary>
     /// <param name="name">The column name.</param>
     /// <param name="value">The DateTimeOffset value to store for the column (used as a timestamp value).</param>
@@ -236,50 +237,61 @@ public interface ISender : IDisposable
     public void CancelRow();
 
     /// <summary>
-    /// Clears the sender's internal buffer and resets buffer-related state, removing all pending rows.
+    ///     Clears the sender's internal buffer and resets buffer-related state, removing all pending rows.
     /// </summary>
     public void Clear();
 
     /// <summary>
-    /// Adds a column to the current row using a sequence of value-type elements and an explicit multidimensional shape.
+    ///     Adds a column to the current row using a sequence of value-type elements and an explicit multidimensional shape.
     /// </summary>
     /// <typeparam name="T">The element value type stored in the column.</typeparam>
     /// <param name="name">The column name.</param>
     /// <param name="value">A sequence of elements that form the column's data.</param>
-    /// <param name="shape">A sequence of integers describing the dimensions of the array representation; dimension lengths must match the number of elements in <paramref name="value"/> when multiplied together.</param>
-    /// <returns>The same <see cref="ISender"/> instance for fluent chaining.</returns>
+    /// <param name="shape">
+    ///     A sequence of integers describing the dimensions of the array representation; dimension lengths
+    ///     must match the number of elements in <paramref name="value" /> when multiplied together.
+    /// </param>
+    /// <returns>The same <see cref="ISender" /> instance for fluent chaining.</returns>
     public ISender Column<T>(ReadOnlySpan<char> name, IEnumerable<T> value, IEnumerable<int> shape) where T : struct;
 
     /// <summary>
-    /// Adds a column whose value is provided as a native array; multidimensional (non-jagged) arrays are supported.
+    ///     Adds a column whose value is provided as a native array; multidimensional (non-jagged) arrays are supported.
     /// </summary>
     /// <param name="name">The column name.</param>
-    /// <param name="value">A native array containing the column data. Multidimensional arrays are treated as shaped data (do not pass jagged arrays).</param>
+    /// <param name="value">
+    ///     A native array containing the column data. Multidimensional arrays are treated as shaped data (do
+    ///     not pass jagged arrays).
+    /// </param>
     /// <returns>The sender instance for fluent chaining.</returns>
     public ISender Column(ReadOnlySpan<char> name, Array value);
 
     /// <summary>
-    /// Adds a column with the specified name and a sequence of value-type elements from a span to the current row.
+    ///     Adds a column with the specified name and a sequence of value-type elements from a span to the current row.
     /// </summary>
     /// <param name="name">The column (field) name.</param>
     /// <param name="value">A contiguous sequence of value-type elements representing the column data.</param>
-    /// <returns>The same <see cref="ISender"/> instance to allow fluent chaining.</returns>
+    /// <returns>The same <see cref="ISender" /> instance to allow fluent chaining.</returns>
     public ISender Column<T>(ReadOnlySpan<char> name, ReadOnlySpan<T> value) where T : struct;
 
     /// <summary>
-    /// Adds a column with the specified string value to the current row.
+    ///     Adds a column with the specified string value to the current row.
     /// </summary>
     /// <param name="name">The column name.</param>
     /// <param name="value">The column's string value; may be null.</param>
     /// <returns>The same sender instance for fluent chaining.</returns>
     public ISender Column(ReadOnlySpan<char> name, string? value)
     {
-        if (value is null) return this;
+        if (value is null)
+        {
+            return this;
+        }
+
         return Column(name, value.AsSpan());
     }
 
     /// <summary>
-    /// Adds a column whose value is a sequence of value-type elements with the given multidimensional shape when both <paramref name="value"/> and <paramref name="shape"/> are provided; no action is taken if either is null.
+    ///     Adds a column whose value is a sequence of value-type elements with the given multidimensional shape when both
+    ///     <paramref name="value" /> and <paramref name="shape" /> are provided; no action is taken if either is null.
     /// </summary>
     /// <param name="name">The column name.</param>
     /// <param name="value">The sequence of elements for the column, or null to skip adding the column.</param>
@@ -297,11 +309,14 @@ public interface ISender : IDisposable
     }
 
     /// <summary>
-    /// Adds a column using a native array value when the provided array is non-null.
+    ///     Adds a column using a native array value when the provided array is non-null.
     /// </summary>
     /// <param name="name">The column name.</param>
-    /// <param name="value">The array to use as the column value; if null, no column is added. Multidimensional arrays are supported (non-jagged).</param>
-    /// <returns>The same <see cref="ISender"/> instance for fluent chaining.</returns>
+    /// <param name="value">
+    ///     The array to use as the column value; if null, no column is added. Multidimensional arrays are
+    ///     supported (non-jagged).
+    /// </param>
+    /// <returns>The same <see cref="ISender" /> instance for fluent chaining.</returns>
     public ISender NullableColumn(ReadOnlySpan<char> name, Array? value)
     {
         if (value != null)
@@ -313,7 +328,7 @@ public interface ISender : IDisposable
     }
 
     /// <summary>
-    /// Adds a string column with the given name when the provided value is not null.
+    ///     Adds a string column with the given name when the provided value is not null.
     /// </summary>
     /// <param name="name">The column name.</param>
     /// <param name="value">The string value to add; if null, no column is added.</param>
@@ -329,7 +344,8 @@ public interface ISender : IDisposable
     }
 
     /// <summary>
-    /// Adds a long column with the specified name when the provided nullable value has a value; does nothing when the value is null.
+    ///     Adds a long column with the specified name when the provided nullable value has a value; does nothing when the
+    ///     value is null.
     /// </summary>
     /// <param name="name">The column name.</param>
     /// <param name="value">The nullable long value to add as a column; if null the sender is unchanged.</param>
@@ -345,7 +361,7 @@ public interface ISender : IDisposable
     }
 
     /// <summary>
-    /// Adds a boolean column with the given name when a value is provided; does nothing if the value is null.
+    ///     Adds a boolean column with the given name when a value is provided; does nothing if the value is null.
     /// </summary>
     /// <param name="name">The column name.</param>
     /// <param name="value">The nullable boolean value to add as a column.</param>
@@ -361,7 +377,8 @@ public interface ISender : IDisposable
     }
 
     /// <summary>
-    /// Adds a column with the given double value when the value is non-null; otherwise no column is added and the sender is unchanged.
+    ///     Adds a column with the given double value when the value is non-null; otherwise no column is added and the sender
+    ///     is unchanged.
     /// </summary>
     /// <param name="name">The column name.</param>
     /// <param name="value">The column value; if non-null, the value is written as a double field.</param>
@@ -377,11 +394,14 @@ public interface ISender : IDisposable
     }
 
     /// <summary>
-    /// Adds a DateTime column with the specified name when a value is provided; no action is taken if the value is null.
+    ///     Adds a DateTime column with the specified name when a value is provided; no action is taken if the value is null.
     /// </summary>
     /// <param name="name">The column name.</param>
     /// <param name="value">The nullable DateTime value to add as a column.</param>
-    /// <returns>The current <see cref="ISender"/> instance for fluent chaining; unchanged if <paramref name="value"/> is null.</returns>
+    /// <returns>
+    ///     The current <see cref="ISender" /> instance for fluent chaining; unchanged if <paramref name="value" /> is
+    ///     null.
+    /// </returns>
     public ISender NullableColumn(ReadOnlySpan<char> name, DateTime? value)
     {
         if (value != null)
@@ -393,11 +413,12 @@ public interface ISender : IDisposable
     }
 
     /// <summary>
-    /// Adds a column with the given name and DateTimeOffset value when a value is provided; does nothing if the value is null.
+    ///     Adds a column with the given name and DateTimeOffset value when a value is provided; does nothing if the value is
+    ///     null.
     /// </summary>
     /// <param name="name">The column name.</param>
     /// <param name="value">The DateTimeOffset value to add; if null the column is not added.</param>
-    /// <returns>The same <see cref="ISender"/> instance to allow fluent chaining.</returns>
+    /// <returns>The same <see cref="ISender" /> instance to allow fluent chaining.</returns>
     public ISender NullableColumn(ReadOnlySpan<char> name, DateTimeOffset? value)
     {
         if (value != null)
@@ -409,10 +430,31 @@ public interface ISender : IDisposable
     }
 
     /// <summary>
-    /// Adds a decimal column in binary format to the current row.
+    ///     Adds a decimal column in binary format to the current row.
     /// </summary>
     /// <param name="name">The column name.</param>
     /// <param name="value">The decimal value to add; may be null to represent a NULL field.</param>
     /// <returns>The sender instance for fluent call chaining.</returns>
-    public ISender Column(ReadOnlySpan<char> name, decimal? value);
+    public ISender Column(ReadOnlySpan<char> name, decimal value);
+
+
+    /// <summary>
+    ///     Writes a DECIMAL column with the specified name using the ILP binary decimal layout.
+    /// </summary>
+    /// <param name="name">The column name.</param>
+    /// <param name="value">The decimal value to write, or `null` to write a NULL column.</param>
+    /// <returns>The buffer instance for method chaining.</returns>
+    /// <remarks>
+    ///     This method requires protocol version 3 or later. It will throw an <see cref="IngressError" /> with
+    ///     <see cref="ErrorCode.ProtocolVersionError" /> if used with protocol version 1 or 2.
+    /// </remarks>
+    public ISender NullableColumn(ReadOnlySpan<char> name, decimal? value)
+    {
+        if (value != null)
+        {
+            return Column(name, value ?? throw new InvalidOperationException());
+        }
+
+        return this;
+    }
 }

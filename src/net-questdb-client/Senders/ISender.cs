@@ -433,7 +433,7 @@ public interface ISender : IDisposable
     ///     Adds a decimal column in binary format to the current row.
     /// </summary>
     /// <param name="name">The column name.</param>
-    /// <param name="value">The decimal value to add; may be null to represent a NULL field.</param>
+    /// <param name="value">The decimal value to add; if null is required, use the `NullableColumn` variant.</param>
     /// <returns>The sender instance for fluent call chaining.</returns>
     public ISender Column(ReadOnlySpan<char> name, decimal value);
 

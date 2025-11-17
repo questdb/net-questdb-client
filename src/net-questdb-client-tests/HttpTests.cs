@@ -1233,7 +1233,6 @@ public class HttpTests
         Assert.That(srv.PrintBuffer(), Is.EqualTo(expected));
     }
 
-
     [Test]
     public async Task CannotConnect()
     {

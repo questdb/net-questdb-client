@@ -494,7 +494,7 @@ public class BufferV1 : IBuffer
     ///     Attempts to add a DECIMAL column to the current row; DECIMAL types are not supported by Protocol Version V1.
     /// </summary>
     /// <param name="name">The column name to write.</param>
-    /// <param name="value">The decimal value to write, or null to indicate absence.</param>
+    /// <param name="value">The decimal value to write.</param>
     /// <returns>The buffer instance for fluent chaining.</returns>
     /// <exception cref="IngressError">
     ///     Always thrown with <see cref="ErrorCode.ProtocolVersionError" /> to indicate DECIMAL is

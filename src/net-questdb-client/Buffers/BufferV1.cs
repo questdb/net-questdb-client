@@ -40,15 +40,15 @@ public class BufferV1 : IBuffer
     private int _currentBufferIndex;
     private string _currentTableName = null!;
     private bool _hasTable;
-    private int _lineStartLength;
     private int _lineStartBufferIndex;
     private int _lineStartBufferPosition;
+    private int _lineStartLength;
     private bool _noFields = true;
     private bool _noSymbols = true;
     private bool _quoted;
 
     /// <summary>
-    /// Initializes a new instance of BufferV1 for writing ILP (InfluxDB Line Protocol) messages.
+    ///     Initializes a new instance of BufferV1 for writing ILP (InfluxDB Line Protocol) messages.
     /// </summary>
     /// <param name="bufferSize">Initial size of each buffer chunk, in bytes.</param>
     /// <param name="maxNameLen">Maximum allowed UTF-8 byte length for table and column names.</param>
@@ -82,13 +82,13 @@ public class BufferV1 : IBuffer
         if (WithinTransaction)
         {
             throw new IngressError(ErrorCode.InvalidApiCall,
-                "Cannot start another transaction - only one allowed at a time.");
+                                   "Cannot start another transaction - only one allowed at a time.");
         }
 
         if (Length > 0)
         {
             throw new IngressError(ErrorCode.InvalidApiCall,
-                "Buffer must be clear before you can start a transaction.");
+                                   "Buffer must be clear before you can start a transaction.");
         }
 
         GuardInvalidTableName(tableName);
@@ -139,28 +139,29 @@ public class BufferV1 : IBuffer
     }
 
     /// <summary>
-    /// Resets the buffer to its initial empty state and clears all written data.
+    ///     Resets the buffer to its initial empty state and clears all written data.
     /// </summary>
     /// <remarks>
-    /// Clears lengths of all allocated chunks, resets the active chunk and write position,
-    /// resets row and total-length counters, exits any transaction state, and clears the current table and line start markers.
+    ///     Clears lengths of all allocated chunks, resets the active chunk and write position,
+    ///     resets row and total-length counters, exits any transaction state, and clears the current table and line start
+    ///     markers.
     /// </remarks>
     public void Clear()
     {
         _currentBufferIndex = 0;
-        Chunk = _buffers[_currentBufferIndex].Buffer;
+        Chunk               = _buffers[_currentBufferIndex].Buffer;
         for (var i = 0; i < _buffers.Count; i++)
         {
             _buffers[i] = (_buffers[i].Buffer, 0);
         }
 
-        Position = 0;
-        RowCount = 0;
-        Length = 0;
-        WithinTransaction = false;
-        _currentTableName = "";
-        _lineStartLength = 0;
-        _lineStartBufferIndex = 0;
+        Position                 = 0;
+        RowCount                 = 0;
+        Length                   = 0;
+        WithinTransaction        = false;
+        _currentTableName        = "";
+        _lineStartLength         = 0;
+        _lineStartBufferIndex    = 0;
         _lineStartBufferPosition = 0;
     }
 
@@ -175,20 +176,19 @@ public class BufferV1 : IBuffer
     }
 
     /// <summary>
-    /// Reverts the current (in-progress) row to its start position, removing any bytes written for that row.
+    ///     Reverts the current (in-progress) row to its start position, removing any bytes written for that row.
     /// </summary>
     /// <remarks>
-    /// Restores the active buffer index, adjusts the total Length and current Position to the saved line start,
-    /// and clears the table-set flag for the cancelled row.
+    ///     Restores the active buffer index, adjusts the total Length and current Position to the saved line start,
+    ///     and clears the table-set flag for the cancelled row.
     /// </remarks>
     public void CancelRow()
     {
         _currentBufferIndex = _lineStartBufferIndex;
-        Chunk = _buffers[_currentBufferIndex].Buffer;
-        Length = _lineStartLength;
-        Position = _lineStartBufferPosition;
-        _hasTable = false;
-        
+        Chunk               = _buffers[_currentBufferIndex].Buffer;
+        Length              = _lineStartLength;
+        Position            = _lineStartBufferPosition;
+        _hasTable           = false;
     }
 
     /// <inheritdoc />
@@ -245,13 +245,14 @@ public class BufferV1 : IBuffer
     }
 
     /// <summary>
-    /// Sets the table name for the current row and encodes it into the buffer, beginning a new line context.
+    ///     Sets the table name for the current row and encodes it into the buffer, beginning a new line context.
     /// </summary>
     /// <param name="name">The table name to write; must meet filesystem length limits and protocol naming rules.</param>
     /// <returns>This buffer instance to support fluent calls.</returns>
     /// <exception cref="IngressError">
-    /// Thrown with ErrorCode.InvalidApiCall if a transaction is active for a different table or if a table has already been set for the current line.
-    /// Thrown with ErrorCode.InvalidName if the provided name violates length or character restrictions. 
+    ///     Thrown with ErrorCode.InvalidApiCall if a transaction is active for a different table or if a table has already
+    ///     been set for the current line.
+    ///     Thrown with ErrorCode.InvalidName if the provided name violates length or character restrictions.
     /// </exception>
     public IBuffer Table(ReadOnlySpan<char> name)
     {
@@ -259,17 +260,17 @@ public class BufferV1 : IBuffer
         if (WithinTransaction && name != _currentTableName)
         {
             throw new IngressError(ErrorCode.InvalidApiCall,
-                "Transactions can only be for one table.");
+                                   "Transactions can only be for one table.");
         }
 
         GuardTableAlreadySet();
         GuardInvalidTableName(name);
 
-        _quoted = false;
+        _quoted   = false;
         _hasTable = true;
 
-        _lineStartLength = Length;
-        _lineStartBufferIndex = _currentBufferIndex;
+        _lineStartLength         = Length;
+        _lineStartBufferIndex    = _currentBufferIndex;
         _lineStartBufferPosition = Position;
 
         EncodeUtf8(name);
@@ -416,26 +417,29 @@ public class BufferV1 : IBuffer
     }
 
     /// <summary>
-    /// Appends the decimal ASCII representation of the specified 64-bit integer to the buffer.
+    ///     Appends the decimal ASCII representation of the specified 64-bit integer to the buffer.
     /// </summary>
     /// <returns>The current buffer instance.</returns>
-    /// <exception cref="IngressError">Thrown when the value is <see cref="long.MinValue"/>, which cannot be represented by this method; the error contains an inner <see cref="ArgumentOutOfRangeException"/>.</exception>
+    /// <exception cref="IngressError">
+    ///     Thrown when the value is <see cref="long.MinValue" />, which cannot be represented by
+    ///     this method; the error contains an inner <see cref="ArgumentOutOfRangeException" />.
+    /// </exception>
     public IBuffer Put(long value)
     {
         if (value == long.MinValue)
         {
             throw new IngressError(ErrorCode.InvalidApiCall, "Special case, long.MinValue cannot be handled by QuestDB",
-                new ArgumentOutOfRangeException());
+                                   new ArgumentOutOfRangeException());
         }
 
-        Span<byte> num = stackalloc byte[20];
-        var pos = num.Length;
-        var remaining = Math.Abs(value);
+        Span<byte> num       = stackalloc byte[20];
+        var        pos       = num.Length;
+        var        remaining = Math.Abs(value);
         do
         {
             var digit = remaining % 10;
-            num[--pos] = (byte)('0' + digit);
-            remaining /= 10;
+            num[--pos] =  (byte)('0' + digit);
+            remaining  /= 10;
         } while (remaining != 0);
 
         if (value < 0)
@@ -448,7 +452,7 @@ public class BufferV1 : IBuffer
 
         num.Slice(pos, len).CopyTo(Chunk.AsSpan(Position));
         Position += len;
-        Length += len;
+        Length   += len;
 
         return this;
     }
@@ -486,23 +490,39 @@ public class BufferV1 : IBuffer
         return this;
     }
 
+    /// <summary>
+    ///     Attempts to add a DECIMAL column to the current row; DECIMAL types are not supported by Protocol Version V1.
+    /// </summary>
+    /// <param name="name">The column name to write.</param>
+    /// <param name="value">The decimal value to write.</param>
+    /// <returns>The buffer instance for fluent chaining.</returns>
+    /// <exception cref="IngressError">
+    ///     Always thrown with <see cref="ErrorCode.ProtocolVersionError" /> to indicate DECIMAL is
+    ///     unsupported.
+    /// </exception>
+    public virtual IBuffer Column(ReadOnlySpan<char> name, decimal value)
+    {
+        throw new IngressError(ErrorCode.ProtocolVersionError, "Protocol Version does not support DECIMAL types");
+    }
+
 
     /// <summary>
-    /// Advance the current buffer write position and the overall length by a given number of bytes.
+    ///     Advance the current buffer write position and the overall length by a given number of bytes.
     /// </summary>
-    /// <param name="by">The number of bytes to add to both <see cref="Position"/> and <see cref="Length"/>.</param>
+    /// <param name="by">The number of bytes to add to both <see cref="Position" /> and <see cref="Length" />.</param>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal void Advance(int by)
     {
         Position += by;
-        Length += by;
+        Length   += by;
     }
 
     /// <summary>
-    /// Sets the buffer's current table to the stored table name when a transaction is active and no table has been set for the current row.
+    ///     Sets the buffer's current table to the stored table name when a transaction is active and no table has been set for
+    ///     the current row.
     /// </summary>
     /// <remarks>
-    /// Has no effect if not within a transaction or if a table has already been set for the current row.
+    ///     Has no effect if not within a transaction or if a table has already been set for the current row.
     /// </remarks>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal void SetTableIfAppropriate()
@@ -514,15 +534,16 @@ public class BufferV1 : IBuffer
     }
 
     /// <summary>
-    /// Finalizes the current row: terminates it with a newline, increments the completed row counter, resets per-row flags, and enforces the buffer size limit.
+    ///     Finalizes the current row: terminates it with a newline, increments the completed row counter, resets per-row
+    ///     flags, and enforces the buffer size limit.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void FinishLine()
     {
         PutAscii('\n');
         RowCount++;
-        _hasTable = false;
-        _noFields = true;
+        _hasTable  = false;
+        _noFields  = true;
         _noSymbols = true;
         GuardExceededMaxBufferSize();
     }
@@ -537,16 +558,20 @@ public class BufferV1 : IBuffer
         if (Length > _maxBufSize)
         {
             throw new IngressError(ErrorCode.InvalidApiCall,
-                $"Exceeded maximum buffer size. Current: {Length} Maximum: {_maxBufSize}");
+                                   $"Exceeded maximum buffer size. Current: {Length} Maximum: {_maxBufSize}");
         }
     }
 
     /// <summary>
-    /// Writes the column name to the buffer and prepares for writing the column value by appending the appropriate separator and equals sign.
+    ///     Writes the column name to the buffer and prepares for writing the column value by appending the appropriate
+    ///     separator and equals sign.
     /// </summary>
     /// <param name="columnName">The column name to write.</param>
     /// <returns>The buffer instance for fluent chaining.</returns>
-    /// <exception cref="IngressError">Thrown if the table is not set, the column name is invalid, or the name exceeds the maximum length.</exception>
+    /// <exception cref="IngressError">
+    ///     Thrown if the table is not set, the column name is invalid, or the name exceeds the
+    ///     maximum length.
+    /// </exception>
     internal IBuffer Column(ReadOnlySpan<char> columnName)
     {
         GuardFsFileNameLimit(columnName);
@@ -567,22 +592,26 @@ public class BufferV1 : IBuffer
     }
 
     /// <summary>
-    /// Validates that the requested additional byte count does not exceed the chunk size.
+    ///     Validates that the requested additional byte count does not exceed the chunk size.
     /// </summary>
     /// <param name="additional">The number of additional bytes requested.</param>
-    /// <exception cref="IngressError">Thrown with <see cref="ErrorCode.InvalidApiCall"/> if the requested size exceeds the chunk length.</exception>
+    /// <exception cref="IngressError">
+    ///     Thrown with <see cref="ErrorCode.InvalidApiCall" /> if the requested size exceeds the
+    ///     chunk length.
+    /// </exception>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal void GuardAgainstOversizedChunk(int additional)
     {
         if (additional > Chunk.Length)
         {
             throw new IngressError(ErrorCode.InvalidApiCall,
-                "tried to allocate oversized chunk: " + additional + " bytes");
+                                   "tried to allocate oversized chunk: " + additional + " bytes");
         }
     }
 
     /// <summary>
-    /// Ensures that the current chunk has enough space to write the specified number of additional bytes; switches to the next buffer chunk if needed.
+    ///     Ensures that the current chunk has enough space to write the specified number of additional bytes; switches to the
+    ///     next buffer chunk if needed.
     /// </summary>
     /// <param name="additional">The number of additional bytes required.</param>
     /// <exception cref="IngressError">Thrown if the requested size exceeds the chunk size.</exception>
@@ -597,7 +626,8 @@ public class BufferV1 : IBuffer
     }
 
     /// <summary>
-    /// Writes a non-ASCII character as UTF-8 to the buffer, switching to the next buffer chunk if insufficient space remains.
+    ///     Writes a non-ASCII character as UTF-8 to the buffer, switching to the next buffer chunk if insufficient space
+    ///     remains.
     /// </summary>
     /// <param name="c">The character to encode and write.</param>
     private void PutUtf8(char c)
@@ -607,18 +637,19 @@ public class BufferV1 : IBuffer
             NextBuffer();
         }
 
-        var bytes = Chunk.AsSpan(Position);
-        Span<char> chars = stackalloc char[1] { c, };
-        var byteLength = Encoding.UTF8.GetBytes(chars, bytes);
+        var        bytes      = Chunk.AsSpan(Position);
+        Span<char> chars      = stackalloc char[1] { c, };
+        var        byteLength = Encoding.UTF8.GetBytes(chars, bytes);
         Advance(byteLength);
     }
 
     /// <summary>
-    /// Writes an ASCII character to the buffer, applying ILP escaping rules based on context (quoted or unquoted).
+    ///     Writes an ASCII character to the buffer, applying ILP escaping rules based on context (quoted or unquoted).
     /// </summary>
     /// <param name="c">The ASCII character to write.</param>
     /// <remarks>
-    /// Escapes space, comma, equals, newline, carriage return, quote, and backslash characters according to ILP protocol requirements.
+    ///     Escapes space, comma, equals, newline, carriage return, quote, and backslash characters according to ILP protocol
+    ///     requirements.
     /// </remarks>
     private void PutSpecial(char c)
     {
@@ -733,7 +764,7 @@ public class BufferV1 : IBuffer
         if (tableName.IsEmpty)
         {
             throw new IngressError(ErrorCode.InvalidName,
-                "Table names must have a non-zero length.");
+                                   "Table names must have a non-zero length.");
         }
 
         var prev = '\0';
@@ -746,7 +777,7 @@ public class BufferV1 : IBuffer
                     if (i == 0 || i == tableName.Length - 1 || prev == '.')
                     {
                         throw new IngressError(ErrorCode.InvalidName,
-                            $"Bad string {tableName}. Found invalid dot `.` at position {i}.");
+                                               $"Bad string {tableName}. Found invalid dot `.` at position {i}.");
                     }
 
                     break;
@@ -781,10 +812,10 @@ public class BufferV1 : IBuffer
                 case '\x000f':
                 case '\x007f':
                     throw new IngressError(ErrorCode.InvalidName,
-                        $"Bad string {tableName}. Table names can't contain a {c} character, which was found at byte position {i}");
+                                           $"Bad string {tableName}. Table names can't contain a {c} character, which was found at byte position {i}");
                 case '\xfeff':
                     throw new IngressError(ErrorCode.InvalidName,
-                        $"Bad string {tableName}. Table names can't contain a UTF-8 BOM character, which was found at byte position {i}.");
+                                           $"Bad string {tableName}. Table names can't contain a UTF-8 BOM character, which was found at byte position {i}.");
             }
 
             prev = c;
@@ -801,7 +832,7 @@ public class BufferV1 : IBuffer
         if (columnName.IsEmpty)
         {
             throw new IngressError(ErrorCode.InvalidName,
-                "Column names must have a non-zero length.");
+                                   "Column names must have a non-zero length.");
         }
 
         for (var i = 0; i < columnName.Length; i++)
@@ -842,10 +873,10 @@ public class BufferV1 : IBuffer
                 case '\x000f':
                 case '\x007f':
                     throw new IngressError(ErrorCode.InvalidName,
-                        $"Bad string {columnName}. Column names can't contain a {c} character, which was found at byte position {i}");
+                                           $"Bad string {columnName}. Column names can't contain a {c} character, which was found at byte position {i}");
                 case '\xfeff':
                     throw new IngressError(ErrorCode.InvalidName,
-                        $"Bad string {columnName}. Column names can't contain a UTF-8 BOM character, which was found at byte position {i}.");
+                                           $"Bad string {columnName}. Column names can't contain a UTF-8 BOM character, which was found at byte position {i}.");
             }
         }
     }
@@ -855,28 +886,19 @@ public class BufferV1 : IBuffer
     /// </summary>
     /// <param name="name"></param>
     /// <summary>
-    /// Validates that the UTF-8 encoded byte length of the given name is within the configured maximum.
+    ///     Validates that the UTF-8 encoded byte length of the given name is within the configured maximum.
     /// </summary>
     /// <param name="name">The name to validate (measured in UTF-8 bytes).</param>
-    /// <exception cref="IngressError">Thrown with <see cref="ErrorCode.InvalidApiCall"/> if the name exceeds the maximum allowed byte length.</exception>
+    /// <exception cref="IngressError">
+    ///     Thrown with <see cref="ErrorCode.InvalidApiCall" /> if the name exceeds the maximum
+    ///     allowed byte length.
+    /// </exception>
     private void GuardFsFileNameLimit(ReadOnlySpan<char> name)
     {
         if (Encoding.UTF8.GetBytes(name.ToString()).Length > _maxNameLen)
         {
             throw new IngressError(ErrorCode.InvalidApiCall,
-                $"Name is too long, must be under {_maxNameLen} bytes.");
+                                   $"Name is too long, must be under {_maxNameLen} bytes.");
         }
-    }
-
-    /// <summary>
-    /// Attempts to add a DECIMAL column to the current row; DECIMAL types are not supported by Protocol Version V1.
-    /// </summary>
-    /// <param name="name">The column name to write.</param>
-    /// <param name="value">The decimal value to write, or null to indicate absence.</param>
-    /// <returns>The buffer instance for fluent chaining.</returns>
-    /// <exception cref="IngressError">Always thrown with <see cref="ErrorCode.ProtocolVersionError"/> to indicate DECIMAL is unsupported.</exception>
-    public virtual IBuffer Column(ReadOnlySpan<char> name, decimal? value)
-    {
-        throw new IngressError(ErrorCode.ProtocolVersionError, "Protocol Version does not support DECIMAL types");
     }
 }

@@ -101,7 +101,7 @@ public class HttpTests
                     .Symbol("tag", "value")
                     .Column("dec_pos", 123.45m)
                     .Column("dec_neg", -123.45m)
-                    .Column("dec_null", (decimal?)null)
+                    .NullableColumn("dec_null", (decimal?)null)
                     .Column("dec_max", decimal.MaxValue)
                     .Column("dec_min", decimal.MinValue)
                     .AtAsync(new DateTime(1970, 01, 01, 0, 0, 1));
@@ -1232,7 +1232,6 @@ public class HttpTests
         var expected = "good,a=b 86400000000000\n";
         Assert.That(srv.PrintBuffer(), Is.EqualTo(expected));
     }
-
 
     [Test]
     public async Task CannotConnect()

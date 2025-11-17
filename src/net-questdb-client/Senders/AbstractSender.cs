@@ -95,11 +95,11 @@ internal abstract class AbstractSender : ISender
     }
 
     /// <summary>
-    /// Appends an integer-valued column with the specified name to the current buffered row.
+    ///     Appends an integer-valued column with the specified name to the current buffered row.
     /// </summary>
     /// <param name="name">The column name.</param>
     /// <param name="value">The integer value to append for the column.</param>
-    /// <returns>The same <see cref="ISender"/> instance to allow fluent chaining.</returns>
+    /// <returns>The same <see cref="ISender" /> instance to allow fluent chaining.</returns>
     public ISender Column(ReadOnlySpan<char> name, int value)
     {
         Buffer.Column(name, value);
@@ -266,6 +266,18 @@ internal abstract class AbstractSender : ISender
     /// <inheritdoc />
     public abstract void Send(CancellationToken ct = default);
 
+    /// <summary>
+    ///     Adds a nullable decimal column value to the current row in the buffer.
+    /// </summary>
+    /// <param name="name">The column name.</param>
+    /// <param name="value">The decimal value to write, or <c>null</c> to emit a null for the column.</param>
+    /// <returns>The same <see cref="ISender" /> instance for fluent chaining.</returns>
+    public ISender Column(ReadOnlySpan<char> name, decimal value)
+    {
+        Buffer.Column(name, value);
+        return this;
+    }
+
     public ISender Column<T>(ReadOnlySpan<char> name, T[] value) where T : struct
     {
         Buffer.Column(name, value);
@@ -304,17 +316,18 @@ internal abstract class AbstractSender : ISender
     }
 
     /// <summary>
-    /// Synchronously checks auto-flush conditions and sends the buffer if thresholds are met.
+    ///     Synchronously checks auto-flush conditions and sends the buffer if thresholds are met.
     /// </summary>
     /// <param name="ct">A user-provided cancellation token.</param>
     /// <remarks>
-    /// Auto-flushing is triggered based on:
-    /// <list type="bullet">
-    /// <item><see cref="SenderOptions.auto_flush_rows"/> - the number of buffered ILP rows.</item>
-    /// <item><see cref="SenderOptions.auto_flush_bytes"/> - the current length of the buffer in UTF-8 bytes.</item>
-    /// <item><see cref="SenderOptions.auto_flush_interval"/> - the elapsed time interval since the last flush.</item>
-    /// </list>
-    /// Has no effect within a transaction or if <see cref="SenderOptions.auto_flush"/> is set to <see cref="AutoFlushType.off"/>.
+    ///     Auto-flushing is triggered based on:
+    ///     <list type="bullet">
+    ///         <item><see cref="SenderOptions.auto_flush_rows" /> - the number of buffered ILP rows.</item>
+    ///         <item><see cref="SenderOptions.auto_flush_bytes" /> - the current length of the buffer in UTF-8 bytes.</item>
+    ///         <item><see cref="SenderOptions.auto_flush_interval" /> - the elapsed time interval since the last flush.</item>
+    ///     </list>
+    ///     Has no effect within a transaction or if <see cref="SenderOptions.auto_flush" /> is set to
+    ///     <see cref="AutoFlushType.off" />.
     /// </remarks>
     private void FlushIfNecessary(CancellationToken ct = default)
     {
@@ -329,7 +342,7 @@ internal abstract class AbstractSender : ISender
     }
 
     /// <summary>
-    /// Sets <see cref="LastFlush"/> to the current UTC time if it has not been initialized.
+    ///     Sets <see cref="LastFlush" /> to the current UTC time if it has not been initialized.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void GuardLastFlushNotSet()
@@ -338,17 +351,5 @@ internal abstract class AbstractSender : ISender
         {
             LastFlush = DateTime.UtcNow;
         }
-    }
-
-    /// <summary>
-    /// Adds a nullable decimal column value to the current row in the buffer.
-    /// </summary>
-    /// <param name="name">The column name.</param>
-    /// <param name="value">The decimal value to write, or <c>null</c> to emit a null for the column.</param>
-    /// <returns>The same <see cref="ISender"/> instance for fluent chaining.</returns>
-    public ISender Column(ReadOnlySpan<char> name, decimal? value)
-    {
-        Buffer.Column(name, value);
-        return this;
     }
 }

@@ -58,7 +58,7 @@ public class BufferV3 : BufferV2
     ///     value).
     /// </summary>
     /// <param name="name">Column name to write.</param>
-    /// <param name="value">Nullable decimal value to encode; when null writes zero scale and zero length.</param>
+    /// <param name="value">Decimal value to encode.</param>
     /// <returns>The buffer instance for call chaining.</returns>
     public override IBuffer Column(ReadOnlySpan<char> name, decimal value)
     {

@@ -76,10 +76,9 @@ public class AddressProvider
     /// Rotates to the next address in round-robin fashion.
     /// </summary>
     /// <returns>The next address</returns>
-    public string RotateToNextAddress()
+    public void RotateToNextAddress()
     {
         _currentIndex = (_currentIndex + 1) % _addresses.Count;
-        return CurrentAddress;
     }
 
     /// <summary>

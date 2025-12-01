@@ -158,7 +158,7 @@ internal class HttpSender : AbstractSender
         _handler.PreAuthenticate = true;
 
         // Create and cache the initial client
-        UseClientForCurrentAddress();
+        _client = GetClientForCurrentAddress();
 
         var protocolVersion = Options.protocol_version;
 
@@ -166,38 +166,45 @@ internal class HttpSender : AbstractSender
         {
             // We need to select the last version that both client and server support.
             // Other clients use 1 second timeout for "/settings", follow same practice here.
-            using var response = SendWithRetries(default, _settingRequestFactory, TimeSpan.FromSeconds(1));
-            if (!response.IsSuccessStatusCode)
+            try
             {
-                if (response.StatusCode == HttpStatusCode.NotFound)
+                using var response = SendWithRetries(default, _settingRequestFactory, TimeSpan.FromSeconds(1));
+                if (!response.IsSuccessStatusCode)
                 {
-                    protocolVersion = ProtocolVersion.V1;
+                    if (response.StatusCode == HttpStatusCode.NotFound)
+                    {
+                        protocolVersion = ProtocolVersion.V1;
+                    }
+                    else
+                    {
+                        protocolVersion = ProtocolVersion.V3;
+                    }
                 }
-                else
+
+                if (protocolVersion == ProtocolVersion.Auto)
                 {
-                    _client.Dispose();
-                    // Throw exception.
-                    response.EnsureSuccessStatusCode();
+                    try
+                    {
+                        var json = response.Content.ReadFromJsonAsync<SettingsResponse>().Result!;
+                        var versions = json.Config?.LineProtoSupportVersions!;
+                        protocolVersion = (ProtocolVersion)versions.Where(v => v <= (int)ProtocolVersion.V3).Max();
+                    }
+                    catch
+                    {
+                        protocolVersion = ProtocolVersion.V3;
+                    }
                 }
+            }
+            catch
+            {
+                // If /settings probing fails (connection error, timeout, etc.),
+                // default to V3 and allow actual sends to attempt connection.
+                protocolVersion = ProtocolVersion.V3;
             }
 
             if (protocolVersion == ProtocolVersion.Auto)
             {
-                try
-                {
-                    var json = response.Content.ReadFromJsonAsync<SettingsResponse>().Result!;
-                    var versions = json.Config?.LineProtoSupportVersions!;
-                    protocolVersion = (ProtocolVersion)versions.Where(v => v <= (int)ProtocolVersion.V3).Max();
-                }
-                catch
-                {
-                    protocolVersion = ProtocolVersion.V1;
-                }
-            }
-
-            if (protocolVersion == ProtocolVersion.Auto)
-            {
-                protocolVersion = ProtocolVersion.V1;
+                protocolVersion = ProtocolVersion.V3;
             }
         }
 
@@ -236,6 +243,12 @@ internal class HttpSender : AbstractSender
         client.BaseAddress = uri.Uri;
         client.Timeout = Timeout.InfiniteTimeSpan;
 
+        // Update handler's TLS target host if using HTTPS and host changed
+        if (Options.protocol == ProtocolType.https && _handler.SslOptions.TargetHost != host)
+        {
+            _handler.SslOptions.TargetHost = host;
+        }
+
         // Apply authentication headers
         if (!string.IsNullOrEmpty(Options.username) && !string.IsNullOrEmpty(Options.password))
         {
@@ -256,7 +269,7 @@ internal class HttpSender : AbstractSender
     /// <summary>
     /// Gets or creates an HttpClient for the current address, caching it to avoid recreation on subsequent rotations.
     /// </summary>
-    private void UseClientForCurrentAddress()
+    private HttpClient GetClientForCurrentAddress()
     {
         var address = _addressProvider.CurrentAddress;
 
@@ -268,6 +281,7 @@ internal class HttpSender : AbstractSender
         }
 
         _client = client;
+        return client;
     }
 
     /// <summary>
@@ -535,7 +549,6 @@ internal class HttpSender : AbstractSender
                         if (_addressProvider.HasMultipleAddresses)
                         {
                             _addressProvider.RotateToNextAddress();
-                            UseClientForCurrentAddress();
                         }
 
                         request = requestFactory();
@@ -546,7 +559,9 @@ internal class HttpSender : AbstractSender
 
                         try
                         {
-                            response = _client.Send(request, HttpCompletionOption.ResponseHeadersRead, cts.Token);
+                            // Get the client for the current address (may have rotated)
+                            var client = GetClientForCurrentAddress();
+                            response = client.Send(request, HttpCompletionOption.ResponseHeadersRead, cts.Token);
                         }
                         catch (HttpRequestException)
                         {
@@ -674,7 +689,6 @@ internal class HttpSender : AbstractSender
                         if (_addressProvider.HasMultipleAddresses)
                         {
                             _addressProvider.RotateToNextAddress();
-                            UseClientForCurrentAddress();
                         }
 
                         request = GenerateRequest();
@@ -685,7 +699,9 @@ internal class HttpSender : AbstractSender
 
                         try
                         {
-                            response = await _client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead,
+                            // Get the client for the current address (may have rotated)
+                            var client = GetClientForCurrentAddress();
+                            response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead,
                                 cts.Token);
                         }
                         catch (HttpRequestException)

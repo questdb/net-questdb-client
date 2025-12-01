@@ -90,6 +90,7 @@ public record SenderOptions
     /// </summary>
     public SenderOptions()
     {
+        ParseAddresses();
     }
 
     /// <summary>

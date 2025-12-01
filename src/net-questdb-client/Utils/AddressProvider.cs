@@ -85,7 +85,7 @@ public class AddressProvider
     /// <summary>
     /// Parses the host from an address string (host:port format).
     /// </summary>
-    private static string ParseHost(string address)
+    public static string ParseHost(string address)
     {
         if (string.IsNullOrEmpty(address))
             return address;
@@ -103,7 +103,7 @@ public class AddressProvider
     /// Parses the port from an address string (host:port format).
     /// Returns -1 if no port is specified.
     /// </summary>
-    private static int ParsePort(string address)
+    public static int ParsePort(string address)
     {
         if (string.IsNullOrEmpty(address))
             return -1;

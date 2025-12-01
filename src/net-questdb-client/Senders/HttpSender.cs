@@ -45,7 +45,13 @@ namespace QuestDB.Senders;
 internal class HttpSender : AbstractSender
 {
     /// <summary>
-    ///     Instance-specific <see cref="HttpClient" /> for sending data to QuestDB.
+    ///     Cache of <see cref="HttpClient" /> instances, one per address for multi-URL support.
+    ///     Avoids recreating clients on each rotation.
+    /// </summary>
+    private readonly Dictionary<string, HttpClient> _clientCache = new();
+
+    /// <summary>
+    ///     Current <see cref="HttpClient" /> reference from the cache.
     /// </summary>
     private HttpClient _client = null!;
 
@@ -151,35 +157,8 @@ internal class HttpSender : AbstractSender
         _handler.ConnectTimeout = Options.auth_timeout;
         _handler.PreAuthenticate = true;
 
-        _client = new HttpClient(_handler);
-
-        // Set initial address from AddressProvider
-        var port = _addressProvider.CurrentPort;
-        if (port <= 0)
-        {
-            port = Options.protocol switch
-            {
-                ProtocolType.http or ProtocolType.https => 9000,
-                ProtocolType.tcp or ProtocolType.tcps => 9009,
-                _ => 9000
-            };
-        }
-        var uri = new UriBuilder(Options.protocol.ToString(), _addressProvider.CurrentHost, port);
-        _client.BaseAddress = uri.Uri;
-        _client.Timeout = Timeout.InfiniteTimeSpan;
-
-        if (!string.IsNullOrEmpty(Options.username) && !string.IsNullOrEmpty(Options.password))
-        {
-            _client.DefaultRequestHeaders.Authorization
-                = new AuthenticationHeaderValue("Basic",
-                    Convert.ToBase64String(
-                        Encoding.ASCII.GetBytes(
-                            $"{Options.username}:{Options.password}")));
-        }
-        else if (!string.IsNullOrEmpty(Options.token))
-        {
-            _client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", Options.token);
-        }
+        // Create and cache the initial client
+        UseClientForCurrentAddress();
 
         var protocolVersion = Options.protocol_version;
 
@@ -231,17 +210,16 @@ internal class HttpSender : AbstractSender
     }
 
     /// <summary>
-    /// Recreates the HttpClient with the current address from AddressProvider.
-    /// This is necessary when rotating to a different address during failover.
+    /// Creates a new HttpClient for the specified address with proper configuration.
     /// </summary>
-    private void RecreateHttpClient()
+    /// <param name="address">The address to create a client for.</param>
+    /// <returns>A configured HttpClient for the given address.</returns>
+    private HttpClient CreateClientForAddress(string address)
     {
-        _client.Dispose();
-
-        _client = new HttpClient(_handler);
+        var client = new HttpClient(_handler);
 
         // Determine the port to use
-        var port = _addressProvider.CurrentPort;
+        var port = AddressProvider.ParsePort(address);
         if (port <= 0)
         {
             // Use protocol default if no port specified
@@ -253,14 +231,15 @@ internal class HttpSender : AbstractSender
             };
         }
 
-        var uri = new UriBuilder(Options.protocol.ToString(), _addressProvider.CurrentHost, port);
-        _client.BaseAddress = uri.Uri;
-        _client.Timeout = Timeout.InfiniteTimeSpan;
+        var host = AddressProvider.ParseHost(address);
+        var uri = new UriBuilder(Options.protocol.ToString(), host, port);
+        client.BaseAddress = uri.Uri;
+        client.Timeout = Timeout.InfiniteTimeSpan;
 
-        // Reapply authentication headers
+        // Apply authentication headers
         if (!string.IsNullOrEmpty(Options.username) && !string.IsNullOrEmpty(Options.password))
         {
-            _client.DefaultRequestHeaders.Authorization
+            client.DefaultRequestHeaders.Authorization
                 = new AuthenticationHeaderValue("Basic",
                     Convert.ToBase64String(
                         Encoding.ASCII.GetBytes(
@@ -268,7 +247,52 @@ internal class HttpSender : AbstractSender
         }
         else if (!string.IsNullOrEmpty(Options.token))
         {
-            _client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", Options.token);
+            client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", Options.token);
+        }
+
+        return client;
+    }
+
+    /// <summary>
+    /// Gets or creates an HttpClient for the current address, caching it to avoid recreation on subsequent rotations.
+    /// </summary>
+    private void UseClientForCurrentAddress()
+    {
+        var address = _addressProvider.CurrentAddress;
+
+        if (!_clientCache.TryGetValue(address, out var client))
+        {
+            // Create and cache a new client for this address
+            client = CreateClientForAddress(address);
+            _clientCache[address] = client;
+        }
+
+        _client = client;
+    }
+
+    /// <summary>
+    /// Cleans up all cached HttpClient instances except the one for the current address.
+    /// Called when a successful response is received to avoid holding unnecessary resources.
+    /// </summary>
+    private void CleanupUnusedClients()
+    {
+        if (!_addressProvider.HasMultipleAddresses)
+        {
+            return;
+        }
+
+        var currentAddress = _addressProvider.CurrentAddress;
+        var addressesToRemove = _clientCache.Keys
+            .Where(address => address != currentAddress)
+            .ToList();
+
+        foreach (var address in addressesToRemove)
+        {
+            if (_clientCache.TryGetValue(address, out var client))
+            {
+                client.Dispose();
+                _clientCache.Remove(address);
+            }
         }
     }
 
@@ -421,6 +445,7 @@ internal class HttpSender : AbstractSender
             if (response.IsSuccessStatusCode)
             {
                 LastFlush = (response.Headers.Date ?? DateTime.UtcNow).UtcDateTime;
+                CleanupUnusedClients();
                 success = true;
                 return;
             }
@@ -510,7 +535,7 @@ internal class HttpSender : AbstractSender
                         if (_addressProvider.HasMultipleAddresses)
                         {
                             _addressProvider.RotateToNextAddress();
-                            RecreateHttpClient();
+                            UseClientForCurrentAddress();
                         }
 
                         request = requestFactory();
@@ -649,7 +674,7 @@ internal class HttpSender : AbstractSender
                         if (_addressProvider.HasMultipleAddresses)
                         {
                             _addressProvider.RotateToNextAddress();
-                            RecreateHttpClient();
+                            UseClientForCurrentAddress();
                         }
 
                         request = GenerateRequest();
@@ -681,6 +706,7 @@ internal class HttpSender : AbstractSender
             // return if ok
             if (response.IsSuccessStatusCode)
             {
+                CleanupUnusedClients();
                 return;
             }
 
@@ -742,7 +768,13 @@ internal class HttpSender : AbstractSender
     /// <inheritdoc />
     public override void Dispose()
     {
-        _client.Dispose();
+        // Dispose all cached clients
+        foreach (var client in _clientCache.Values)
+        {
+            client.Dispose();
+        }
+        _clientCache.Clear();
+
         _handler.Dispose();
         Buffer.Clear();
         Buffer.TrimExcessBuffers();

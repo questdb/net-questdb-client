@@ -91,9 +91,8 @@ public class DummyHttpServer : IDisposable
             }
 
             o.Limits.MaxRequestBodySize = 1073741824;
-            o.ListenLocalhost(29474,
-                options => { options.UseHttps(); });
-            o.ListenLocalhost(29473);
+            // Note: These internal ports will be set dynamically in StartAsync based on the main port
+            // to avoid conflicts when multiple DummyHttpServer instances are created
         });
 
         _app = bld.Build();

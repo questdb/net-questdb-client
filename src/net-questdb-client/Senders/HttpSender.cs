@@ -166,6 +166,8 @@ internal class HttpSender : AbstractSender
         {
             // We need to select the last version that both client and server support.
             // Other clients use 1 second timeout for "/settings", follow same practice here.
+            // Save the current address index to restore after probing (SendWithRetries may rotate)
+            var initialAddressIndex = _addressProvider.CurrentIndex;
             try
             {
                 using var response = SendWithRetries(default, _settingRequestFactory, TimeSpan.FromSeconds(1));
@@ -200,6 +202,13 @@ internal class HttpSender : AbstractSender
                 // If /settings probing fails (connection error, timeout, etc.),
                 // default to V3 and allow actual sends to attempt connection.
                 protocolVersion = ProtocolVersion.V3;
+            }
+            finally
+            {
+                // Restore the address index to avoid probe rotating the address
+                _addressProvider.CurrentIndex = initialAddressIndex;
+                // Update the client reference to match the restored address
+                _client = GetClientForCurrentAddress();
             }
 
             if (protocolVersion == ProtocolVersion.Auto)

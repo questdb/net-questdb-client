@@ -63,6 +63,16 @@ public class AddressProvider
     public int CurrentPort => ParsePort(_addresses[_currentIndex]);
 
     /// <summary>
+    /// Gets or sets the current address index.
+    /// Used internally to save/restore state during operations like /settings probing.
+    /// </summary>
+    internal int CurrentIndex
+    {
+        get => _currentIndex;
+        set => _currentIndex = value;
+    }
+
+    /// <summary>
     /// Gets the number of addresses.
     /// </summary>
     public int AddressCount => _addresses.Count;

@@ -338,6 +338,196 @@ public class QuestDbIntegrationTests
             await testDb.DisposeAsync();
         }
     }
+
+    [Test]
+    public async Task SendRowsWithMultiDatabaseFailover()
+    {
+        const int rowsPerBatch = 10;
+        const int numBatches = 5;
+        const int expectedTotalRows = rowsPerBatch * numBatches;
+
+        // Create two separate databases with persistent volumes
+        var volume1 = $"questdb-test-vol-db1-{Guid.NewGuid().ToString().Substring(0, 8)}";
+        var volume2 = $"questdb-test-vol-db2-{Guid.NewGuid().ToString().Substring(0, 8)}";
+
+        var testDb1 = new QuestDbManager(port: 29009, httpPort: 29000);
+        var testDb2 = new QuestDbManager(port: 29019, httpPort: 29010);
+        testDb1.SetVolume(volume1);
+        testDb2.SetVolume(volume2);
+
+        try
+        {
+            // Start both databases
+            await testDb1.StartAsync();
+            await testDb2.StartAsync();
+
+            var endpoint1 = testDb1.GetHttpEndpoint();
+            var endpoint2 = testDb2.GetHttpEndpoint();
+
+            // Create a single sender with both endpoints for failover
+            using var sender = Sender.New(
+                $"http::addr={endpoint1};addr={endpoint2};auto_flush=off;retry_timeout=60000;");
+
+            var batchesSent = 0;
+            var sendLock = new object();
+
+            // Task that restarts DB1 after sends complete
+            var restartDb1Task = Task.Run(async () =>
+            {
+                // Wait for all sends to complete (5 batches * 500ms + 100ms buffer)
+                await Task.Delay(2600);
+
+                TestContext.WriteLine("Stopping database 1");
+                await testDb1.StopAsync();
+                await Task.Delay(1000);
+
+                TestContext.WriteLine("Starting database 1");
+                await testDb1.StartAsync();
+
+                TestContext.WriteLine("Database 1 restart complete");
+            });
+
+            // Task that restarts DB2 after DB1 restart completes
+            var restartDb2Task = Task.Run(async () =>
+            {
+                // Wait for DB1 restart to complete before restarting DB2
+                await Task.Delay(4000);
+
+                TestContext.WriteLine("Stopping database 2");
+                await testDb2.StopAsync();
+                await Task.Delay(1000);
+
+                TestContext.WriteLine("Starting database 2");
+                await testDb2.StartAsync();
+
+                TestContext.WriteLine("Database 2 restart complete");
+            });
+
+            // Task that sends rows to both databases via multi-address sender
+            var sendTask = Task.Run(async () =>
+            {
+                for (var batch = 0; batch < numBatches; batch++)
+                {
+                    try
+                    {
+                        // Build batch of rows
+                        for (var i = 0; i < rowsPerBatch; i++)
+                        {
+                            var rowId = batch * rowsPerBatch + i;
+                            await sender
+                                  .Table("test_multi_db")
+                                  .Symbol("batch", $"batch_{batch}")
+                                  .Column("row_id", (long)rowId)
+                                  .Column("value", (double)(rowId * 100))
+                                  .AtAsync(DateTime.UtcNow);
+                        }
+
+                        TestContext.WriteLine($"Sending batch {batch}");
+                        await sender.SendAsync();
+
+                        lock (sendLock)
+                        {
+                            batchesSent++;
+                        }
+                        TestContext.WriteLine($"Batch {batch} sent successfully");
+
+                        await Task.Delay(500);
+                    }
+                    catch (Exception ex)
+                    {
+                        TestContext.WriteLine($"Error sending batch {batch}: {ex.GetType().Name} - {ex.Message}");
+                        throw;
+                    }
+                }
+
+                TestContext.WriteLine($"All batches sent. Total: {batchesSent}");
+            });
+
+            // Wait for all tasks
+            await Task.WhenAll(sendTask, restartDb1Task, restartDb2Task);
+            await Task.Delay(2000);
+
+            // Query both databases and sum the row counts
+            var maxAttempts = 20;
+            long count1 = 0;
+            long count2 = 0;
+
+            for (var attempt = 0; attempt < maxAttempts; attempt++)
+            {
+                try
+                {
+                    using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(5) };
+
+                    // Query database 1
+                    try
+                    {
+                        var response1 = await client.GetAsync($"{endpoint1}/exec?query=test_multi_db");
+                        if (response1.IsSuccessStatusCode)
+                        {
+                            var content1 = await response1.Content.ReadAsStringAsync();
+                            var json1 = JsonDocument.Parse(content1);
+                            if (json1.RootElement.TryGetProperty("count", out var countProp1))
+                            {
+                                count1 = countProp1.GetInt64();
+                            }
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        TestContext.WriteLine($"Attempt {attempt + 1}: Query DB1 failed - {ex.Message}");
+                    }
+
+                    // Query database 2
+                    try
+                    {
+                        var response2 = await client.GetAsync($"{endpoint2}/exec?query=test_multi_db");
+                        if (response2.IsSuccessStatusCode)
+                        {
+                            var content2 = await response2.Content.ReadAsStringAsync();
+                            var json2 = JsonDocument.Parse(content2);
+                            if (json2.RootElement.TryGetProperty("count", out var countProp2))
+                            {
+                                count2 = countProp2.GetInt64();
+                            }
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        TestContext.WriteLine($"Attempt {attempt + 1}: Query DB2 failed - {ex.Message}");
+                    }
+
+                    var totalRowCount = count1 + count2;
+                    TestContext.WriteLine($"Attempt {attempt + 1}: DB1={count1}, DB2={count2}, Total={totalRowCount}");
+
+                    if (totalRowCount >= expectedTotalRows)
+                        break;
+                }
+                catch (Exception ex)
+                {
+                    TestContext.WriteLine($"Attempt {attempt + 1}: Error - {ex.Message}");
+                }
+
+                await Task.Delay(500);
+            }
+
+            var totalRowCount2 = count1 + count2;
+
+            // Assert that the sum of both databases equals expected total
+            Assert.That(
+                totalRowCount2,
+                Is.EqualTo(expectedTotalRows),
+                $"Expected {expectedTotalRows} total rows across both databases but found {totalRowCount2}. " +
+                $"Successfully sent {batchesSent} batches of {rowsPerBatch} rows each");
+        }
+        finally
+        {
+            // Cleanup
+            await testDb1.StopAsync();
+            await testDb2.StopAsync();
+            await testDb1.DisposeAsync();
+            await testDb2.DisposeAsync();
+        }
+    }
     
     private async Task VerifyTableHasDataAsync(string tableName)
     {

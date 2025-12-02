@@ -247,7 +247,7 @@ internal class HttpSender : AbstractSender
             };
         }
 
-        var host = AddressProvider.ParseHost(address);
+        var host = AddressProvider.ParseHost(address).Split("//")[1];
         var uri = new UriBuilder(Options.protocol.ToString(), host, port);
         client.BaseAddress = uri.Uri;
         client.Timeout = Timeout.InfiniteTimeSpan;

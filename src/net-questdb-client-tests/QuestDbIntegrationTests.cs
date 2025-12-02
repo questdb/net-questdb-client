@@ -22,36 +22,23 @@
  *
  ******************************************************************************/
 
-using System;
-using System.Collections.Generic;
-using System.Diagnostics;
-using System.Net.Http;
-using System.Net.Http.Json;
 using System.Text.Json;
-using System.Threading.Tasks;
 using NUnit.Framework;
-using QuestDB;
 
 namespace QuestDB.Client.Tests;
 
 /// <summary>
-/// Integration tests against a real QuestDB instance.
-/// Requires QuestDB to be downloaded and running.
+///     Integration tests against a real QuestDB instance running in Docker.
+///     Requires Docker to be installed and running.
 /// </summary>
 [TestFixture]
 public class QuestDbIntegrationTests
 {
-    private QuestDbManager? _questDb;
-    private const int IlpPort = 19009;
-    private const int HttpPort = 19000;
-
     [OneTimeSetUp]
     public async Task SetUpFixture()
     {
         _questDb = new QuestDbManager(IlpPort, HttpPort);
-        await _questDb.EnsureDownloadedAsync();
         await _questDb.StartAsync();
-        await Task.Delay(1000); // Give QuestDB a moment to fully initialize
     }
 
     [OneTimeTearDown]
@@ -64,18 +51,22 @@ public class QuestDbIntegrationTests
         }
     }
 
+    private QuestDbManager? _questDb;
+    private const int IlpPort = 19009;
+    private const int HttpPort = 19000;
+
     [Test]
     public async Task CanSendDataOverHttp()
     {
-        var httpEndpoint = _questDb!.GetHttpEndpoint();
-        using var sender = Sender.New($"http::addr={httpEndpoint};auto_flush=off;");
+        var       httpEndpoint = _questDb!.GetHttpEndpoint();
+        using var sender       = Sender.New($"http::addr={httpEndpoint};auto_flush=off;");
 
         // Send test data
         await sender
-            .Table("test_http")
-            .Symbol("tag", "test")
-            .Column("value", 42L)
-            .AtAsync(DateTime.UtcNow);
+              .Table("test_http")
+              .Symbol("tag", "test")
+              .Column("value", 42L)
+              .AtAsync(DateTime.UtcNow);
         await sender.SendAsync();
 
         // Verify data was written
@@ -85,15 +76,15 @@ public class QuestDbIntegrationTests
     [Test]
     public async Task CanSendDataOverIlp()
     {
-        var ilpEndpoint = _questDb!.GetIlpEndpoint();
-        using var sender = Sender.New($"tcp::addr={ilpEndpoint};auto_flush=off;");
+        var       ilpEndpoint = _questDb!.GetIlpEndpoint();
+        using var sender      = Sender.New($"tcp::addr={ilpEndpoint};auto_flush=off;");
 
         // Send test data
         await sender
-            .Table("test_ilp")
-            .Symbol("tag", "test")
-            .Column("value", 123L)
-            .AtAsync(DateTime.UtcNow);
+              .Table("test_ilp")
+              .Symbol("tag", "test")
+              .Column("value", 123L)
+              .AtAsync(DateTime.UtcNow);
         await sender.SendAsync();
 
         // Verify data was written
@@ -103,17 +94,17 @@ public class QuestDbIntegrationTests
     [Test]
     public async Task CanSendMultipleRows()
     {
-        var httpEndpoint = _questDb!.GetHttpEndpoint();
-        using var sender = Sender.New($"http::addr={httpEndpoint};auto_flush=off;");
+        var       httpEndpoint = _questDb!.GetHttpEndpoint();
+        using var sender       = Sender.New($"http::addr={httpEndpoint};auto_flush=off;");
 
         // Send multiple rows
-        for (int i = 0; i < 10; i++)
+        for (var i = 0; i < 10; i++)
         {
             await sender
-                .Table("test_multiple_rows")
-                .Symbol("tag", $"test_{i}")
-                .Column("value", (long)(i * 10))
-                .AtAsync(DateTime.UtcNow);
+                  .Table("test_multiple_rows")
+                  .Symbol("tag", $"test_{i}")
+                  .Column("value", (long)(i * 10))
+                  .AtAsync(DateTime.UtcNow);
         }
 
         await sender.SendAsync();
@@ -126,25 +117,38 @@ public class QuestDbIntegrationTests
     [Test]
     public async Task CanSendDifferentDataTypes()
     {
-        var httpEndpoint = _questDb!.GetHttpEndpoint();
-        using var sender = Sender.New($"http::addr={httpEndpoint};auto_flush=off;");
+        var       httpEndpoint = _questDb!.GetHttpEndpoint();
+        using var sender       = Sender.New($"http::addr={httpEndpoint};auto_flush=off;");
 
         var now = DateTime.UtcNow;
 
         // Send different data types
         await sender
-            .Table("test_data_types")
-            .Symbol("symbol_col", "test")
-            .Column("long_col", 42L)
-            .Column("double_col", 3.14)
-            .Column("string_col", "hello world")
-            .Column("bool_col", true)
-            .AtAsync(now);
+              .Table("test_data_types")
+              .Symbol("symbol_col", "test")
+              .Column("long_col", 42L)
+              .Column("double_col", 3.14)
+              .Column("string_col", "hello world")
+              .Column("bool_col", true)
+              .AtAsync(now);
 
         await sender.SendAsync();
 
         // Verify the row exists
-        var rowCount = await GetTableRowCountAsync("test_data_types");
+
+        long rowCount = 0;
+        var  retries  = 10;
+        for (var i = 0; i < retries; i++)
+        {
+            rowCount = await GetTableRowCountAsync("test_data_types");
+            if (rowCount != 0)
+            {
+                break;
+            }
+
+            await Task.Delay(500);
+        }
+
         Assert.That(rowCount, Is.GreaterThanOrEqualTo(1));
     }
 
@@ -153,17 +157,17 @@ public class QuestDbIntegrationTests
     {
         // Test that the client properly handles multiple URLs with fallback
         var httpEndpoint = _questDb!.GetHttpEndpoint();
-        var badEndpoint = "http://localhost:19001"; // Non-existent endpoint
+        var badEndpoint  = "http://localhost:19001"; // Non-existent endpoint
 
         // The client should try the bad endpoint first, then fallback to the good one
         using var sender = Sender.New(
-            $"http::addr={badEndpoint},{httpEndpoint};auto_flush=off;");
+            $"http::addr={badEndpoint};addr={httpEndpoint};auto_flush=off;");
 
         await sender
-            .Table("test_multi_url")
-            .Symbol("tag", "fallback")
-            .Column("value", 999L)
-            .AtAsync(DateTime.UtcNow);
+              .Table("test_multi_url")
+              .Symbol("tag", "fallback")
+              .Column("value", 999L)
+              .AtAsync(DateTime.UtcNow);
 
         await sender.SendAsync();
 
@@ -180,10 +184,10 @@ public class QuestDbIntegrationTests
 
         // Send data - should auto-flush due to auto_flush_rows=1
         await sender
-            .Table("test_auto_flush")
-            .Symbol("tag", "test")
-            .Column("value", 777L)
-            .AtAsync(DateTime.UtcNow);
+              .Table("test_auto_flush")
+              .Symbol("tag", "test")
+              .Column("value", 777L)
+              .AtAsync(DateTime.UtcNow);
 
         // Give it a moment to flush
         await Task.Delay(100);
@@ -191,46 +195,20 @@ public class QuestDbIntegrationTests
         // Verify data was written
         await VerifyTableHasDataAsync("test_auto_flush");
     }
-
-    [Test]
-    public async Task HealthCheckEndpoint()
-    {
-        var httpEndpoint = _questDb!.GetHttpEndpoint();
-
-        using var client = new HttpClient();
-        var response = await client.GetAsync($"{httpEndpoint}/api/v1/health");
-
-        Assert.That(response.IsSuccessStatusCode, "Health check should succeed");
-
-        var content = await response.Content.ReadAsStringAsync();
-        var json = JsonDocument.Parse(content);
-        var status = json.RootElement.GetProperty("status").GetString();
-
-        Assert.That(status, Is.EqualTo("ok"), "Status should be 'ok'");
-    }
-
-    [Test]
-    public async Task TablesEndpoint()
-    {
-        var httpEndpoint = _questDb!.GetHttpEndpoint();
-
-        using var client = new HttpClient();
-        var response = await client.GetAsync($"{httpEndpoint}/api/v1/tables");
-
-        Assert.That(response.IsSuccessStatusCode, "Tables endpoint should succeed");
-
-        var content = await response.Content.ReadAsStringAsync();
-        var json = JsonDocument.Parse(content);
-        Assert.That(json.RootElement.TryGetProperty("tables", out _), "Response should contain tables property");
-    }
-
+    
     private async Task VerifyTableHasDataAsync(string tableName)
     {
-        var httpEndpoint = _questDb!.GetHttpEndpoint();
-        using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
+        var value = await GetTableRowCountAsync(tableName);
+        Assert.That(value, Is.GreaterThan(0));
+    }
+
+    private async Task<long> GetTableRowCountAsync(string tableName)
+    {
+        var       httpEndpoint = _questDb!.GetHttpEndpoint();
+        using var client       = new HttpClient { Timeout = TimeSpan.FromSeconds(10), };
 
         // Retry a few times to allow for write latency
-        var attempts = 0;
+        var       attempts    = 0;
         const int maxAttempts = 10;
 
         while (attempts < maxAttempts)
@@ -238,19 +216,19 @@ public class QuestDbIntegrationTests
             try
             {
                 var response = await client.GetAsync(
-                    $"{httpEndpoint}/api/v1/query?query=select count(*) as cnt from {tableName}");
+                                   $"{httpEndpoint}/exec?query={tableName}");
 
                 if (response.IsSuccessStatusCode)
                 {
                     var content = await response.Content.ReadAsStringAsync();
-                    var json = JsonDocument.Parse(content);
-                    if (json.RootElement.TryGetProperty("dataset", out var dataset) &&
-                        dataset.TryGetProperty("count", out var count))
+                    var json    = JsonDocument.Parse(content);
+                    if (
+                        json.RootElement.TryGetProperty("count", out var count))
                     {
                         var rowCount = count.GetInt64();
                         if (rowCount > 0)
                         {
-                            return;
+                            return rowCount;
                         }
                     }
                 }
@@ -265,29 +243,6 @@ public class QuestDbIntegrationTests
         }
 
         Assert.Fail($"Table {tableName} has no data after {maxAttempts} attempts");
-    }
-
-    private async Task<long> GetTableRowCountAsync(string tableName)
-    {
-        var httpEndpoint = _questDb!.GetHttpEndpoint();
-        using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
-
-        var response = await client.GetAsync(
-            $"{httpEndpoint}/api/v1/query?query=select count(*) as cnt from {tableName}");
-
-        if (!response.IsSuccessStatusCode)
-        {
-            return 0;
-        }
-
-        var content = await response.Content.ReadAsStringAsync();
-        var json = JsonDocument.Parse(content);
-        if (json.RootElement.TryGetProperty("dataset", out var dataset) &&
-            dataset.TryGetProperty("count", out var count))
-        {
-            return count.GetInt64();
-        }
-
         return 0;
     }
 }

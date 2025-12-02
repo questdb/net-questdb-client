@@ -21,6 +21,7 @@ public class QuestDbManager : IAsyncDisposable
     private string? _containerId;
     private readonly HttpClient _httpClient;
     private readonly string _containerName;
+    private string? _volumeName;
 
     public bool IsRunning { get; private set; }
 
@@ -35,6 +36,14 @@ public class QuestDbManager : IAsyncDisposable
         _httpPort = httpPort;
         _containerName = $"{ContainerNamePrefix}{port}-{httpPort}-{Guid.NewGuid().ToString().Substring(0, 8)}";
         _httpClient = new HttpClient { Timeout = TimeSpan.FromSeconds(5) };
+    }
+
+    /// <summary>
+    /// Sets a Docker volume to be used for persistent storage.
+    /// </summary>
+    public void SetVolume(string volumeName)
+    {
+        _volumeName = volumeName;
     }
 
     /// <summary>
@@ -120,10 +129,16 @@ public class QuestDbManager : IAsyncDisposable
         // -d: detached mode
         // -p: port mappings
         // --name: container name
+        // -v: volume mount (if specified)
+        var volumeArg = string.IsNullOrEmpty(_volumeName)
+            ? string.Empty
+            : $"-v {_volumeName}:/var/lib/questdb ";
+
         var runArgs = $"run -d " +
                       $"-p {_httpPort}:9000 " +
                       $"-p {_port}:9009 " +
                       $"--name {_containerName} " +
+                      volumeArg +
                       DockerImage;
 
         var (exitCode, output) = await RunDockerCommandAsync(runArgs);

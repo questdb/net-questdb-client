@@ -195,6 +195,149 @@ public class QuestDbIntegrationTests
         // Verify data was written
         await VerifyTableHasDataAsync("test_auto_flush");
     }
+
+    [Test]
+    public async Task SendRowsWhileRestartingDatabase()
+    {
+        const int rowsPerBatch = 10;
+        const int numBatches = 5;
+        const int expectedTotalRows = rowsPerBatch * numBatches;
+
+        // Create a persistent Docker volume for the test database
+        var volumeName = $"questdb-test-vol-{Guid.NewGuid().ToString().Substring(0, 8)}";
+
+        // Use a separate QuestDB instance for this chaos test to avoid conflicts
+        var testDb = new QuestDbManager(port: 29009, httpPort: 29000);
+        testDb.SetVolume(volumeName);
+        try
+        {
+            await testDb.StartAsync();
+
+            var httpEndpoint = testDb.GetHttpEndpoint();
+            using var sender = Sender.New(
+                $"http::addr={httpEndpoint};auto_flush=off;retry_timeout=60000;");
+
+            var batchesSent = 0;
+            var sendLock = new object();
+
+            // Task that restarts the database
+            var restartTask = Task.Run(async () =>
+            {
+                // Allow first batch to be sent while database is up
+                await Task.Delay(600);
+
+                // Perform restart cycles
+                for (var i = 0; i < 2; i++)
+                {
+                    TestContext.WriteLine($"Stopping test database (cycle {i + 1})");
+                    await testDb.StopAsync();
+
+                    // Database is down - sender will retry
+                    await Task.Delay(1200);
+
+                    TestContext.WriteLine($"Starting test database (cycle {i + 1})");
+                    await testDb.StartAsync();
+
+                    // Wait for client to detect database is back up
+                    await Task.Delay(800);
+                }
+
+                TestContext.WriteLine("Test database restart cycles complete");
+            });
+
+            // Task that sends rows continuously
+            var sendTask = Task.Run(async () =>
+            {
+                for (var batch = 0; batch < numBatches; batch++)
+                {
+                    try
+                    {
+                        // Build batch of rows
+                        for (var i = 0; i < rowsPerBatch; i++)
+                        {
+                            var rowId = batch * rowsPerBatch + i;
+                            await sender
+                                  .Table("test_chaos")
+                                  .Symbol("batch", $"batch_{batch}")
+                                  .Column("row_id", (long)rowId)
+                                  .Column("value", (double)(rowId * 100))
+                                  .AtAsync(DateTime.UtcNow);
+                        }
+
+                        // Send the batch
+                        TestContext.WriteLine($"Sending batch {batch}");
+                        await sender.SendAsync();
+
+                        lock (sendLock)
+                        {
+                            batchesSent++;
+                        }
+                        TestContext.WriteLine($"Batch {batch} sent successfully");
+
+                        // Wait before next batch
+                        await Task.Delay(500);
+                    }
+                    catch (Exception ex)
+                    {
+                        TestContext.WriteLine($"Error sending batch {batch}: {ex.GetType().Name} - {ex.Message}");
+                        throw;
+                    }
+                }
+
+                TestContext.WriteLine($"All batches sent. Total: {batchesSent}");
+            });
+
+            // Wait for both tasks to complete
+            await Task.WhenAll(sendTask, restartTask);
+
+            // Wait for final data to be written
+            await Task.Delay(2000);
+
+            // Query the row count, with retries
+            long actualRowCount = 0;
+            var maxAttempts = 20;
+            for (var attempt = 0; attempt < maxAttempts; attempt++)
+            {
+                try
+                {
+                    using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(5) };
+                    var response = await client.GetAsync($"{httpEndpoint}/exec?query=test_chaos");
+
+                    if (response.IsSuccessStatusCode)
+                    {
+                        var content = await response.Content.ReadAsStringAsync();
+                        var json = JsonDocument.Parse(content);
+                        if (json.RootElement.TryGetProperty("count", out var countProp))
+                        {
+                            actualRowCount = countProp.GetInt64();
+                            TestContext.WriteLine($"Attempt {attempt + 1}: Found {actualRowCount} rows");
+                            if (actualRowCount >= expectedTotalRows)
+                                break;
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    TestContext.WriteLine($"Attempt {attempt + 1}: Query failed - {ex.Message}");
+                }
+
+                await Task.Delay(500);
+            }
+
+            // Assert that all rows made it
+            Assert.That(
+                actualRowCount,
+                Is.GreaterThanOrEqualTo(expectedTotalRows),
+                $"Expected {expectedTotalRows} rows but found {actualRowCount}. " +
+                $"Successfully sent {batchesSent} batches of {rowsPerBatch} rows each");
+        }
+        finally
+        {
+            // Cleanup
+            await testDb.StopAsync();
+            await testDb.DisposeAsync();
+        }
+    }
     
     private async Task VerifyTableHasDataAsync(string tableName)
     {

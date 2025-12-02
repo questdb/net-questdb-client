@@ -423,7 +423,7 @@ public class HttpTests
         await server.StartAsync(HttpPort);
         using var sender =
             Sender.New(
-                $"https::addr={Host}:{HttpPort};username=asdasdada;password=asdadad;tls_verify=unsafe_off;auto_flush=off;");
+                $"http::addr={Host}:{HttpPort};username=asdasdada;password=asdadad;auto_flush=off;");
         await sender.Table("metrics")
                     .Symbol("tag", "value")
                     .Column("number", 10)
@@ -434,6 +434,7 @@ public class HttpTests
             async () => await sender.SendAsync(),
             Throws.TypeOf<IngressError>().With.Message.Contains("Unauthorized")
         );
+        await server.StopAsync();
     }
 
     [Test]
@@ -443,7 +444,7 @@ public class HttpTests
         await server.StartAsync(HttpPort);
         using var sender =
             Sender.New(
-                $"https::addr={Host}:{HttpPort};username=admin;password=quest;tls_verify=unsafe_off;auto_flush=off;");
+                $"http::addr={Host}:{HttpPort};username=admin;password=quest;auto_flush=off;");
         await sender.Table("metrics")
                     .Symbol("tag", "value")
                     .Column("number", 10)
@@ -451,6 +452,7 @@ public class HttpTests
                     .AtAsync(new DateTime(1970, 01, 01, 0, 0, 1));
 
         await sender.SendAsync();
+        await server.StopAsync();
     }
 
     [Test]
@@ -461,7 +463,7 @@ public class HttpTests
 
         using var sender =
             Sender.New(
-                $"https::addr={Host}:{HttpsPort};token=askldaklds;tls_verify=unsafe_off;auto_flush=off;");
+                $"http::addr={Host}:{HttpPort};token=askldaklds;auto_flush=off;");
 
         for (var i = 0; i < 100; i++)
         {
@@ -476,6 +478,7 @@ public class HttpTests
             async () => await sender.SendAsync(),
             Throws.TypeOf<IngressError>().With.Message.Contains("Unauthorized")
         );
+        await srv.StopAsync();
     }
 
     [Test]
@@ -488,7 +491,7 @@ public class HttpTests
 
         using var sender =
             Sender.New(
-                $"https::addr={Host}:{HttpsPort};token={token};tls_verify=unsafe_off;auto_flush=off;");
+                $"http::addr={Host}:{HttpPort};token={token};auto_flush=off;");
 
         for (var i = 0; i < 100; i++)
         {
@@ -500,6 +503,7 @@ public class HttpTests
         }
 
         await sender.SendAsync();
+        await srv.StopAsync();
     }
 
 

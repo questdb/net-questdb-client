@@ -177,6 +177,7 @@ public class HttpTests
     }
 
     [Test]
+    // [Ignore("Test is broken - arrays are not validated until send. Needs redesign.")]
     public async Task BasicArrayDoubleNegotiationVersion2NotSupported()
     {
         {
@@ -1737,8 +1738,15 @@ public class HttpTests
         using var server = new DummyHttpServer(requireClientCert: true);
         await server.StartAsync(HttpsPort);
 
+        using var sender = Sender.Configure($"https::addr=localhost:{HttpsPort};tls_verify=unsafe_off;").Build();
+
+        await sender.Table("metrics")
+                    .Symbol("tag", "value")
+                    .Column("number", 12.2)
+                    .AtAsync(new DateTime(1970, 01, 01, 0, 0, 1));
+
         Assert.That(
-            () => Sender.Configure($"https::addr=localhost:{HttpsPort};tls_verify=unsafe_off;").Build(),
+            async () => await sender.SendAsync(),
             Throws.TypeOf<IngressError>().With.Message.Contains("ServerFlushError")
         );
 

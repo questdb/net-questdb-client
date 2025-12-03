@@ -45,6 +45,7 @@ public class DummyHttpServer : IDisposable
     private readonly bool _withBasicAuth;
     private readonly bool _withRetriableError;
     private readonly bool _withErrorMessage;
+    private readonly bool _requireClientCert;
 
     /// <summary>
     /// Initializes a configurable in-process dummy HTTP server used for testing endpoints.
@@ -74,6 +75,7 @@ public class DummyHttpServer : IDisposable
         _withRetriableError = withRetriableError;
         _withErrorMessage = withErrorMessage;
         _withStartDelay = withStartDelay;
+        _requireClientCert = requireClientCert;
 
         // Also set static flags for backwards compatibility
         IlpEndpoint.WithTokenAuth = withTokenAuth;
@@ -171,7 +173,10 @@ public class DummyHttpServer : IDisposable
             retriableError: _withRetriableError,
             errorMessage: _withErrorMessage);
 
-        _ = _app.RunAsync($"http://localhost:{port}");
+        var url = _requireClientCert
+            ? $"https://localhost:{port}"
+            : $"http://localhost:{port}";
+        _ = _app.RunAsync(url);
     }
 
     /// <summary>

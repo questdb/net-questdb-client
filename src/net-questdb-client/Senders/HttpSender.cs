@@ -179,14 +179,7 @@ internal class HttpSender : AbstractSender
                 using var response = SendWithRetries(default, _settingRequestFactory, TimeSpan.FromSeconds(1));
                 if (!response.IsSuccessStatusCode)
                 {
-                    if (response.StatusCode == HttpStatusCode.NotFound)
-                    {
-                        protocolVersion = ProtocolVersion.V1;
-                    }
-                    else
-                    {
-                        protocolVersion = ProtocolVersion.V3;
-                    }
+                    protocolVersion = ProtocolVersion.V1;
                 }
 
                 if (protocolVersion == ProtocolVersion.Auto)
@@ -199,7 +192,7 @@ internal class HttpSender : AbstractSender
                     }
                     catch
                     {
-                        protocolVersion = ProtocolVersion.V3;
+                        protocolVersion = ProtocolVersion.V1;
                     }
                 }
             }

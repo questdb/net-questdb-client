@@ -184,23 +184,14 @@ internal class HttpSender : AbstractSender
 
                 if (protocolVersion == ProtocolVersion.Auto)
                 {
-                    try
-                    {
-                        var json     = response.Content.ReadFromJsonAsync<SettingsResponse>().Result!;
-                        var versions = json.Config?.LineProtoSupportVersions!;
-                        protocolVersion = (ProtocolVersion)versions.Where(v => v <= (int)ProtocolVersion.V3).Max();
-                    }
-                    catch
-                    {
-                        protocolVersion = ProtocolVersion.V1;
-                    }
+                    var json     = response.Content.ReadFromJsonAsync<SettingsResponse>().Result!;
+                    var versions = json.Config?.LineProtoSupportVersions!;
+                    protocolVersion = (ProtocolVersion)versions.Where(v => v <= (int)ProtocolVersion.V3).Max();
                 }
             }
             catch
             {
-                // If /settings probing fails (connection error, timeout, etc.),
-                // default to V3 and allow actual sends to attempt connection.
-                protocolVersion = ProtocolVersion.V3;
+                protocolVersion = ProtocolVersion.V1;
             }
             finally
             {
@@ -208,11 +199,6 @@ internal class HttpSender : AbstractSender
                 _addressProvider.CurrentIndex = initialAddressIndex;
                 // Update the client reference to match the restored address
                 _client = GetClientForCurrentAddress();
-            }
-
-            if (protocolVersion == ProtocolVersion.Auto)
-            {
-                protocolVersion = ProtocolVersion.V1;
             }
         }
 

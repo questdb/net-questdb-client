@@ -45,7 +45,7 @@ public class JsonSpecTestRunner
     private static readonly TestCase[]? TestCases = ReadTestCases();
 
     /// <summary>
-    /// Populate the provided sender with the test case's table, symbols, and columns, then send the prepared row.
+    ///     Populate the provided sender with the test case's table, symbols, and columns, then send the prepared row.
     /// </summary>
     /// <param name="sender">The ISender to configure and use for sending the test case row.</param>
     /// <param name="testCase">The test case containing table name, symbols, and typed columns to write.</param>
@@ -82,13 +82,14 @@ public class JsonSpecTestRunner
                     var value = ((JsonElement)column.Value).GetString();
                     if (value is null)
                     {
-                        sender.Column(column.Name, (decimal?)null);
+                        sender.NullableColumn(column.Name, (decimal?)null);
                     }
                     else
                     {
                         var d = decimal.Parse(value, NumberStyles.Number, CultureInfo.InvariantCulture);
                         sender.Column(column.Name, d);
                     }
+
                     break;
 
                 default:
@@ -103,9 +104,13 @@ public class JsonSpecTestRunner
     }
 
     /// <summary>
-    /// Executes the provided test case by sending its configured table, symbols, and columns to a local TCP listener and asserting the listener's received output against the test case's expected result.
+    ///     Executes the provided test case by sending its configured table, symbols, and columns to a local TCP listener and
+    ///     asserting the listener's received output against the test case's expected result.
     /// </summary>
-    /// <param name="testCase">The test case to run; provides table, symbols, columns to send and a Result describing the expected validation (Status, Line, AnyLines, or BinaryBase64).</param>
+    /// <param name="testCase">
+    ///     The test case to run; provides table, symbols, columns to send and a Result describing the
+    ///     expected validation (Status, Line, AnyLines, or BinaryBase64).
+    /// </param>
     [TestCaseSource(nameof(TestCases))]
     public async Task RunTcp(TestCase testCase)
     {
@@ -162,9 +167,13 @@ public class JsonSpecTestRunner
     }
 
     /// <summary>
-    /// Executes the provided test case by sending data over HTTP to a dummy server using a QuestDB sender and validates the server's response according to the test case result.
+    ///     Executes the provided test case by sending data over HTTP to a dummy server using a QuestDB sender and validates
+    ///     the server's response according to the test case result.
     /// </summary>
-    /// <param name="testCase">The test case describing table, symbols, columns, and expected result (status, line(s), or base64 binary) to execute and validate.</param>
+    /// <param name="testCase">
+    ///     The test case describing table, symbols, columns, and expected result (status, line(s), or
+    ///     base64 binary) to execute and validate.
+    /// </param>
     [TestCaseSource(nameof(TestCases))]
     public async Task RunHttp(TestCase testCase)
     {
@@ -293,7 +302,7 @@ public class JsonSpecTestRunner
         [JsonPropertyName("result")] public TestCaseResult Result { get; set; } = null!;
 
         /// <summary>
-        /// Provides the test case name for display and logging.
+        ///     Provides the test case name for display and logging.
         /// </summary>
         /// <returns>The TestName of the test case.</returns>
         public override string ToString()

@@ -1,0 +1,82 @@
+# Azure Pipeline for building NuGet package for net-questdb-client
+# Manual trigger for creating release packages
+
+trigger: none
+pr: none
+
+variables:
+  buildConfiguration: 'Release'
+  dotnetVersion: '9.0.x'
+  nugetPackageDirectory: '$(Build.ArtifactStagingDirectory)'
+
+pool:
+  vmImage: 'ubuntu-latest'
+
+stages:
+  - stage: Build
+    displayName: 'Build NuGet Package'
+    jobs:
+      - job: BuildNugetPackage
+        displayName: 'Build and Package'
+        steps:
+          - checkout: self
+            submodules: true
+            displayName: 'Checkout code with submodules'
+        
+          - task: UseDotNet@2
+            displayName: 'Install .NET 6.0 SDK'
+            inputs:
+              packageType: 'sdk'
+              version: '6.0.x'
+              installationPath: $(Agent.ToolsDirectory)/dotnet
+        
+          - task: UseDotNet@2
+            displayName: 'Install .NET 7.0 SDK'
+            inputs:
+              packageType: 'sdk'
+              version: '7.0.x'
+              installationPath: $(Agent.ToolsDirectory)/dotnet
+        
+          - task: UseDotNet@2
+            displayName: 'Install .NET 8.0 SDK'
+            inputs:
+              packageType: 'sdk'
+              version: '8.0.x'
+              installationPath: $(Agent.ToolsDirectory)/dotnet
+        
+          - task: UseDotNet@2
+            displayName: 'Install .NET 9.0 SDK'
+            inputs:
+              packageType: 'sdk'
+              version: $(dotnetVersion)
+              installationPath: $(Agent.ToolsDirectory)/dotnet
+        
+          - task: DotNetCoreCLI@2
+            displayName: 'Restore dependencies'
+            inputs:
+              command: 'restore'
+              projects: 'net-questdb-client.sln'
+
+          - task: DotNetCoreCLI@2
+            displayName: 'Build Release'
+            inputs:
+              command: 'build'
+              projects: 'src/net-questdb-client/net-questdb-client.csproj'
+              arguments: '--configuration $(buildConfiguration)'
+
+          - task: DotNetCoreCLI@2
+            displayName: 'Create NuGet package'
+            inputs:
+              command: 'pack'
+              packagesToPack: 'src/net-questdb-client/net-questdb-client.csproj'
+              configuration: '$(buildConfiguration)'
+              nobuild: true
+              outputDir: '$(nugetPackageDirectory)'
+              versioningScheme: 'off'
+
+          - task: PublishBuildArtifacts@1
+            displayName: 'Publish NuGet package as artifact'
+            inputs:
+              pathToPublish: '$(nugetPackageDirectory)'
+              artifactName: 'nuget-package'
+              publishLocation: 'Container'

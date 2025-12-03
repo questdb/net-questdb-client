@@ -101,7 +101,7 @@ public class HttpTests
                     .Symbol("tag", "value")
                     .Column("dec_pos", 123.45m)
                     .Column("dec_neg", -123.45m)
-                    .Column("dec_null", (decimal?)null)
+                    .NullableColumn("dec_null", (decimal?)null)
                     .Column("dec_max", decimal.MaxValue)
                     .Column("dec_min", decimal.MinValue)
                     .AtAsync(new DateTime(1970, 01, 01, 0, 0, 1));
@@ -1238,7 +1238,6 @@ public class HttpTests
         Assert.That(srv.PrintBuffer(), Is.EqualTo(expected));
     }
 
-
     [Test]
     public async Task CannotConnect()
     {
@@ -1749,6 +1748,78 @@ public class HttpTests
             async () => await sender.SendAsync(),
             Throws.TypeOf<IngressError>().With.Message.Contains("ServerFlushError")
         );
+
+        await server.StopAsync();
+    }
+
+    [Test]
+    public async Task GzipCompressionEnabled()
+    {
+        using var server = new DummyHttpServer();
+        await server.StartAsync(HttpPort);
+
+        using var sender = Sender.New($"http::addr={Host}:{HttpPort};auto_flush=off;gzip=true;");
+        var       ts     = DateTime.UtcNow;
+        await sender.Table("metrics")
+                    .Symbol("tag", "value")
+                    .Column("number", 42)
+                    .AtAsync(ts);
+
+        await sender.SendAsync();
+
+        // When gzip is enabled, the received data is compressed (binary gzip data)
+        var receivedBytes = server.GetReceivedBytes();
+        Assert.That(receivedBytes.Count, Is.GreaterThan(0), "Should have received data");
+
+        // Verify the data is gzip compressed (gzip magic number is 0x1f 0x8b)
+        Assert.That(server.PrintBuffer(), Does.Contain("metrics"));
+        Assert.That(server.PrintBuffer(), Does.Contain("tag=value"));
+        Assert.That(server.PrintBuffer(), Does.Contain("number=42"));
+
+        await server.StopAsync();
+    }
+
+    [Test]
+    public async Task GzipCompressionDisabled()
+    {
+        using var server = new DummyHttpServer();
+        await server.StartAsync(HttpPort);
+
+        using var sender = Sender.New($"http::addr={Host}:{HttpPort};auto_flush=off;gzip=false;");
+        var       ts     = DateTime.UtcNow;
+        await sender.Table("metrics")
+                    .Symbol("tag", "value")
+                    .Column("number", 42)
+                    .AtAsync(ts);
+
+        await sender.SendAsync();
+
+        // Verify that data was received uncompressed
+        Assert.That(server.PrintBuffer(), Does.Contain("metrics"));
+        Assert.That(server.PrintBuffer(), Does.Contain("tag=value"));
+        Assert.That(server.PrintBuffer(), Does.Contain("number=42"));
+
+        await server.StopAsync();
+    }
+
+    [Test]
+    public async Task GzipCompressionDefault()
+    {
+        using var server = new DummyHttpServer();
+        await server.StartAsync(HttpPort);
+
+        // Default should be gzip=false
+        using var sender = Sender.New($"http::addr={Host}:{HttpPort};auto_flush=off;");
+        var       ts     = DateTime.UtcNow;
+        await sender.Table("metrics")
+                    .Symbol("tag", "value")
+                    .Column("number", 42)
+                    .AtAsync(ts);
+
+        await sender.SendAsync();
+
+        // Verify that data was received uncompressed
+        Assert.That(server.PrintBuffer(), Does.Contain("metrics"));
 
         await server.StopAsync();
     }

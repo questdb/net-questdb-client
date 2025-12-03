@@ -53,7 +53,7 @@ public record SenderOptions
         "protocol", "protocol_version", "addr", "auto_flush", "auto_flush_rows", "auto_flush_bytes",
         "auto_flush_interval", "init_buf_size", "max_buf_size", "max_name_len", "username", "password", "token",
         "request_min_throughput", "auth_timeout", "request_timeout", "retry_timeout",
-        "pool_timeout", "tls_verify", "tls_roots", "tls_roots_password", "own_socket",
+        "pool_timeout", "tls_verify", "tls_roots", "tls_roots_password", "own_socket", "gzip",
     };
 
     private string _addr = "localhost:9000";
@@ -64,6 +64,7 @@ public record SenderOptions
     private TimeSpan _autoFlushInterval = TimeSpan.FromMilliseconds(1000);
     private int _autoFlushRows = 75000;
     private DbConnectionStringBuilder _connectionStringBuilder = null!;
+    private bool _gzip = false;
     private int _initBufSize = 65536;
     private int _maxBufSize = 104857600;
     private int _maxNameLen = 127;
@@ -108,6 +109,7 @@ public record SenderOptions
         ParseIntThatMayBeOff(nameof(auto_flush_rows), IsHttp() ? "75000" : "600", out _autoFlushRows);
         ParseIntThatMayBeOff(nameof(auto_flush_bytes), int.MaxValue.ToString(), out _autoFlushBytes);
         ParseMillisecondsThatMayBeOff(nameof(auto_flush_interval), "1000", out _autoFlushInterval);
+        ParseBoolWithDefault(nameof(gzip), "false", out _gzip);
         ParseIntWithDefault(nameof(init_buf_size), "65536", out _initBufSize);
         ParseIntWithDefault(nameof(max_buf_size), "104857600", out _maxBufSize);
         ParseIntWithDefault(nameof(max_name_len), "127", out _maxNameLen);
@@ -234,6 +236,20 @@ public record SenderOptions
     [Obsolete]
     public string bind_interface =>
         throw new IngressError(ErrorCode.ConfigError, "Not supported!", new NotImplementedException());
+
+    /// <summary>
+    ///     Enables or disables gzip compression for HTTP requests.
+    ///     Defaults to <c>false</c>.
+    /// </summary>
+    /// <remarks>
+    ///     This option only applies to HTTP/HTTPS transports (ILP/HTTP).
+    ///     When enabled, the request body will be gzip compressed before being sent.
+    /// </remarks>
+    public bool gzip
+    {
+        get => _gzip;
+        set => _gzip = value;
+    }
 
     /// <summary>
     ///     Initial buffer size for the ILP rows in bytes.

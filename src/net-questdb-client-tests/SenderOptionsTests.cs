@@ -73,7 +73,7 @@ public class SenderOptionsTests
     {
         Assert.That(
             new SenderOptions("http::addr=localhost:9000;").ToString()
-          , Is.EqualTo("http::addr=localhost:9000;auth_timeout=15000;auto_flush=on;auto_flush_bytes=2147483647;auto_flush_interval=1000;auto_flush_rows=75000;init_buf_size=65536;max_buf_size=104857600;max_name_len=127;pool_timeout=120000;protocol_version=Auto;request_min_throughput=102400;request_timeout=10000;retry_timeout=10000;tls_verify=on;"));
+          , Is.EqualTo("http::addr=localhost:9000;auth_timeout=15000;auto_flush=on;auto_flush_bytes=2147483647;auto_flush_interval=1000;auto_flush_rows=75000;gzip=False;init_buf_size=65536;max_buf_size=104857600;max_name_len=127;pool_timeout=120000;protocol_version=Auto;request_min_throughput=102400;request_timeout=10000;retry_timeout=10000;tls_verify=on;"));
     }
 
     [Test]
@@ -105,6 +105,34 @@ public class SenderOptionsTests
 
         Assert.That(senderOptions.ToString(),
                     Is.EqualTo(
-                        "http::addr=localhost:9000;auth_timeout=15000;auto_flush=on;auto_flush_bytes=-1;auto_flush_interval=-1;auto_flush_rows=-1;init_buf_size=65536;max_buf_size=104857600;max_name_len=127;pool_timeout=120000;protocol_version=Auto;request_min_throughput=102400;request_timeout=10000;retry_timeout=10000;tls_verify=on;"));
+                        "http::addr=localhost:9000;auth_timeout=15000;auto_flush=on;auto_flush_bytes=-1;auto_flush_interval=-1;auto_flush_rows=-1;gzip=False;init_buf_size=65536;max_buf_size=104857600;max_name_len=127;pool_timeout=120000;protocol_version=Auto;request_min_throughput=102400;request_timeout=10000;retry_timeout=10000;tls_verify=on;"));
+    }
+
+    [Test]
+    public void GzipDefaultFalse()
+    {
+        var senderOptions = new SenderOptions("http::addr=localhost:9000;");
+        Assert.That(senderOptions.gzip, Is.EqualTo(false));
+    }
+
+    [Test]
+    public void GzipTrue()
+    {
+        var senderOptions = new SenderOptions("http::addr=localhost:9000;gzip=true;");
+        Assert.That(senderOptions.gzip, Is.EqualTo(true));
+    }
+
+    [Test]
+    public void GzipFalse()
+    {
+        var senderOptions = new SenderOptions("http::addr=localhost:9000;gzip=false;");
+        Assert.That(senderOptions.gzip, Is.EqualTo(false));
+    }
+
+    [Test]
+    public void GzipInToString()
+    {
+        var senderOptions = new SenderOptions("http::addr=localhost:9000;gzip=true;");
+        Assert.That(senderOptions.ToString(), Does.Contain("gzip=True"));
     }
 }

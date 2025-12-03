@@ -30,16 +30,6 @@ namespace QuestDB.Buffers;
 /// <summary />
 public class BufferV3 : BufferV2
 {
-    /// <summary>
-    /// Initializes a new instance of BufferV3 with the specified buffer and name length limits.
-    /// </summary>
-    /// <param name="bufferSize">Initial size of the internal write buffer, in bytes.</param>
-    /// <param name="maxNameLen">Maximum allowed length for column names, in characters.</param>
-    /// <param name="maxBufSize">Maximum allowed internal buffer size, in bytes.</param>
-    public BufferV3(int bufferSize, int maxNameLen, int maxBufSize) : base(bufferSize, maxNameLen, maxBufSize)
-    {
-    }
-
     // Sign mask for the flags field. A value of zero in this bit indicates a
     // positive Decimal value, and a value of one in this bit indicates a
     // negative Decimal value.
@@ -54,18 +44,24 @@ public class BufferV3 : BufferV2
     private const int ScaleShift = 16;
 
     /// <summary>
-    /// Writes a decimal column in QuestDB's binary column format (scale, length, and two's-complement big-endian unscaled value).
+    ///     Initializes a new instance of BufferV3 with the specified buffer and name length limits.
+    /// </summary>
+    /// <param name="bufferSize">Initial size of the internal write buffer, in bytes.</param>
+    /// <param name="maxNameLen">Maximum allowed length for column names, in characters.</param>
+    /// <param name="maxBufSize">Maximum allowed internal buffer size, in bytes.</param>
+    public BufferV3(int bufferSize, int maxNameLen, int maxBufSize) : base(bufferSize, maxNameLen, maxBufSize)
+    {
+    }
+
+    /// <summary>
+    ///     Writes a decimal column in QuestDB's binary column format (scale, length, and two's-complement big-endian unscaled
+    ///     value).
     /// </summary>
     /// <param name="name">Column name to write.</param>
-    /// <param name="value">Nullable decimal value to encode; when null writes zero scale and zero length.</param>
+    /// <param name="value">Decimal value to encode.</param>
     /// <returns>The buffer instance for call chaining.</returns>
-    public override IBuffer Column(ReadOnlySpan<char> name, decimal? value)
+    public override IBuffer Column(ReadOnlySpan<char> name, decimal value)
     {
-        if (value is null)
-        {
-            return this;
-        }
-
         // # Binary Format
         // 1. Binary format marker: `'='` (0x3D)
         // 2. Type identifier: BinaryFormatType.DECIMAL byte
@@ -78,7 +74,7 @@ public class BufferV3 : BufferV2
             .Put((byte)BinaryFormatType.DECIMAL);
 
         Span<int> parts = stackalloc int[4];
-        decimal.GetBits(value.Value, parts);
+        decimal.GetBits(value, parts);
 
         var flags = parts[3];
         var scale = (byte)((flags & ScaleMask) >> ScaleShift);
@@ -86,10 +82,10 @@ public class BufferV3 : BufferV2
         // 3. Scale
         Put(scale);
 
-        var low = parts[0];
-        var mid = parts[1];
-        var high = parts[2];
-        var negative = (flags & SignMask) != 0 && value.Value != 0m;
+        var low      = parts[0];
+        var mid      = parts[1];
+        var high     = parts[2];
+        var negative = (flags & SignMask) != 0 && value != 0m;
 
         if (negative)
         {
@@ -98,15 +94,15 @@ public class BufferV3 : BufferV2
             {
                 low = ~low + 1;
                 var c = low == 0 ? 1 : 0;
-                mid = ~mid + c;
-                c = mid == 0 && c == 1 ? 1 : 0;
+                mid  = ~mid + c;
+                c    = mid == 0 && c == 1 ? 1 : 0;
                 high = ~high + c;
             }
         }
 
         // We write the byte array on the stack first so that we can compress (remove unnecessary bytes) it later.
-        Span<byte> span = stackalloc byte[13];
-        var signByte = (byte)(negative ? 255 : 0);
+        Span<byte> span     = stackalloc byte[13];
+        var        signByte = (byte)(negative ? 255 : 0);
         span[0] = signByte;
         BinaryPrimitives.WriteInt32BigEndian(span.Slice(1, 4), high);
         BinaryPrimitives.WriteInt32BigEndian(span.Slice(5, 4), mid);
@@ -118,7 +114,10 @@ public class BufferV3 : BufferV2
              // We can strip prefix bits that are 0 (if positive) or 1 (if negative) as long as we keep at least
              // one of it in front to convey the sign.
              start < span.Length - 1 && span[start] == signByte && ((span[start + 1] ^ signByte) & 0x80) == 0;
-             start++) ;
+             start++)
+        {
+            ;
+        }
 
         // 4. Length
         var size = span.Length - start;

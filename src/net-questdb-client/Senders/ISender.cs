@@ -442,12 +442,28 @@ public interface ISender : IDisposable
         return this;
     }
 
+    /// <summary>
+    ///     Adds a GUID column with the specified name and value to the current row.
+    /// </summary>
+    /// <param name="name">The column name.</param>
+    /// <param name="value">The GUID value to store in the column.</param>
+    /// <returns>The sender instance for fluent call chaining.</returns>
     public ISender Column(ReadOnlySpan<char> name, Guid value);
 
-
+    /// <summary>
+    ///     Adds a character column with the specified name and value to the current row.
+    /// </summary>
+    /// <param name="name">The column name.</param>
+    /// <param name="value">The character value to store in the column.</param>
+    /// <returns>The sender instance for fluent call chaining.</returns>
     public ISender Column(ReadOnlySpan<char> name, char value);
 
-
+    /// <summary>
+    ///     Adds a nullable GUID column with the specified name when a value is provided; does nothing if the value is null.
+    /// </summary>
+    /// <param name="name">The column name.</param>
+    /// <param name="value">The nullable GUID value to add as a column; if null, the column is not added.</param>
+    /// <returns>The sender instance for fluent call chaining.</returns>
     public ISender NullableColumn(ReadOnlySpan<char> name, Guid? value)
     {
         if (value != null)
@@ -458,6 +474,13 @@ public interface ISender : IDisposable
         return this;
     }
 
+    /// <summary>
+    ///     Adds a nullable character column with the specified name when a value is provided; does nothing if the value is
+    ///     null.
+    /// </summary>
+    /// <param name="name">The column name.</param>
+    /// <param name="value">The nullable character value to add as a column; if null, the column is not added.</param>
+    /// <returns>The sender instance for fluent call chaining.</returns>
     public ISender NullableColumn(ReadOnlySpan<char> name, char? value)
     {
         if (value != null)

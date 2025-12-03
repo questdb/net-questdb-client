@@ -272,18 +272,21 @@ internal abstract class AbstractSender : ISender
     /// <param name="name">The column name.</param>
     /// <param name="value">The decimal value to write, or <c>null</c> to emit a null for the column.</param>
     /// <returns>The same <see cref="ISender" /> instance for fluent chaining.</returns>
+    /// <inheritdoc />
     public ISender Column(ReadOnlySpan<char> name, decimal value)
     {
         Buffer.Column(name, value);
         return this;
     }
 
+    /// <inheritdoc />
     public ISender Column(ReadOnlySpan<char> name, Guid value)
     {
         Buffer.Column(name, value);
         return this;
     }
 
+    /// <inheritdoc />
     public ISender Column(ReadOnlySpan<char> name, char value)
     {
         Buffer.Column(name, value);

@@ -274,22 +274,6 @@ public interface ISender : IDisposable
     public ISender Column<T>(ReadOnlySpan<char> name, ReadOnlySpan<T> value) where T : struct;
 
     /// <summary>
-    ///     Adds a column with the specified string value to the current row.
-    /// </summary>
-    /// <param name="name">The column name.</param>
-    /// <param name="value">The column's string value; may be null.</param>
-    /// <returns>The same sender instance for fluent chaining.</returns>
-    public ISender Column(ReadOnlySpan<char> name, string? value)
-    {
-        if (value is null)
-        {
-            return this;
-        }
-
-        return Column(name, value.AsSpan());
-    }
-
-    /// <summary>
     ///     Adds a column whose value is a sequence of value-type elements with the given multidimensional shape when both
     ///     <paramref name="value" /> and <paramref name="shape" /> are provided; no action is taken if either is null.
     /// </summary>

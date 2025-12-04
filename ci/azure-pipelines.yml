@@ -74,16 +74,17 @@ steps:
     arguments: '--configuration $(buildConfiguration) --no-restore'
 
 - script: |
-    sudo apt-get update
-    sudo apt-get install -y docker.io
-    sudo usermod -aG docker $(whoami)
-    sudo systemctl start docker
-  displayName: 'Install Docker Engine (Linux)'
-  condition: eq(variables['osName'], 'Linux')
-
-- script: |
     brew install docker colima
     colima start --runtime docker
+    # Wait for Colima to be ready
+    for i in {1..60}; do
+      if docker ps >/dev/null 2>&1; then
+        echo "Docker daemon is ready"
+        break
+      fi
+      echo "Waiting for Docker daemon... ($i/60)"
+      sleep 1
+    done
   displayName: 'Install Colima (macOS)'
   condition: eq(variables['osName'], 'macOS')
 
@@ -92,11 +93,19 @@ steps:
     $dockerPath = "C:\Program Files\Docker\Docker\Docker Desktop.exe"
     if (Test-Path $dockerPath) {
       Start-Process $dockerPath
-      for ($i = 1; $i -le 60; $i++) {
-        if (Test-Path "\\.\pipe\docker_engine") {
-          Write-Host "Docker daemon is ready"
-          break
+      # Wait for Docker daemon to be ready (up to 5 minutes)
+      $maxAttempts = 300
+      for ($i = 1; $i -le $maxAttempts; $i++) {
+        try {
+          $result = docker ps 2>&1
+          if ($LASTEXITCODE -eq 0) {
+            Write-Host "Docker daemon is ready"
+            break
+          }
+        } catch {
+          # Silently continue
         }
+        Write-Host "Waiting for Docker daemon... ($i/$maxAttempts)"
         Start-Sleep -Seconds 1
       }
     }

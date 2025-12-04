@@ -90,50 +90,11 @@ steps:
   displayName: 'Install QuestDB via systemd (Linux)'
   condition: eq(variables['osName'], 'Linux')
 
-- script: |
-    brew install colima docker
-    colima start --runtime docker
-    # Wait for Docker to be ready
-    for i in {1..120}; do
-      if docker ps >/dev/null 2>&1; then
-        echo "Docker is ready"
-        break
-      fi
-      echo "Waiting for Docker... ($i/120)"
-      sleep 1
-    done
-  displayName: 'Install Docker via Colima (macOS)'
-  condition: eq(variables['osName'], 'macOS')
-
-- pwsh: |
-    Write-Host "Installing Docker Desktop..."
-    choco install docker-desktop -y --no-progress
-
-    Write-Host "Waiting for Docker Desktop to be installed..."
-    Start-Sleep -Seconds 10
-
-    Write-Host "Starting Docker Desktop..."
-    Start-Process "C:\Program Files\Docker\Docker\Docker Desktop.exe"
-
-    Write-Host "Waiting for Docker daemon..."
-    $maxAttempts = 300
-    for ($i = 1; $i -le $maxAttempts; $i++) {
-      try {
-        $output = docker ps 2>&1
-        if ($LASTEXITCODE -eq 0) {
-          Write-Host "Docker is ready"
-          break
-        }
-      } catch {
-        # Continue
-      }
-      if ($i % 60 -eq 0) {
-        Write-Host "Still waiting for Docker... ($i/$maxAttempts seconds)"
-      }
-      Start-Sleep -Seconds 1
-    }
-  displayName: 'Install Docker Desktop (Windows)'
-  condition: eq(variables['osName'], 'Windows')
+- task: Docker@2
+  displayName: 'Ensure Docker is available (macOS & Windows)'
+  condition: or(eq(variables['osName'], 'macOS'), eq(variables['osName'], 'Windows'))
+  inputs:
+    command: 'version'
 
 - task: DotNetCoreCLI@2
   displayName: 'Run tests on $(osName)'

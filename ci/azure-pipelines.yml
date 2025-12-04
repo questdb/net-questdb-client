@@ -73,6 +73,32 @@ steps:
     projects: 'net-questdb-client.sln'
     arguments: '--configuration $(buildConfiguration) --no-restore'
 
+- script: |
+    sudo apt-get update
+    sudo apt-get install -y docker.io
+    sudo usermod -aG docker $(whoami)
+    sudo systemctl start docker
+  displayName: 'Install Docker Engine (Linux)'
+  condition: eq(variables['osName'], 'Linux')
+
+- script: |
+    brew install colima
+    colima start --runtime docker
+  displayName: 'Install Colima (macOS)'
+  condition: eq(variables['osName'], 'macOS')
+
+- script: |
+    choco install docker-desktop -y
+    Start-Process "C:\Program Files\Docker\Docker\Docker Desktop.exe"
+    for ($i = 1; $i -le 60; $i++) {
+      if (Test-Path "\\.\pipe\docker_engine") {
+        break
+      }
+      Start-Sleep -Seconds 1
+    }
+  displayName: 'Install Docker Desktop (Windows)'
+  condition: eq(variables['osName'], 'Windows')
+
 - task: DotNetCoreCLI@2
   displayName: 'Run tests on $(osName)'
   inputs:

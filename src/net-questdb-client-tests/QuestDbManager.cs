@@ -40,8 +40,8 @@ public class QuestDbManager : IAsyncDisposable
     {
         await StopAsync();
 
-        // Clean up Docker volume if one was used (only if using Docker)
-        if (!string.IsNullOrEmpty(_volumeName) && !IsNativeInstance)
+        // Clean up Docker volume if one was used
+        if (!string.IsNullOrEmpty(_volumeName))
         {
             await RunDockerCommandAsync($"volume rm {_volumeName}");
         }
@@ -58,21 +58,10 @@ public class QuestDbManager : IAsyncDisposable
     }
 
     /// <summary>
-    ///     Ensures QuestDB is available (either native or Docker).
+    ///     Ensures Docker is available.
     /// </summary>
     public async Task EnsureDockerAvailableAsync()
     {
-        // First, check if QuestDB is already running natively
-        Console.WriteLine("Checking for native QuestDB instance...");
-        if (await IsQuestDbNativelyAvailableAsync())
-        {
-            Console.WriteLine("QuestDB is running natively");
-            return;
-        }
-
-        Console.WriteLine("Native QuestDB not detected, falling back to Docker...");
-
-        // Fall back to Docker if native QuestDB is not available
         try
         {
             var (exitCode, output) = await RunDockerCommandAsync("--version");
@@ -86,36 +75,9 @@ public class QuestDbManager : IAsyncDisposable
         catch (Exception ex)
         {
             throw new InvalidOperationException(
-                "QuestDB must be running (natively or via Docker). " +
-                "Please install QuestDB from https://questdb.io/download/ or Docker from https://docs.docker.com/get-docker/ " +
-                $"(Error: {ex.Message})",
+                "Docker is required to run integration tests. " +
+                "Please install Docker from https://docs.docker.com/get-docker/",
                 ex);
-        }
-    }
-
-    /// <summary>
-    ///     Checks if QuestDB is already running natively (not in Docker).
-    /// </summary>
-    private async Task<bool> IsQuestDbNativelyAvailableAsync()
-    {
-        Console.WriteLine($"Attempting to connect to native QuestDB at {GetHttpEndpoint()}/settings");
-        try
-        {
-            // Try to connect with a reasonable timeout
-            using var cts = new System.Threading.CancellationTokenSource(TimeSpan.FromSeconds(60));
-            var response = await _httpClient.GetAsync($"{GetHttpEndpoint()}/settings", System.Net.Http.HttpCompletionOption.ResponseHeadersRead, cts.Token);
-            Console.WriteLine($"Native QuestDB health check returned status: {response.StatusCode}");
-            return response.IsSuccessStatusCode;
-        }
-        catch (TaskCanceledException ex)
-        {
-            Console.WriteLine($"Native QuestDB check timed out after 60 seconds: {ex.Message}");
-            return false;
-        }
-        catch (Exception ex)
-        {
-            Console.WriteLine($"Native QuestDB check failed with exception: {ex.GetType().Name}: {ex.Message}");
-            return false;
         }
     }
 
@@ -156,7 +118,7 @@ public class QuestDbManager : IAsyncDisposable
     }
 
     /// <summary>
-    ///     Starts the QuestDB container or connects to native instance.
+    ///     Starts the QuestDB container.
     /// </summary>
     public async Task StartAsync()
     {
@@ -167,18 +129,6 @@ public class QuestDbManager : IAsyncDisposable
         }
 
         await EnsureDockerAvailableAsync();
-
-        // Check if QuestDB is already running natively
-        if (await IsQuestDbNativelyAvailableAsync())
-        {
-            Console.WriteLine("Connecting to native QuestDB instance");
-            IsRunning = true;
-            // No need to wait, it's already running
-            return;
-        }
-
-        // Use Docker to start QuestDB
-        Console.WriteLine("Starting QuestDB via Docker container");
 
         // Clean up any existing containers using these ports
         await CleanupExistingContainersAsync();
@@ -219,7 +169,7 @@ public class QuestDbManager : IAsyncDisposable
     }
 
     /// <summary>
-    ///     Stops the QuestDB container (only if running in Docker).
+    ///     Stops the QuestDB container.
     /// </summary>
     public async Task StopAsync()
     {
@@ -243,11 +193,6 @@ public class QuestDbManager : IAsyncDisposable
         _containerId = null;
         Console.WriteLine("QuestDB container stopped");
     }
-
-    /// <summary>
-    ///     Checks if QuestDB is running as a native instance (not Docker).
-    /// </summary>
-    public bool IsNativeInstance => string.IsNullOrEmpty(_containerId) && IsRunning;
 
     /// <summary>
     ///     Gets the HTTP endpoint for QuestDB.

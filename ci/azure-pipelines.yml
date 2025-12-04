@@ -91,89 +91,48 @@ steps:
   condition: eq(variables['osName'], 'Linux')
 
 - script: |
-    brew install questdb
-    questdb start
-    # Wait for QuestDB to be ready
-    for i in {1..60}; do
-      if curl -s http://localhost:9000/settings > /dev/null 2>&1; then
-        echo "QuestDB is ready"
+    brew install colima docker
+    colima start --runtime docker
+    # Wait for Docker to be ready
+    for i in {1..120}; do
+      if docker ps >/dev/null 2>&1; then
+        echo "Docker is ready"
         break
       fi
-      echo "Waiting for QuestDB... ($i/60)"
+      echo "Waiting for Docker... ($i/120)"
       sleep 1
     done
-  displayName: 'Install QuestDB via Homebrew (macOS)'
+  displayName: 'Install Docker via Colima (macOS)'
   condition: eq(variables['osName'], 'macOS')
 
 - pwsh: |
-    Write-Host "Downloading QuestDB..."
-    $downloadUrl = "https://github.com/questdb/questdb/releases/download/9.2.2/questdb-9.2.2-rt-windows-x86-64.tar.gz"
-    Invoke-WebRequest -Uri $downloadUrl -OutFile questdb.tar.gz
+    Write-Host "Installing Docker Desktop..."
+    choco install docker-desktop -y --no-progress
 
-    Write-Host "Extracting QuestDB..."
-    tar -xzf questdb.tar.gz
+    Write-Host "Waiting for Docker Desktop to be installed..."
+    Start-Sleep -Seconds 10
 
-    Write-Host "Finding questdb.exe..."
-    $questdbExe = Get-ChildItem -Recurse -Filter "questdb.exe" | Select-Object -First 1
-    if (-not $questdbExe) {
-      Write-Host "ERROR: questdb.exe not found after extraction"
-      Get-ChildItem -Recurse
-      exit 1
-    }
+    Write-Host "Starting Docker Desktop..."
+    Start-Process "C:\Program Files\Docker\Docker\Docker Desktop.exe"
 
-    Write-Host "Found questdb.exe at: $($questdbExe.FullName)"
-    $questdbDir = $questdbExe.Directory
-
-    Write-Host "Starting QuestDB from directory: $questdbDir"
-    Push-Location $questdbDir
-    try {
-      # Run questdb.exe directly and capture any errors
-      Write-Host "Executing: $($questdbExe.FullName) start"
-      $process = Start-Process -FilePath $questdbExe.FullName -ArgumentList "start" -PassThru -NoNewWindow
-      Write-Host "Process started with PID: $($process.Id)"
-      Start-Sleep -Seconds 5
-
-      # Check if process is still running
-      if ($process.HasExited) {
-        Write-Host "WARNING: QuestDB process exited immediately with exit code: $($process.ExitCode)"
-      } else {
-        Write-Host "QuestDB process is running"
-      }
-    } finally {
-      Pop-Location
-    }
-
-    # Wait for QuestDB to be ready (up to 120 seconds)
-    Write-Host "Waiting for QuestDB to be ready..."
-    $maxAttempts = 120
-    $ready = $false
+    Write-Host "Waiting for Docker daemon..."
+    $maxAttempts = 300
     for ($i = 1; $i -le $maxAttempts; $i++) {
       try {
-        $response = Invoke-WebRequest -Uri "http://localhost:9000/settings" -UseBasicParsing -ErrorAction SilentlyContinue
-        if ($response.StatusCode -eq 200) {
-          Write-Host "QuestDB is ready after $i seconds"
-          $ready = $true
+        $output = docker ps 2>&1
+        if ($LASTEXITCODE -eq 0) {
+          Write-Host "Docker is ready"
           break
         }
       } catch {
-        # Silently continue
+        # Continue
       }
-      if ($i % 30 -eq 0) {
-        Write-Host "Still waiting... ($i/$maxAttempts seconds)"
+      if ($i % 60 -eq 0) {
+        Write-Host "Still waiting for Docker... ($i/$maxAttempts seconds)"
       }
       Start-Sleep -Seconds 1
     }
-
-    if (-not $ready) {
-      Write-Host "WARNING: QuestDB did not respond to health check"
-      $processes = Get-Process -Name questdb -ErrorAction SilentlyContinue
-      if ($processes) {
-        Write-Host "Found QuestDB processes: $($processes | ForEach-Object { $_.Id })"
-      } else {
-        Write-Host "No QuestDB processes found"
-      }
-    }
-  displayName: 'Install and Start QuestDB (Windows)'
+  displayName: 'Install Docker Desktop (Windows)'
   condition: eq(variables['osName'], 'Windows')
 
 - task: DotNetCoreCLI@2

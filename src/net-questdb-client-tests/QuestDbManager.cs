@@ -280,8 +280,11 @@ public class QuestDbManager : IAsyncDisposable
             throw new InvalidOperationException("Failed to start docker command");
         }
 
-        var output = await process.StandardOutput.ReadToEndAsync();
-        var error = await process.StandardError.ReadToEndAsync();
+        var outputTask = process.StandardOutput.ReadToEndAsync();
+        var errorTask = process.StandardError.ReadToEndAsync();
+        await Task.WhenAll(outputTask, errorTask);
+        var output = await outputTask;
+        var error = await errorTask;
         await process.WaitForExitAsync();
 
         return (process.ExitCode, output + error);

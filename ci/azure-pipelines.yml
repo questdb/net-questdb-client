@@ -113,27 +113,46 @@ steps:
     Write-Host "Extracting QuestDB..."
     tar -xzf questdb.tar.gz
 
-    Write-Host "Listing extracted contents..."
-    Get-ChildItem
-
-    Write-Host "Starting QuestDB..."
+    Write-Host "Finding questdb.exe..."
     $questdbExe = Get-ChildItem -Recurse -Filter "questdb.exe" | Select-Object -First 1
-    if ($questdbExe) {
-      Write-Host "Found questdb.exe at: $($questdbExe.FullName)"
-      & $questdbExe.FullName start
-    } else {
+    if (-not $questdbExe) {
       Write-Host "ERROR: questdb.exe not found after extraction"
+      Get-ChildItem -Recurse
       exit 1
     }
 
+    Write-Host "Found questdb.exe at: $($questdbExe.FullName)"
+    $questdbDir = $questdbExe.Directory
+
+    Write-Host "Starting QuestDB from directory: $questdbDir"
+    Push-Location $questdbDir
+    try {
+      # Run questdb.exe directly and capture any errors
+      Write-Host "Executing: $($questdbExe.FullName) start"
+      $process = Start-Process -FilePath $questdbExe.FullName -ArgumentList "start" -PassThru -NoNewWindow
+      Write-Host "Process started with PID: $($process.Id)"
+      Start-Sleep -Seconds 5
+
+      # Check if process is still running
+      if ($process.HasExited) {
+        Write-Host "WARNING: QuestDB process exited immediately with exit code: $($process.ExitCode)"
+      } else {
+        Write-Host "QuestDB process is running"
+      }
+    } finally {
+      Pop-Location
+    }
+
     # Wait for QuestDB to be ready (up to 120 seconds)
-    Write-Host "Waiting for QuestDB to start..."
+    Write-Host "Waiting for QuestDB to be ready..."
     $maxAttempts = 120
+    $ready = $false
     for ($i = 1; $i -le $maxAttempts; $i++) {
       try {
         $response = Invoke-WebRequest -Uri "http://localhost:9000/settings" -UseBasicParsing -ErrorAction SilentlyContinue
         if ($response.StatusCode -eq 200) {
-          Write-Host "QuestDB is ready"
+          Write-Host "QuestDB is ready after $i seconds"
+          $ready = $true
           break
         }
       } catch {
@@ -143,6 +162,16 @@ steps:
         Write-Host "Still waiting... ($i/$maxAttempts seconds)"
       }
       Start-Sleep -Seconds 1
+    }
+
+    if (-not $ready) {
+      Write-Host "WARNING: QuestDB did not respond to health check"
+      $processes = Get-Process -Name questdb -ErrorAction SilentlyContinue
+      if ($processes) {
+        Write-Host "Found QuestDB processes: $($processes | ForEach-Object { $_.Id })"
+      } else {
+        Write-Host "No QuestDB processes found"
+      }
     }
   displayName: 'Install and Start QuestDB (Windows)'
   condition: eq(variables['osName'], 'Windows')

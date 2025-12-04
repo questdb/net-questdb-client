@@ -63,11 +63,14 @@ public class QuestDbManager : IAsyncDisposable
     public async Task EnsureDockerAvailableAsync()
     {
         // First, check if QuestDB is already running natively
+        Console.WriteLine("Checking for native QuestDB instance...");
         if (await IsQuestDbNativelyAvailableAsync())
         {
             Console.WriteLine("QuestDB is running natively");
             return;
         }
+
+        Console.WriteLine("Native QuestDB not detected, falling back to Docker...");
 
         // Fall back to Docker if native QuestDB is not available
         try
@@ -84,7 +87,8 @@ public class QuestDbManager : IAsyncDisposable
         {
             throw new InvalidOperationException(
                 "QuestDB must be running (natively or via Docker). " +
-                "Please install QuestDB from https://questdb.io/download/ or Docker from https://docs.docker.com/get-docker/",
+                "Please install QuestDB from https://questdb.io/download/ or Docker from https://docs.docker.com/get-docker/ " +
+                $"(Error: {ex.Message})",
                 ex);
         }
     }
@@ -94,16 +98,23 @@ public class QuestDbManager : IAsyncDisposable
     /// </summary>
     private async Task<bool> IsQuestDbNativelyAvailableAsync()
     {
+        Console.WriteLine($"Attempting to connect to native QuestDB at {GetHttpEndpoint()}/settings");
         try
         {
-            // Try with a longer timeout for native instances that may be slower to initialize
-            using var cts = new System.Threading.CancellationTokenSource(TimeSpan.FromSeconds(30));
+            // Try to connect with a reasonable timeout
+            using var cts = new System.Threading.CancellationTokenSource(TimeSpan.FromSeconds(60));
             var response = await _httpClient.GetAsync($"{GetHttpEndpoint()}/settings", System.Net.Http.HttpCompletionOption.ResponseHeadersRead, cts.Token);
+            Console.WriteLine($"Native QuestDB health check returned status: {response.StatusCode}");
             return response.IsSuccessStatusCode;
+        }
+        catch (TaskCanceledException ex)
+        {
+            Console.WriteLine($"Native QuestDB check timed out after 60 seconds: {ex.Message}");
+            return false;
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"Native QuestDB availability check failed: {ex.Message}");
+            Console.WriteLine($"Native QuestDB check failed with exception: {ex.GetType().Name}: {ex.Message}");
             return false;
         }
     }

@@ -90,80 +90,14 @@ steps:
   displayName: 'Install QuestDB via systemd (Linux)'
   condition: eq(variables['osName'], 'Linux')
 
-- task: Docker@2
-  displayName: 'Ensure Docker is available (macOS & Windows)'
-  condition: or(eq(variables['osName'], 'macOS'), eq(variables['osName'], 'Windows'))
-  inputs:
-    command: 'version'
-
-- script: |
-    echo "Waiting for Docker to be fully ready on macOS..."
-    maxAttempts=120
-    for i in $(seq 1 $maxAttempts); do
-      if docker ps >/dev/null 2>&1; then
-        echo "Docker is ready to run containers"
-        exit 0
-      fi
-      echo "Waiting for Docker... ($i/$maxAttempts)"
-      sleep 1
-    done
-    echo "ERROR: Docker did not become ready after $maxAttempts seconds"
-    exit 1
-  displayName: 'Wait for Docker to be ready (macOS)'
-  condition: eq(variables['osName'], 'macOS')
-
-- pwsh: |
-    Write-Host "Checking Docker mode on Windows..."
-    $dockerInfo = docker info --format='{{.OSType}}'
-    Write-Host "Current Docker OS type: $dockerInfo"
-
-    if ($dockerInfo -eq "windows") {
-      Write-Host "Docker is in Windows mode, switching to Linux mode..."
-
-      # Get Docker Desktop config path
-      $configPath = "$env:APPDATA\Docker\settings.json"
-
-      if (Test-Path $configPath) {
-        $config = Get-Content $configPath | ConvertFrom-Json
-        $config.WSLDomain = "Ubuntu"
-        $config.UseWindowsContainers = $false
-        $config | ConvertTo-Json | Set-Content $configPath
-
-        Write-Host "Config updated, restarting Docker..."
-        # Kill Docker processes
-        Get-Process "Docker Desktop" -ErrorAction SilentlyContinue | Stop-Process -Force
-        Start-Sleep -Seconds 5
-
-        # Restart Docker Desktop
-        Start-Process "C:\Program Files\Docker\Docker\Docker Desktop.exe"
-        Start-Sleep -Seconds 30
-
-        Write-Host "Waiting for Docker to be ready in Linux mode..."
-        $maxAttempts = 60
-        for ($i = 1; $i -le $maxAttempts; $i++) {
-          try {
-            $mode = docker info --format='{{.OSType}}'
-            if ($mode -eq "linux") {
-              Write-Host "Docker is now in Linux mode"
-              break
-            }
-          } catch {
-            # Continue
-          }
-          Start-Sleep -Seconds 1
-        }
-      }
-    }
-  displayName: 'Switch Docker to Linux mode (Windows)'
-  condition: eq(variables['osName'], 'Windows')
-
 - task: DotNetCoreCLI@2
-  displayName: 'Run tests on $(osName)'
+  displayName: 'Run integration tests on $(osName)'
   inputs:
     command: 'test'
     projects: 'src/net-questdb-client-tests/net-questdb-client-tests.csproj'
     arguments: '--configuration $(buildConfiguration) --framework net9.0 --no-build --verbosity normal --logger trx --collect:"XPlat Code Coverage"'
     publishTestResults: true
+  condition: eq(variables['osName'], 'Linux')
 
 - task: PublishCodeCoverageResults@2
   displayName: 'Publish code coverage'

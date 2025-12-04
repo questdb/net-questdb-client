@@ -106,21 +106,15 @@ steps:
   condition: eq(variables['osName'], 'macOS')
 
 - pwsh: |
-    # Download and install QuestDB on Windows
     Write-Host "Downloading QuestDB..."
-    $url = "https://questdb.io/api/questdb-latest-release"
-    $response = Invoke-WebRequest -Uri $url -UseBasicParsing
-    $downloadUrl = $response | Select-Object -ExpandProperty Content | ConvertFrom-Json | Select-Object -ExpandProperty windows_exe
+    $downloadUrl = "https://github.com/questdb/questdb/releases/download/9.2.2/questdb-9.2.2-rt-windows-x86-64.tar.gz"
+    Invoke-WebRequest -Uri $downloadUrl -OutFile questdb.tar.gz
 
-    $questDbPath = "C:\questdb"
-    New-Item -ItemType Directory -Path $questDbPath -Force | Out-Null
-
-    $exePath = "$questDbPath\questdb.exe"
-    Write-Host "Downloading from: $downloadUrl"
-    Invoke-WebRequest -Uri $downloadUrl -OutFile $exePath -UseBasicParsing
+    Write-Host "Extracting QuestDB..."
+    tar -xzf questdb.tar.gz
 
     Write-Host "Starting QuestDB..."
-    & $exePath start
+    & .\questdb\bin\questdb.exe start
 
     # Wait for QuestDB to be ready (up to 120 seconds)
     Write-Host "Waiting for QuestDB to start..."
@@ -140,7 +134,7 @@ steps:
       }
       Start-Sleep -Seconds 1
     }
-  displayName: 'Install QuestDB via Binary (Windows)'
+  displayName: 'Install and Start QuestDB (Windows)'
   condition: eq(variables['osName'], 'Windows')
 
 - task: DotNetCoreCLI@2

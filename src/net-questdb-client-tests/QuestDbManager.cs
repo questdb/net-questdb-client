@@ -65,11 +65,25 @@ public class QuestDbManager : IAsyncDisposable
         // First, check if QuestDB is already running natively
         if (await IsQuestDbNativelyAvailableAsync())
         {
-            Console.WriteLine("QuestDB is running natively (not using Docker)");
+            Console.WriteLine("QuestDB is running natively");
             return;
         }
 
-        // Fall back to Docker if native QuestDB is not available
+        // For CI environments, fail if native QuestDB is not available
+        // (CI pipelines explicitly start native QuestDB instances)
+        var isCI = !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("CI")) ||
+                   !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("GITHUB_ACTIONS")) ||
+                   !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("SYSTEM_TEAMFOUNDATIONCOLLECTIONURI"));
+
+        if (isCI)
+        {
+            throw new InvalidOperationException(
+                "QuestDB is not running. " +
+                "CI pipeline should have started QuestDB before running tests. " +
+                "Please ensure QuestDB was started correctly.");
+        }
+
+        // Fall back to Docker for local development
         try
         {
             var (exitCode, output) = await RunDockerCommandAsync("--version");
@@ -96,11 +110,14 @@ public class QuestDbManager : IAsyncDisposable
     {
         try
         {
-            var response = await _httpClient.GetAsync($"{GetHttpEndpoint()}/settings");
+            // Add a longer timeout for the initial health check
+            using var cts = new System.Threading.CancellationTokenSource(TimeSpan.FromSeconds(10));
+            var response = await _httpClient.GetAsync($"{GetHttpEndpoint()}/settings", System.Net.Http.HttpCompletionOption.ResponseHeadersRead, cts.Token);
             return response.IsSuccessStatusCode;
         }
-        catch
+        catch (Exception ex)
         {
+            Console.WriteLine($"Native QuestDB check failed: {ex.Message}");
             return false;
         }
     }

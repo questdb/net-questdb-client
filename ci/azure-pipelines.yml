@@ -90,23 +90,43 @@ steps:
 
 - pwsh: |
     choco install docker-desktop -y
+    refreshenv
+
     $dockerPath = "C:\Program Files\Docker\Docker\Docker Desktop.exe"
     if (Test-Path $dockerPath) {
+      Write-Host "Starting Docker Desktop..."
       Start-Process $dockerPath
-      # Wait for Docker daemon to be ready (up to 5 minutes)
-      $maxAttempts = 300
+
+      # Wait for Docker daemon and WSL2 backend to be fully ready
+      # This can take several minutes on first run
+      Write-Host "Waiting for Docker daemon (WSL2 backend)..."
+      $maxAttempts = 600
+      $ready = $false
+
       for ($i = 1; $i -le $maxAttempts; $i++) {
         try {
-          $result = docker ps 2>&1
+          # Try to pull a small image to verify full daemon readiness
+          $null = & docker pull hello-world:latest 2>&1
           if ($LASTEXITCODE -eq 0) {
-            Write-Host "Docker daemon is ready"
+            Write-Host "Docker daemon is ready (pulled hello-world successfully)"
+            $ready = $true
             break
           }
         } catch {
           # Silently continue
         }
-        Write-Host "Waiting for Docker daemon... ($i/$maxAttempts)"
+
+        if ($i % 60 -eq 0) {
+          Write-Host "Still waiting... ($i seconds elapsed)"
+        }
+
         Start-Sleep -Seconds 1
+      }
+
+      if ($ready) {
+        Write-Host "Docker initialization complete"
+      } else {
+        Write-Host "Warning: Docker may not be fully initialized after 10 minutes"
       }
     }
   displayName: 'Install Docker Desktop (Windows)'

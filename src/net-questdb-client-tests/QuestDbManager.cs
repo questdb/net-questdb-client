@@ -215,7 +215,7 @@ public class QuestDbManager : IAsyncDisposable
     /// </summary>
     private async Task WaitForQuestDbAsync()
     {
-        const int maxAttempts = 30;
+        const int maxAttempts = 120; // 2 minutes for CI environments with Colima
         var       attempts    = 0;
 
         while (attempts < maxAttempts)
@@ -225,7 +225,7 @@ public class QuestDbManager : IAsyncDisposable
                 var response = await _httpClient.GetAsync($"{GetHttpEndpoint()}/settings");
                 if (response.IsSuccessStatusCode)
                 {
-                    Console.WriteLine("QuestDB is ready");
+                    Console.WriteLine($"QuestDB is ready (after {attempts} seconds)");
                     return;
                 }
             }
@@ -236,6 +236,11 @@ public class QuestDbManager : IAsyncDisposable
 
             await Task.Delay(1000);
             attempts++;
+
+            if (attempts % 30 == 0)
+            {
+                Console.WriteLine($"Still waiting for QuestDB... ({attempts}/{maxAttempts} seconds)");
+            }
         }
 
         throw new TimeoutException($"QuestDB failed to start within {maxAttempts} seconds");

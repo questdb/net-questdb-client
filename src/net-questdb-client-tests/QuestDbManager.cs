@@ -255,11 +255,15 @@ public class QuestDbManager : IAsyncDisposable
         var containerNames = output.Split('\n', StringSplitOptions.RemoveEmptyEntries);
 
         // Stop and remove any QuestDB test containers
-        foreach (var name in containerNames)
+        foreach (var rawName in containerNames)
         {
+            // Trim the name to remove trailing \r or whitespace
+            var name = rawName.Trim();
+
             // Look for containers with matching port pattern: questdb-test-{port}-{httpPort}-*
-            if (name.Contains("questdb-test-") &&
-                (name.Contains($"-{_port}-{_httpPort}-") || name.Contains($"-{_httpPort}-{_port}-")))
+            if (name.Contains(ContainerNamePrefix, StringComparison.Ordinal) &&
+                (name.Contains($"-{_port}-{_httpPort}-", StringComparison.Ordinal) ||
+                 name.Contains($"-{_httpPort}-{_port}-", StringComparison.Ordinal)))
             {
                 Console.WriteLine($"Cleaning up existing container: {name}");
 

@@ -50,6 +50,12 @@ internal class HttpSender : AbstractSender
     /// </summary>
     private readonly Dictionary<string, HttpClient> _clientCache = new();
 
+    /// <summary>
+    ///     Cache of <see cref="SocketsHttpHandler" /> instances, one per address.
+    ///     Each address has its own handler to avoid TLS TargetHost conflicts when rotating addresses.
+    /// </summary>
+    private readonly Dictionary<string, SocketsHttpHandler> _handlerCache = new();
+
     private readonly Func<HttpRequestMessage> _sendRequestFactory;
     private readonly Func<HttpRequestMessage> _settingRequestFactory;
 
@@ -62,11 +68,6 @@ internal class HttpSender : AbstractSender
     ///     Current <see cref="HttpClient" /> reference from the cache.
     /// </summary>
     private HttpClient _client = null!;
-
-    /// <summary>
-    ///     Instance specific <see cref="SocketsHttpHandler" /> for use constructing <see cref="_client" />.
-    /// </summary>
-    private SocketsHttpHandler _handler = null!;
 
     /// <summary>
     ///     Initializes a new HttpSender configured according to the provided options.
@@ -106,11 +107,13 @@ internal class HttpSender : AbstractSender
     ///     mutually supported protocol up to V3, falling back to V1 on errors or unexpected responses.
     ///     - Initializes the Buffer with init_buf_size, max_name_len, max_buf_size, and the chosen protocol version.
     /// </remarks>
-    private void Build()
+    /// <summary>
+    ///     Creates a configured <see cref="SocketsHttpHandler" /> for a specific host.
+    ///     Each handler is isolated to prevent TLS TargetHost conflicts between different addresses.
+    /// </summary>
+    private SocketsHttpHandler CreateHandler(string host)
     {
-        _addressProvider = new AddressProvider(Options.addresses);
-
-        _handler = new SocketsHttpHandler
+        var handler = new SocketsHttpHandler
         {
             PooledConnectionIdleTimeout = Options.pool_timeout,
             MaxConnectionsPerServer     = 1,
@@ -118,16 +121,16 @@ internal class HttpSender : AbstractSender
 
         if (Options.protocol == ProtocolType.https)
         {
-            _handler.SslOptions.TargetHost          = _addressProvider.CurrentHost;
-            _handler.SslOptions.EnabledSslProtocols = SslProtocols.Tls12 | SslProtocols.Tls13;
+            handler.SslOptions.TargetHost          = host;
+            handler.SslOptions.EnabledSslProtocols = SslProtocols.Tls12 | SslProtocols.Tls13;
 
             if (Options.tls_verify == TlsVerifyType.unsafe_off)
             {
-                _handler.SslOptions.RemoteCertificateValidationCallback += (_, _, _, _) => true;
+                handler.SslOptions.RemoteCertificateValidationCallback += (_, _, _, _) => true;
             }
             else
             {
-                _handler.SslOptions.RemoteCertificateValidationCallback =
+                handler.SslOptions.RemoteCertificateValidationCallback =
                     (_, certificate, chain, errors) =>
                     {
                         if ((errors & ~SslPolicyErrors.RemoteCertificateChainErrors) != 0)
@@ -148,20 +151,26 @@ internal class HttpSender : AbstractSender
 
             if (!string.IsNullOrEmpty(Options.tls_roots))
             {
-                _handler.SslOptions.ClientCertificates ??= new X509Certificate2Collection();
-                _handler.SslOptions.ClientCertificates.Add(
+                handler.SslOptions.ClientCertificates ??= new X509Certificate2Collection();
+                handler.SslOptions.ClientCertificates.Add(
                     X509Certificate2.CreateFromPemFile(Options.tls_roots!, Options.tls_roots_password));
             }
 
             if (Options.client_cert is not null)
             {
-                _handler.SslOptions.ClientCertificates ??= new X509Certificate2Collection();
-                _handler.SslOptions.ClientCertificates.Add(Options.client_cert);
+                handler.SslOptions.ClientCertificates ??= new X509Certificate2Collection();
+                handler.SslOptions.ClientCertificates.Add(Options.client_cert);
             }
         }
 
-        _handler.ConnectTimeout  = Options.auth_timeout;
-        _handler.PreAuthenticate = true;
+        handler.ConnectTimeout  = Options.auth_timeout;
+        handler.PreAuthenticate = true;
+        return handler;
+    }
+
+    private void Build()
+    {
+        _addressProvider = new AddressProvider(Options.addresses);
 
         // Create and cache the initial client
         _client = GetClientForCurrentAddress();
@@ -217,8 +226,6 @@ internal class HttpSender : AbstractSender
     /// <returns>A configured HttpClient for the given address.</returns>
     private HttpClient CreateClientForAddress(string address)
     {
-        var client = new HttpClient(_handler);
-
         // Determine the port to use
         var port = AddressProvider.ParsePort(address);
         if (port <= 0)
@@ -236,15 +243,18 @@ internal class HttpSender : AbstractSender
                        ? AddressProvider.ParseHost(address).Split("//")[1]
                        : AddressProvider.ParseHost(address);
 
+        // Get or create a handler for this specific address
+        if (!_handlerCache.TryGetValue(address, out var handler))
+        {
+            handler = CreateHandler(host);
+            _handlerCache[address] = handler;
+        }
+
+        var client = new HttpClient(handler);
+
         var uri = new UriBuilder(Options.protocol.ToString(), host, port);
         client.BaseAddress = uri.Uri;
         client.Timeout     = Timeout.InfiniteTimeSpan;
-
-        // Update handler's TLS target host if using HTTPS and host changed
-        if (Options.protocol == ProtocolType.https && _handler.SslOptions.TargetHost != host)
-        {
-            _handler.SslOptions.TargetHost = host;
-        }
 
         // Apply authentication headers
         if (!string.IsNullOrEmpty(Options.username) && !string.IsNullOrEmpty(Options.password))
@@ -282,7 +292,7 @@ internal class HttpSender : AbstractSender
     }
 
     /// <summary>
-    ///     Cleans up all cached HttpClient instances except the one for the current address.
+    ///     Cleans up all cached HttpClient and SocketsHttpHandler instances except the ones for the current address.
     ///     Called when a successful response is received to avoid holding unnecessary resources.
     /// </summary>
     private void CleanupUnusedClients()
@@ -303,6 +313,12 @@ internal class HttpSender : AbstractSender
             {
                 client.Dispose();
                 _clientCache.Remove(address);
+            }
+
+            if (_handlerCache.TryGetValue(address, out var handler))
+            {
+                handler.Dispose();
+                _handlerCache.Remove(address);
             }
         }
     }
@@ -825,7 +841,13 @@ internal class HttpSender : AbstractSender
 
         _clientCache.Clear();
 
-        _handler.Dispose();
+        // Dispose all cached handlers
+        foreach (var handler in _handlerCache.Values)
+        {
+            handler.Dispose();
+        }
+
+        _handlerCache.Clear();
         Buffer.Clear();
         Buffer.TrimExcessBuffers();
     }

@@ -82,19 +82,23 @@ steps:
   condition: eq(variables['osName'], 'Linux')
 
 - script: |
-    brew install colima
+    brew install docker colima
     colima start --runtime docker
   displayName: 'Install Colima (macOS)'
   condition: eq(variables['osName'], 'macOS')
 
-- script: |
+- pwsh: |
     choco install docker-desktop -y
-    Start-Process "C:\Program Files\Docker\Docker\Docker Desktop.exe"
-    for ($i = 1; $i -le 60; $i++) {
-      if (Test-Path "\\.\pipe\docker_engine") {
-        break
+    $dockerPath = "C:\Program Files\Docker\Docker\Docker Desktop.exe"
+    if (Test-Path $dockerPath) {
+      Start-Process $dockerPath
+      for ($i = 1; $i -le 60; $i++) {
+        if (Test-Path "\\.\pipe\docker_engine") {
+          Write-Host "Docker daemon is ready"
+          break
+        }
+        Start-Sleep -Seconds 1
       }
-      Start-Sleep -Seconds 1
     }
   displayName: 'Install Docker Desktop (Windows)'
   condition: eq(variables['osName'], 'Windows')

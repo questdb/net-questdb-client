@@ -1,45 +1,56 @@
-using System;
 using System.Diagnostics;
-using System.IO;
-using System.Net.Http;
-using System.Threading;
-using System.Threading.Tasks;
 
 namespace QuestDB.Client.Tests;
 
 /// <summary>
-/// Manages QuestDB server lifecycle for integration tests using Docker.
-/// Handles pulling, starting, and stopping QuestDB container instances.
+///     Manages QuestDB server lifecycle for integration tests using Docker.
+///     Handles pulling, starting, and stopping QuestDB container instances.
 /// </summary>
 public class QuestDbManager : IAsyncDisposable
 {
     private const string DockerImage = "questdb/questdb:latest";
     private const string ContainerNamePrefix = "questdb-test-";
+    private readonly string _containerName;
+    private readonly HttpClient _httpClient;
+    private readonly int _httpPort;
 
     private readonly int _port;
-    private readonly int _httpPort;
     private string? _containerId;
-    private readonly HttpClient _httpClient;
-    private readonly string _containerName;
     private string? _volumeName;
 
-    public bool IsRunning { get; private set; }
-
     /// <summary>
-    /// Initializes a new instance of the QuestDbManager.
+    ///     Initializes a new instance of the QuestDbManager.
     /// </summary>
     /// <param name="port">ILP port (default: 9009)</param>
     /// <param name="httpPort">HTTP port (default: 9000)</param>
     public QuestDbManager(int port = 9009, int httpPort = 9000)
     {
-        _port = port;
-        _httpPort = httpPort;
+        _port          = port;
+        _httpPort      = httpPort;
         _containerName = $"{ContainerNamePrefix}{port}-{httpPort}-{Guid.NewGuid().ToString().Substring(0, 8)}";
-        _httpClient = new HttpClient { Timeout = TimeSpan.FromSeconds(5) };
+        _httpClient    = new HttpClient { Timeout = TimeSpan.FromSeconds(5), };
+    }
+
+    public bool IsRunning { get; private set; }
+
+    /// <summary>
+    ///     Cleanup resources.
+    /// </summary>
+    public async ValueTask DisposeAsync()
+    {
+        await StopAsync();
+
+        // Clean up Docker volume if one was used
+        if (!string.IsNullOrEmpty(_volumeName))
+        {
+            await RunDockerCommandAsync($"volume rm {_volumeName}");
+        }
+
+        _httpClient?.Dispose();
     }
 
     /// <summary>
-    /// Sets a Docker volume to be used for persistent storage.
+    ///     Sets a Docker volume to be used for persistent storage.
     /// </summary>
     public void SetVolume(string volumeName)
     {
@@ -47,7 +58,7 @@ public class QuestDbManager : IAsyncDisposable
     }
 
     /// <summary>
-    /// Ensures Docker is available.
+    ///     Ensures Docker is available.
     /// </summary>
     public async Task EnsureDockerAvailableAsync()
     {
@@ -58,6 +69,7 @@ public class QuestDbManager : IAsyncDisposable
             {
                 throw new InvalidOperationException("Docker is not available or not working properly");
             }
+
             Console.WriteLine($"Docker is available: {output.Trim()}");
         }
         catch (Exception ex)
@@ -70,7 +82,7 @@ public class QuestDbManager : IAsyncDisposable
     }
 
     /// <summary>
-    /// Ensures QuestDB Docker image is available (uses local if exists, otherwise pulls latest).
+    ///     Ensures QuestDB Docker image is available (uses local if exists, otherwise pulls latest).
     /// </summary>
     public async Task PullImageAsync()
     {
@@ -87,11 +99,12 @@ public class QuestDbManager : IAsyncDisposable
         {
             throw new InvalidOperationException($"Failed to pull Docker image: {output}");
         }
+
         Console.WriteLine("Docker image pulled successfully");
     }
 
     /// <summary>
-    /// Checks if the QuestDB Docker image exists locally.
+    ///     Checks if the QuestDB Docker image exists locally.
     /// </summary>
     private async Task<bool> ImageExistsAsync()
     {
@@ -105,7 +118,7 @@ public class QuestDbManager : IAsyncDisposable
     }
 
     /// <summary>
-    /// Starts the QuestDB container.
+    ///     Starts the QuestDB container.
     /// </summary>
     public async Task StartAsync()
     {
@@ -131,8 +144,8 @@ public class QuestDbManager : IAsyncDisposable
         // --name: container name
         // -v: volume mount (if specified)
         var volumeArg = string.IsNullOrEmpty(_volumeName)
-            ? string.Empty
-            : $"-v {_volumeName}:/var/lib/questdb ";
+                            ? string.Empty
+                            : $"-v {_volumeName}:/var/lib/questdb ";
 
         var runArgs = $"run -d " +
                       $"-p {_httpPort}:9000 " +
@@ -156,7 +169,7 @@ public class QuestDbManager : IAsyncDisposable
     }
 
     /// <summary>
-    /// Stops the QuestDB container.
+    ///     Stops the QuestDB container.
     /// </summary>
     public async Task StopAsync()
     {
@@ -176,28 +189,34 @@ public class QuestDbManager : IAsyncDisposable
             await RunDockerCommandAsync($"rm -f {_containerName}");
         }
 
-        IsRunning = false;
+        IsRunning    = false;
         _containerId = null;
         Console.WriteLine("QuestDB container stopped");
     }
 
     /// <summary>
-    /// Gets the HTTP endpoint for QuestDB.
+    ///     Gets the HTTP endpoint for QuestDB.
     /// </summary>
-    public string GetHttpEndpoint() => $"http://localhost:{_httpPort}";
+    public string GetHttpEndpoint()
+    {
+        return $"http://localhost:{_httpPort}";
+    }
 
     /// <summary>
-    /// Gets the ILP endpoint for QuestDB.
+    ///     Gets the ILP endpoint for QuestDB.
     /// </summary>
-    public string GetIlpEndpoint() => $"localhost:{_port}";
+    public string GetIlpEndpoint()
+    {
+        return $"localhost:{_port}";
+    }
 
     /// <summary>
-    /// Waits for QuestDB to be ready.
+    ///     Waits for QuestDB to be ready.
     /// </summary>
     private async Task WaitForQuestDbAsync()
     {
         const int maxAttempts = 30;
-        var attempts = 0;
+        var       attempts    = 0;
 
         while (attempts < maxAttempts)
         {
@@ -222,15 +241,6 @@ public class QuestDbManager : IAsyncDisposable
         throw new TimeoutException($"QuestDB failed to start within {maxAttempts} seconds");
     }
 
-    /// <summary>
-    /// Cleanup resources.
-    /// </summary>
-    public async ValueTask DisposeAsync()
-    {
-        await StopAsync();
-        _httpClient?.Dispose();
-    }
-
     private async Task CleanupExistingContainersAsync()
     {
         Console.WriteLine($"Checking for existing containers on ports {_httpPort}/{_port}...");
@@ -248,7 +258,7 @@ public class QuestDbManager : IAsyncDisposable
         foreach (var name in containerNames)
         {
             // Look for containers with matching port pattern: questdb-test-{port}-{httpPort}-*
-            if (name.Contains($"questdb-test-") &&
+            if (name.Contains("questdb-test-") &&
                 (name.Contains($"-{_port}-{_httpPort}-") || name.Contains($"-{_httpPort}-{_port}-")))
             {
                 Console.WriteLine($"Cleaning up existing container: {name}");
@@ -266,12 +276,12 @@ public class QuestDbManager : IAsyncDisposable
     {
         var startInfo = new ProcessStartInfo
         {
-            FileName = "docker",
-            Arguments = arguments,
-            UseShellExecute = false,
+            FileName               = "docker",
+            Arguments              = arguments,
+            UseShellExecute        = false,
             RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            CreateNoWindow = true
+            RedirectStandardError  = true,
+            CreateNoWindow         = true,
         };
 
         var process = Process.Start(startInfo);
@@ -281,10 +291,10 @@ public class QuestDbManager : IAsyncDisposable
         }
 
         var outputTask = process.StandardOutput.ReadToEndAsync();
-        var errorTask = process.StandardError.ReadToEndAsync();
+        var errorTask  = process.StandardError.ReadToEndAsync();
         await Task.WhenAll(outputTask, errorTask);
         var output = await outputTask;
-        var error = await errorTask;
+        var error  = await errorTask;
         await process.WaitForExitAsync();
 
         return (process.ExitCode, output + error);

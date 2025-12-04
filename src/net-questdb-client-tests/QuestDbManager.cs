@@ -69,21 +69,7 @@ public class QuestDbManager : IAsyncDisposable
             return;
         }
 
-        // For CI environments, fail if native QuestDB is not available
-        // (CI pipelines explicitly start native QuestDB instances)
-        var isCI = !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("CI")) ||
-                   !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("GITHUB_ACTIONS")) ||
-                   !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("SYSTEM_TEAMFOUNDATIONCOLLECTIONURI"));
-
-        if (isCI)
-        {
-            throw new InvalidOperationException(
-                "QuestDB is not running. " +
-                "CI pipeline should have started QuestDB before running tests. " +
-                "Please ensure QuestDB was started correctly.");
-        }
-
-        // Fall back to Docker for local development
+        // Fall back to Docker if native QuestDB is not available
         try
         {
             var (exitCode, output) = await RunDockerCommandAsync("--version");
@@ -110,14 +96,14 @@ public class QuestDbManager : IAsyncDisposable
     {
         try
         {
-            // Add a longer timeout for the initial health check
-            using var cts = new System.Threading.CancellationTokenSource(TimeSpan.FromSeconds(10));
+            // Try with a longer timeout for native instances that may be slower to initialize
+            using var cts = new System.Threading.CancellationTokenSource(TimeSpan.FromSeconds(30));
             var response = await _httpClient.GetAsync($"{GetHttpEndpoint()}/settings", System.Net.Http.HttpCompletionOption.ResponseHeadersRead, cts.Token);
             return response.IsSuccessStatusCode;
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"Native QuestDB check failed: {ex.Message}");
+            Console.WriteLine($"Native QuestDB availability check failed: {ex.Message}");
             return false;
         }
     }

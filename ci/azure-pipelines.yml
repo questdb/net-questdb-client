@@ -113,8 +113,18 @@ steps:
     Write-Host "Extracting QuestDB..."
     tar -xzf questdb.tar.gz
 
+    Write-Host "Listing extracted contents..."
+    Get-ChildItem
+
     Write-Host "Starting QuestDB..."
-    & .\questdb\bin\questdb.exe start
+    $questdbExe = Get-ChildItem -Recurse -Filter "questdb.exe" | Select-Object -First 1
+    if ($questdbExe) {
+      Write-Host "Found questdb.exe at: $($questdbExe.FullName)"
+      & $questdbExe.FullName start
+    } else {
+      Write-Host "ERROR: questdb.exe not found after extraction"
+      exit 1
+    }
 
     # Wait for QuestDB to be ready (up to 120 seconds)
     Write-Host "Waiting for QuestDB to start..."

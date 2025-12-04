@@ -92,24 +92,39 @@ public class AddressProvider
     }
 
     /// <summary>
-    /// Parses the host from an address string (host:port format).
+    /// Parses the host from an address string.
+    /// Supports both regular (host:port) and IPv6 ([ipv6]:port) formats.
+    /// For IPv6 addresses, returns the complete bracketed form including '[' and ']'.
     /// </summary>
     public static string ParseHost(string address)
     {
         if (string.IsNullOrEmpty(address))
             return address;
 
-        var index = address.LastIndexOf(':');
-        if (index > 0)
+        // Handle IPv6 addresses in bracket notation: [ipv6]:port
+        if (address.StartsWith("["))
         {
-            return address.Substring(0, index);
+            var closingBracketIndex = address.IndexOf(']');
+            if (closingBracketIndex > 0)
+            {
+                // Return the entire bracketed section as the host
+                return address.Substring(0, closingBracketIndex + 1);
+            }
+        }
+
+        // For non-bracketed addresses, use the last colon to split host and port
+        var colonIndex = address.LastIndexOf(':');
+        if (colonIndex > 0)
+        {
+            return address.Substring(0, colonIndex);
         }
 
         return address;
     }
 
     /// <summary>
-    /// Parses the port from an address string (host:port format).
+    /// Parses the port from an address string.
+    /// Supports both regular (host:port) and IPv6 ([ipv6]:port) formats.
     /// Returns -1 if no port is specified.
     /// </summary>
     public static int ParsePort(string address)
@@ -117,10 +132,30 @@ public class AddressProvider
         if (string.IsNullOrEmpty(address))
             return -1;
 
-        var index = address.LastIndexOf(':');
-        if (index >= 0 && index < address.Length - 1)
+        // Handle IPv6 addresses in bracket notation: [ipv6]:port
+        if (address.StartsWith("["))
         {
-            if (int.TryParse(address.Substring(index + 1), out var port))
+            var closingBracketIndex = address.IndexOf(']');
+            if (closingBracketIndex > 0 && closingBracketIndex < address.Length - 1)
+            {
+                // Check if there's a colon after the closing bracket
+                if (address[closingBracketIndex + 1] == ':')
+                {
+                    var portString = address.Substring(closingBracketIndex + 2);
+                    if (int.TryParse(portString, out var port))
+                    {
+                        return port;
+                    }
+                }
+            }
+            return -1;
+        }
+
+        // For non-bracketed addresses, use the last colon to split host and port
+        var colonIndex = address.LastIndexOf(':');
+        if (colonIndex >= 0 && colonIndex < address.Length - 1)
+        {
+            if (int.TryParse(address.Substring(colonIndex + 1), out var port))
             {
                 return port;
             }

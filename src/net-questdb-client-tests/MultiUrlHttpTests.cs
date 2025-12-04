@@ -306,6 +306,37 @@ public class MultiUrlHttpTests
     }
 
     [Test]
+    public void AddressProvider_IPv6Parsing()
+    {
+        // Test various IPv6 address formats
+
+        // Simple loopback with port
+        var provider1 = new AddressProvider(new[] { "[::1]:9000" });
+        Assert.That(provider1.CurrentHost, Is.EqualTo("[::1]"));
+        Assert.That(provider1.CurrentPort, Is.EqualTo(9000));
+
+        // Full IPv6 address with port
+        var provider2 = new AddressProvider(new[] { "[2001:db8::1]:9000" });
+        Assert.That(provider2.CurrentHost, Is.EqualTo("[2001:db8::1]"));
+        Assert.That(provider2.CurrentPort, Is.EqualTo(9000));
+
+        // IPv6 with many colons
+        var provider3 = new AddressProvider(new[] { "[fe80::1:2:3:4]:8080" });
+        Assert.That(provider3.CurrentHost, Is.EqualTo("[fe80::1:2:3:4]"));
+        Assert.That(provider3.CurrentPort, Is.EqualTo(8080));
+
+        // IPv6 without port (should return -1 for port)
+        var provider4 = new AddressProvider(new[] { "[::1]" });
+        Assert.That(provider4.CurrentHost, Is.EqualTo("[::1]"));
+        Assert.That(provider4.CurrentPort, Is.EqualTo(-1));
+
+        // IPv6 with different port numbers
+        var provider5 = new AddressProvider(new[] { "[::1]:29000" });
+        Assert.That(provider5.CurrentHost, Is.EqualTo("[::1]"));
+        Assert.That(provider5.CurrentPort, Is.EqualTo(29000));
+    }
+
+    [Test]
     public void AddressProvider_SingleAddress()
     {
         // Test AddressProvider with single address

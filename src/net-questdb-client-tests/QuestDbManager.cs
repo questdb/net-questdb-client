@@ -40,8 +40,8 @@ public class QuestDbManager : IAsyncDisposable
     {
         await StopAsync();
 
-        // Clean up Docker volume if one was used
-        if (!string.IsNullOrEmpty(_volumeName))
+        // Clean up Docker volume if one was used (only if using Docker)
+        if (!string.IsNullOrEmpty(_volumeName) && !IsNativeInstance)
         {
             await RunDockerCommandAsync($"volume rm {_volumeName}");
         }
@@ -58,10 +58,18 @@ public class QuestDbManager : IAsyncDisposable
     }
 
     /// <summary>
-    ///     Ensures Docker is available.
+    ///     Ensures QuestDB is available (either native or Docker).
     /// </summary>
     public async Task EnsureDockerAvailableAsync()
     {
+        // First, check if QuestDB is already running natively
+        if (await IsQuestDbNativelyAvailableAsync())
+        {
+            Console.WriteLine("QuestDB is running natively (not using Docker)");
+            return;
+        }
+
+        // Fall back to Docker if native QuestDB is not available
         try
         {
             var (exitCode, output) = await RunDockerCommandAsync("--version");
@@ -75,9 +83,25 @@ public class QuestDbManager : IAsyncDisposable
         catch (Exception ex)
         {
             throw new InvalidOperationException(
-                "Docker is required to run integration tests. " +
-                "Please install Docker from https://docs.docker.com/get-docker/",
+                "QuestDB must be running (natively or via Docker). " +
+                "Please install QuestDB from https://questdb.io/download/ or Docker from https://docs.docker.com/get-docker/",
                 ex);
+        }
+    }
+
+    /// <summary>
+    ///     Checks if QuestDB is already running natively (not in Docker).
+    /// </summary>
+    private async Task<bool> IsQuestDbNativelyAvailableAsync()
+    {
+        try
+        {
+            var response = await _httpClient.GetAsync($"{GetHttpEndpoint()}/settings");
+            return response.IsSuccessStatusCode;
+        }
+        catch
+        {
+            return false;
         }
     }
 
@@ -118,7 +142,7 @@ public class QuestDbManager : IAsyncDisposable
     }
 
     /// <summary>
-    ///     Starts the QuestDB container.
+    ///     Starts the QuestDB container or connects to native instance.
     /// </summary>
     public async Task StartAsync()
     {
@@ -129,6 +153,18 @@ public class QuestDbManager : IAsyncDisposable
         }
 
         await EnsureDockerAvailableAsync();
+
+        // Check if QuestDB is already running natively
+        if (await IsQuestDbNativelyAvailableAsync())
+        {
+            Console.WriteLine("Connecting to native QuestDB instance");
+            IsRunning = true;
+            // No need to wait, it's already running
+            return;
+        }
+
+        // Use Docker to start QuestDB
+        Console.WriteLine("Starting QuestDB via Docker container");
 
         // Clean up any existing containers using these ports
         await CleanupExistingContainersAsync();
@@ -169,7 +205,7 @@ public class QuestDbManager : IAsyncDisposable
     }
 
     /// <summary>
-    ///     Stops the QuestDB container.
+    ///     Stops the QuestDB container (only if running in Docker).
     /// </summary>
     public async Task StopAsync()
     {
@@ -195,6 +231,11 @@ public class QuestDbManager : IAsyncDisposable
     }
 
     /// <summary>
+    ///     Checks if QuestDB is running as a native instance (not Docker).
+    /// </summary>
+    public bool IsNativeInstance => string.IsNullOrEmpty(_containerId) && IsRunning;
+
+    /// <summary>
     ///     Gets the HTTP endpoint for QuestDB.
     /// </summary>
     public string GetHttpEndpoint()
@@ -215,7 +256,7 @@ public class QuestDbManager : IAsyncDisposable
     /// </summary>
     private async Task WaitForQuestDbAsync()
     {
-        const int maxAttempts = 120; // 2 minutes for CI environments with Colima
+        const int maxAttempts = 30;
         var       attempts    = 0;
 
         while (attempts < maxAttempts)
@@ -225,7 +266,7 @@ public class QuestDbManager : IAsyncDisposable
                 var response = await _httpClient.GetAsync($"{GetHttpEndpoint()}/settings");
                 if (response.IsSuccessStatusCode)
                 {
-                    Console.WriteLine($"QuestDB is ready (after {attempts} seconds)");
+                    Console.WriteLine("QuestDB is ready");
                     return;
                 }
             }
@@ -236,11 +277,6 @@ public class QuestDbManager : IAsyncDisposable
 
             await Task.Delay(1000);
             attempts++;
-
-            if (attempts % 30 == 0)
-            {
-                Console.WriteLine($"Still waiting for QuestDB... ({attempts}/{maxAttempts} seconds)");
-            }
         }
 
         throw new TimeoutException($"QuestDB failed to start within {maxAttempts} seconds");

@@ -74,62 +74,73 @@ steps:
     arguments: '--configuration $(buildConfiguration) --no-restore'
 
 - script: |
-    brew install docker colima
-    colima start --runtime docker
-    # Wait for Colima to be ready
+    sudo apt-get update
+    sudo apt-get install -y questdb
+    sudo systemctl start questdb
+    sudo systemctl enable questdb
+    # Wait for QuestDB to be ready
     for i in {1..60}; do
-      if docker ps >/dev/null 2>&1; then
-        echo "Docker daemon is ready"
+      if curl -s http://localhost:9000/settings > /dev/null 2>&1; then
+        echo "QuestDB is ready"
         break
       fi
-      echo "Waiting for Docker daemon... ($i/60)"
+      echo "Waiting for QuestDB... ($i/60)"
       sleep 1
     done
-  displayName: 'Install Colima (macOS)'
+  displayName: 'Install QuestDB via systemd (Linux)'
+  condition: eq(variables['osName'], 'Linux')
+
+- script: |
+    brew install questdb
+    questdb start
+    # Wait for QuestDB to be ready
+    for i in {1..60}; do
+      if curl -s http://localhost:9000/settings > /dev/null 2>&1; then
+        echo "QuestDB is ready"
+        break
+      fi
+      echo "Waiting for QuestDB... ($i/60)"
+      sleep 1
+    done
+  displayName: 'Install QuestDB via Homebrew (macOS)'
   condition: eq(variables['osName'], 'macOS')
 
 - pwsh: |
-    choco install docker-desktop -y
-    refreshenv
+    # Download and install QuestDB on Windows
+    Write-Host "Downloading QuestDB..."
+    $url = "https://questdb.io/api/questdb-latest-release"
+    $response = Invoke-WebRequest -Uri $url -UseBasicParsing
+    $downloadUrl = $response | Select-Object -ExpandProperty Content | ConvertFrom-Json | Select-Object -ExpandProperty windows_exe
 
-    $dockerPath = "C:\Program Files\Docker\Docker\Docker Desktop.exe"
-    if (Test-Path $dockerPath) {
-      Write-Host "Starting Docker Desktop..."
-      Start-Process $dockerPath
+    $questDbPath = "C:\questdb"
+    New-Item -ItemType Directory -Path $questDbPath -Force | Out-Null
 
-      # Wait for Docker daemon and WSL2 backend to be fully ready
-      # This can take several minutes on first run
-      Write-Host "Waiting for Docker daemon (WSL2 backend)..."
-      $maxAttempts = 600
-      $ready = $false
+    $exePath = "$questDbPath\questdb.exe"
+    Write-Host "Downloading from: $downloadUrl"
+    Invoke-WebRequest -Uri $downloadUrl -OutFile $exePath -UseBasicParsing
 
-      for ($i = 1; $i -le $maxAttempts; $i++) {
-        try {
-          # Try to pull a small image to verify full daemon readiness
-          $null = & docker pull hello-world:latest 2>&1
-          if ($LASTEXITCODE -eq 0) {
-            Write-Host "Docker daemon is ready (pulled hello-world successfully)"
-            $ready = $true
-            break
-          }
-        } catch {
-          # Silently continue
+    Write-Host "Starting QuestDB..."
+    & $exePath start
+
+    # Wait for QuestDB to be ready (up to 120 seconds)
+    Write-Host "Waiting for QuestDB to start..."
+    $maxAttempts = 120
+    for ($i = 1; $i -le $maxAttempts; $i++) {
+      try {
+        $response = Invoke-WebRequest -Uri "http://localhost:9000/settings" -UseBasicParsing -ErrorAction SilentlyContinue
+        if ($response.StatusCode -eq 200) {
+          Write-Host "QuestDB is ready"
+          break
         }
-
-        if ($i % 60 -eq 0) {
-          Write-Host "Still waiting... ($i seconds elapsed)"
-        }
-
-        Start-Sleep -Seconds 1
+      } catch {
+        # Silently continue
       }
-
-      if ($ready) {
-        Write-Host "Docker initialization complete"
-      } else {
-        Write-Host "Warning: Docker may not be fully initialized after 10 minutes"
+      if ($i % 30 -eq 0) {
+        Write-Host "Still waiting... ($i/$maxAttempts seconds)"
       }
+      Start-Sleep -Seconds 1
     }
-  displayName: 'Install Docker Desktop (Windows)'
+  displayName: 'Install QuestDB via Binary (Windows)'
   condition: eq(variables['osName'], 'Windows')
 
 - task: DotNetCoreCLI@2

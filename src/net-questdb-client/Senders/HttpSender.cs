@@ -246,7 +246,7 @@ internal class HttpSender : AbstractSender
         // Get or create a handler for this specific address
         if (!_handlerCache.TryGetValue(address, out var handler))
         {
-            handler = CreateHandler(host);
+            handler                = CreateHandler(host);
             _handlerCache[address] = handler;
         }
 

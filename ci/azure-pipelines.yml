@@ -73,31 +73,13 @@ steps:
     projects: 'net-questdb-client.sln'
     arguments: '--configuration $(buildConfiguration) --no-restore'
 
-- script: |
-    sudo apt-get update
-    sudo apt-get install -y questdb
-    sudo systemctl start questdb
-    sudo systemctl enable questdb
-    # Wait for QuestDB to be ready
-    for i in {1..60}; do
-      if curl -s http://localhost:9000/settings > /dev/null 2>&1; then
-        echo "QuestDB is ready"
-        break
-      fi
-      echo "Waiting for QuestDB... ($i/60)"
-      sleep 1
-    done
-  displayName: 'Install QuestDB via systemd (Linux)'
-  condition: eq(variables['osName'], 'Linux')
-
 - task: DotNetCoreCLI@2
-  displayName: 'Run integration tests on $(osName)'
+  displayName: 'Run tests on $(osName)'
   inputs:
     command: 'test'
     projects: 'src/net-questdb-client-tests/net-questdb-client-tests.csproj'
     arguments: '--configuration $(buildConfiguration) --framework net9.0 --no-build --verbosity normal --logger trx --collect:"XPlat Code Coverage"'
     publishTestResults: true
-  condition: eq(variables['osName'], 'Linux')
 
 - task: PublishCodeCoverageResults@2
   displayName: 'Publish code coverage'

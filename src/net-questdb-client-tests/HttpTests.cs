@@ -32,6 +32,7 @@ using QuestDB.Utils;
 
 namespace net_questdb_client_tests;
 
+[SetCulture("en-us")]
 public class HttpTests
 {
     private const string Host = "localhost";
@@ -1161,7 +1162,8 @@ public class HttpTests
 
         await sender.SendAsync();
 
-        var expected = "metrics,tag=value id1=\"550e8400-e29b-41d4-a716-446655440000\",letter1=\"X\",id2=\"6ba7b810-9dad-11d1-80b4-00c04fd430c8\",letter2=\"Y\" 1000000000\n";
+        var expected =
+            "metrics,tag=value id1=\"550e8400-e29b-41d4-a716-446655440000\",letter1=\"X\",id2=\"6ba7b810-9dad-11d1-80b4-00c04fd430c8\",letter2=\"Y\" 1000000000\n";
         Assert.That(srv.PrintBuffer(), Is.EqualTo(expected));
     }
 
@@ -1178,7 +1180,7 @@ public class HttpTests
         // Send with value
         await sender.Table("metrics")
                     .Symbol("tag", "value1")
-                    .NullableColumn("id", (Guid?)guid)
+                    .NullableColumn("id", guid)
                     .AtAsync(new DateTime(1970, 01, 01, 0, 0, 1));
 
         // Send with null
@@ -1205,7 +1207,7 @@ public class HttpTests
         // Send with value
         await sender.Table("metrics")
                     .Symbol("tag", "value1")
-                    .NullableColumn("letter", (char?)'Z')
+                    .NullableColumn("letter", 'Z')
                     .AtAsync(new DateTime(1970, 01, 01, 0, 0, 1));
 
         // Send with null

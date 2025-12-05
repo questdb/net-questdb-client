@@ -1,6 +1,6 @@
 using System.Diagnostics;
 
-namespace QuestDB.Client.Tests;
+namespace net_questdb_client_tests;
 
 /// <summary>
 ///     Manages QuestDB server lifecycle for integration tests using Docker.

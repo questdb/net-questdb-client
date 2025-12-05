@@ -24,8 +24,9 @@
 
 using System.Text.Json;
 using NUnit.Framework;
+using QuestDB;
 
-namespace QuestDB.Client.Tests;
+namespace net_questdb_client_tests;
 
 /// <summary>
 ///     Integration tests against a real QuestDB instance running in Docker.
@@ -199,15 +200,15 @@ public class QuestDbIntegrationTests
     [Test]
     public async Task SendRowsWhileRestartingDatabase()
     {
-        const int rowsPerBatch = 10;
-        const int numBatches = 5;
+        const int rowsPerBatch      = 10;
+        const int numBatches        = 5;
         const int expectedTotalRows = rowsPerBatch * numBatches;
 
         // Create a persistent Docker volume for the test database
         var volumeName = $"questdb-test-vol-{Guid.NewGuid().ToString().Substring(0, 8)}";
 
         // Use a separate QuestDB instance for this chaos test to avoid conflicts
-        var testDb = new QuestDbManager(port: 29009, httpPort: 29000);
+        var testDb = new QuestDbManager(29009, 29000);
         testDb.SetVolume(volumeName);
         try
         {
@@ -218,7 +219,7 @@ public class QuestDbIntegrationTests
                 $"http::addr={httpEndpoint};auto_flush=off;retry_timeout=60000;");
 
             var batchesSent = 0;
-            var sendLock = new object();
+            var sendLock    = new object();
 
             // Task that restarts the database
             var restartTask = Task.Run(async () =>
@@ -272,6 +273,7 @@ public class QuestDbIntegrationTests
                         {
                             batchesSent++;
                         }
+
                         TestContext.WriteLine($"Batch {batch} sent successfully");
 
                         // Wait before next batch
@@ -295,24 +297,26 @@ public class QuestDbIntegrationTests
 
             // Query the row count, with retries
             long actualRowCount = 0;
-            var maxAttempts = 20;
+            var  maxAttempts    = 20;
             for (var attempt = 0; attempt < maxAttempts; attempt++)
             {
                 try
                 {
-                    using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(5) };
-                    var response = await client.GetAsync($"{httpEndpoint}/exec?query=test_chaos");
+                    using var client   = new HttpClient { Timeout = TimeSpan.FromSeconds(5), };
+                    var       response = await client.GetAsync($"{httpEndpoint}/exec?query=test_chaos");
 
                     if (response.IsSuccessStatusCode)
                     {
                         var content = await response.Content.ReadAsStringAsync();
-                        var json = JsonDocument.Parse(content);
+                        var json    = JsonDocument.Parse(content);
                         if (json.RootElement.TryGetProperty("count", out var countProp))
                         {
                             actualRowCount = countProp.GetInt64();
                             TestContext.WriteLine($"Attempt {attempt + 1}: Found {actualRowCount} rows");
                             if (actualRowCount >= expectedTotalRows)
+                            {
                                 break;
+                            }
                         }
                     }
                 }
@@ -342,16 +346,16 @@ public class QuestDbIntegrationTests
     [Test]
     public async Task SendRowsWithMultiDatabaseFailover()
     {
-        const int rowsPerBatch = 10;
-        const int numBatches = 5;
+        const int rowsPerBatch      = 10;
+        const int numBatches        = 5;
         const int expectedTotalRows = rowsPerBatch * numBatches;
 
         // Create two separate databases with persistent volumes
         var volume1 = $"questdb-test-vol-db1-{Guid.NewGuid().ToString().Substring(0, 8)}";
         var volume2 = $"questdb-test-vol-db2-{Guid.NewGuid().ToString().Substring(0, 8)}";
 
-        var testDb1 = new QuestDbManager(port: 29009, httpPort: 29000);
-        var testDb2 = new QuestDbManager(port: 29019, httpPort: 29010);
+        var testDb1 = new QuestDbManager(29009, 29000);
+        var testDb2 = new QuestDbManager(29019, 29010);
         testDb1.SetVolume(volume1);
         testDb2.SetVolume(volume2);
 
@@ -369,7 +373,7 @@ public class QuestDbIntegrationTests
                 $"http::addr={endpoint1};addr={endpoint2};auto_flush=off;retry_timeout=60000;");
 
             var batchesSent = 0;
-            var sendLock = new object();
+            var sendLock    = new object();
 
             // Task that restarts DB1 after sends complete
             var restartDb1Task = Task.Run(async () =>
@@ -429,6 +433,7 @@ public class QuestDbIntegrationTests
                         {
                             batchesSent++;
                         }
+
                         TestContext.WriteLine($"Batch {batch} sent successfully");
 
                         await Task.Delay(500);
@@ -448,15 +453,15 @@ public class QuestDbIntegrationTests
             await Task.Delay(2000);
 
             // Query both databases and sum the row counts
-            var maxAttempts = 20;
-            long count1 = 0;
-            long count2 = 0;
+            var  maxAttempts = 20;
+            long count1      = 0;
+            long count2      = 0;
 
             for (var attempt = 0; attempt < maxAttempts; attempt++)
             {
                 try
                 {
-                    using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(5) };
+                    using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(5), };
 
                     // Query database 1
                     try
@@ -465,7 +470,7 @@ public class QuestDbIntegrationTests
                         if (response1.IsSuccessStatusCode)
                         {
                             var content1 = await response1.Content.ReadAsStringAsync();
-                            var json1 = JsonDocument.Parse(content1);
+                            var json1    = JsonDocument.Parse(content1);
                             if (json1.RootElement.TryGetProperty("count", out var countProp1))
                             {
                                 count1 = countProp1.GetInt64();
@@ -484,7 +489,7 @@ public class QuestDbIntegrationTests
                         if (response2.IsSuccessStatusCode)
                         {
                             var content2 = await response2.Content.ReadAsStringAsync();
-                            var json2 = JsonDocument.Parse(content2);
+                            var json2    = JsonDocument.Parse(content2);
                             if (json2.RootElement.TryGetProperty("count", out var countProp2))
                             {
                                 count2 = countProp2.GetInt64();
@@ -500,7 +505,9 @@ public class QuestDbIntegrationTests
                     TestContext.WriteLine($"Attempt {attempt + 1}: DB1={count1}, DB2={count2}, Total={totalRowCount}");
 
                     if (totalRowCount >= expectedTotalRows)
+                    {
                         break;
+                    }
                 }
                 catch (Exception ex)
                 {
@@ -528,7 +535,7 @@ public class QuestDbIntegrationTests
             await testDb2.DisposeAsync();
         }
     }
-    
+
     private async Task VerifyTableHasDataAsync(string tableName)
     {
         var value = await GetTableRowCountAsync(tableName);

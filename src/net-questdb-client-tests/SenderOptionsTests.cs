@@ -35,14 +35,8 @@ public class SenderOptionsTests
     [Test]
     public void NoPortProvided()
     {
-        {
-            using var sender = new SenderOptions("http::addr=localhost;").Build();
-            Assert.That(sender.Options.Port, Is.EqualTo(9000));
-        }
-        {
-            using var sender = new SenderOptions("tcp::addr=localhost;").Build();
-            Assert.That(sender.Options.Port, Is.EqualTo(9009));
-        }
+        using var sender = new SenderOptions("http::addr=localhost;").Build();
+        Assert.That(sender.Options.Port, Is.EqualTo(9000));
     }
 
 

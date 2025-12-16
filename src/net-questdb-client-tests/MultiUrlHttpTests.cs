@@ -22,7 +22,7 @@
  *
  ******************************************************************************/
 
-using System.Net;
+using System.Reflection;
 using dummy_http_server;
 using NUnit.Framework;
 using QuestDB;
@@ -31,7 +31,7 @@ using QuestDB.Utils;
 namespace net_questdb_client_tests;
 
 /// <summary>
-/// Tests for multi-URL support in the HTTP sender with address rotation and failover.
+///     Tests for multi-URL support in the HTTP sender with address rotation and failover.
 /// </summary>
 public class MultiUrlHttpTests
 {
@@ -44,7 +44,8 @@ public class MultiUrlHttpTests
     public void ParseMultipleAddresses_FromConfigString()
     {
         // Test parsing multiple addresses from config string
-        var options = new SenderOptions("http::addr=localhost:9000;addr=localhost:9001;addr=localhost:9002;auto_flush=off;");
+        var options =
+            new SenderOptions("http::addr=localhost:9000;addr=localhost:9001;addr=localhost:9002;auto_flush=off;");
 
         Assert.That(options.AddressCount, Is.EqualTo(3));
         Assert.That(options.addresses[0], Is.EqualTo("localhost:9000"));
@@ -82,13 +83,14 @@ public class MultiUrlHttpTests
         await server1.StartAsync(HttpPort1);
         await server2.StartAsync(HttpPort2);
 
-        var configString = $"http::addr={Host}:{HttpPort1};addr={Host}:{HttpPort2};auto_flush=off;tls_verify=unsafe_off;";
+        var configString =
+            $"http::addr={Host}:{HttpPort1};addr={Host}:{HttpPort2};auto_flush=off;tls_verify=unsafe_off;";
         using var sender = Sender.New(configString);
 
         await sender.Table("metrics")
-            .Symbol("tag", "value")
-            .Column("number", 10)
-            .AtAsync(new DateTime(1970, 01, 01, 0, 0, 1));
+                    .Symbol("tag", "value")
+                    .Column("number", 10)
+                    .AtAsync(new DateTime(1970, 01, 01, 0, 0, 1));
 
         await sender.SendAsync();
 
@@ -111,13 +113,14 @@ public class MultiUrlHttpTests
         await server1.StartAsync(HttpPort1);
         await server2.StartAsync(HttpPort2);
 
-        var configString = $"http::addr={Host}:{HttpPort1};addr={Host}:{HttpPort2};auto_flush=off;tls_verify=unsafe_off;retry_timeout=5000;";
+        var configString =
+            $"http::addr={Host}:{HttpPort1};addr={Host}:{HttpPort2};auto_flush=off;tls_verify=unsafe_off;retry_timeout=5000;";
         using var sender = Sender.New(configString);
 
         await sender.Table("metrics")
-            .Symbol("tag", "value")
-            .Column("number", 10)
-            .AtAsync(new DateTime(1970, 01, 01, 0, 0, 1));
+                    .Symbol("tag", "value")
+                    .Column("number", 10)
+                    .AtAsync(new DateTime(1970, 01, 01, 0, 0, 1));
 
         await sender.SendAsync();
 
@@ -140,7 +143,8 @@ public class MultiUrlHttpTests
         await server2.StartAsync(HttpPort2);
         await server3.StartAsync(HttpPort3);
 
-        var configString = $"http::addr={Host}:{HttpPort1};addr={Host}:{HttpPort2};addr={Host}:{HttpPort3};auto_flush=off;tls_verify=unsafe_off;retry_timeout=5000;";
+        var configString =
+            $"http::addr={Host}:{HttpPort1};addr={Host}:{HttpPort2};addr={Host}:{HttpPort3};auto_flush=off;tls_verify=unsafe_off;retry_timeout=5000;";
 
         // First request succeeds on server 1
         using var sender1 = Sender.New(configString);
@@ -161,13 +165,14 @@ public class MultiUrlHttpTests
     public async Task MultipleAddresses_AllServersUnavailable()
     {
         // Test error when all addresses are unavailable
-        var configString = $"http::addr=localhost:29999;addr=localhost:29998;auto_flush=off;tls_verify=unsafe_off;retry_timeout=1000;";
+        var configString =
+            "http::addr=localhost:29999;addr=localhost:29998;auto_flush=off;tls_verify=unsafe_off;retry_timeout=1000;";
         using var sender = Sender.New(configString);
 
         await sender.Table("metrics")
-            .Symbol("tag", "value")
-            .Column("number", 10)
-            .AtAsync(new DateTime(1970, 01, 01, 0, 0, 1));
+                    .Symbol("tag", "value")
+                    .Column("number", 10)
+                    .AtAsync(new DateTime(1970, 01, 01, 0, 0, 1));
 
         // Should throw an error since all servers are unavailable
         var ex = Assert.ThrowsAsync<IngressError>(async () => await sender.SendAsync());
@@ -185,8 +190,10 @@ public class MultiUrlHttpTests
         await server2.StartAsync(HttpPort2);
 
         // Create senders with different primary addresses
-        var configString1 = $"http::addr={Host}:{HttpPort1};addr={Host}:{HttpPort2};auto_flush=off;tls_verify=unsafe_off;";
-        var configString2 = $"http::addr={Host}:{HttpPort2};addr={Host}:{HttpPort1};auto_flush=off;tls_verify=unsafe_off;";
+        var configString1 =
+            $"http::addr={Host}:{HttpPort1};addr={Host}:{HttpPort2};auto_flush=off;tls_verify=unsafe_off;";
+        var configString2 =
+            $"http::addr={Host}:{HttpPort2};addr={Host}:{HttpPort1};auto_flush=off;tls_verify=unsafe_off;";
 
         using var sender1 = Sender.New(configString1);
         await sender1.Table("metrics1").Column("number", 30).AtAsync(new DateTime(1970, 01, 01, 0, 0, 1));
@@ -214,13 +221,14 @@ public class MultiUrlHttpTests
         await server1.StartAsync(HttpPort1);
         await server2.StartAsync(HttpPort2);
 
-        var configString = $"http::addr={Host}:{HttpPort1};addr={Host}:{HttpPort2};auto_flush=off;tls_verify=unsafe_off;";
+        var configString =
+            $"http::addr={Host}:{HttpPort1};addr={Host}:{HttpPort2};auto_flush=off;tls_verify=unsafe_off;";
         using var sender = Sender.New(configString);
 
         sender.Table("metrics")
-            .Symbol("tag", "sync_test")
-            .Column("number", 42)
-            .At(new DateTime(1970, 01, 01, 0, 0, 1));
+              .Symbol("tag", "sync_test")
+              .Column("number", 42)
+              .At(new DateTime(1970, 01, 01, 0, 0, 1));
 
         sender.Send();
 
@@ -241,13 +249,14 @@ public class MultiUrlHttpTests
         await server1.StartAsync(HttpPort1);
         await server2.StartAsync(HttpPort2);
 
-        var configString = $"http::addr={Host}:{HttpPort1};addr={Host}:{HttpPort2};auto_flush=off;tls_verify=unsafe_off;";
+        var configString =
+            $"http::addr={Host}:{HttpPort1};addr={Host}:{HttpPort2};auto_flush=off;tls_verify=unsafe_off;";
         using var sender = Sender.New(configString);
 
         await sender.Table("metrics")
-            .Symbol("tag", "success")
-            .Column("number", 100)
-            .AtAsync(new DateTime(1970, 01, 01, 0, 0, 1));
+                    .Symbol("tag", "success")
+                    .Column("number", 100)
+                    .AtAsync(new DateTime(1970, 01, 01, 0, 0, 1));
 
         await sender.SendAsync();
 
@@ -263,8 +272,8 @@ public class MultiUrlHttpTests
     public void AddressProvider_RoundRobinRotation()
     {
         // Test AddressProvider round-robin rotation logic
-        var addresses = new[] { "host1:9000", "host2:9001", "host3:9002" };
-        var provider = new AddressProvider(addresses);
+        var addresses = new[] { "host1:9000", "host2:9001", "host3:9002", };
+        var provider  = new AddressProvider(addresses);
 
         Assert.That(provider.CurrentAddress, Is.EqualTo("host1:9000"));
         Assert.That(provider.CurrentHost, Is.EqualTo("host1"));
@@ -291,16 +300,16 @@ public class MultiUrlHttpTests
     public void AddressProvider_ParseHostAndPort()
     {
         // Test host and port parsing with various formats
-        var provider1 = new AddressProvider(new[] { "192.168.1.1:9000" });
+        var provider1 = new AddressProvider(new[] { "192.168.1.1:9000", });
         Assert.That(provider1.CurrentHost, Is.EqualTo("192.168.1.1"));
         Assert.That(provider1.CurrentPort, Is.EqualTo(9000));
 
-        var provider2 = new AddressProvider(new[] { "example.com:8080" });
+        var provider2 = new AddressProvider(new[] { "example.com:8080", });
         Assert.That(provider2.CurrentHost, Is.EqualTo("example.com"));
         Assert.That(provider2.CurrentPort, Is.EqualTo(8080));
 
         // IPv6 addresses with port (format: [ipv6]:port)
-        var provider3 = new AddressProvider(new[] { "[::1]:9000" });
+        var provider3 = new AddressProvider(new[] { "[::1]:9000", });
         Assert.That(provider3.CurrentHost, Is.EqualTo("[::1]"));
         Assert.That(provider3.CurrentPort, Is.EqualTo(9000));
     }
@@ -311,27 +320,27 @@ public class MultiUrlHttpTests
         // Test various IPv6 address formats
 
         // Simple loopback with port
-        var provider1 = new AddressProvider(new[] { "[::1]:9000" });
+        var provider1 = new AddressProvider(new[] { "[::1]:9000", });
         Assert.That(provider1.CurrentHost, Is.EqualTo("[::1]"));
         Assert.That(provider1.CurrentPort, Is.EqualTo(9000));
 
         // Full IPv6 address with port
-        var provider2 = new AddressProvider(new[] { "[2001:db8::1]:9000" });
+        var provider2 = new AddressProvider(new[] { "[2001:db8::1]:9000", });
         Assert.That(provider2.CurrentHost, Is.EqualTo("[2001:db8::1]"));
         Assert.That(provider2.CurrentPort, Is.EqualTo(9000));
 
         // IPv6 with many colons
-        var provider3 = new AddressProvider(new[] { "[fe80::1:2:3:4]:8080" });
+        var provider3 = new AddressProvider(new[] { "[fe80::1:2:3:4]:8080", });
         Assert.That(provider3.CurrentHost, Is.EqualTo("[fe80::1:2:3:4]"));
         Assert.That(provider3.CurrentPort, Is.EqualTo(8080));
 
         // IPv6 without port (should return -1 for port)
-        var provider4 = new AddressProvider(new[] { "[::1]" });
+        var provider4 = new AddressProvider(new[] { "[::1]", });
         Assert.That(provider4.CurrentHost, Is.EqualTo("[::1]"));
         Assert.That(provider4.CurrentPort, Is.EqualTo(-1));
 
         // IPv6 with different port numbers
-        var provider5 = new AddressProvider(new[] { "[::1]:29000" });
+        var provider5 = new AddressProvider(new[] { "[::1]:29000", });
         Assert.That(provider5.CurrentHost, Is.EqualTo("[::1]"));
         Assert.That(provider5.CurrentPort, Is.EqualTo(29000));
     }
@@ -340,7 +349,7 @@ public class MultiUrlHttpTests
     public void AddressProvider_SingleAddress()
     {
         // Test AddressProvider with single address
-        var provider = new AddressProvider(new[] { "localhost:9000" });
+        var provider = new AddressProvider(new[] { "localhost:9000", });
 
         Assert.That(provider.CurrentAddress, Is.EqualTo("localhost:9000"));
         Assert.That(provider.AddressCount, Is.EqualTo(1));
@@ -349,5 +358,76 @@ public class MultiUrlHttpTests
         // Rotating with single address should return same address
         provider.RotateToNextAddress();
         Assert.That(provider.CurrentAddress, Is.EqualTo("localhost:9000"));
+    }
+
+    [Test]
+    public void CleanupUnusedClients_DoesNotThrowWhenModifyingCollectionDuringEnumeration()
+    {
+        // Test to verify or deny the statement:
+        // "Lines 295-313 iterate over _clientCache.Keys while removing entries from both _clientCache
+        // and _handlerCache. This will throw InvalidOperationException with message
+        // 'Collection was modified; enumeration operation may not execute.'"
+
+        var configString = $"http::addr={Host}:29999;addr={Host}:29998;auto_flush=off;tls_verify=unsafe_off;";
+        var sender       = Sender.New(configString);
+        var senderType   = sender.GetType();
+
+        // Use reflection to access private fields and methods
+        var clientCacheField = senderType.GetField("_clientCache",
+                                                   BindingFlags.NonPublic | BindingFlags.Instance);
+        var handlerCacheField = senderType.GetField("_handlerCache",
+                                                    BindingFlags.NonPublic | BindingFlags.Instance);
+        var cleanupMethod = senderType.GetMethod("CleanupUnusedClients",
+                                                 BindingFlags.NonPublic | BindingFlags.Instance);
+        var addressProviderField = senderType.GetField("_addressProvider",
+                                                       BindingFlags.NonPublic | BindingFlags.Instance);
+
+        Assert.That(clientCacheField, Is.Not.Null);
+        Assert.That(handlerCacheField, Is.Not.Null);
+        Assert.That(cleanupMethod, Is.Not.Null);
+        Assert.That(addressProviderField, Is.Not.Null);
+
+        // Populate the caches manually to simulate having multiple clients from rotation
+        var clientCache     = (Dictionary<string, HttpClient>)clientCacheField.GetValue(sender);
+        var handlerCache    = (Dictionary<string, SocketsHttpHandler>)handlerCacheField.GetValue(sender);
+        var addressProvider = (AddressProvider)addressProviderField.GetValue(sender);
+
+        // Verify initial cache has at least one entry from first address
+        Assert.That(clientCache.Count, Is.GreaterThanOrEqualTo(1));
+
+        // Create dummy clients and handlers for the other address to simulate rotation
+        var address2 = $"{Host}:29998";
+        if (!clientCache.ContainsKey(address2))
+        {
+            var dummyHandler = new SocketsHttpHandler();
+            var dummyClient  = new HttpClient(dummyHandler);
+            clientCache[address2]  = dummyClient;
+            handlerCache[address2] = dummyHandler;
+        }
+
+        // Verify we have multiple entries
+        Assert.That(clientCache.Count, Is.GreaterThanOrEqualTo(2), "Should have multiple clients in cache");
+
+        // Rotate to a different address so that current address is different from the first cached entry
+        addressProvider.RotateToNextAddress();
+
+        // Call CleanupUnusedClients - verify it does NOT throw an exception
+        try
+        {
+            cleanupMethod.Invoke(sender, null);
+            // If we reach here, no exception was thrown
+            Assert.Pass("CleanupUnusedClients executed successfully without throwing InvalidOperationException");
+        }
+        catch (TargetInvocationException ex)
+        {
+            if (ex.InnerException is InvalidOperationException)
+            {
+                Assert.Fail($"CONFIRMED BUG: InvalidOperationException thrown: {ex.InnerException.Message}");
+            }
+
+            throw;
+        }
+
+        sender.Dispose();
     }
 }

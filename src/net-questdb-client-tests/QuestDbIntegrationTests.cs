@@ -158,7 +158,7 @@ public class QuestDbIntegrationTests
     {
         // Test that the client properly handles multiple URLs with fallback
         var httpEndpoint = _questDb!.GetHttpEndpoint();
-        var badEndpoint  = "http://localhost:19001"; // Non-existent endpoint
+        var badEndpoint  = "localhost:19001"; // Non-existent endpoint
 
         // The client should try the bad endpoint first, then fallback to the good one
         using var sender = Sender.New(

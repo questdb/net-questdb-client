@@ -134,7 +134,7 @@ public class MultiUrlHttpTests
     [Test]
     public async Task MultipleAddresses_RoundRobinRotation()
     {
-        // Test round-robin rotation across multiple addresses
+        // Test round-robin rotation only occurs on failover when prior server is turned off
         using var server1 = new DummyHttpServer(withBasicAuth: false);
         using var server2 = new DummyHttpServer(withBasicAuth: false);
         using var server3 = new DummyHttpServer(withBasicAuth: false);
@@ -146,18 +146,31 @@ public class MultiUrlHttpTests
         var configString =
             $"http::addr={Host}:{HttpPort1};addr={Host}:{HttpPort2};addr={Host}:{HttpPort3};auto_flush=off;tls_verify=unsafe_off;retry_timeout=5000;";
 
-        // First request succeeds on server 1
-        using var sender1 = Sender.New(configString);
-        await sender1.Table("test1").Column("val", 1).AtAsync(new DateTime(1970, 01, 01, 0, 0, 1));
-        await sender1.SendAsync();
+        using var sender = Sender.New(configString);
 
-        // All three servers can receive, so data goes to first available (server 1)
-        Assert.That(server1.PrintBuffer(), Contains.Substring("test1"));
-        Assert.That(server2.PrintBuffer(), Is.Empty);
-        Assert.That(server3.PrintBuffer(), Is.Empty);
+        // First request - server1 is available, should go to first address
+        await sender.Table("metrics1").Column("val", 1).AtAsync(new DateTime(1970, 01, 01, 0, 0, 1));
+        await sender.SendAsync();
+        Assert.That(server1.PrintBuffer(), Contains.Substring("metrics1"));
 
+        // Turn off server1 to force rotation
         await server1.StopAsync();
+
+        // Second request - server1 unavailable, should rotate to server2
+        await sender.Table("metrics2").Column("val", 2).AtAsync(new DateTime(1970, 01, 01, 0, 0, 2));
+        await sender.SendAsync();
+        Assert.That(server2.PrintBuffer(), Contains.Substring("metrics2"));
+        Assert.That(server1.PrintBuffer(), Does.Not.Contain("metrics2"));
+
+        // Turn off server2 to force rotation
         await server2.StopAsync();
+
+        // Third request - server2 unavailable, should rotate to server3
+        await sender.Table("metrics3").Column("val", 3).AtAsync(new DateTime(1970, 01, 01, 0, 0, 3));
+        await sender.SendAsync();
+        Assert.That(server3.PrintBuffer(), Contains.Substring("metrics3"));
+        Assert.That(server2.PrintBuffer(), Does.Not.Contain("metrics3"));
+
         await server3.StopAsync();
     }
 
@@ -369,7 +382,7 @@ public class MultiUrlHttpTests
         // 'Collection was modified; enumeration operation may not execute.'"
 
         var configString = $"http::addr={Host}:29999;addr={Host}:29998;auto_flush=off;tls_verify=unsafe_off;";
-        var sender       = Sender.New(configString);
+        using var sender       = Sender.New(configString);
         var senderType   = sender.GetType();
 
         // Use reflection to access private fields and methods
@@ -427,7 +440,5 @@ public class MultiUrlHttpTests
 
             throw;
         }
-
-        sender.Dispose();
     }
 }

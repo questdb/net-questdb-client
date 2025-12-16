@@ -302,7 +302,8 @@ public class QuestDbIntegrationTests
             {
                 try
                 {
-                    using var client   = new HttpClient { Timeout = TimeSpan.FromSeconds(5), };
+                    using var client   = new HttpClient();
+                    client.Timeout = TimeSpan.FromSeconds(5);
                     var       response = await client.GetAsync($"{httpEndpoint}/exec?query=test_chaos");
 
                     if (response.IsSuccessStatusCode)
@@ -461,7 +462,8 @@ public class QuestDbIntegrationTests
             {
                 try
                 {
-                    using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(5), };
+                    using var client = new HttpClient();
+                    client.Timeout = TimeSpan.FromSeconds(5);
 
                     // Query database 1
                     try
@@ -545,7 +547,8 @@ public class QuestDbIntegrationTests
     private async Task<long> GetTableRowCountAsync(string tableName)
     {
         var       httpEndpoint = _questDb!.GetHttpEndpoint();
-        using var client       = new HttpClient { Timeout = TimeSpan.FromSeconds(10), };
+        using var client       = new HttpClient();
+        client.Timeout = TimeSpan.FromSeconds(10);
 
         // Retry a few times to allow for write latency
         var       attempts    = 0;

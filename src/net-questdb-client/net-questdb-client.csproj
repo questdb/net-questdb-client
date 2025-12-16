@@ -6,7 +6,7 @@
         <RootNamespace>QuestDB</RootNamespace>
         <ImplicitUsings>enable</ImplicitUsings>
         <Nullable>enable</Nullable>
-        <LangVersion>10</LangVersion>
+        <LangVersion>latest</LangVersion>
         <GeneratePackageOnBuild>true</GeneratePackageOnBuild>
         <Title>QuestDB client</Title>
         <Description>Simple QuestDB ILP protocol client</Description>
@@ -18,6 +18,6 @@
         <Company>QuestDB Limited</Company>
         <PackageVersion>3.1.1</PackageVersion>
         <GenerateDocumentationFile>true</GenerateDocumentationFile>
-        <TargetFrameworks>net6.0;net7.0;net8.0;net9.0</TargetFrameworks>
+        <TargetFrameworks>net6.0;net7.0;net8.0;net9.0;net10.0</TargetFrameworks>
     </PropertyGroup>
 </Project>

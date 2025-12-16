@@ -173,7 +173,7 @@ internal class HttpSender : AbstractSender
         _addressProvider = new AddressProvider(Options.addresses);
 
         // Create and cache the initial client
-        _client = GetClientForCurrentAddress();
+        SwitchClientToCurrentAddress();
 
         var protocolVersion = Options.protocol_version;
 
@@ -190,8 +190,7 @@ internal class HttpSender : AbstractSender
                 {
                     protocolVersion = ProtocolVersion.V1;
                 }
-
-                if (protocolVersion == ProtocolVersion.Auto)
+                else
                 {
                     var json     = response.Content.ReadFromJsonAsync<SettingsResponse>().Result!;
                     var versions = json.Config?.LineProtoSupportVersions!;
@@ -201,13 +200,6 @@ internal class HttpSender : AbstractSender
             catch
             {
                 protocolVersion = ProtocolVersion.V1;
-            }
-            finally
-            {
-                // Restore the address index to avoid probe rotating the address
-                _addressProvider.CurrentIndex = initialAddressIndex;
-                // Update the client reference to match the restored address
-                _client = GetClientForCurrentAddress();
             }
         }
 
@@ -239,9 +231,7 @@ internal class HttpSender : AbstractSender
             };
         }
 
-        var host = address.Contains("//")
-                       ? AddressProvider.ParseHost(address).Split("//")[1]
-                       : AddressProvider.ParseHost(address);
+        var host = AddressProvider.ParseHost(address);
 
         // Get or create a handler for this specific address
         if (!_handlerCache.TryGetValue(address, out var handler))
@@ -276,7 +266,7 @@ internal class HttpSender : AbstractSender
     /// <summary>
     ///     Gets or creates an HttpClient for the current address, caching it to avoid recreation on subsequent rotations.
     /// </summary>
-    private HttpClient GetClientForCurrentAddress()
+    private HttpClient SwitchClientToCurrentAddress()
     {
         var address = _addressProvider.CurrentAddress;
 
@@ -297,18 +287,18 @@ internal class HttpSender : AbstractSender
     /// </summary>
     private void CleanupUnusedClients()
     {
-        if (!_addressProvider.HasMultipleAddresses)
+        if (!_addressProvider.HasMultipleAddresses || _clientCache.Count == 1)
         {
             return;
         }
 
-        var currentAddress = _addressProvider.CurrentAddress;
-        var addressesToRemove = _clientCache.Keys
-                                            .Where(address => address != currentAddress)
-                                            .ToList();
-
-        foreach (var address in addressesToRemove)
+        foreach (var address in _clientCache.Keys)
         {
+            if (address == _addressProvider.CurrentAddress)
+            {
+                continue;
+            }
+
             if (_clientCache.TryGetValue(address, out var client))
             {
                 client.Dispose();
@@ -598,8 +588,8 @@ internal class HttpSender : AbstractSender
                         try
                         {
                             // Get the client for the current address (may have rotated)
-                            var client = GetClientForCurrentAddress();
-                            response = client.Send(request, HttpCompletionOption.ResponseHeadersRead, cts.Token);
+                            SwitchClientToCurrentAddress();
+                            response = _client.Send(request, HttpCompletionOption.ResponseHeadersRead, cts.Token);
                         }
                         catch (HttpRequestException)
                         {
@@ -746,7 +736,7 @@ internal class HttpSender : AbstractSender
                         try
                         {
                             // Get the client for the current address (may have rotated)
-                            var client = GetClientForCurrentAddress();
+                            var client = SwitchClientToCurrentAddress();
                             response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead,
                                                               cts.Token);
                         }

@@ -178,7 +178,6 @@ public class HttpTests
     }
 
     [Test]
-    // [Ignore("Test is broken - arrays are not validated until send. Needs redesign.")]
     public async Task BasicArrayDoubleNegotiationVersion2NotSupported()
     {
         {

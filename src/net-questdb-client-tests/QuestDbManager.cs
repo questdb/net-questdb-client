@@ -199,7 +199,7 @@ public class QuestDbManager : IAsyncDisposable
     /// </summary>
     public string GetHttpEndpoint()
     {
-        return $"http://localhost:{_httpPort}";
+        return $"localhost:{_httpPort}";
     }
 
     /// <summary>

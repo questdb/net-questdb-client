@@ -215,7 +215,7 @@ public class QuestDbManager : IAsyncDisposable
     /// </summary>
     private async Task WaitForQuestDbAsync()
     {
-        const int maxAttempts = 30;
+        const int maxAttempts = 120;
         var       attempts    = 0;
 
         while (attempts < maxAttempts)
@@ -238,7 +238,7 @@ public class QuestDbManager : IAsyncDisposable
             attempts++;
         }
 
-        throw new TimeoutException($"QuestDB failed to start within {maxAttempts} seconds");
+        throw new TimeoutException("QuestDB failed to start within 120 seconds");
     }
 
     private async Task CleanupExistingContainersAsync()

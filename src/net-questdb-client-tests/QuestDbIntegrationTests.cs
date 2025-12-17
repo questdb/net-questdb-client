@@ -468,7 +468,7 @@ public class QuestDbIntegrationTests
                     // Query database 1
                     try
                     {
-                        var response1 = await client.GetAsync($"{endpoint1}/exec?query=test_multi_db");
+                        var response1 = await client.GetAsync($"http://{endpoint1}/exec?query=test_multi_db");
                         if (response1.IsSuccessStatusCode)
                         {
                             var content1 = await response1.Content.ReadAsStringAsync();
@@ -487,7 +487,7 @@ public class QuestDbIntegrationTests
                     // Query database 2
                     try
                     {
-                        var response2 = await client.GetAsync($"{endpoint2}/exec?query=test_multi_db");
+                        var response2 = await client.GetAsync($"http://{endpoint2}/exec?query=test_multi_db");
                         if (response2.IsSuccessStatusCode)
                         {
                             var content2 = await response2.Content.ReadAsStringAsync();

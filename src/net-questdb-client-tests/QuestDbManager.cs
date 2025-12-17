@@ -162,10 +162,11 @@ public class QuestDbManager : IAsyncDisposable
 
         _containerId = output.Trim();
         Console.WriteLine($"QuestDB container started: {_containerId}");
-        IsRunning = true;
+   
 
         // Wait for QuestDB to be ready
         await WaitForQuestDbAsync();
+        IsRunning = true;
     }
 
     /// <summary>
@@ -222,7 +223,7 @@ public class QuestDbManager : IAsyncDisposable
         {
             try
             {
-                var response = await _httpClient.GetAsync($"{GetHttpEndpoint()}/settings");
+                var response = await _httpClient.GetAsync($"http://{GetHttpEndpoint()}/settings");
                 if (response.IsSuccessStatusCode)
                 {
                     Console.WriteLine("QuestDB is ready");

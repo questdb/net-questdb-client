@@ -304,7 +304,7 @@ public class QuestDbIntegrationTests
                 {
                     using var client   = new HttpClient();
                     client.Timeout = TimeSpan.FromSeconds(5);
-                    var       response = await client.GetAsync($"{httpEndpoint}/exec?query=test_chaos");
+                    var       response = await client.GetAsync($"http://{httpEndpoint}/exec?query=test_chaos");
 
                     if (response.IsSuccessStatusCode)
                     {
@@ -559,7 +559,7 @@ public class QuestDbIntegrationTests
             try
             {
                 var response = await client.GetAsync(
-                                   $"{httpEndpoint}/exec?query={tableName}");
+                                   $"http://{httpEndpoint}/exec?query={tableName}");
 
                 if (response.IsSuccessStatusCode)
                 {

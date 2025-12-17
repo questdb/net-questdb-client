@@ -194,7 +194,6 @@ Behavior details:
 | `own_socket`   | `true`   | Specifies whether the internal TCP data stream will own the underlying socket or not. |
 | `pool_timeout` | `120000` | Sets the idle timeout for HTTP connections in SocketsHttpHandler.                     |
 
-
 ## Properties and methods
 
 | Name                                                                                                  | Returns         | Description                                                                |

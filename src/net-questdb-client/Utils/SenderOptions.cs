@@ -57,6 +57,7 @@ public record SenderOptions
     };
 
     private string _addr = "localhost:9000";
+    private List<string> _addresses = new();
     private TimeSpan _authTimeout = TimeSpan.FromMilliseconds(15000);
     private AutoFlushType _autoFlush = AutoFlushType.on;
     private int _autoFlushBytes = int.MaxValue;
@@ -90,6 +91,7 @@ public record SenderOptions
     /// </summary>
     public SenderOptions()
     {
+        ParseAddresses();
     }
 
     /// <summary>
@@ -102,6 +104,7 @@ public record SenderOptions
         ParseEnumWithDefault(nameof(protocol), "http", out _protocol);
         ParseEnumWithDefault(nameof(protocol_version), "auto", out _protocol_version);
         ParseStringWithDefault(nameof(addr), "localhost:9000", out _addr!);
+        ParseAddresses();
         ParseEnumWithDefault(nameof(auto_flush), "on", out _autoFlush);
         ParseIntThatMayBeOff(nameof(auto_flush_rows), IsHttp() ? "75000" : "600", out _autoFlushRows);
         ParseIntThatMayBeOff(nameof(auto_flush_bytes), int.MaxValue.ToString(), out _autoFlushBytes);
@@ -154,12 +157,29 @@ public record SenderOptions
     /// </summary>
     /// <remarks>
     ///     Used to populate the <see cref="Host" /> and <see cref="Port" /> fields.
+    ///     When multiple addresses are configured, this returns the first one.
     /// </remarks>
     public string addr
     {
         get => _addr;
         set => _addr = value;
     }
+
+    /// <summary>
+    ///     List of all configured addresses for failover.
+    /// </summary>
+    /// <remarks>
+    ///     Contains all addresses specified via multiple `addr` entries in the configuration string.
+    ///     The list is never empty; it contains at least the primary address.
+    /// </remarks>
+    [JsonIgnore]
+    public IReadOnlyList<string> addresses => _addresses.AsReadOnly();
+
+    /// <summary>
+    ///     Gets the number of configured addresses.
+    /// </summary>
+    [JsonIgnore]
+    public int AddressCount => _addresses.Count;
 
     /// <summary>
     ///     Enables or disables automatic flushing of rows.
@@ -570,10 +590,29 @@ public record SenderOptions
         }
 
         var splits = confStr.Split("::");
+        var paramString = splits[1];
+
+        // Parse addresses manually before using DbConnectionStringBuilder
+        // because DbConnectionStringBuilder only keeps the last value for duplicate keys
+        _addresses.Clear();
+        foreach (var param in paramString.Split(';'))
+        {
+            if (string.IsNullOrWhiteSpace(param)) continue;
+
+            var kvp = param.Split('=');
+            if (kvp.Length == 2 && kvp[0].Trim() == "addr")
+            {
+                var addrValue = kvp[1].Trim();
+                if (!string.IsNullOrEmpty(addrValue))
+                {
+                    _addresses.Add(addrValue);
+                }
+            }
+        }
 
         _connectionStringBuilder = new DbConnectionStringBuilder
         {
-            ConnectionString = splits[1],
+            ConnectionString = paramString,
         };
 
         VerifyCorrectKeysInConfigString();
@@ -662,6 +701,15 @@ public record SenderOptions
             {
                 throw new IngressError(ErrorCode.ConfigError, $"Invalid property: `{key}`");
             }
+        }
+    }
+
+    private void ParseAddresses()
+    {
+        // If no addresses were parsed from config string, use the primary addr
+        if (_addresses.Count == 0)
+        {
+            _addresses.Add(_addr);
         }
     }
 

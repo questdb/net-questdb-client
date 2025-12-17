@@ -296,4 +296,20 @@ public interface IBuffer
     ///     <see cref="ErrorCode.ProtocolVersionError" /> if used with protocol version 1 or 2.
     /// </remarks>
     public IBuffer Column(ReadOnlySpan<char> name, decimal value);
+
+    /// <summary>
+    ///     Adds a character column with the specified name and value to the current row.
+    /// </summary>
+    /// <param name="name">The column name.</param>
+    /// <param name="value">The character value to store in the column.</param>
+    /// <returns>The buffer instance for method chaining.</returns>
+    public IBuffer Column(ReadOnlySpan<char> name, char value);
+
+    /// <summary>
+    ///     Adds a GUID column with the specified name and value to the current row.
+    /// </summary>
+    /// <param name="name">The column name.</param>
+    /// <param name="value">The GUID value to store in the column.</param>
+    /// <returns>The buffer instance for method chaining.</returns>
+    public IBuffer Column(ReadOnlySpan<char> name, Guid value);
 }

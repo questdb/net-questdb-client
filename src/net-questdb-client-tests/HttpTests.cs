@@ -32,6 +32,7 @@ using QuestDB.Utils;
 
 namespace net_questdb_client_tests;
 
+[SetCulture("en-us")]
 public class HttpTests
 {
     private const string Host = "localhost";
@@ -423,7 +424,7 @@ public class HttpTests
         await server.StartAsync(HttpPort);
         using var sender =
             Sender.New(
-                $"https::addr={Host}:{HttpsPort};username=asdasdada;password=asdadad;tls_verify=unsafe_off;auto_flush=off;");
+                $"http::addr={Host}:{HttpPort};username=asdasdada;password=asdadad;auto_flush=off;");
         await sender.Table("metrics")
                     .Symbol("tag", "value")
                     .Column("number", 10)
@@ -434,6 +435,7 @@ public class HttpTests
             async () => await sender.SendAsync(),
             Throws.TypeOf<IngressError>().With.Message.Contains("Unauthorized")
         );
+        await server.StopAsync();
     }
 
     [Test]
@@ -443,7 +445,7 @@ public class HttpTests
         await server.StartAsync(HttpPort);
         using var sender =
             Sender.New(
-                $"https::addr={Host}:{HttpsPort};username=admin;password=quest;tls_verify=unsafe_off;auto_flush=off;");
+                $"http::addr={Host}:{HttpPort};username=admin;password=quest;auto_flush=off;");
         await sender.Table("metrics")
                     .Symbol("tag", "value")
                     .Column("number", 10)
@@ -451,6 +453,7 @@ public class HttpTests
                     .AtAsync(new DateTime(1970, 01, 01, 0, 0, 1));
 
         await sender.SendAsync();
+        await server.StopAsync();
     }
 
     [Test]
@@ -461,7 +464,7 @@ public class HttpTests
 
         using var sender =
             Sender.New(
-                $"https::addr={Host}:{HttpsPort};token=askldaklds;tls_verify=unsafe_off;auto_flush=off;");
+                $"http::addr={Host}:{HttpPort};token=askldaklds;auto_flush=off;");
 
         for (var i = 0; i < 100; i++)
         {
@@ -476,6 +479,7 @@ public class HttpTests
             async () => await sender.SendAsync(),
             Throws.TypeOf<IngressError>().With.Message.Contains("Unauthorized")
         );
+        await srv.StopAsync();
     }
 
     [Test]
@@ -488,7 +492,7 @@ public class HttpTests
 
         using var sender =
             Sender.New(
-                $"https::addr={Host}:{HttpsPort};token={token};tls_verify=unsafe_off;auto_flush=off;");
+                $"http::addr={Host}:{HttpPort};token={token};auto_flush=off;");
 
         for (var i = 0; i < 100; i++)
         {
@@ -500,6 +504,7 @@ public class HttpTests
         }
 
         await sender.SendAsync();
+        await srv.StopAsync();
     }
 
 
@@ -1093,6 +1098,127 @@ public class HttpTests
         await sender.SendAsync();
 
         var expected = "neg\\ name привед=\" мед\\\rве\\\n д\" 86400000000000\n";
+        Assert.That(srv.PrintBuffer(), Is.EqualTo(expected));
+    }
+
+    [Test]
+    public async Task SendGuidColumn()
+    {
+        using var srv = new DummyHttpServer();
+        await srv.StartAsync(HttpPort);
+
+        using var sender = Sender.New($"http::addr={Host}:{HttpPort};auto_flush=off;");
+
+        var guid = new Guid("550e8400-e29b-41d4-a716-446655440000");
+        await sender.Table("metrics")
+                    .Symbol("tag", "value")
+                    .Column("id", guid)
+                    .AtAsync(new DateTime(1970, 01, 01, 0, 0, 1));
+
+        await sender.SendAsync();
+
+        var expected = "metrics,tag=value id=\"550e8400-e29b-41d4-a716-446655440000\" 1000000000\n";
+        Assert.That(srv.PrintBuffer(), Is.EqualTo(expected));
+    }
+
+    [Test]
+    public async Task SendCharColumn()
+    {
+        using var srv = new DummyHttpServer();
+        await srv.StartAsync(HttpPort);
+
+        using var sender = Sender.New($"http::addr={Host}:{HttpPort};auto_flush=off;");
+
+        await sender.Table("metrics")
+                    .Symbol("tag", "value")
+                    .Column("letter", 'A')
+                    .AtAsync(new DateTime(1970, 01, 01, 0, 0, 1));
+
+        await sender.SendAsync();
+
+        var expected = "metrics,tag=value letter=\"A\" 1000000000\n";
+        Assert.That(srv.PrintBuffer(), Is.EqualTo(expected));
+    }
+
+    [Test]
+    public async Task SendMultipleGuidAndCharColumns()
+    {
+        using var srv = new DummyHttpServer();
+        await srv.StartAsync(HttpPort);
+
+        using var sender = Sender.New($"http::addr={Host}:{HttpPort};auto_flush=off;");
+
+        var guid1 = new Guid("550e8400-e29b-41d4-a716-446655440000");
+        var guid2 = new Guid("6ba7b810-9dad-11d1-80b4-00c04fd430c8");
+
+        await sender.Table("metrics")
+                    .Symbol("tag", "value")
+                    .Column("id1", guid1)
+                    .Column("letter1", 'X')
+                    .Column("id2", guid2)
+                    .Column("letter2", 'Y')
+                    .AtAsync(new DateTime(1970, 01, 01, 0, 0, 1));
+
+        await sender.SendAsync();
+
+        var expected =
+            "metrics,tag=value id1=\"550e8400-e29b-41d4-a716-446655440000\",letter1=\"X\",id2=\"6ba7b810-9dad-11d1-80b4-00c04fd430c8\",letter2=\"Y\" 1000000000\n";
+        Assert.That(srv.PrintBuffer(), Is.EqualTo(expected));
+    }
+
+    [Test]
+    public async Task SendNullableGuidColumn()
+    {
+        using var srv = new DummyHttpServer();
+        await srv.StartAsync(HttpPort);
+
+        using var sender = Sender.New($"http::addr={Host}:{HttpPort};auto_flush=off;");
+
+        var guid = new Guid("550e8400-e29b-41d4-a716-446655440000");
+
+        // Send with value
+        await sender.Table("metrics")
+                    .Symbol("tag", "value1")
+                    .NullableColumn("id", guid)
+                    .AtAsync(new DateTime(1970, 01, 01, 0, 0, 1));
+
+        // Send with null
+        await sender.Table("metrics")
+                    .Symbol("tag", "value2")
+                    .NullableColumn("id", (Guid?)null)
+                    .AtAsync(new DateTime(1970, 01, 01, 0, 0, 2));
+
+        await sender.SendAsync();
+
+        var expected = "metrics,tag=value1 id=\"550e8400-e29b-41d4-a716-446655440000\" 1000000000\n" +
+                       "metrics,tag=value2 2000000000\n";
+        Assert.That(srv.PrintBuffer(), Is.EqualTo(expected));
+    }
+
+    [Test]
+    public async Task SendNullableCharColumn()
+    {
+        using var srv = new DummyHttpServer();
+        await srv.StartAsync(HttpPort);
+
+        using var sender = Sender.New($"http::addr={Host}:{HttpPort};auto_flush=off;");
+
+        // Send with value
+        await sender.Table("metrics")
+                    .Symbol("tag", "value1")
+                    .NullableColumn("letter", 'Z')
+                    .AtAsync(new DateTime(1970, 01, 01, 0, 0, 1));
+
+        // Send with null
+        await sender.Table("metrics")
+                    .Symbol("tag", "value2")
+                    .NullableColumn("letter", (char?)null)
+                    .AtAsync(new DateTime(1970, 01, 01, 0, 0, 2));
+
+        await sender.SendAsync();
+
+        var expected = "metrics,tag=value1 letter=\"Z\" 1000000000\n" +
+                       "metrics,tag=value2 2000000000\n";
         Assert.That(srv.PrintBuffer(), Is.EqualTo(expected));
     }
 
@@ -1732,8 +1858,15 @@ public class HttpTests
         using var server = new DummyHttpServer(requireClientCert: true);
         await server.StartAsync(HttpsPort);
 
+        using var sender = Sender.Configure($"https::addr=localhost:{HttpsPort};tls_verify=unsafe_off;").Build();
+
+        await sender.Table("metrics")
+                    .Symbol("tag", "value")
+                    .Column("number", 12.2)
+                    .AtAsync(new DateTime(1970, 01, 01, 0, 0, 1));
+
         Assert.That(
-            () => Sender.Configure($"https::addr=localhost:{HttpsPort};tls_verify=unsafe_off;").Build(),
+            async () => await sender.SendAsync(),
             Throws.TypeOf<IngressError>().With.Message.Contains("ServerFlushError")
         );
 

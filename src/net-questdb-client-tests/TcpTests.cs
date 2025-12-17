@@ -38,6 +38,7 @@ using QuestDB.Utils;
 
 namespace net_questdb_client_tests;
 
+[SetCulture("en-us")]
 public class TcpTests
 {
     private readonly IPAddress _host = IPAddress.Loopback;

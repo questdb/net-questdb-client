@@ -48,6 +48,13 @@ stages:
             displayName: 'Install .NET 9.0 SDK'
             inputs:
               packageType: 'sdk'
+              version: '9.0.x'
+              installationPath: $(Agent.ToolsDirectory)/dotnet
+              
+          - task: UseDotNet@2
+            displayName: 'Install .NET 10.0 SDK'
+            inputs:
+              packageType: 'sdk'
               version: $(dotnetVersion)
               installationPath: $(Agent.ToolsDirectory)/dotnet
         

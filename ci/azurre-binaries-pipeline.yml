@@ -6,7 +6,7 @@ pr: none
 
 variables:
   buildConfiguration: 'Release'
-  dotnetVersion: '9.0.x'
+  dotnetVersion: '10.0.x'
   nugetPackageDirectory: '$(Build.ArtifactStagingDirectory)'
 
 pool:

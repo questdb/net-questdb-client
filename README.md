@@ -126,6 +126,20 @@ using var sender = Sender.New("https::addr=localhost:9009;tls_verify=unsafe_off;
 using var sender = Sender.New("tcps::addr=localhost:9009;tls_verify=unsafe_off;username=admin;token=NgdiOWDoQNUP18WOnb1xkkEG5TzPYMda5SiUOvT1K0U=;");
 ```
 
+### Multiple database endpoints
+
+The client can be configured with multiple `addr` entries pointing do different instances of QuestDB.
+
+This is **not** for publishing data concurrently to multiple databases.
+
+Rather, this is allows you to configure a backup database where data will be sent to in the event the primary database is unavailable.
+
+The swap happens transparently within a given `retry_timeout`, and is performed in a round-robin fashion (try the next endpoint and write if it is available). Once a new endpoint is selected, it continue to be used for the lifetime of that `Sender`.
+
+```csharp
+using var sender = Sender.New("http::addr=localhost:21001;addr=localhost:21002;");
+```
+
 ## Configuration Parameters
 
 These options are set either using a config string, or by initialising QuestDBOptions.
@@ -179,6 +193,7 @@ Behavior details:
 | -------------- | -------- | ------------------------------------------------------------------------------------- |
 | `own_socket`   | `true`   | Specifies whether the internal TCP data stream will own the underlying socket or not. |
 | `pool_timeout` | `120000` | Sets the idle timeout for HTTP connections in SocketsHttpHandler.                     |
+
 
 ## Properties and methods
 

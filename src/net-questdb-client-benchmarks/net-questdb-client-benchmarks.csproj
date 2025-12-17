@@ -2,7 +2,7 @@
 
     <PropertyGroup>
         <OutputType>Exe</OutputType>
-        <TargetFrameworks>net6.0;net7.0;net8.0;net9.0</TargetFrameworks>
+        <TargetFrameworks>net6.0;net7.0;net8.0;net9.0;net10.0</TargetFrameworks>
         <GenerateTargetFrameworkAttribute>false</GenerateTargetFrameworkAttribute>
         <RootNamespace>net_questdb_client_benchmarks</RootNamespace>
         <ImplicitUsings>enable</ImplicitUsings>
@@ -15,7 +15,7 @@
 
     <ItemGroup>
         <ProjectReference Include="..\dummy-http-server\dummy-http-server.csproj"/>
-        <ProjectReference Include="..\net-questdb-client-tests\net-questdb-client-tests.csproj" />
+        <ProjectReference Include="..\net-questdb-client-tests\net-questdb-client-tests.csproj"/>
         <ProjectReference Include="..\net-questdb-client\net-questdb-client.csproj"/>
     </ItemGroup>
 

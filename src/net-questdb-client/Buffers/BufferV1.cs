@@ -505,6 +505,25 @@ public class BufferV1 : IBuffer
         throw new IngressError(ErrorCode.ProtocolVersionError, "Protocol Version does not support DECIMAL types");
     }
 
+    public IBuffer Column(ReadOnlySpan<char> name, char value)
+    {
+        Span<char> span = stackalloc char[1];
+        span[0] = value;
+        return Column(name, span);
+    }
+
+    public IBuffer Column(ReadOnlySpan<char> name, Guid value)
+    {
+        Span<char> span = stackalloc char[36];
+        value.TryFormat(span, out var charsWritten);
+        if (charsWritten != 36)
+        {
+            throw new IngressError(ErrorCode.InvalidApiCall, "Could not convert guid to string");
+        }
+
+        return Column(name, span);
+    }
+
 
     /// <summary>
     ///     Advance the current buffer write position and the overall length by a given number of bytes.

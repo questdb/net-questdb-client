@@ -83,14 +83,117 @@ public class IlpEndpoint : Endpoint<Request, JsonErrorResponse?>
 {
     private const string Username = "admin";
     private const string Password = "quest";
-    public static readonly StringBuilder ReceiveBuffer = new();
-    public static readonly List<byte> ReceiveBytes = new();
-    public static Exception? LastError = new();
+
+    // Port-keyed storage to support multiple concurrent DummyHttpServer instances
+    private static readonly Dictionary<int, (StringBuilder Buffer, List<byte> Bytes, Exception? Error, int Counter)>
+        PortData = new();
+
+    // Port-keyed configuration to support multiple concurrent DummyHttpServer instances
+    private static readonly Dictionary<int, (bool TokenAuth, bool BasicAuth, bool RetriableError, bool ErrorMessage)>
+        PortConfig = new();
+
+    // Configuration flags (global, apply to all servers) - kept for backwards compatibility
     public static bool WithTokenAuth = false;
     public static bool WithBasicAuth = false;
     public static bool WithRetriableError = false;
     public static bool WithErrorMessage = false;
-    public static int Counter;
+
+    // Get the port from request headers (set by DummyHttpServer)
+    private static int GetPortKey(HttpContext context)
+    {
+        if (context?.Request.Headers.TryGetValue("X-Server-Port", out var portHeader) == true
+            && int.TryParse(portHeader.ToString(), out var port))
+        {
+            return port;
+        }
+        return context?.Connection?.LocalPort ?? 0;
+    }
+
+    private static (StringBuilder Buffer, List<byte> Bytes, Exception? Error, int Counter) GetOrCreatePortData(int port)
+    {
+        lock (PortData)
+        {
+            if (!PortData.TryGetValue(port, out var data))
+            {
+                data = (new StringBuilder(), new List<byte>(), null, 0);
+                PortData[port] = data;
+            }
+            return data;
+        }
+    }
+
+
+    // Public methods for accessing port-specific data (used by DummyHttpServer)
+    public static StringBuilder GetReceiveBuffer(int port) => GetOrCreatePortData(port).Buffer;
+    public static List<byte> GetReceiveBytes(int port) => GetOrCreatePortData(port).Bytes;
+
+    public static Exception? GetLastError(int port)
+    {
+        lock (PortData)
+        {
+            return GetOrCreatePortData(port).Error;
+        }
+    }
+
+    public static void SetLastError(int port, Exception? error)
+    {
+        lock (PortData)
+        {
+            var data = GetOrCreatePortData(port);
+            PortData[port] = (data.Buffer, data.Bytes, error, data.Counter);
+        }
+    }
+
+    public static int GetCounter(int port)
+    {
+        lock (PortData)
+        {
+            return GetOrCreatePortData(port).Counter;
+        }
+    }
+
+    public static void SetCounter(int port, int value)
+    {
+        lock (PortData)
+        {
+            var data = GetOrCreatePortData(port);
+            PortData[port] = (data.Buffer, data.Bytes, data.Error, value);
+        }
+    }
+
+    public static void ClearPort(int port)
+    {
+        lock (PortData)
+        {
+            if (PortData.TryGetValue(port, out var data))
+            {
+                data.Buffer.Clear();
+                data.Bytes.Clear();
+                PortData[port] = (data.Buffer, data.Bytes, null, 0);
+            }
+        }
+    }
+
+    public static void SetPortConfig(int port, bool tokenAuth, bool basicAuth, bool retriableError, bool errorMessage)
+    {
+        lock (PortConfig)
+        {
+            PortConfig[port] = (tokenAuth, basicAuth, retriableError, errorMessage);
+        }
+    }
+
+    private static (bool TokenAuth, bool BasicAuth, bool RetriableError, bool ErrorMessage) GetPortConfig(int port)
+    {
+        lock (PortConfig)
+        {
+            if (PortConfig.TryGetValue(port, out var config))
+            {
+                return config;
+            }
+            // Return static flags as defaults for backwards compatibility
+            return (WithTokenAuth, WithBasicAuth, WithRetriableError, WithErrorMessage);
+        }
+    }
 
     public override void Configure()
     {
@@ -111,14 +214,24 @@ public class IlpEndpoint : Endpoint<Request, JsonErrorResponse?>
 
     public override async Task HandleAsync(Request req, CancellationToken ct)
     {
-        Counter++;
-        if (WithRetriableError)
+        int port = GetPortKey(HttpContext);
+        var data = GetOrCreatePortData(port);
+        var config = GetPortConfig(port);
+
+        lock (PortData)
+        {
+            // Increment counter for this port
+            data = GetOrCreatePortData(port);
+            PortData[port] = (data.Buffer, data.Bytes, data.Error, data.Counter + 1);
+        }
+
+        if (config.RetriableError)
         {
             await SendAsync(null, 500, ct);
             return;
         }
 
-        if (WithErrorMessage)
+        if (config.ErrorMessage)
         {
             await SendAsync(new JsonErrorResponse
                                 { code = "code", errorId = "errorid", line = 1, message = "message", }, 400, ct);
@@ -127,13 +240,22 @@ public class IlpEndpoint : Endpoint<Request, JsonErrorResponse?>
 
         try
         {
-            ReceiveBuffer.Append(req.StringContent);
-            ReceiveBytes.AddRange(req.ByteContent);
+            lock (PortData)
+            {
+                data = GetOrCreatePortData(port);
+                data.Buffer.Append(req.StringContent);
+                data.Bytes.AddRange(req.ByteContent);
+                PortData[port] = data;
+            }
             await SendNoContentAsync(ct);
         }
         catch (Exception ex)
         {
-            LastError = ex;
+            lock (PortData)
+            {
+                data = GetOrCreatePortData(port);
+                PortData[port] = (data.Buffer, data.Bytes, ex, data.Counter);
+            }
             throw;
         }
     }

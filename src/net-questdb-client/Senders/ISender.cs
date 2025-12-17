@@ -274,22 +274,6 @@ public interface ISender : IDisposable
     public ISender Column<T>(ReadOnlySpan<char> name, ReadOnlySpan<T> value) where T : struct;
 
     /// <summary>
-    ///     Adds a column with the specified string value to the current row.
-    /// </summary>
-    /// <param name="name">The column name.</param>
-    /// <param name="value">The column's string value; may be null.</param>
-    /// <returns>The same sender instance for fluent chaining.</returns>
-    public ISender Column(ReadOnlySpan<char> name, string? value)
-    {
-        if (value is null)
-        {
-            return this;
-        }
-
-        return Column(name, value.AsSpan());
-    }
-
-    /// <summary>
     ///     Adds a column whose value is a sequence of value-type elements with the given multidimensional shape when both
     ///     <paramref name="value" /> and <paramref name="shape" /> are provided; no action is taken if either is null.
     /// </summary>
@@ -453,6 +437,55 @@ public interface ISender : IDisposable
         if (value != null)
         {
             return Column(name, value ?? throw new InvalidOperationException());
+        }
+
+        return this;
+    }
+
+    /// <summary>
+    ///     Adds a GUID column with the specified name and value to the current row.
+    /// </summary>
+    /// <param name="name">The column name.</param>
+    /// <param name="value">The GUID value to store in the column.</param>
+    /// <returns>The sender instance for fluent call chaining.</returns>
+    public ISender Column(ReadOnlySpan<char> name, Guid value);
+
+    /// <summary>
+    ///     Adds a character column with the specified name and value to the current row.
+    /// </summary>
+    /// <param name="name">The column name.</param>
+    /// <param name="value">The character value to store in the column.</param>
+    /// <returns>The sender instance for fluent call chaining.</returns>
+    public ISender Column(ReadOnlySpan<char> name, char value);
+
+    /// <summary>
+    ///     Adds a nullable GUID column with the specified name when a value is provided; does nothing if the value is null.
+    /// </summary>
+    /// <param name="name">The column name.</param>
+    /// <param name="value">The nullable GUID value to add as a column; if null, the column is not added.</param>
+    /// <returns>The sender instance for fluent call chaining.</returns>
+    public ISender NullableColumn(ReadOnlySpan<char> name, Guid? value)
+    {
+        if (value != null)
+        {
+            return Column(name, value.Value);
+        }
+
+        return this;
+    }
+
+    /// <summary>
+    ///     Adds a nullable character column with the specified name when a value is provided; does nothing if the value is
+    ///     null.
+    /// </summary>
+    /// <param name="name">The column name.</param>
+    /// <param name="value">The nullable character value to add as a column; if null, the column is not added.</param>
+    /// <returns>The sender instance for fluent call chaining.</returns>
+    public ISender NullableColumn(ReadOnlySpan<char> name, char? value)
+    {
+        if (value != null)
+        {
+            return Column(name, value.Value);
         }
 
         return this;

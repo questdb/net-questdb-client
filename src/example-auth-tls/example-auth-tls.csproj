@@ -7,7 +7,7 @@
         <GeneratePackageOnBuild>false</GeneratePackageOnBuild>
         <Title>QuestDB client - Example with Authentication and TLS</Title>
         <Description>Authentication and TLS example using the QuestDB ILP protocol client</Description>
-        <TargetFrameworks>net6.0;net7.0;net8.0;net9.0</TargetFrameworks>
+        <TargetFrameworks>net6.0;net7.0;net8.0;net9.0;net10.0</TargetFrameworks>
         <OutputType>Exe</OutputType>
     </PropertyGroup>
 

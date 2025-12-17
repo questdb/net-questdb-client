@@ -41,6 +41,11 @@ public class DummyHttpServer : IDisposable
     private readonly WebApplication _app;
     private int _port = 29743;
     private readonly TimeSpan? _withStartDelay;
+    private readonly bool _withTokenAuth;
+    private readonly bool _withBasicAuth;
+    private readonly bool _withRetriableError;
+    private readonly bool _withErrorMessage;
+    private readonly bool _requireClientCert;
 
     /// <summary>
     /// Initializes a configurable in-process dummy HTTP server used for testing endpoints.
@@ -63,11 +68,20 @@ public class DummyHttpServer : IDisposable
                 .AddConsole();
         });
 
+        // Store configuration in instance fields instead of static fields
+        // to avoid interference between multiple concurrent servers
+        _withTokenAuth = withTokenAuth;
+        _withBasicAuth = withBasicAuth;
+        _withRetriableError = withRetriableError;
+        _withErrorMessage = withErrorMessage;
+        _withStartDelay = withStartDelay;
+        _requireClientCert = requireClientCert;
+
+        // Also set static flags for backwards compatibility
         IlpEndpoint.WithTokenAuth = withTokenAuth;
         IlpEndpoint.WithBasicAuth = withBasicAuth;
         IlpEndpoint.WithRetriableError = withRetriableError;
         IlpEndpoint.WithErrorMessage = withErrorMessage;
-        _withStartDelay = withStartDelay;
 
         if (withTokenAuth)
         {
@@ -91,15 +105,21 @@ public class DummyHttpServer : IDisposable
             }
 
             o.Limits.MaxRequestBodySize = 1073741824;
-            o.ListenLocalhost(29474,
-                options => { options.UseHttps(); });
-            o.ListenLocalhost(29473);
+            // Note: These internal ports will be set dynamically in StartAsync based on the main port
+            // to avoid conflicts when multiple DummyHttpServer instances are created
         });
 
         _app = bld.Build();
 
         _app.MapHealthChecks("/ping");
         _app.UseDefaultExceptionHandler();
+
+        // Add middleware to set X-Server-Port header so endpoints know which port they're running on
+        _app.Use(async (context, next) =>
+        {
+            context.Request.Headers["X-Server-Port"] = _port.ToString();
+            await next();
+        });
 
         if (withTokenAuth)
         {
@@ -126,10 +146,7 @@ public class DummyHttpServer : IDisposable
     /// </remarks>
     public void Clear()
     {
-        IlpEndpoint.ReceiveBuffer.Clear();
-        IlpEndpoint.ReceiveBytes.Clear();
-        IlpEndpoint.LastError = null;
-        IlpEndpoint.Counter = 0;
+        IlpEndpoint.ClearPort(_port);
     }
 
     /// <summary>
@@ -148,7 +165,18 @@ public class DummyHttpServer : IDisposable
         versions ??= new[] { 1, 2, 3, };
         SettingsEndpoint.Versions = versions;
         _port = port;
-        _ = _app.RunAsync($"http://localhost:{port}");
+
+        // Store configuration flags keyed by port so multiple servers don't interfere
+        IlpEndpoint.SetPortConfig(port,
+            tokenAuth: _withTokenAuth,
+            basicAuth: _withBasicAuth,
+            retriableError: _withRetriableError,
+            errorMessage: _withErrorMessage);
+
+        var url = _requireClientCert
+            ? $"https://localhost:{port}"
+            : $"http://localhost:{port}";
+        _ = _app.RunAsync(url);
     }
 
     /// <summary>
@@ -170,7 +198,7 @@ public class DummyHttpServer : IDisposable
     /// <returns>The mutable <see cref="StringBuilder"/> containing the accumulated received text; modifying it updates the server's buffer.</returns>
     public StringBuilder GetReceiveBuffer()
     {
-        return IlpEndpoint.ReceiveBuffer;
+        return IlpEndpoint.GetReceiveBuffer(_port);
     }
 
     /// <summary>
@@ -179,12 +207,12 @@ public class DummyHttpServer : IDisposable
     /// <returns>The mutable list of bytes received by the endpoint.</returns>
     public List<byte> GetReceivedBytes()
     {
-        return IlpEndpoint.ReceiveBytes;
+        return IlpEndpoint.GetReceiveBytes(_port);
     }
 
     public Exception? GetLastError()
     {
-        return IlpEndpoint.LastError;
+        return IlpEndpoint.GetLastError(_port);
     }
 
     public async Task<bool> Healthcheck()
@@ -215,7 +243,7 @@ public class DummyHttpServer : IDisposable
 
     public int GetCounter()
     {
-        return IlpEndpoint.Counter;
+        return IlpEndpoint.GetCounter(_port);
     }
 
     /// <summary>

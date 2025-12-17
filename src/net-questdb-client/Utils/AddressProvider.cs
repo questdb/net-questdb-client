@@ -35,7 +35,11 @@ public class AddressProvider
     /// <summary>
     /// Creates a new AddressProvider with the given list of addresses.
     /// </summary>
-    /// <param name="addresses">List of addresses to rotate through</param>
+    /// <summary>
+    /// Creates an AddressProvider that manages round‑robin rotation over the provided addresses.
+    /// </summary>
+    /// <param name="addresses">A non-empty list of address strings (e.g., host or host:port) to rotate through.</param>
+    /// <exception cref="ArgumentException">Thrown when <paramref name="addresses"/> contains no elements.</exception>
     public AddressProvider(IReadOnlyList<string> addresses)
     {
         if (addresses.Count == 0)
@@ -85,7 +89,9 @@ public class AddressProvider
     /// <summary>
     /// Rotates to the next address in round-robin fashion.
     /// </summary>
-    /// <returns>The next address</returns>
+    /// <summary>
+    /// Advances the current address index to the next address in round-robin order.
+    /// </summary>
     public void RotateToNextAddress()
     {
         _currentIndex = (_currentIndex + 1) % _addresses.Count;
@@ -95,7 +101,11 @@ public class AddressProvider
     /// Parses the host from an address string.
     /// Supports both regular (host:port) and IPv6 ([ipv6]:port) formats.
     /// For IPv6 addresses, returns the complete bracketed form including '[' and ']'.
+    /// <summary>
+    /// Extracts the host portion from an address string that may include a port or a bracketed IPv6 literal.
     /// </summary>
+    /// <param name="address">The address in forms like "host:port", "[ipv6]:port", or a bare host; may be null or empty.</param>
+    /// <returns>The host portion: returns the bracketed "[ipv6]" when present, the substring before the last ':' for "host:port" forms, or the original input if no host separator is found or the input is null/empty.</returns>
     public static string ParseHost(string address)
     {
         if (string.IsNullOrEmpty(address))
@@ -126,7 +136,11 @@ public class AddressProvider
     /// Parses the port from an address string.
     /// Supports both regular (host:port) and IPv6 ([ipv6]:port) formats.
     /// Returns -1 if no port is specified.
+    /// <summary>
+    /// Extracts the numeric port from an address string.
     /// </summary>
+    /// <param name="address">An address in forms like "host:port", "[ipv6]:port", "host", or null/empty; the port portion, if present, is parsed as an integer.</param>
+    /// <returns>`-1` if no valid port is present or parsing fails; otherwise the parsed port number.</returns>
     public static int ParsePort(string address)
     {
         if (string.IsNullOrEmpty(address))

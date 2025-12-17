@@ -88,7 +88,12 @@ public record SenderOptions
 
     /// <summary>
     ///     Construct a <see cref="SenderOptions" /> object with default values.
+    /// <summary>
+    /// Initializes a new SenderOptions instance with default configuration and parses configured addresses.
     /// </summary>
+    /// <remarks>
+    /// Ensures the internal addresses list contains at least the primary addr if no addresses were parsed.
+    /// </remarks>
     public SenderOptions()
     {
         ParseAddresses();
@@ -97,7 +102,11 @@ public record SenderOptions
     /// <summary>
     ///     Construct a <see cref="SenderOptions" /> object from a config string.
     /// </summary>
-    /// <param name="confStr">A configuration string.</param>
+    /// <summary>
+    /// Creates a SenderOptions instance by parsing the provided configuration string and applying defaults for any missing options.
+    /// </summary>
+    /// <param name="confStr">Configuration string containing semicolon-separated key=value pairs (optionally prefixed by "protocol://"); may include multiple addr entries for failover.</param>
+    /// <exception cref="IngressError">Thrown when the configuration string contains invalid keys or when a parsed option has an invalid value.</exception>
     public SenderOptions(string confStr)
     {
         ReadConfigStringIntoBuilder(confStr);
@@ -582,6 +591,11 @@ public record SenderOptions
         }
     }
 
+    /// <summary>
+    /// Parses a configuration string into the internal connection-string builder and extracts any `addr` entries into the options' addresses list.
+    /// </summary>
+    /// <param name="confStr">Configuration string in the form "protocol::key=value;key2=value2;...", where `protocol` precedes `::` and the remainder is a semicolon-separated list of key/value pairs.</param>
+    /// <exception cref="IngressError">Thrown when the configuration string does not contain a protocol separator (`::`) or when the contained keys are not allowed.</exception>
     private void ReadConfigStringIntoBuilder(string confStr)
     {
         if (!confStr.Contains("::"))
@@ -693,6 +707,10 @@ public record SenderOptions
         return $"{protocol.ToString()}::{builder.ConnectionString};";
     }
 
+    /// <summary>
+    /// Ensures every key present in the connection-string builder is one of the allowed configuration keys.
+    /// </summary>
+    /// <exception cref="IngressError">Thrown with ErrorCode.ConfigError when an unknown configuration key is found in the builder.</exception>
     private void VerifyCorrectKeysInConfigString()
     {
         foreach (string key in _connectionStringBuilder.Keys)
@@ -704,6 +722,9 @@ public record SenderOptions
         }
     }
 
+    /// <summary>
+    /// Ensures the internal address list contains at least one entry by adding the primary addr when no addresses were parsed from the configuration string.
+    /// </summary>
     private void ParseAddresses()
     {
         // If no addresses were parsed from config string, use the primary addr

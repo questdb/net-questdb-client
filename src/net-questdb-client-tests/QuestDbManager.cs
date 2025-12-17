@@ -22,7 +22,11 @@ public class QuestDbManager : IAsyncDisposable
     ///     Initializes a new instance of the QuestDbManager.
     /// </summary>
     /// <param name="port">ILP port (default: 9009)</param>
-    /// <param name="httpPort">HTTP port (default: 9000)</param>
+    /// <summary>
+    /// Initializes a QuestDbManager configured to manage a QuestDB Docker container for integration tests.
+    /// </summary>
+    /// <param name="port">Local ILP port to expose (container port 9009).</param>
+    /// <param name="httpPort">Local HTTP port to expose (container port 9000).</param>
     public QuestDbManager(int port = 9009, int httpPort = 9000)
     {
         _port          = port;
@@ -35,7 +39,10 @@ public class QuestDbManager : IAsyncDisposable
 
     /// <summary>
     ///     Cleanup resources.
+    /// <summary>
+    /// Stops the QuestDB container, removes the configured Docker volume if set, and disposes the internal HTTP client.
     /// </summary>
+    /// <returns>A ValueTask that completes when disposal has finished.</returns>
     public async ValueTask DisposeAsync()
     {
         await StopAsync();
@@ -51,7 +58,10 @@ public class QuestDbManager : IAsyncDisposable
 
     /// <summary>
     ///     Sets a Docker volume to be used for persistent storage.
+    /// <summary>
+    /// Sets the Docker volume name to mount into the QuestDB container for persistent storage.
     /// </summary>
+    /// <param name="volumeName">Docker volume name to be mounted at /var/lib/questdb inside the container.</param>
     public void SetVolume(string volumeName)
     {
         _volumeName = volumeName;
@@ -59,7 +69,12 @@ public class QuestDbManager : IAsyncDisposable
 
     /// <summary>
     ///     Ensures Docker is available.
+    /// <summary>
+    /// Verifies that the Docker CLI is available and functioning on the host.
     /// </summary>
+    /// <exception cref="InvalidOperationException">
+    /// Thrown if Docker is not available or the availability check fails. If the failure is caused by an unexpected error, the original exception is provided as the InnerException.
+    /// </exception>
     public async Task EnsureDockerAvailableAsync()
     {
         try
@@ -83,7 +98,10 @@ public class QuestDbManager : IAsyncDisposable
 
     /// <summary>
     ///     Ensures QuestDB Docker image is available (uses local if exists, otherwise pulls latest).
+    /// <summary>
+    /// Ensures the QuestDB Docker image is available locally, pulling it if necessary.
     /// </summary>
+    /// <exception cref="InvalidOperationException">Thrown if the docker pull command fails; the exception message contains the command output.</exception>
     public async Task PullImageAsync()
     {
         // Check if image already exists locally
@@ -105,7 +123,10 @@ public class QuestDbManager : IAsyncDisposable
 
     /// <summary>
     ///     Checks if the QuestDB Docker image exists locally.
+    /// <summary>
+    /// Checks whether the QuestDB Docker image is available locally.
     /// </summary>
+    /// <returns>`true` if the image exists locally (Docker returns a non-empty image ID), `false` otherwise.</returns>
     private async Task<bool> ImageExistsAsync()
     {
         // Use 'docker images' to check if image exists
@@ -119,7 +140,10 @@ public class QuestDbManager : IAsyncDisposable
 
     /// <summary>
     ///     Starts the QuestDB container.
+    /// <summary>
+    /// Starts a QuestDB Docker container configured with the manager's ports and optional mounted volume, waits until the server responds to its HTTP /settings endpoint, and marks the manager as running.
     /// </summary>
+    /// <returns>A task that completes when the container has been started and QuestDB is responsive.</returns>
     public async Task StartAsync()
     {
         if (IsRunning)
@@ -171,7 +195,14 @@ public class QuestDbManager : IAsyncDisposable
 
     /// <summary>
     ///     Stops the QuestDB container.
+    /// <summary>
+    /// Stops the managed QuestDB Docker container if it is running.
     /// </summary>
+    /// <remarks>
+    /// Attempts a graceful stop with a 10-second timeout; if that fails, attempts a force removal.
+    /// On success or failure, clears the manager's running state and stored container ID.
+    /// </remarks>
+    /// <returns>A task that completes after the container has been stopped or force-removed and internal state has been updated.</returns>
     public async Task StopAsync()
     {
         if (!IsRunning || string.IsNullOrEmpty(_containerId))
@@ -197,7 +228,10 @@ public class QuestDbManager : IAsyncDisposable
 
     /// <summary>
     ///     Gets the HTTP endpoint for QuestDB.
+    /// <summary>
+    /// Gets the HTTP endpoint host and port for the managed QuestDB instance.
     /// </summary>
+    /// <returns>The HTTP endpoint in the form "localhost:{port}".</returns>
     public string GetHttpEndpoint()
     {
         return $"localhost:{_httpPort}";
@@ -205,7 +239,10 @@ public class QuestDbManager : IAsyncDisposable
 
     /// <summary>
     ///     Gets the ILP endpoint for QuestDB.
+    /// <summary>
+    /// ILP endpoint host and port for the QuestDB instance.
     /// </summary>
+    /// <returns>The ILP endpoint string in the form "localhost:{port}".</returns>
     public string GetIlpEndpoint()
     {
         return $"localhost:{_port}";
@@ -213,7 +250,10 @@ public class QuestDbManager : IAsyncDisposable
 
     /// <summary>
     ///     Waits for QuestDB to be ready.
+    /// <summary>
+    /// Waits until QuestDB responds successfully to its /settings HTTP endpoint or fails after a timeout.
     /// </summary>
+    /// <exception cref="TimeoutException">Thrown if QuestDB does not respond successfully within 120 seconds.</exception>
     private async Task WaitForQuestDbAsync()
     {
         const int maxAttempts = 120;
@@ -242,6 +282,12 @@ public class QuestDbManager : IAsyncDisposable
         throw new TimeoutException("QuestDB failed to start within 120 seconds");
     }
 
+    /// <summary>
+    /// Finds and removes local QuestDB test containers that match the instance's port and name pattern.
+    /// </summary>
+    /// <remarks>
+    /// Inspects all containers (running and stopped) and, for any whose name contains the configured container prefix and the HTTP/ILP port combination, attempts to stop (with a short timeout) and remove the container. If listing containers fails, the method returns without throwing.
+    /// </remarks>
     private async Task CleanupExistingContainersAsync()
     {
         Console.WriteLine($"Checking for existing containers on ports {_httpPort}/{_port}...");
@@ -277,6 +323,14 @@ public class QuestDbManager : IAsyncDisposable
         }
     }
 
+    /// <summary>
+    /// Executes a Docker CLI command with the provided arguments and captures its output.
+    /// </summary>
+    /// <param name="arguments">Command-line arguments passed to the `docker` executable (e.g., "ps -a").</param>
+    /// <returns>
+    /// A tuple where `ExitCode` is the process exit code and `Output` is the combined standard output and standard error text produced by the command.
+    /// </returns>
+    /// <exception cref="InvalidOperationException">Thrown if the `docker` process could not be started.</exception>
     private async Task<(int ExitCode, string Output)> RunDockerCommandAsync(string arguments)
     {
         var startInfo = new ProcessStartInfo

@@ -499,12 +499,23 @@ public class BufferV1 : IBuffer
     /// <exception cref="IngressError">
     ///     Always thrown with <see cref="ErrorCode.ProtocolVersionError" /> to indicate DECIMAL is
     ///     unsupported.
-    /// </exception>
+    /// <summary>
+    /// Indicates that adding a DECIMAL column is not supported by protocol V1 and always fails.
+    /// </summary>
+    /// <param name="name">The column name.</param>
+    /// <param name="value">The decimal value (unused).</param>
+    /// <exception cref="IngressError">Thrown with ErrorCode.ProtocolVersionError indicating DECIMAL types are not supported by protocol V1.</exception>
     public virtual IBuffer Column(ReadOnlySpan<char> name, decimal value)
     {
         throw new IngressError(ErrorCode.ProtocolVersionError, "Protocol Version does not support DECIMAL types");
     }
 
+    /// <summary>
+    /// Writes a column with the given name and a single-character value.
+    /// </summary>
+    /// <param name="name">Column name.</param>
+    /// <param name="value">Character value to write.</param>
+    /// <returns>The buffer instance for fluent chaining.</returns>
     public IBuffer Column(ReadOnlySpan<char> name, char value)
     {
         Span<char> span = stackalloc char[1];
@@ -512,6 +523,13 @@ public class BufferV1 : IBuffer
         return Column(name, span);
     }
 
+    /// <summary>
+    /// Appends a column whose value is the provided GUID formatted as a 36-character canonical string.
+    /// </summary>
+    /// <param name="name">The column name.</param>
+    /// <param name="value">The GUID value to write, formatted as a 36-character canonical string.</param>
+    /// <returns>The current buffer instance for fluent chaining.</returns>
+    /// <exception cref="IngressError">Thrown with ErrorCode.InvalidApiCall if the GUID cannot be formatted to 36 characters.</exception>
     public IBuffer Column(ReadOnlySpan<char> name, Guid value)
     {
         Span<char> span = stackalloc char[36];

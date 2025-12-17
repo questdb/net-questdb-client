@@ -279,7 +279,12 @@ internal abstract class AbstractSender : ISender
         return this;
     }
 
-    /// <inheritdoc />
+    /// <summary>
+    /// Set the column identified by <paramref name="name"/> to the specified <paramref name="value"/> and return the sender for fluent chaining.
+    /// </summary>
+    /// <param name="name">The column name.</param>
+    /// <param name="value">The Guid value to assign to the column.</param>
+    /// <returns>The current <see cref="ISender"/> instance to allow fluent call chaining.</returns>
     public ISender Column(ReadOnlySpan<char> name, Guid value)
     {
         Buffer.Column(name, value);
@@ -293,6 +298,13 @@ internal abstract class AbstractSender : ISender
         return this;
     }
 
+    /// <summary>
+    /// Appends a column with the specified name using the provided array of values.
+    /// </summary>
+    /// <typeparam name="T">Element type of the array; must be a value type.</typeparam>
+    /// <param name="name">The column name.</param>
+    /// <param name="value">Array of values to set for the column.</param>
+    /// <returns>The current sender instance for fluent chaining.</returns>
     public ISender Column<T>(ReadOnlySpan<char> name, T[] value) where T : struct
     {
         Buffer.Column(name, value);

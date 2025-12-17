@@ -55,7 +55,15 @@ public class DummyHttpServer : IDisposable
     /// <param name="withRetriableError">If true, configure the test endpoint to produce retriable error responses.</param>
     /// <param name="withErrorMessage">If true, include error messages in test error responses.</param>
     /// <param name="withStartDelay">Optional delay applied when starting the server.</param>
-    /// <param name="requireClientCert">If true, require client TLS certificates for HTTPS connections.</param>
+    /// <summary>
+    /// Creates a test in-process HTTP server configured for FastEndpoints with optional authentication, error behaviors, startup delay, and client TLS certificate requirement.
+    /// </summary>
+    /// <param name="withTokenAuth">Enable JWT bearer authentication and related authorization checks for endpoints.</param>
+    /// <param name="withBasicAuth">Enable basic-like username/password validation on test endpoints.</param>
+    /// <param name="withRetriableError">Make certain endpoints return retriable error responses to simulate transient failures.</param>
+    /// <param name="withErrorMessage">Include error messages in responses for endpoints that simulate failures.</param>
+    /// <param name="withStartDelay">Optional delay applied at startup; pass null for no delay.</param>
+    /// <param name="requireClientCert">Require client TLS certificates for HTTPS connections when true.</param>
     public DummyHttpServer(bool withTokenAuth = false, bool withBasicAuth = false, bool withRetriableError = false,
         bool withErrorMessage = false, TimeSpan? withStartDelay = null, bool requireClientCert = false)
     {
@@ -143,7 +151,9 @@ public class DummyHttpServer : IDisposable
     /// <remarks>
     /// Empties IlpEndpoint.ReceiveBuffer and IlpEndpoint.ReceiveBytes, sets IlpEndpoint.LastError to null,
     /// and sets IlpEndpoint.Counter to zero.
-    /// </remarks>
+    /// <summary>
+    /// Clears in-memory receive buffers, counters, and any recorded error state for this server instance's configured port.
+    /// </summary>
     public void Clear()
     {
         IlpEndpoint.ClearPort(_port);
@@ -154,6 +164,11 @@ public class DummyHttpServer : IDisposable
     /// </summary>
     /// <param name="port">Port to listen on (defaults to 29743).</param>
     /// <param name="versions">Array of supported protocol versions; defaults to {1, 2, 3} when null.</param>
+    /// <summary>
+    /// Starts the server on the specified port, initializes per-port test configuration, and begins the app's background run task.
+    /// </summary>
+    /// <param name="port">The TCP port the server will listen on.</param>
+    /// <param name="versions">Protocol or API versions to expose; assigned to <c>SettingsEndpoint.Versions</c>. If null, defaults to {1, 2, 3}.</param>
     /// <returns>A task that completes after any configured startup delay has elapsed and the server's background run task has been initiated.</returns>
     public async Task StartAsync(int port = 29743, int[]? versions = null)
     {
@@ -195,7 +210,10 @@ public class DummyHttpServer : IDisposable
     /// <summary>
     /// Gets the server's in-memory text buffer of received data.
     /// </summary>
-    /// <returns>The mutable <see cref="StringBuilder"/> containing the accumulated received text; modifying it updates the server's buffer.</returns>
+    /// <summary>
+    /// Gets the server instance's accumulated received-text buffer for the configured port.
+    /// </summary>
+    /// <returns>The mutable <see cref="StringBuilder"/> containing the accumulated received text for this port; modifying it updates the server's buffer.</returns>
     public StringBuilder GetReceiveBuffer()
     {
         return IlpEndpoint.GetReceiveBuffer(_port);
@@ -204,17 +222,28 @@ public class DummyHttpServer : IDisposable
     /// <summary>
     /// Gets the in-memory list of bytes received by the ILP endpoint.
     /// </summary>
-    /// <returns>The mutable list of bytes received by the endpoint.</returns>
+    /// <summary>
+    /// Retrieve the mutable list of raw bytes received by this server instance's endpoint.
+    /// </summary>
+    /// <returns>The mutable list of bytes received by the endpoint for the current port.</returns>
     public List<byte> GetReceivedBytes()
     {
         return IlpEndpoint.GetReceiveBytes(_port);
     }
 
+    /// <summary>
+    /// Retrieves the last exception recorded for the server instance's configured port.
+    /// </summary>
+    /// <returns>The most recent <see cref="Exception"/> captured for the server port, or <c>null</c> if no error has been recorded.</returns>
     public Exception? GetLastError()
     {
         return IlpEndpoint.GetLastError(_port);
     }
 
+    /// <summary>
+    /// Checks whether the server's /ping endpoint responds with a successful HTTP status.
+    /// </summary>
+    /// <returns>`true` if the /ping endpoint returns a successful HTTP status code, `false` otherwise.</returns>
     public async Task<bool> Healthcheck()
     {
         var response = await new HttpClient().GetAsync($"http://localhost:{_port}/ping");
@@ -241,6 +270,10 @@ public class DummyHttpServer : IDisposable
         return null;
     }
 
+    /// <summary>
+    /// Gets the current receive counter for this server instance's configured port.
+    /// </summary>
+    /// <returns>The current counter value associated with the server's port.</returns>
     public int GetCounter()
     {
         return IlpEndpoint.GetCounter(_port);

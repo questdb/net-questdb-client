@@ -294,7 +294,13 @@ public interface IBuffer
     /// <remarks>
     ///     This method requires protocol version 3 or later. It will throw an <see cref="IngressError" /> with
     ///     <see cref="ErrorCode.ProtocolVersionError" /> if used with protocol version 1 or 2.
-    /// </remarks>
+    /// <summary>
+/// Adds a DECIMAL column to the current row using the ILP binary decimal layout.
+/// </summary>
+/// <param name="name">The column name.</param>
+/// <param name="value">The decimal value to write in ILP binary decimal format.</param>
+/// <returns>The same buffer instance for fluent chaining.</returns>
+/// <exception cref="IngressError">Thrown with ErrorCode.ProtocolVersionError when the connection uses a protocol version earlier than 3.</exception>
     public IBuffer Column(ReadOnlySpan<char> name, decimal value);
 
     /// <summary>
@@ -302,7 +308,12 @@ public interface IBuffer
     /// </summary>
     /// <param name="name">The column name.</param>
     /// <param name="value">The character value to store in the column.</param>
-    /// <returns>The buffer instance for method chaining.</returns>
+    /// <summary>
+/// Adds a character column with the specified name and value to the current row.
+/// </summary>
+/// <param name="name">The column name to write.</param>
+/// <param name="value">The character value to write for the column.</param>
+/// <returns>The buffer instance for method chaining.</returns>
     public IBuffer Column(ReadOnlySpan<char> name, char value);
 
     /// <summary>
@@ -310,6 +321,11 @@ public interface IBuffer
     /// </summary>
     /// <param name="name">The column name.</param>
     /// <param name="value">The GUID value to store in the column.</param>
-    /// <returns>The buffer instance for method chaining.</returns>
+    /// <summary>
+/// Adds a GUID column with the specified name and value to the current row.
+/// </summary>
+/// <param name="name">The column name.</param>
+/// <param name="value">The GUID value to write into the column.</param>
+/// <returns>The buffer instance for method chaining.</returns>
     public IBuffer Column(ReadOnlySpan<char> name, Guid value);
 }

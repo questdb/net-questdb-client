@@ -75,7 +75,10 @@ internal class HttpSender : AbstractSender
     /// <param name="options">
     ///     Configuration for the sender, including connection endpoint, TLS and certificate settings,
     ///     buffering and protocol parameters, authentication, and timeouts.
-    /// </param>
+    /// <summary>
+    /// Initializes a new HttpSender configured with the provided sender options and prepares internal state.
+    /// </summary>
+    /// <param name="options">Configuration options that control addresses, TLS, timeouts, authentication, buffering, and protocol selection for the sender.</param>
     public HttpSender(SenderOptions options)
     {
         _sendRequestFactory    = GenerateRequest;
@@ -88,7 +91,10 @@ internal class HttpSender : AbstractSender
     /// <summary>
     ///     Initializes a new instance of <see cref="HttpSender" /> by parsing a configuration string.
     /// </summary>
-    /// <param name="confStr">Configuration string in QuestDB connection string format.</param>
+    /// <summary>
+    /// Initializes a new HttpSender by parsing a QuestDB connection string into sender options.
+    /// </summary>
+    /// <param name="confStr">QuestDB connection string (e.g., "host=example.com;port=9000;user=...;password=...").</param>
     public HttpSender(string confStr) : this(new SenderOptions(confStr))
     {
     }
@@ -110,7 +116,11 @@ internal class HttpSender : AbstractSender
     /// <summary>
     ///     Creates a configured <see cref="SocketsHttpHandler" /> for a specific host.
     ///     Each handler is isolated to prevent TLS TargetHost conflicts between different addresses.
+    /// <summary>
+    /// Create a SocketsHttpHandler configured for the specified host using the instance's transport and TLS options.
     /// </summary>
+    /// <param name="host">The host name used for TLS TargetHost and certificate validation.</param>
+    /// <returns>A configured SocketsHttpHandler with pooling, connection limits, timeouts, and TLS/client-certificate settings applied.</returns>
     private SocketsHttpHandler CreateHandler(string host)
     {
         var handler = new SocketsHttpHandler
@@ -168,6 +178,14 @@ internal class HttpSender : AbstractSender
         return handler;
     }
 
+    /// <summary>
+    /// Initializes address management, determines the protocol version to use (probing the server when configured to Auto), and creates the internal buffer.
+    /// </summary>
+    /// <remarks>
+    /// - Initializes the AddressProvider from configured addresses and ensures an HttpClient exists for the current address.
+    /// - When Options.protocol_version is set to Auto, probes the server's /settings endpoint with a 1 second window to select the highest mutually supported protocol version up to V3; if probing fails or returns a non-success response, falls back to V1.
+    /// - Creates the Buffer instance using init_buf_size, max_name_len, max_buf_size, and the chosen protocol version.
+    /// </remarks>
     private void Build()
     {
         _addressProvider = new AddressProvider(Options.addresses);
@@ -215,7 +233,11 @@ internal class HttpSender : AbstractSender
     ///     Creates a new HttpClient for the specified address with proper configuration.
     /// </summary>
     /// <param name="address">The address to create a client for.</param>
-    /// <returns>A configured HttpClient for the given address.</returns>
+    /// <summary>
+    /// Creates and configures an HttpClient for the specified server address.
+    /// </summary>
+    /// <param name="address">Server address in the form "host" or "host:port".</param>
+    /// <returns>An HttpClient whose BaseAddress is set to the address' scheme/host/port, backed by a per-address HTTP handler, with an infinite timeout and optional Basic or Bearer Authorization header when credentials or a token are configured.</returns>
     private HttpClient CreateClientForAddress(string address)
     {
         // Determine the port to use
@@ -265,7 +287,10 @@ internal class HttpSender : AbstractSender
 
     /// <summary>
     ///     Gets or creates an HttpClient for the current address, caching it to avoid recreation on subsequent rotations.
+    /// <summary>
+    /// Ensures an HttpClient exists for the address currently selected by the AddressProvider and sets it as the active client.
     /// </summary>
+    /// <returns>The HttpClient instance associated with the current address.</returns>
     private HttpClient SwitchClientToCurrentAddress()
     {
         var address = _addressProvider.CurrentAddress;
@@ -284,7 +309,12 @@ internal class HttpSender : AbstractSender
     /// <summary>
     ///     Cleans up all cached HttpClient and SocketsHttpHandler instances except the ones for the current address.
     ///     Called when a successful response is received to avoid holding unnecessary resources.
+    /// <summary>
+    /// Disposes and removes cached HttpClient and SocketsHttpHandler instances for all addresses except the currently active address.
     /// </summary>
+    /// <remarks>
+    /// If only a single address is configured or only one client is cached, no action is taken.
+    /// </remarks>
     private void CleanupUnusedClients()
     {
         if (!_addressProvider.HasMultipleAddresses || _clientCache.Count == 1)
@@ -316,7 +346,10 @@ internal class HttpSender : AbstractSender
     /// <summary>
     ///     Creates an HTTP GET request to the /settings endpoint for querying server capabilities.
     /// </summary>
-    /// <returns>A new <see cref="HttpRequestMessage" /> configured for the /settings endpoint.</returns>
+    /// <summary>
+    /// Creates an HttpRequestMessage configured to probe the server's settings endpoint at "/settings".
+    /// </summary>
+    /// <returns>A new <see cref="HttpRequestMessage"/> for an HTTP GET to "/settings".</returns>
     private static HttpRequestMessage GenerateSettingsRequest()
     {
         return new HttpRequestMessage(HttpMethod.Get, "/settings");
@@ -327,7 +360,10 @@ internal class HttpSender : AbstractSender
     ///     timeout.
     /// </summary>
     /// <param name="ct">Optional cancellation token to link.</param>
-    /// <returns>A <see cref="CancellationTokenSource" /> configured with the request timeout.</returns>
+    /// <summary>
+    /// Create a linked CancellationTokenSource that will be canceled after the sender's request timeout.
+    /// </summary>
+    /// <returns>A <see cref="CancellationTokenSource"/> linked to the provided token and canceled after the calculated request timeout.</returns>
     private CancellationTokenSource GenerateRequestCts(CancellationToken ct = default)
     {
         var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
@@ -341,7 +377,10 @@ internal class HttpSender : AbstractSender
     /// <returns>
     ///     An <see cref="HttpRequestMessage" /> configured with the buffer as the request body, Content-Type set to
     ///     "text/plain" with charset "utf-8", and optionally gzip-compressed.
-    /// </returns>
+    /// <summary>
+    /// Create an HttpRequestMessage for POST /write containing the sender's current buffer as the request body.
+    /// </summary>
+    /// <returns>An HttpRequestMessage targeting "/write" whose content is the current Buffer; sets Content-Type to "text/plain; charset=utf-8", sets Content-Length when not gzipping, and adds "Content-Encoding: gzip" when gzipping.</returns>
     private HttpRequestMessage GenerateRequest()
     {
         var request = new HttpRequestMessage(HttpMethod.Post, "/write")
@@ -461,7 +500,16 @@ internal class HttpSender : AbstractSender
     /// <exception cref="IngressError">
     ///     Thrown with <see cref="ErrorCode.InvalidApiCall" /> if a transaction is open but not
     ///     committing, or with <see cref="ErrorCode.ServerFlushError" /> for server/transport errors.
+    /// <summary>
+    /// Sends the current buffer to the configured server and clears the buffer.
+    /// </summary>
+    /// <param name="ct">Cancellation token to cancel the send operation.</param>
+    /// <exception cref="IngressError">
+    /// Thrown with ErrorCode.InvalidApiCall when a transaction is open but not committing; thrown with ErrorCode.ServerFlushError when the server responds with an error or the client cannot complete the request (the server message or inner exception is included).
     /// </exception>
+    /// <remarks>
+    /// On success, <see cref="LastFlush"/> is set to the server-provided date (if available) and any unused per-address clients are cleaned up. On failure, <see cref="LastFlush"/> is set to the current time. The buffer is cleared regardless of outcome.
+    /// </remarks>
     public override void Send(CancellationToken ct = default)
     {
         if (WithinTransaction && !CommittingTransaction)
@@ -529,7 +577,16 @@ internal class HttpSender : AbstractSender
     ///     Thrown with <see cref="ErrorCode.ServerFlushError" /> when a connection could not be
     ///     established within the allowed retries.
     /// </exception>
-    /// <remarks>The caller is responsible for disposing the returned <see cref="HttpResponseMessage" />./// </remarks>
+    /// <summary>
+    /// Sends an HTTP request and, on connection failures or retriable HTTP errors, retries the send (with backoff and jitter)
+    /// and rotates to the next configured address until a successful response is received or the retry timeout elapses.
+    /// </summary>
+    /// <param name="ct">Token to observe for cancellation of the overall operation.</param>
+    /// <param name="requestFactory">Factory that produces a new <see cref="HttpRequestMessage"/> for each attempt.</param>
+    /// <param name="retryTimeout">Maximum total duration to spend retrying; use <see cref="TimeSpan.Zero"/> to disable retries.</param>
+    /// <returns>The final <see cref="HttpResponseMessage"/> returned by the server.</returns>
+    /// <exception cref="IngressError">Thrown with <see cref="ErrorCode.ServerFlushError"/> when no connection to any address could be established within the retry window.</exception>
+    /// <remarks>The caller is responsible for disposing the returned <see cref="HttpResponseMessage"/>.</remarks>
     private HttpResponseMessage SendWithRetries(CancellationToken ct, Func<HttpRequestMessage> requestFactory,
                                                 TimeSpan retryTimeout)
     {
@@ -623,7 +680,11 @@ internal class HttpSender : AbstractSender
     /// <exception cref="IngressError">
     ///     Always thrown with <see cref="ErrorCode.ServerFlushError" />; the message combines the
     ///     response reason phrase with the deserialized JSON error or raw response text.
-    /// </exception>
+    /// <summary>
+    /// Parse the HTTP response body (JSON if possible, otherwise plain text) and throw an IngressError containing the server message.
+    /// </summary>
+    /// <param name="response">The HTTP response whose content contains the server error details.</param>
+    /// <exception cref="IngressError">Thrown with <see cref="ErrorCode.ServerFlushError"/>; the exception message is the response's ReasonPhrase followed by the parsed JSON error or the raw response body.</exception>
     private void HandleErrorJson(HttpResponseMessage response)
     {
         using var respStream = response.Content.ReadAsStream();
@@ -647,7 +708,11 @@ internal class HttpSender : AbstractSender
     /// <exception cref="IngressError">
     ///     Always thrown with <see cref="ErrorCode.ServerFlushError" />; the message contains
     ///     <c>response.ReasonPhrase</c> followed by the deserialized JSON error or the raw response body.
-    /// </exception>
+    /// <summary>
+    /// Parse the response content as a JSON error payload and throw an IngressError containing the response reason and the parsed or raw error body.
+    /// </summary>
+    /// <param name="response">The HTTP response whose content contains the server error payload.</param>
+    /// <exception cref="IngressError">Thrown with ErrorCode.ServerFlushError and a message composed of the response ReasonPhrase followed by the parsed JSON error or the raw response body if JSON deserialization fails.</exception>
     private async Task HandleErrorJsonAsync(HttpResponseMessage response)
     {
         await using var respStream = await response.Content.ReadAsStreamAsync();
@@ -664,7 +729,20 @@ internal class HttpSender : AbstractSender
         }
     }
 
-    /// <inheritdoc />
+    /// <summary>
+    /// Sends the sender's buffered data to the current HTTP endpoint, applying retry, backoff, and address rotation when configured.
+    /// </summary>
+    /// <remarks>
+    /// Validates transaction state and returns immediately if the buffer is empty. Attempts an initial HTTP POST and, when enabled, retries
+    /// transient failures until the configured retry timeout elapses; retries include exponential backoff, jitter, and rotation to the next
+    /// address when multiple addresses are configured. On a successful response the method cleans up unused per-address clients and updates
+    /// the last-flush timestamp; on error it attempts to unwrap a JSON error body before raising an error. The buffer is cleared and resources
+    /// are disposed regardless of outcome.
+    /// </remarks>
+    /// <exception cref="IngressError">
+    /// Thrown when a commit is required to complete an open transaction, when the client cannot connect to any address, or when the server
+    /// returns an error (JSON error bodies will be included when available).
+    /// </exception>
     public override async Task SendAsync(CancellationToken ct = default)
     {
         if (WithinTransaction && !CommittingTransaction)
@@ -798,7 +876,11 @@ internal class HttpSender : AbstractSender
     ///     <c>true</c> if the error is transient and retriable (e.g., 404, 421, 500, 503, 504, 509, 523, 524, 529, 599);
     ///     otherwise, <c>false</c>.
     /// </returns>
-    // ReSharper disable once IdentifierTypo
+    /// <summary>
+    /// Determines whether an HTTP status code represents a transient or retriable error for request retry logic.
+    /// </summary>
+    /// <param name="code">The HTTP status code to evaluate.</param>
+    /// <returns>`true` if the code indicates a retriable/transient error (e.g., routing, server, or timeout conditions), `false` otherwise.</returns>
     private static bool IsRetriableError(HttpStatusCode code)
     {
         switch (code)

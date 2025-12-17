@@ -98,7 +98,11 @@ public class IlpEndpoint : Endpoint<Request, JsonErrorResponse?>
     public static bool WithRetriableError = false;
     public static bool WithErrorMessage = false;
 
-    // Get the port from request headers (set by DummyHttpServer)
+    /// <summary>
+    /// Determine the port key used for per-port state, preferring an explicit X-Server-Port request header when present.
+    /// </summary>
+    /// <param name="context">HTTP context from which to read the X-Server-Port header or the connection's local port.</param>
+    /// <returns>The port number from the X-Server-Port header if present and valid; otherwise the connection's local port; or 0 if neither is available.</returns>
     private static int GetPortKey(HttpContext context)
     {
         if (context?.Request.Headers.TryGetValue("X-Server-Port", out var portHeader) == true
@@ -109,6 +113,17 @@ public class IlpEndpoint : Endpoint<Request, JsonErrorResponse?>
         return context?.Connection?.LocalPort ?? 0;
     }
 
+    /// <summary>
+    /// Retrieve the port-scoped state for the specified server port, creating a new empty tuple if none exists.
+    /// </summary>
+    /// <param name="port">Server port number used as the key for port-scoped state.</param>
+    /// <returns>
+    /// A tuple containing:
+    /// - `Buffer`: the StringBuilder receiving text for the port,
+    /// - `Bytes`: the List&lt;byte&gt; receiving raw bytes for the port,
+    /// - `Error`: the last Exception observed for the port, or `null` if none,
+    /// - `Counter`: the per-port request counter.
+    /// </returns>
     private static (StringBuilder Buffer, List<byte> Bytes, Exception? Error, int Counter) GetOrCreatePortData(int port)
     {
         lock (PortData)
@@ -123,10 +138,24 @@ public class IlpEndpoint : Endpoint<Request, JsonErrorResponse?>
     }
 
 
-    // Public methods for accessing port-specific data (used by DummyHttpServer)
+    /// <summary>
+/// Gets the StringBuilder that accumulates received request bodies for the specified server port.
+/// </summary>
+/// <param name="port">The port number identifying the server instance whose buffer to retrieve.</param>
+/// <returns>The per-port receive buffer containing appended request string data.</returns>
     public static StringBuilder GetReceiveBuffer(int port) => GetOrCreatePortData(port).Buffer;
-    public static List<byte> GetReceiveBytes(int port) => GetOrCreatePortData(port).Bytes;
+    /// <summary>
+/// Gets the list of bytes received by the server instance identified by the specified port.
+/// </summary>
+/// <param name="port">The port number that identifies the server instance.</param>
+/// <returns>The list of bytes that have been received for the specified port.</returns>
+public static List<byte> GetReceiveBytes(int port) => GetOrCreatePortData(port).Bytes;
 
+    /// <summary>
+    /// Gets the last exception recorded for the specified server port.
+    /// </summary>
+    /// <param name="port">The port number used to identify the per-port server state.</param>
+    /// <returns>The exception recorded for the port, or <c>null</c> if no error has been recorded.</returns>
     public static Exception? GetLastError(int port)
     {
         lock (PortData)
@@ -135,6 +164,11 @@ public class IlpEndpoint : Endpoint<Request, JsonErrorResponse?>
         }
     }
 
+    /// <summary>
+    /// Stores or clears the last exception associated with the specified server port in the port-scoped state.
+    /// </summary>
+    /// <param name="port">The port identifier whose stored error will be set.</param>
+    /// <param name="error">The exception to store for the port, or <c>null</c> to clear the stored error.</param>
     public static void SetLastError(int port, Exception? error)
     {
         lock (PortData)
@@ -144,6 +178,11 @@ public class IlpEndpoint : Endpoint<Request, JsonErrorResponse?>
         }
     }
 
+    /// <summary>
+    /// Retrieves the current request counter for the specified port.
+    /// </summary>
+    /// <param name="port">The server port whose counter to retrieve.</param>
+    /// <returns>The current request counter value associated with the specified port.</returns>
     public static int GetCounter(int port)
     {
         lock (PortData)
@@ -152,6 +191,11 @@ public class IlpEndpoint : Endpoint<Request, JsonErrorResponse?>
         }
     }
 
+    /// <summary>
+    /// Set the request counter for the specified server port's per-port state.
+    /// </summary>
+    /// <param name="port">Port key identifying which server instance's state to modify.</param>
+    /// <param name="value">New counter value to store for that port.</param>
     public static void SetCounter(int port, int value)
     {
         lock (PortData)
@@ -161,6 +205,10 @@ public class IlpEndpoint : Endpoint<Request, JsonErrorResponse?>
         }
     }
 
+    /// <summary>
+    /// Clears stored state for the specified port, removing accumulated request text and bytes and resetting the port's last error and request counter.
+    /// </summary>
+    /// <param name="port">Port number whose stored buffers and metadata will be reset.</param>
     public static void ClearPort(int port)
     {
         lock (PortData)
@@ -174,6 +222,14 @@ public class IlpEndpoint : Endpoint<Request, JsonErrorResponse?>
         }
     }
 
+    /// <summary>
+    /// Set per-port configuration flags that control authentication requirements and simulated error behavior for the server running on the specified port.
+    /// </summary>
+    /// <param name="port">The server port to configure.</param>
+    /// <param name="tokenAuth">If true, token-based authentication is required for requests to this port.</param>
+    /// <param name="basicAuth">If true, HTTP Basic authentication is required for requests to this port.</param>
+    /// <param name="retriableError">If true, the endpoint will respond with an HTTP 500 to simulate a retriable server error for this port.</param>
+    /// <param name="errorMessage">If true, the endpoint will respond with a JSON error payload and HTTP 400 to simulate a client error for this port.</param>
     public static void SetPortConfig(int port, bool tokenAuth, bool basicAuth, bool retriableError, bool errorMessage)
     {
         lock (PortConfig)
@@ -182,6 +238,19 @@ public class IlpEndpoint : Endpoint<Request, JsonErrorResponse?>
         }
     }
 
+    /// <summary>
+    /// Resolve authentication and error-behavior flags for the specified server port, falling back to global defaults when no per-port configuration exists.
+    /// </summary>
+    /// <param name="port">TCP port number used to look up per-port configuration.</param>
+    /// <returns>
+    /// A tuple with the resolved flags:
+    /// <list type="bullet">
+    /// <item><description><c>TokenAuth</c>: <c>true</c> if token authentication is enabled for the port, <c>false</c> otherwise.</description></item>
+    /// <item><description><c>BasicAuth</c>: <c>true</c> if basic authentication is enabled for the port, <c>false</c> otherwise.</description></item>
+    /// <item><description><c>RetriableError</c>: <c>true</c> if the port is configured to respond with retriable errors, <c>false</c> otherwise.</description></item>
+    /// <item><description><c>ErrorMessage</c>: <c>true</c> if the port is configured to return structured error messages, <c>false</c> otherwise.</description></item>
+    /// </list>
+    /// </returns>
     private static (bool TokenAuth, bool BasicAuth, bool RetriableError, bool ErrorMessage) GetPortConfig(int port)
     {
         lock (PortConfig)
@@ -195,6 +264,14 @@ public class IlpEndpoint : Endpoint<Request, JsonErrorResponse?>
         }
     }
 
+    /// <summary>
+    /// Configure the endpoint's route, authentication behavior, request description, and request binder.
+    /// </summary>
+    /// <remarks>
+    /// Maps the POST route "api/v2/write" to the endpoint, allows anonymous access when token auth is disabled,
+    /// registers a basic-auth preprocessor when basic auth is enabled, declares that the endpoint accepts a <see cref="Request"/>,
+    /// and assigns the <see cref="Binder"/> as the request binder.
+    /// </remarks>
     public override void Configure()
     {
         Post("write", "api/v2/write");
@@ -212,6 +289,19 @@ public class IlpEndpoint : Endpoint<Request, JsonErrorResponse?>
         RequestBinder(new Binder());
     }
 
+    /// <summary>
+    /// Processes an incoming write request for a specific port's dummy server, recording the request body into that port's in-memory buffers or returning configured error responses.
+    /// </summary>
+    /// <param name="req">The bound request containing raw bytes and a UTF-8 string representation of the body.</param>
+    /// <param name="ct">A cancellation token to observe while processing the request.</param>
+    /// <remarks>
+    /// Behavior:
+    /// - Increments the per-port request counter.
+    /// - If the port's configuration requests a retriable error, responds with HTTP 500 and no content.
+    /// - If the port's configuration requests an error message, responds with a JsonErrorResponse and HTTP 400.
+    /// - Otherwise appends the request string to the port's receive buffer and the request bytes to the port's byte list, then responds with HTTP 204.
+    /// - On exception, stores the exception as the port's last error and rethrows.
+    /// </remarks>
     public override async Task HandleAsync(Request req, CancellationToken ct)
     {
         int port = GetPortKey(HttpContext);

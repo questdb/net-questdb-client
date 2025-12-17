@@ -126,6 +126,16 @@ using var sender = Sender.New("https::addr=localhost:9009;tls_verify=unsafe_off;
 using var sender = Sender.New("tcps::addr=localhost:9009;tls_verify=unsafe_off;username=admin;token=NgdiOWDoQNUP18WOnb1xkkEG5TzPYMda5SiUOvT1K0U=;");
 ```
 
+### Multiple database endpoints
+
+The client can be configured with multiple `addr` entries pointing to different instances of QuestDB.
+
+This is **not** for publishing data concurrently to multiple databases.
+
+Rather, this allows you to configure a backup database where data will be sent to in the event the primary database is unavailable.
+
+The swap happens transparently within a given `retry_timeout`, and is performed in a round-robin fashion (try the next endpoint and write if it is available). Once a new endpoint is selected, it continues to be used for the lifetime of that `Sender`.
+
 ## Configuration Parameters
 
 These options are set either using a config string, or by initialising QuestDBOptions.

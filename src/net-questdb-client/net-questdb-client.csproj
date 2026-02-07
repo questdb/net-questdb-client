@@ -9,7 +9,6 @@
         <ImplicitUsings>enable</ImplicitUsings>
         <Nullable>enable</Nullable>
         <LangVersion>latest</LangVersion>
-        <GeneratePackageOnBuild>true</GeneratePackageOnBuild>
         <Title>QuestDB client</Title>
         <Description>QuestDB .NET client. Supports ILP over HTTP/TCP and the QWP columnar binary protocol over WebSocket (ingest sender + egress query client + store-and-forward).</Description>
         <Copyright>QuestDB</Copyright>
@@ -19,8 +18,15 @@
         <PackageTags>QuestDB, ILP, QWP, WebSocket, columnar, ingest, query, store-and-forward</PackageTags>
         <Company>QuestDB Limited</Company>
         <PackageVersion>4.0.0</PackageVersion>
+        <PackageReadmeFile>README.md</PackageReadmeFile>
         <GenerateDocumentationFile>true</GenerateDocumentationFile>
         <TargetFrameworks>net6.0;net7.0;net8.0;net9.0;net10.0</TargetFrameworks>
+        <EmbedUntrackedSources>true</EmbedUntrackedSources>
+        <IncludeSymbols>true</IncludeSymbols>
+        <SymbolPackageFormat>snupkg</SymbolPackageFormat>
+    </PropertyGroup>
+    <PropertyGroup Condition="'$(TF_BUILD)' != ''">
+        <ContinuousIntegrationBuild>true</ContinuousIntegrationBuild>
     </PropertyGroup>
     <ItemGroup>
         <InternalsVisibleTo Include="net-questdb-client-tests" />
@@ -28,5 +34,11 @@
     <ItemGroup Condition="'$(TargetFramework)' != 'net6.0'">
         <!-- Egress consumer only; the egress decode path is #if NET7_0_OR_GREATER. -->
         <PackageReference Include="ZstdSharp.Port" Version="0.8.4" />
+    </ItemGroup>
+    <ItemGroup>
+        <None Include="..\..\README.md">
+            <Pack>True</Pack>
+            <PackagePath>\</PackagePath>
+        </None>
     </ItemGroup>
 </Project>

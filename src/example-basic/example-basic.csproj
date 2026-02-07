@@ -4,7 +4,6 @@
         <RootNamespace>QuestDBDemo</RootNamespace>
         <Nullable>enable</Nullable>
         <LangVersion>10</LangVersion>
-        <GeneratePackageOnBuild>false</GeneratePackageOnBuild>
         <Title>QuestDB client - Basic Example</Title>
         <Description>Basic example using the QuestDB ILP protocol client</Description>
         <TargetFrameworks>net6.0;net7.0;net8.0;net9.0;net10.0</TargetFrameworks>

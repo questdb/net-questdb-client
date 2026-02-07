@@ -56,8 +56,8 @@ public record SenderOptions
         "pool_timeout", "tls_verify", "tls_roots", "tls_roots_password", "own_socket", "gzip",
     };
 
-    private string _addr = "localhost:9000";
-    private List<string> _addresses = new();
+    private const string DefaultAddress = "localhost:9000";
+    private readonly List<string> _addresses = new();
     private TimeSpan _authTimeout = TimeSpan.FromMilliseconds(15000);
     private AutoFlushType _autoFlush = AutoFlushType.on;
     private int _autoFlushBytes = int.MaxValue;
@@ -91,7 +91,7 @@ public record SenderOptions
     /// </summary>
     public SenderOptions()
     {
-        ParseAddresses();
+        addr = DefaultAddress;
     }
 
     /// <summary>
@@ -103,8 +103,6 @@ public record SenderOptions
         ReadConfigStringIntoBuilder(confStr);
         ParseEnumWithDefault(nameof(protocol), "http", out _protocol);
         ParseEnumWithDefault(nameof(protocol_version), "auto", out _protocol_version);
-        ParseStringWithDefault(nameof(addr), "localhost:9000", out _addr!);
-        ParseAddresses();
         ParseEnumWithDefault(nameof(auto_flush), "on", out _autoFlush);
         ParseIntThatMayBeOff(nameof(auto_flush_rows), IsHttp() ? "75000" : "600", out _autoFlushRows);
         ParseIntThatMayBeOff(nameof(auto_flush_bytes), int.MaxValue.ToString(), out _autoFlushBytes);
@@ -161,8 +159,12 @@ public record SenderOptions
     /// </remarks>
     public string addr
     {
-        get => _addr;
-        set => _addr = value;
+        get => _addresses[0];
+        set
+        {
+            _addresses.Clear();
+            _addresses.Add(value);
+        }
     }
 
     /// <summary>
@@ -595,19 +597,23 @@ public record SenderOptions
         // Parse addresses manually before using DbConnectionStringBuilder
         // because DbConnectionStringBuilder only keeps the last value for duplicate keys
         _addresses.Clear();
-        foreach (var param in paramString.Split(';'))
+        foreach (var param in paramString.Split(';', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries))
         {
-            if (string.IsNullOrWhiteSpace(param)) continue;
-
-            var kvp = param.Split('=');
-            if (kvp.Length == 2 && kvp[0].Trim() == "addr")
+            if (!param.StartsWith("addr", StringComparison.OrdinalIgnoreCase))
             {
-                var addrValue = kvp[1].Trim();
-                if (!string.IsNullOrEmpty(addrValue))
-                {
-                    _addresses.Add(addrValue);
-                }
+                continue;
             }
+
+            var kvp = param.Split('=', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
+            if (kvp.Length == 2 && kvp[0].Equals("addr", StringComparison.OrdinalIgnoreCase))
+            {
+                _addresses.Add(kvp[1]);
+            }
+        }
+
+        if (_addresses.Count == 0)
+        {
+            _addresses.Add(DefaultAddress);
         }
 
         _connectionStringBuilder = new DbConnectionStringBuilder
@@ -701,15 +707,6 @@ public record SenderOptions
             {
                 throw new IngressError(ErrorCode.ConfigError, $"Invalid property: `{key}`");
             }
-        }
-    }
-
-    private void ParseAddresses()
-    {
-        // If no addresses were parsed from config string, use the primary addr
-        if (_addresses.Count == 0)
-        {
-            _addresses.Add(_addr);
         }
     }
 

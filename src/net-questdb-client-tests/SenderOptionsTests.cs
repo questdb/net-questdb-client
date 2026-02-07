@@ -44,8 +44,8 @@ public class SenderOptionsTests
     public void BasicParse()
     {
         Assert.That(
-            new SenderOptions("http::addr=localhost:9000;").addr,
-            Is.EqualTo("localhost:9000"));
+            new SenderOptions("http::addr=localhost:9999;").addr,
+            Is.EqualTo("localhost:9999"));
     }
 
     [Test]
@@ -59,10 +59,37 @@ public class SenderOptionsTests
     [Test]
     public void DuplicateKey()
     {
-        // duplicate keys are 'last writer wins'
+        // duplicate (non-addr) keys are 'last writer wins'
         Assert.That(
-            new SenderOptions("http::addr=localhost:9000;addr=localhost:9009;").addr,
-            Is.EqualTo("localhost:9009"));
+            new SenderOptions("http::auth_timeout=15000;auth_timeout=8000;").auth_timeout,
+            Is.EqualTo(TimeSpan.FromMilliseconds(8000)));
+    }
+
+    [Test]
+    public void DefaultConstructorInit()
+    {
+        var options = new SenderOptions
+        {
+            addr = "192.168.0.218:9000",
+        };
+
+        Assert.That(options.addr, Is.EqualTo("192.168.0.218:9000"));
+        Assert.That(options.AddressCount, Is.EqualTo(1));
+        Assert.That(options.addresses[0], Is.EqualTo("192.168.0.218:9000"));
+    }
+
+    [Test]
+    public void SetGetAddr()
+    {
+        var options = new SenderOptions();
+
+        Assert.That(options.addr, Is.EqualTo("localhost:9000"));
+
+        options.addr = "192.168.0.218:9000";
+
+        Assert.That(options.addr, Is.EqualTo("192.168.0.218:9000"));
+        Assert.That(options.AddressCount, Is.EqualTo(1));
+        Assert.That(options.addresses[0], Is.EqualTo("192.168.0.218:9000"));
     }
 
     [Test]

@@ -16,6 +16,7 @@
  *
  ******************************************************************************/
 
+using System.Buffers.Binary;
 using NUnit.Framework;
 using QuestDB.Qwp;
 using QuestDB.Utils;
@@ -332,13 +333,151 @@ public class QwpTableBufferTests
     }
 
     // ---- Symbol column support (PR 3b) ----
-    [Test] public void AddSymbolNullOnNonNullableColumn() => Assert.Inconclusive(AwaitingSymbol);
-    [Test] public void AddSymbolUtf8CancelRowRewindsDictionary() => Assert.Inconclusive(AwaitingSymbol);
-    [Test] public void AddSymbolUtf8RejectsInvalidUtf8() => Assert.Inconclusive(AwaitingSymbol);
-    [Test] public void AddSymbolUtf8ReusesExistingDictionaryEntry() => Assert.Inconclusive(AwaitingSymbol);
-    [Test] public void AddSymbolWithGlobalIdStoresOnlyGlobalIds() => Assert.Inconclusive(AwaitingSymbol);
-    [Test] public void CancelRowResetsSymbolDictOnLateAddedColumn() => Assert.Inconclusive(AwaitingSymbol);
-    [Test] public void CancelRowRetainsGlobalSymbolIdWithoutLocalDictionary() => Assert.Inconclusive(AwaitingSymbol);
+
+    [Test]
+    public void AddSymbolNullOnNonNullableColumn()
+    {
+        var table = new QwpTableBuffer("t");
+        var col = table.GetOrCreateColumn("sym", QwpConstants.TYPE_SYMBOL, false)!;
+        col.AddSymbol("server1");
+        table.NextRow();
+        col.AddSymbol(null);
+        table.NextRow();
+        col.AddSymbol("server2");
+        table.NextRow();
+
+        Assert.That(table.RowCount, Is.EqualTo(3));
+        // Non-nullable: every row produces a physical value (sentinel for nulls).
+        Assert.That(col.Size, Is.EqualTo(col.ValueCount));
+    }
+
+    [Test]
+    public void AddSymbolUtf8CancelRowRewindsDictionary()
+    {
+        var table = new QwpTableBuffer("t");
+        table.GetOrCreateColumn("a", QwpConstants.TYPE_LONG, false)!.AddLong(0);
+        table.NextRow();
+
+        table.GetOrCreateColumn("a", QwpConstants.TYPE_LONG, false)!.AddLong(1);
+        var col = table.GetOrCreateColumn("s", QwpConstants.TYPE_SYMBOL, true)!;
+        col.AddSymbolUtf8(System.Text.Encoding.UTF8.GetBytes("stale"));
+        table.CancelCurrentRow();
+
+        table.GetOrCreateColumn("a", QwpConstants.TYPE_LONG, false)!.AddLong(1);
+        col.AddSymbolUtf8(System.Text.Encoding.UTF8.GetBytes("fresh"));
+        table.NextRow();
+
+        Assert.That(col.Size, Is.EqualTo(2));
+        Assert.That(col.ValueCount, Is.EqualTo(1));
+        Assert.That(col.GetSymbolDictionary(), Is.EqualTo(new[] { "fresh" }));
+        // First int in the data buffer is the local index for "fresh" (= 0).
+        Assert.That(BinaryPrimitives.ReadInt32LittleEndian(col.GetDataReadOnlySpan()), Is.EqualTo(0));
+    }
+
+    [Test]
+    public void AddSymbolUtf8RejectsInvalidUtf8()
+    {
+        var table = new QwpTableBuffer("t");
+        var col = table.GetOrCreateColumn("sym", QwpConstants.TYPE_SYMBOL, true)!;
+        var invalid = new byte[] { 0xC3, 0x28 };
+
+        Assert.That(() => col.AddSymbolUtf8(invalid),
+                    Throws.TypeOf<IngressError>().With.Message.Contains("invalid UTF-8"));
+        Assert.That(col.Size, Is.EqualTo(0));
+        Assert.That(col.ValueCount, Is.EqualTo(0));
+        Assert.That(col.SymbolDictionarySize, Is.EqualTo(0));
+    }
+
+    [Test]
+    public void AddSymbolUtf8ReusesExistingDictionaryEntry()
+    {
+        var table = new QwpTableBuffer("t");
+        var col = table.GetOrCreateColumn("sym", QwpConstants.TYPE_SYMBOL, true)!;
+        col.AddSymbolUtf8(System.Text.Encoding.UTF8.GetBytes("東京"));
+        table.NextRow();
+        col.AddSymbolUtf8(System.Text.Encoding.UTF8.GetBytes("東京"));
+        table.NextRow();
+        col.AddSymbolUtf8(System.Text.Encoding.UTF8.GetBytes("Αθηνα"));
+        table.NextRow();
+
+        Assert.That(col.Size, Is.EqualTo(3));
+        Assert.That(col.ValueCount, Is.EqualTo(3));
+        Assert.That(col.SymbolDictionarySize, Is.EqualTo(2));
+        Assert.That(col.GetSymbolDictionary(), Is.EqualTo(new[] { "東京", "Αθηνα" }));
+
+        var data = col.GetDataReadOnlySpan();
+        Assert.That(BinaryPrimitives.ReadInt32LittleEndian(data.Slice(0, 4)), Is.EqualTo(0));
+        Assert.That(BinaryPrimitives.ReadInt32LittleEndian(data.Slice(4, 4)), Is.EqualTo(0));
+        Assert.That(BinaryPrimitives.ReadInt32LittleEndian(data.Slice(8, 4)), Is.EqualTo(1));
+    }
+
+    [Test]
+    public void AddSymbolWithGlobalIdStoresOnlyGlobalIds()
+    {
+        var table = new QwpTableBuffer("t");
+        var col = table.GetOrCreateColumn("sym", QwpConstants.TYPE_SYMBOL, true)!;
+        col.AddSymbolWithGlobalId("alpha", 7);
+        table.NextRow();
+        col.AddSymbolWithGlobalId("beta", 11);
+        table.NextRow();
+
+        Assert.That(col.Size, Is.EqualTo(2));
+        Assert.That(col.ValueCount, Is.EqualTo(2));
+        Assert.That(col.SymbolDictionarySize, Is.EqualTo(0));
+        Assert.That(col.GetAuxDataReadOnlySpan().IsEmpty, Is.True);
+        Assert.That(col.MaxGlobalSymbolId, Is.EqualTo(11));
+
+        var data = col.GetDataReadOnlySpan();
+        Assert.That(BinaryPrimitives.ReadInt32LittleEndian(data.Slice(0, 4)), Is.EqualTo(7));
+        Assert.That(BinaryPrimitives.ReadInt32LittleEndian(data.Slice(4, 4)), Is.EqualTo(11));
+    }
+
+    [Test]
+    public void CancelRowResetsSymbolDictOnLateAddedColumn()
+    {
+        var table = new QwpTableBuffer("t");
+        table.GetOrCreateColumn("a", QwpConstants.TYPE_LONG, false)!.AddLong(0);
+        table.NextRow();
+
+        table.GetOrCreateColumn("a", QwpConstants.TYPE_LONG, false)!.AddLong(1);
+        var col = table.GetOrCreateColumn("s", QwpConstants.TYPE_SYMBOL, true)!;
+        col.AddSymbol("stale");
+        table.CancelCurrentRow();
+
+        // After cancel, dictionary must be empty — "fresh" gets local id 0, not 1.
+        table.GetOrCreateColumn("a", QwpConstants.TYPE_LONG, false)!.AddLong(1);
+        col.AddSymbol("fresh");
+        table.NextRow();
+
+        Assert.That(col.Size, Is.EqualTo(2));
+        Assert.That(col.ValueCount, Is.EqualTo(1));
+        var dict = col.GetSymbolDictionary();
+        Assert.That(dict.Length, Is.EqualTo(1));
+        Assert.That(dict[0], Is.EqualTo("fresh"));
+    }
+
+    [Test]
+    public void CancelRowRetainsGlobalSymbolIdWithoutLocalDictionary()
+    {
+        var table = new QwpTableBuffer("t");
+        table.GetOrCreateColumn("a", QwpConstants.TYPE_LONG, false)!.AddLong(0);
+        table.NextRow();
+
+        table.GetOrCreateColumn("a", QwpConstants.TYPE_LONG, false)!.AddLong(1);
+        var col = table.GetOrCreateColumn("s", QwpConstants.TYPE_SYMBOL, true)!;
+        col.AddSymbolWithGlobalId("stale", 4);
+        table.CancelCurrentRow();
+
+        table.GetOrCreateColumn("a", QwpConstants.TYPE_LONG, false)!.AddLong(1);
+        col.AddSymbolWithGlobalId("fresh", 9);
+        table.NextRow();
+
+        Assert.That(col.Size, Is.EqualTo(2));
+        Assert.That(col.ValueCount, Is.EqualTo(1));
+        Assert.That(col.SymbolDictionarySize, Is.EqualTo(0));
+        Assert.That(col.MaxGlobalSymbolId, Is.EqualTo(9));
+        Assert.That(BinaryPrimitives.ReadInt32LittleEndian(col.GetDataReadOnlySpan()), Is.EqualTo(9));
+    }
 
     // ---- Decimal column support (PR 3c) ----
     [Test] public void AddDecimal64PrecisionLoss() => Assert.Inconclusive(AwaitingDecimal);

@@ -17,6 +17,7 @@
  ******************************************************************************/
 
 using System.Buffers.Binary;
+using System.Text;
 using QuestDB.Utils;
 
 namespace QuestDB.Qwp;
@@ -41,6 +42,7 @@ internal sealed class QwpTableBuffer
     private readonly Dictionary<string, int> _columnIndexByLowerName =
         new(StringComparer.Ordinal);
     private readonly List<ColumnBuffer> _columns = new();
+    private readonly IQwpGlobalSymbolSink? _globalSymbolSink;
     private readonly string _tableName;
 
     private int _columnAccessCursor;
@@ -49,7 +51,15 @@ internal sealed class QwpTableBuffer
     private int _rowCount;
     private int _schemaId = -1;
 
-    public QwpTableBuffer(string tableName)
+    public QwpTableBuffer(string tableName) : this(tableName, null) { }
+
+    /// <summary>
+    ///     Constructs a table buffer optionally bound to a global symbol dictionary sink.
+    ///     When <paramref name="globalSymbolSink"/> is non-null, <c>AddSymbol</c> calls flow
+    ///     through it for global ID allocation; otherwise the column maintains a
+    ///     per-batch local dictionary.
+    /// </summary>
+    public QwpTableBuffer(string tableName, IQwpGlobalSymbolSink? globalSymbolSink)
     {
         if (string.IsNullOrEmpty(tableName))
         {
@@ -61,6 +71,7 @@ internal sealed class QwpTableBuffer
                 $"table name too long [maxLength={QwpConstants.MAX_TABLE_NAME_LENGTH}]");
         }
         _tableName = tableName;
+        _globalSymbolSink = globalSymbolSink;
     }
 
     public string TableName => _tableName;
@@ -217,7 +228,10 @@ internal sealed class QwpTableBuffer
                 $"column count exceeds maximum: {_columns.Count + 1} (max {QwpConstants.MAX_COLUMNS_PER_TABLE})");
         }
 
-        var col = new ColumnBuffer(name, type, useNullBitmap) { Index = _columns.Count };
+        var col = new ColumnBuffer(name, type, useNullBitmap, _globalSymbolSink)
+        {
+            Index = _columns.Count,
+        };
         _columns.Add(col);
         _columnIndexByLowerName[LowerInvariant(name)] = col.Index;
 
@@ -248,7 +262,11 @@ internal sealed class QwpTableBuffer
     /// </summary>
     public sealed class ColumnBuffer
     {
+        // Strict UTF-8 decoder — throws on invalid byte sequences (used by AddSymbolUtf8).
+        private static readonly UTF8Encoding StrictUtf8 = new(false, true);
+
         private readonly PinnedAppendBuffer? _dataBuffer;
+        private readonly IQwpGlobalSymbolSink? _globalSymbolSink;
         private readonly PinnedAppendBuffer? _stringData;
         private readonly PinnedAppendBuffer? _stringOffsets;
 
@@ -256,17 +274,25 @@ internal sealed class QwpTableBuffer
         private byte[] _nullBitmap = Array.Empty<byte>();
         private int _nullBitmapCapBits;
 
+        // Per-column symbol state (TYPE_SYMBOL only). Null when unused.
+        private PinnedAppendBuffer? _auxBuffer;
+        private Dictionary<string, int>? _symbolDict;
+        private List<string>? _symbolList;
+        private bool _storeGlobalSymbolIdsOnly;
+        private int _maxGlobalSymbolId = -1;
+
         private int _geohashPrecision = -1;
         private bool _hasNulls;
         private int _size;
         private int _valueCount;
 
-        internal ColumnBuffer(string name, byte type, bool useNullBitmap)
+        internal ColumnBuffer(string name, byte type, bool useNullBitmap, IQwpGlobalSymbolSink? globalSymbolSink = null)
         {
             Name = name;
             Type = type;
             UseNullBitmap = useNullBitmap;
             ElementSize = ElementSizeInBuffer(type);
+            _globalSymbolSink = globalSymbolSink;
 
             switch (type)
             {
@@ -408,6 +434,116 @@ internal sealed class QwpTableBuffer
             _size++;
         }
 
+        /// <summary>
+        ///     Number of entries in the per-column local symbol dictionary (zero when in
+        ///     global-IDs-only mode or when the column is empty).
+        /// </summary>
+        public int SymbolDictionarySize => _symbolList?.Count ?? 0;
+
+        /// <summary>Largest global symbol ID seen on this column, or -1 if no global IDs were written.</summary>
+        public int MaxGlobalSymbolId => _maxGlobalSymbolId;
+
+        /// <summary>Whether the column is currently in "global IDs only" mode (no local dict).</summary>
+        public bool StoreGlobalSymbolIdsOnly => _storeGlobalSymbolIdsOnly;
+
+        /// <summary>
+        ///     Snapshot of the per-column local symbol dictionary in insertion order.
+        ///     Returns an empty array when in global-IDs-only mode or when the column is empty.
+        /// </summary>
+        public string[] GetSymbolDictionary() =>
+            _symbolList is null ? Array.Empty<string>() : _symbolList.ToArray();
+
+        /// <summary>Read-only span over the column's data buffer (the bytes written so far).</summary>
+        public ReadOnlySpan<byte> GetDataReadOnlySpan() =>
+            _dataBuffer is null ? ReadOnlySpan<byte>.Empty : _dataBuffer.AsReadOnlySpan(0, _dataBuffer.Length);
+
+        /// <summary>
+        ///     Read-only span over the per-column auxiliary buffer (used to record global IDs
+        ///     when the column is in mixed local+global mode). Empty when the column is in
+        ///     local-only or global-only mode.
+        /// </summary>
+        public ReadOnlySpan<byte> GetAuxDataReadOnlySpan() =>
+            _auxBuffer is null ? ReadOnlySpan<byte>.Empty : _auxBuffer.AsReadOnlySpan(0, _auxBuffer.Length);
+
+        public void AddSymbol(string? value)
+        {
+            if (value is null)
+            {
+                AddNull();
+                return;
+            }
+            if (_globalSymbolSink is not null)
+            {
+                var globalId = _globalSymbolSink.GetOrAddGlobalSymbol(value);
+                AddSymbolWithGlobalId(value, globalId);
+                return;
+            }
+            if (_storeGlobalSymbolIdsOnly)
+            {
+                throw new IngressError(Enums.ErrorCode.InvalidName,
+                    $"column '{Name}' cannot mix global symbol IDs with local symbol dictionary values");
+            }
+            var idx = GetOrAddLocalSymbol(value);
+            _dataBuffer!.PutInt(idx);
+            _valueCount++;
+            _size++;
+        }
+
+        public void AddSymbolUtf8(ReadOnlySpan<byte> utf8Bytes)
+        {
+            if (utf8Bytes.IsEmpty)
+            {
+                // Java treats negative length as null, otherwise empty string is a real value.
+                // .NET's empty span is unambiguous — treat it as a real (zero-length) symbol.
+                AddSymbol(string.Empty);
+                return;
+            }
+
+            string decoded;
+            try
+            {
+                decoded = StrictUtf8.GetString(utf8Bytes);
+            }
+            catch (DecoderFallbackException ex)
+            {
+                throw new IngressError(Enums.ErrorCode.InvalidName,
+                    $"cannot convert invalid UTF-8 sequence to UTF-16 for column '{Name}'", ex);
+            }
+            AddSymbol(decoded);
+        }
+
+        public void AddSymbolWithGlobalId(string? value, int globalId)
+        {
+            if (value is null)
+            {
+                AddNull();
+                return;
+            }
+
+            if (!_storeGlobalSymbolIdsOnly)
+            {
+                if (_symbolList is { Count: > 0 })
+                {
+                    // Mixed mode: record the local index in dataBuffer + the global ID in
+                    // the aux buffer, so the encoder can ship the local dict + a mapping
+                    // from local IDs to global IDs.
+                    var localIdx = GetOrAddLocalSymbol(value);
+                    _dataBuffer!.PutInt(localIdx);
+                    _auxBuffer ??= new PinnedAppendBuffer(64);
+                    _auxBuffer.PutInt(globalId);
+                    if (globalId > _maxGlobalSymbolId) _maxGlobalSymbolId = globalId;
+                    _valueCount++;
+                    _size++;
+                    return;
+                }
+                _storeGlobalSymbolIdsOnly = true;
+            }
+            _dataBuffer!.PutInt(globalId);
+            if (globalId > _maxGlobalSymbolId) _maxGlobalSymbolId = globalId;
+            _valueCount++;
+            _size++;
+        }
+
         public void AddString(string? value)
         {
             if (value is null && UseNullBitmap)
@@ -539,10 +675,20 @@ internal sealed class QwpTableBuffer
                 _stringOffsets.JumpTo((newValueCount + 1) * 4);
             }
 
+            // Rewind aux buffer (mixed-mode global IDs).
+            if (_auxBuffer is not null)
+            {
+                _auxBuffer.JumpTo(newValueCount * 4);
+            }
+
             // Type-specific metadata reverts to "freshly created" when truncated to zero.
             if (newValueCount == 0)
             {
                 _geohashPrecision = -1;
+                _storeGlobalSymbolIdsOnly = false;
+                _maxGlobalSymbolId = -1;
+                _symbolDict?.Clear();
+                _symbolList?.Clear();
             }
         }
 
@@ -552,6 +698,7 @@ internal sealed class QwpTableBuffer
             _valueCount = 0;
             _hasNulls = false;
             _dataBuffer?.Truncate();
+            _auxBuffer?.Truncate();
             if (_stringOffsets is not null)
             {
                 _stringOffsets.Truncate();
@@ -560,6 +707,21 @@ internal sealed class QwpTableBuffer
             _stringData?.Truncate();
             if (_nullBitmap.Length > 0) Array.Clear(_nullBitmap, 0, _nullBitmap.Length);
             _geohashPrecision = -1;
+            _storeGlobalSymbolIdsOnly = false;
+            _maxGlobalSymbolId = -1;
+            _symbolDict?.Clear();
+            _symbolList?.Clear();
+        }
+
+        private int GetOrAddLocalSymbol(string value)
+        {
+            _symbolDict ??= new Dictionary<string, int>(StringComparer.Ordinal);
+            _symbolList ??= new List<string>();
+            if (_symbolDict.TryGetValue(value, out var existing)) return existing;
+            var idx = _symbolList.Count;
+            _symbolDict[value] = idx;
+            _symbolList.Add(value);
+            return idx;
         }
 
         private void EnsureNullBitmapCapacity(int requiredBits)

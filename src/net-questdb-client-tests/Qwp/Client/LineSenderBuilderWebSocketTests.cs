@@ -217,23 +217,22 @@ public class LineSenderBuilderWebSocketTests
     }
 
     [Test]
-    public void WsScheme_FactoryReturnsNotImplementedForNow()
+    public void WsScheme_FactoryAttemptsConnect()
     {
-        // PR0: WS sender is not implemented yet; factory throws NotImplementedException.
-        // Replace with instance-of check when QwpWebSocketSender lands in PR7.
-        var options = new SenderOptions("ws::addr=localhost;");
+        // PR 7 wired the factory to construct QwpWebSocketSender, which connects in the
+        // constructor. Without a server, the connect fails with IngressError(SocketError)
+        // — but the factory no longer throws NotImplementedException for ws/wss.
+        var options = new SenderOptions("ws::addr=127.0.0.1:1;");
         Assert.That(() => options.Build(),
-                    Throws.TypeOf<NotImplementedException>()
-                          .With.Message.Contains("QWP WebSocket sender is not yet implemented"));
+                    Throws.TypeOf<QuestDB.Utils.IngressError>().With.Message.Contains("WebSocket connect"));
     }
 
     [Test]
-    public void WssScheme_FactoryReturnsNotImplementedForNow()
+    public void WssScheme_FactoryAttemptsConnect()
     {
-        var options = new SenderOptions("wss::addr=localhost;");
+        var options = new SenderOptions("wss::addr=127.0.0.1:1;");
         Assert.That(() => options.Build(),
-                    Throws.TypeOf<NotImplementedException>()
-                          .With.Message.Contains("QWP WebSocket sender is not yet implemented"));
+                    Throws.TypeOf<QuestDB.Utils.IngressError>().With.Message.Contains("WebSocket connect"));
     }
 
     [Test]
@@ -332,13 +331,19 @@ public class LineSenderBuilderWebSocketTests
     [Test]
     public void ConnectionRefused_SurfacesError()
     {
-        Assert.Inconclusive("Awaiting PR7: QwpWebSocketSender connect path.");
+        // Port 1 is reserved for tcpmux and is virtually never bound — connect fails fast.
+        var options = new SenderOptions("ws::addr=127.0.0.1:1;");
+        Assert.That(() => options.Build(),
+                    Throws.TypeOf<IngressError>().With.Message.Contains("WebSocket connect"));
     }
 
     [Test]
     public void DnsResolutionFailure_SurfacesError()
     {
-        Assert.Inconclusive("Awaiting PR7: QwpWebSocketSender connect path.");
+        // .invalid TLD is reserved for testing — never resolves.
+        var options = new SenderOptions("ws::addr=should-not-resolve.invalid;");
+        Assert.That(() => options.Build(),
+                    Throws.TypeOf<IngressError>().With.Message.Contains("WebSocket connect"));
     }
 
     // ---- Divergent: Java behaviours the .NET wrapper does not replicate ----

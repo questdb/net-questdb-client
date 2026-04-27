@@ -285,9 +285,13 @@ internal sealed class WebSocketResponse
         return offset;
     }
 
+    /// <summary>
+    ///     Per-entry size only — the 2-byte tableCount is already counted by
+    ///     <see cref="MIN_OK_RESPONSE_SIZE"/> / <see cref="MIN_DURABLE_ACK_SIZE"/>.
+    /// </summary>
     private int TableEntriesSize()
     {
-        var size = 2; // tableCount
+        var size = 0;
         for (var i = 0; i < _tableNames.Count; i++)
         {
             size += 2 + Encoding.UTF8.GetByteCount(_tableNames[i]) + 8;

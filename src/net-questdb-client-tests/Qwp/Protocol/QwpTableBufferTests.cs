@@ -557,16 +557,333 @@ public class QwpTableBufferTests
     }
 
     // ---- Array column support (PR 3d) ----
-    [Test] public void AddDoubleArrayNullOnNonNullableColumn() => Assert.Inconclusive(AwaitingArray);
-    [Test] public void AddDoubleArrayPayloadSupportsHigherDimensionalShape() => Assert.Inconclusive(AwaitingArray);
-    [Test] public void AddLongArrayNullOnNonNullableColumn() => Assert.Inconclusive(AwaitingArray);
-    [Test] public void CancelRowRewindsDoubleArrayOffsets() => Assert.Inconclusive(AwaitingArray);
-    [Test] public void CancelRowRewindsLongArrayOffsets() => Assert.Inconclusive(AwaitingArray);
-    [Test] public void CancelRowRewindsMultiDimArrayOffsets() => Assert.Inconclusive(AwaitingArray);
-    [Test] public void DoubleArrayWrapperMultipleRows() => Assert.Inconclusive(AwaitingArray);
-    [Test] public void DoubleArrayWrapperShrinkingSize() => Assert.Inconclusive(AwaitingArray);
-    [Test] public void DoubleArrayWrapperVaryingDimensionality() => Assert.Inconclusive(AwaitingArray);
-    [Test] public void LongArrayMultipleRows() => Assert.Inconclusive(AwaitingArray);
-    [Test] public void LongArrayShrinkingSize() => Assert.Inconclusive(AwaitingArray);
-    [Test] public void LongArrayWrapperMultipleRows() => Assert.Inconclusive(AwaitingArray);
+
+    [Test]
+    public void AddDoubleArrayNullOnNonNullableColumn()
+    {
+        var table = new QwpTableBuffer("t");
+        var col = table.GetOrCreateColumn("arr", QwpConstants.TYPE_DOUBLE_ARRAY, false)!;
+        col.AddDoubleArray(new[] { 1.0, 2.0 });
+        table.NextRow();
+        col.AddDoubleArray((double[]?)null);
+        table.NextRow();
+        col.AddDoubleArray(new[] { 3.0, 4.0 });
+        table.NextRow();
+
+        Assert.That(table.RowCount, Is.EqualTo(3));
+        Assert.That(col.ValueCount, Is.EqualTo(3));
+        Assert.That(col.Size, Is.EqualTo(col.ValueCount));
+
+        var encoded = ReadDoubleArraysLikeEncoder(col);
+        Assert.That(encoded, Is.EqualTo(new[] { 1.0, 2.0, 3.0, 4.0 }));
+
+        var dims = col.GetArrayDims();
+        var shapes = col.GetArrayShapes();
+        Assert.That(dims[0], Is.EqualTo((byte)1));
+        Assert.That(shapes[0], Is.EqualTo(2));
+        Assert.That(dims[1], Is.EqualTo((byte)1));
+        Assert.That(shapes[1], Is.EqualTo(0));
+        Assert.That(dims[2], Is.EqualTo((byte)1));
+        Assert.That(shapes[2], Is.EqualTo(2));
+    }
+
+    [Test]
+    [Ignore("Awaiting raw-payload AddDoubleArrayPayload API (Java's appendToBufPtr hook for >3D arrays). PR 3d only ships the typed 1D/2D overloads.")]
+    public void AddDoubleArrayPayloadSupportsHigherDimensionalShape() { }
+
+    [Test]
+    public void AddLongArrayNullOnNonNullableColumn()
+    {
+        var table = new QwpTableBuffer("t");
+        var col = table.GetOrCreateColumn("arr", QwpConstants.TYPE_LONG_ARRAY, false)!;
+        col.AddLongArray(new long[] { 10, 20 });
+        table.NextRow();
+        col.AddLongArray((long[]?)null);
+        table.NextRow();
+        col.AddLongArray(new long[] { 30, 40 });
+        table.NextRow();
+
+        Assert.That(table.RowCount, Is.EqualTo(3));
+        Assert.That(col.ValueCount, Is.EqualTo(3));
+
+        var encoded = ReadLongArraysLikeEncoder(col);
+        Assert.That(encoded, Is.EqualTo(new long[] { 10, 20, 30, 40 }));
+
+        var dims = col.GetArrayDims();
+        var shapes = col.GetArrayShapes();
+        Assert.That(dims[0], Is.EqualTo((byte)1));
+        Assert.That(shapes[0], Is.EqualTo(2));
+        Assert.That(dims[1], Is.EqualTo((byte)1));
+        Assert.That(shapes[1], Is.EqualTo(0));
+        Assert.That(dims[2], Is.EqualTo((byte)1));
+        Assert.That(shapes[2], Is.EqualTo(2));
+    }
+
+    [Test]
+    public void CancelRowRewindsDoubleArrayOffsets()
+    {
+        var table = new QwpTableBuffer("t");
+        table.GetOrCreateColumn("arr", QwpConstants.TYPE_DOUBLE_ARRAY, false)!.AddDoubleArray(new[] { 1.0, 2.0 });
+        table.NextRow();
+        table.GetOrCreateColumn("arr", QwpConstants.TYPE_DOUBLE_ARRAY, false)!.AddDoubleArray(new[] { 3.0, 4.0 });
+        table.NextRow();
+
+        // Start row 2 then cancel.
+        table.GetOrCreateColumn("arr", QwpConstants.TYPE_DOUBLE_ARRAY, false)!.AddDoubleArray(new[] { 5.0, 6.0 });
+        table.CancelCurrentRow();
+
+        // Replacement row 2.
+        var col = table.GetOrCreateColumn("arr", QwpConstants.TYPE_DOUBLE_ARRAY, false)!;
+        col.AddDoubleArray(new[] { 7.0, 8.0 });
+        table.NextRow();
+
+        Assert.That(table.RowCount, Is.EqualTo(3));
+        Assert.That(col.ValueCount, Is.EqualTo(3));
+        Assert.That(ReadDoubleArraysLikeEncoder(col),
+                    Is.EqualTo(new[] { 1.0, 2.0, 3.0, 4.0, 7.0, 8.0 }));
+    }
+
+    [Test]
+    public void CancelRowRewindsLongArrayOffsets()
+    {
+        var table = new QwpTableBuffer("t");
+        table.GetOrCreateColumn("arr", QwpConstants.TYPE_LONG_ARRAY, false)!.AddLongArray(new long[] { 10, 20 });
+        table.NextRow();
+
+        table.GetOrCreateColumn("arr", QwpConstants.TYPE_LONG_ARRAY, false)!.AddLongArray(new long[] { 30, 40 });
+        table.CancelCurrentRow();
+
+        var col = table.GetOrCreateColumn("arr", QwpConstants.TYPE_LONG_ARRAY, false)!;
+        col.AddLongArray(new long[] { 50, 60 });
+        table.NextRow();
+
+        Assert.That(table.RowCount, Is.EqualTo(2));
+        Assert.That(col.ValueCount, Is.EqualTo(2));
+        Assert.That(ReadLongArraysLikeEncoder(col), Is.EqualTo(new long[] { 10, 20, 50, 60 }));
+    }
+
+    [Test]
+    public void CancelRowRewindsMultiDimArrayOffsets()
+    {
+        var table = new QwpTableBuffer("t");
+        var col = table.GetOrCreateColumn("arr", QwpConstants.TYPE_DOUBLE_ARRAY, false)!;
+        col.AddDoubleArray(new[,] { { 1.0, 2.0 }, { 3.0, 4.0 } });
+        table.NextRow();
+
+        col.AddDoubleArray(new[,] { { 5.0, 6.0 }, { 7.0, 8.0 } });
+        table.CancelCurrentRow();
+
+        col.AddDoubleArray(new[,] { { 9.0, 10.0 }, { 11.0, 12.0 } });
+        table.NextRow();
+
+        Assert.That(table.RowCount, Is.EqualTo(2));
+        Assert.That(col.ValueCount, Is.EqualTo(2));
+
+        var dims = col.GetArrayDims();
+        var shapes = col.GetArrayShapes();
+        Assert.That(dims[0], Is.EqualTo((byte)2));
+        Assert.That(dims[1], Is.EqualTo((byte)2));
+        Assert.That(shapes[0], Is.EqualTo(2));
+        Assert.That(shapes[1], Is.EqualTo(2));
+        // Replacement row's shapes must be the new [2, 2], not stale data.
+        Assert.That(shapes[2], Is.EqualTo(2));
+        Assert.That(shapes[3], Is.EqualTo(2));
+
+        Assert.That(ReadDoubleArraysLikeEncoder(col),
+                    Is.EqualTo(new[] { 1.0, 2.0, 3.0, 4.0, 9.0, 10.0, 11.0, 12.0 }));
+    }
+
+    [Test]
+    public void DoubleArrayWrapperMultipleRows()
+    {
+        // .NET has no DoubleArray wrapper — the typed double[] overload is the equivalent.
+        var table = new QwpTableBuffer("t");
+        var col = table.GetOrCreateColumn("arr", QwpConstants.TYPE_DOUBLE_ARRAY, false)!;
+        col.AddDoubleArray(new[] { 1.0, 2.0, 3.0 });
+        table.NextRow();
+        col.AddDoubleArray(new[] { 4.0, 5.0, 6.0 });
+        table.NextRow();
+        col.AddDoubleArray(new[] { 7.0, 8.0, 9.0 });
+        table.NextRow();
+
+        Assert.That(col.ValueCount, Is.EqualTo(3));
+        Assert.That(ReadDoubleArraysLikeEncoder(col),
+                    Is.EqualTo(new[] { 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0 }));
+        var dims = col.GetArrayDims();
+        var shapes = col.GetArrayShapes();
+        for (var i = 0; i < 3; i++)
+        {
+            Assert.That(dims[i], Is.EqualTo((byte)1));
+            Assert.That(shapes[i], Is.EqualTo(3));
+        }
+    }
+
+    [Test]
+    public void DoubleArrayWrapperShrinkingSize()
+    {
+        var table = new QwpTableBuffer("t");
+        var col = table.GetOrCreateColumn("arr", QwpConstants.TYPE_DOUBLE_ARRAY, false)!;
+        col.AddDoubleArray(new[] { 1.0, 2.0, 3.0, 4.0, 5.0 });
+        table.NextRow();
+        col.AddDoubleArray(new[] { 10.0, 20.0 });
+        table.NextRow();
+
+        Assert.That(col.ValueCount, Is.EqualTo(2));
+        Assert.That(ReadDoubleArraysLikeEncoder(col),
+                    Is.EqualTo(new[] { 1.0, 2.0, 3.0, 4.0, 5.0, 10.0, 20.0 }));
+        var shapes = col.GetArrayShapes();
+        Assert.That(shapes[0], Is.EqualTo(5));
+        Assert.That(shapes[1], Is.EqualTo(2));
+    }
+
+    [Test]
+    public void DoubleArrayWrapperVaryingDimensionality()
+    {
+        var table = new QwpTableBuffer("t");
+        var col = table.GetOrCreateColumn("arr", QwpConstants.TYPE_DOUBLE_ARRAY, false)!;
+        col.AddDoubleArray(new[,] { { 1.0, 2.0 }, { 3.0, 4.0 } });
+        table.NextRow();
+        col.AddDoubleArray(new[] { 10.0, 20.0, 30.0 });
+        table.NextRow();
+
+        Assert.That(col.ValueCount, Is.EqualTo(2));
+        var dims = col.GetArrayDims();
+        Assert.That(dims[0], Is.EqualTo((byte)2));
+        Assert.That(dims[1], Is.EqualTo((byte)1));
+
+        var shapes = col.GetArrayShapes();
+        Assert.That(shapes[0], Is.EqualTo(2)); // row 0 dim 0
+        Assert.That(shapes[1], Is.EqualTo(2)); // row 0 dim 1
+        Assert.That(shapes[2], Is.EqualTo(3)); // row 1 dim 0
+
+        Assert.That(ReadDoubleArraysLikeEncoder(col),
+                    Is.EqualTo(new[] { 1.0, 2.0, 3.0, 4.0, 10.0, 20.0, 30.0 }));
+    }
+
+    [Test]
+    public void LongArrayMultipleRows()
+    {
+        var table = new QwpTableBuffer("t");
+        var col = table.GetOrCreateColumn("arr", QwpConstants.TYPE_LONG_ARRAY, false)!;
+        col.AddLongArray(new long[] { 10, 20, 30 });
+        table.NextRow();
+        col.AddLongArray(new long[] { 40, 50, 60 });
+        table.NextRow();
+        col.AddLongArray(new long[] { 70, 80, 90 });
+        table.NextRow();
+
+        Assert.That(col.ValueCount, Is.EqualTo(3));
+        Assert.That(ReadLongArraysLikeEncoder(col),
+                    Is.EqualTo(new long[] { 10, 20, 30, 40, 50, 60, 70, 80, 90 }));
+        var dims = col.GetArrayDims();
+        var shapes = col.GetArrayShapes();
+        for (var i = 0; i < 3; i++)
+        {
+            Assert.That(dims[i], Is.EqualTo((byte)1));
+            Assert.That(shapes[i], Is.EqualTo(3));
+        }
+    }
+
+    [Test]
+    public void LongArrayShrinkingSize()
+    {
+        var table = new QwpTableBuffer("t");
+        var col = table.GetOrCreateColumn("arr", QwpConstants.TYPE_LONG_ARRAY, false)!;
+        col.AddLongArray(new long[] { 100, 200, 300, 400 });
+        table.NextRow();
+        col.AddLongArray(new long[] { 10, 20 });
+        table.NextRow();
+
+        Assert.That(col.ValueCount, Is.EqualTo(2));
+        Assert.That(ReadLongArraysLikeEncoder(col),
+                    Is.EqualTo(new long[] { 100, 200, 300, 400, 10, 20 }));
+        var shapes = col.GetArrayShapes();
+        Assert.That(shapes[0], Is.EqualTo(4));
+        Assert.That(shapes[1], Is.EqualTo(2));
+    }
+
+    [Test]
+    public void LongArrayWrapperMultipleRows()
+    {
+        // .NET has no LongArray wrapper — the typed long[] overload is the equivalent.
+        var table = new QwpTableBuffer("t");
+        var col = table.GetOrCreateColumn("arr", QwpConstants.TYPE_LONG_ARRAY, false)!;
+        col.AddLongArray(new long[] { 10, 20, 30 });
+        table.NextRow();
+        col.AddLongArray(new long[] { 40, 50, 60 });
+        table.NextRow();
+        col.AddLongArray(new long[] { 70, 80, 90 });
+        table.NextRow();
+
+        Assert.That(col.ValueCount, Is.EqualTo(3));
+        Assert.That(ReadLongArraysLikeEncoder(col),
+                    Is.EqualTo(new long[] { 10, 20, 30, 40, 50, 60, 70, 80, 90 }));
+    }
+
+    /// <summary>
+    ///     Walks (dims, shapes, data) to recover per-row arrays, mirroring the way
+    ///     <c>QwpColumnWriter</c> emits the wire format. Ports the
+    ///     <c>readDoubleArraysLikeEncoder</c> helper from the Java tests.
+    /// </summary>
+    private static double[] ReadDoubleArraysLikeEncoder(QwpTableBuffer.ColumnBuffer col)
+    {
+        var dims = col.GetArrayDims();
+        var shapes = col.GetArrayShapes();
+        var data = col.GetDoubleArrayData();
+        var count = col.ValueCount;
+
+        var totalElements = 0;
+        var shapeIdx = 0;
+        for (var row = 0; row < count; row++)
+        {
+            var nDims = dims[row];
+            var elemCount = 1;
+            for (var d = 0; d < nDims; d++) elemCount *= shapes[shapeIdx++];
+            totalElements += elemCount;
+        }
+
+        var result = new double[totalElements];
+        shapeIdx = 0;
+        var dataIdx = 0;
+        var resultIdx = 0;
+        for (var row = 0; row < count; row++)
+        {
+            var nDims = dims[row];
+            var elemCount = 1;
+            for (var d = 0; d < nDims; d++) elemCount *= shapes[shapeIdx++];
+            for (var i = 0; i < elemCount; i++) result[resultIdx++] = data[dataIdx++];
+        }
+        return result;
+    }
+
+    private static long[] ReadLongArraysLikeEncoder(QwpTableBuffer.ColumnBuffer col)
+    {
+        var dims = col.GetArrayDims();
+        var shapes = col.GetArrayShapes();
+        var data = col.GetLongArrayData();
+        var count = col.ValueCount;
+
+        var totalElements = 0;
+        var shapeIdx = 0;
+        for (var row = 0; row < count; row++)
+        {
+            var nDims = dims[row];
+            var elemCount = 1;
+            for (var d = 0; d < nDims; d++) elemCount *= shapes[shapeIdx++];
+            totalElements += elemCount;
+        }
+
+        var result = new long[totalElements];
+        shapeIdx = 0;
+        var dataIdx = 0;
+        var resultIdx = 0;
+        for (var row = 0; row < count; row++)
+        {
+            var nDims = dims[row];
+            var elemCount = 1;
+            for (var d = 0; d < nDims; d++) elemCount *= shapes[shapeIdx++];
+            for (var i = 0; i < elemCount; i++) result[resultIdx++] = data[dataIdx++];
+        }
+        return result;
+    }
 }

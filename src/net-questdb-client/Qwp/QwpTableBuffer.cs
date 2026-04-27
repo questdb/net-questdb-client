@@ -282,6 +282,15 @@ internal sealed class QwpTableBuffer
         private bool _storeGlobalSymbolIdsOnly;
         private int _maxGlobalSymbolId = -1;
 
+        // Per-column array state (TYPE_DOUBLE_ARRAY / TYPE_LONG_ARRAY only).
+        // Java uses growable native byte[] / int[]; .NET uses List<T> for simplicity —
+        // arrays are not the hot path for QWP and the GC overhead is dominated by the
+        // value boxing avoided here.
+        private List<byte>? _arrayDims;
+        private List<int>? _arrayShapes;
+        private List<double>? _doubleArrayData;
+        private List<long>? _longArrayData;
+
         private int _decimalScale = -1;
         private int _geohashPrecision = -1;
         private bool _hasNulls;
@@ -333,6 +342,16 @@ internal sealed class QwpTableBuffer
                     _stringOffsets = new PinnedAppendBuffer(64);
                     _stringOffsets.PutInt(0); // seed initial 0 offset
                     _stringData = new PinnedAppendBuffer(256);
+                    break;
+                case QwpConstants.TYPE_DOUBLE_ARRAY:
+                    _arrayDims = new List<byte>();
+                    _arrayShapes = new List<int>();
+                    _doubleArrayData = new List<double>();
+                    break;
+                case QwpConstants.TYPE_LONG_ARRAY:
+                    _arrayDims = new List<byte>();
+                    _arrayShapes = new List<int>();
+                    _longArrayData = new List<long>();
                     break;
                 default:
                     throw new IngressError(Enums.ErrorCode.InvalidName,
@@ -538,6 +557,70 @@ internal sealed class QwpTableBuffer
             var high = (long)(value >> 64);
             var low = (long)(ulong)lowBig;
             return (high, low);
+        }
+
+        /// <summary>Snapshot of per-row dimensionality entries for an array column.</summary>
+        public byte[] GetArrayDims() => _arrayDims?.ToArray() ?? Array.Empty<byte>();
+
+        /// <summary>Snapshot of accumulated shape ints for an array column.</summary>
+        public int[] GetArrayShapes() => _arrayShapes?.ToArray() ?? Array.Empty<int>();
+
+        /// <summary>Snapshot of the flat double-array column data.</summary>
+        public double[] GetDoubleArrayData() => _doubleArrayData?.ToArray() ?? Array.Empty<double>();
+
+        /// <summary>Snapshot of the flat long-array column data.</summary>
+        public long[] GetLongArrayData() => _longArrayData?.ToArray() ?? Array.Empty<long>();
+
+        public void AddDoubleArray(double[]? values)
+        {
+            if (values is null) { AddNull(); return; }
+            _arrayDims!.Add(1);
+            _arrayShapes!.Add(values.Length);
+            for (var i = 0; i < values.Length; i++) _doubleArrayData!.Add(values[i]);
+            _valueCount++;
+            _size++;
+        }
+
+        public void AddDoubleArray(double[,]? values)
+        {
+            if (values is null) { AddNull(); return; }
+            var dim0 = values.GetLength(0);
+            var dim1 = values.GetLength(1);
+            _arrayDims!.Add(2);
+            _arrayShapes!.Add(dim0);
+            _arrayShapes!.Add(dim1);
+            for (var i = 0; i < dim0; i++)
+            {
+                for (var j = 0; j < dim1; j++) _doubleArrayData!.Add(values[i, j]);
+            }
+            _valueCount++;
+            _size++;
+        }
+
+        public void AddLongArray(long[]? values)
+        {
+            if (values is null) { AddNull(); return; }
+            _arrayDims!.Add(1);
+            _arrayShapes!.Add(values.Length);
+            for (var i = 0; i < values.Length; i++) _longArrayData!.Add(values[i]);
+            _valueCount++;
+            _size++;
+        }
+
+        public void AddLongArray(long[,]? values)
+        {
+            if (values is null) { AddNull(); return; }
+            var dim0 = values.GetLength(0);
+            var dim1 = values.GetLength(1);
+            _arrayDims!.Add(2);
+            _arrayShapes!.Add(dim0);
+            _arrayShapes!.Add(dim1);
+            for (var i = 0; i < dim0; i++)
+            {
+                for (var j = 0; j < dim1; j++) _longArrayData!.Add(values[i, j]);
+            }
+            _valueCount++;
+            _size++;
         }
 
         public void AddGeoHash(long value, int precision)
@@ -756,6 +839,12 @@ internal sealed class QwpTableBuffer
                     case QwpConstants.TYPE_BINARY:
                         _stringOffsets!.PutInt(CheckedStringOffset(_stringData!.Length));
                         break;
+                    case QwpConstants.TYPE_DOUBLE_ARRAY:
+                    case QwpConstants.TYPE_LONG_ARRAY:
+                        // Empty 1D array sentinel: 1 dim, shape=0, no data.
+                        _arrayDims!.Add(1);
+                        _arrayShapes!.Add(0);
+                        break;
                     default:
                         throw new IngressError(Enums.ErrorCode.InvalidName,
                             $"AddNull: unsupported column type 0x{Type:X2}");
@@ -821,6 +910,40 @@ internal sealed class QwpTableBuffer
                 _auxBuffer.JumpTo(newValueCount * 4);
             }
 
+            // Rewind array state by walking the retained values to recompute shape and
+            // data offsets, then truncating the lists.
+            if (_arrayDims is not null)
+            {
+                var newShapeCount = 0;
+                var newDataCount = 0;
+                for (var i = 0; i < newValueCount; i++)
+                {
+                    var nDims = _arrayDims[i];
+                    var elemCount = 1;
+                    for (var d = 0; d < nDims; d++)
+                    {
+                        elemCount *= _arrayShapes![newShapeCount++];
+                    }
+                    newDataCount += elemCount;
+                }
+                if (_arrayDims.Count > newValueCount)
+                {
+                    _arrayDims.RemoveRange(newValueCount, _arrayDims.Count - newValueCount);
+                }
+                if (_arrayShapes!.Count > newShapeCount)
+                {
+                    _arrayShapes.RemoveRange(newShapeCount, _arrayShapes.Count - newShapeCount);
+                }
+                if (_doubleArrayData is not null && _doubleArrayData.Count > newDataCount)
+                {
+                    _doubleArrayData.RemoveRange(newDataCount, _doubleArrayData.Count - newDataCount);
+                }
+                if (_longArrayData is not null && _longArrayData.Count > newDataCount)
+                {
+                    _longArrayData.RemoveRange(newDataCount, _longArrayData.Count - newDataCount);
+                }
+            }
+
             // Type-specific metadata reverts to "freshly created" when truncated to zero.
             if (newValueCount == 0)
             {
@@ -847,6 +970,10 @@ internal sealed class QwpTableBuffer
             }
             _stringData?.Truncate();
             if (_nullBitmap.Length > 0) Array.Clear(_nullBitmap, 0, _nullBitmap.Length);
+            _arrayDims?.Clear();
+            _arrayShapes?.Clear();
+            _doubleArrayData?.Clear();
+            _longArrayData?.Clear();
             _decimalScale = -1;
             _geohashPrecision = -1;
             _storeGlobalSymbolIdsOnly = false;

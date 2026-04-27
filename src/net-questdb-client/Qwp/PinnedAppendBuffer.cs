@@ -109,6 +109,12 @@ internal sealed class PinnedAppendBuffer
         _position += bytes;
     }
 
+    /// <summary>
+    ///     Public facade for the internal grow helper. Useful when an external encoder
+    ///     wants to stage the destination capacity before writing in place.
+    /// </summary>
+    public void EnsureCapacityFor(int additionalBytes) => EnsureCapacity(additionalBytes);
+
     public void PutBoolean(bool value) => PutByte(value ? (byte)1 : (byte)0);
 
     public void PutByte(byte value)

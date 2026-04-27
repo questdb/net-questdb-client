@@ -56,7 +56,16 @@ internal sealed class QwpWebSocketSender : ISender
     private bool _disposed;
     private DateTime _lastFlush = DateTime.MinValue;
 
-    public QwpWebSocketSender(SenderOptions options)
+    public QwpWebSocketSender(SenderOptions options) : this(options, requestDurableAck: false) { }
+
+    /// <summary>
+    ///     Constructs a sender with optional durable-ack opt-in. When
+    ///     <paramref name="requestDurableAck"/> is true, the upgrade request carries
+    ///     <c>X-QWP-Request-Durable-Ack: true</c> so the server interleaves
+    ///     STATUS_DURABLE_ACK frames with the regular STATUS_OK acks; the durable
+    ///     seqTxn watermarks are then exposed via <see cref="GetHighestDurableSeqTxn"/>.
+    /// </summary>
+    public QwpWebSocketSender(SenderOptions options, bool requestDurableAck)
     {
         Options = options ?? throw new ArgumentNullException(nameof(options));
 
@@ -66,6 +75,10 @@ internal sealed class QwpWebSocketSender : ISender
         var url = new Uri($"{scheme}://{addr}/qwp/v1");
 
         _socket = new ClientWebSocket();
+        if (requestDurableAck)
+        {
+            _socket.Options.SetRequestHeader("X-QWP-Request-Durable-Ack", "true");
+        }
         _channel = new ClientWebSocketChannel(_socket);
 
         try
@@ -280,15 +293,39 @@ internal sealed class QwpWebSocketSender : ISender
             buffer.Write(_encoder.AsReadOnlySpan().Slice(0, size));
             buffer.IncrementRowCount();
             buffer.Seal();
+            // Enqueue is the back-pressure point: in sync mode (in_flight_window=1) the
+            // next Enqueue blocks until the previous batch is acked; in async mode
+            // (in_flight_window>1) up to N batches sit in-flight before back-pressure
+            // kicks in.
             _queue.Enqueue(buffer);
             table.Reset();
         }
-        // Sync mode: wait for the queue + InFlightWindow to drain before returning.
+        // Wait for the IO thread to actually place the bytes on the wire.
         _queue.Flush();
-        if (_inFlightWindow is not null) _queue.AwaitPendingAcks();
         _lastFlush = DateTime.UtcNow;
         return Task.CompletedTask;
     }
+
+    /// <summary>
+    ///     Blocks until every in-flight batch has been acknowledged by the server.
+    ///     Use this for at-least-once durability guarantees; for sync mode (in_flight_window=1)
+    ///     the natural back-pressure on <see cref="SendAsync"/> already serialises ack
+    ///     visibility, but explicit waits still help on shutdown.
+    /// </summary>
+    public void AwaitPendingAcks() => _queue.AwaitPendingAcks();
+
+    /// <summary>
+    ///     Round-trips a WebSocket-level ping, blocking until the matching pong arrives.
+    ///     The server flushes pending durable acks before sending the pong, so a
+    ///     successful Ping leaves the durable-seqTxn watermarks at their post-ping state.
+    /// </summary>
+    public void Ping(TimeSpan? timeout = null) => _queue.Ping(timeout);
+
+    /// <summary>Highest committed seqTxn observed for <paramref name="tableName"/> (0 if absent).</summary>
+    public long GetHighestAckedSeqTxn(string tableName) => _queue.GetCommittedSeqTxn(tableName);
+
+    /// <summary>Highest durable seqTxn observed for <paramref name="tableName"/> (0 if absent).</summary>
+    public long GetHighestDurableSeqTxn(string tableName) => _queue.GetDurableSeqTxn(tableName);
 
     public void Truncate() { /* no-op; per-table buffers grow on demand */ }
 

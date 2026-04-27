@@ -74,6 +74,76 @@ public class QwpWebSocketSenderTests
         Assert.That(() => sender.Transaction("x"), Throws.TypeOf<QuestDB.Utils.IngressError>());
     }
 
+    // ---- PR 8 — async pipelining + watermark accessors + durable-ack header ----
+
+    [Test]
+    public async Task AsyncModeAcceptsMultipleSendsBeforeAcksDrain()
+    {
+        // Window=4 lets up to 4 batches sit in-flight. Send 4 in rapid succession
+        // without waiting for individual acks; AwaitPendingAcks at the end drains.
+        await using var server = await EchoWebSocketServer.StartAsync();
+        var options = new SenderOptions($"ws::addr=127.0.0.1:{server.Port};in_flight_window=4;");
+        using var sender = (QwpWebSocketSender)options.Build();
+
+        for (var i = 0; i < 4; i++)
+        {
+            sender.Table("trades").Column("v", (long)i).At(DateTime.UtcNow);
+            await sender.SendAsync();
+        }
+        sender.AwaitPendingAcks();
+        Assert.That(server.FrameCount, Is.GreaterThanOrEqualTo(4));
+    }
+
+    [Test]
+    public async Task PingRoundTripsAgainstEchoServer()
+    {
+        // The echo server replies to any binary frame with a STATUS_OK ack. The
+        // sender's ping payload is the 4-byte 0xFF marker; the queue treats any
+        // byte-for-byte echo of that payload as a pong. Configure the server to
+        // echo the exact bytes back instead of sending an ack — this verifies the
+        // ping round-trip path. We use a server flag for this.
+        await using var server = await EchoWebSocketServer.StartAsync(echoExactly: true);
+        var options = new SenderOptions($"ws::addr=127.0.0.1:{server.Port};in_flight_window=1;");
+        using var sender = (QwpWebSocketSender)options.Build();
+        // Ping with a generous timeout; the echo server returns the payload immediately.
+        Assert.That(() => sender.Ping(TimeSpan.FromSeconds(2)), Throws.Nothing);
+    }
+
+    [Test]
+    public async Task GetHighestAckedSeqTxnReflectsServerOkFrame()
+    {
+        await using var server = await EchoWebSocketServer.StartAsync(seqTxnPerTable: 100);
+        var options = new SenderOptions($"ws::addr=127.0.0.1:{server.Port};in_flight_window=1;");
+        using var sender = (QwpWebSocketSender)options.Build();
+
+        sender.Table("trades").Column("v", 1L).At(DateTime.UtcNow);
+        await sender.SendAsync();
+        sender.AwaitPendingAcks();
+
+        Assert.That(WaitFor(() => sender.GetHighestAckedSeqTxn("trades") == 100,
+                            TimeSpan.FromSeconds(2)), Is.True);
+    }
+
+    [Test]
+    public async Task DurableAckHeaderIsSetWhenRequested()
+    {
+        await using var server = await EchoWebSocketServer.StartAsync();
+        var options = new SenderOptions($"ws::addr=127.0.0.1:{server.Port};in_flight_window=1;");
+        using var sender = new QwpWebSocketSender(options, requestDurableAck: true);
+        Assert.That(server.UpgradeHeaderDurableAck, Is.EqualTo("true"));
+    }
+
+    private static bool WaitFor(Func<bool> condition, TimeSpan timeout)
+    {
+        var deadline = Environment.TickCount64 + (long)timeout.TotalMilliseconds;
+        while (Environment.TickCount64 < deadline)
+        {
+            if (condition()) return true;
+            Thread.Sleep(10);
+        }
+        return condition();
+    }
+
     /// <summary>
     ///     Minimal HttpListener-backed WebSocket server used by the smoke tests above.
     ///     Accepts one connection, records incoming frames, and stays alive until the
@@ -87,12 +157,20 @@ public class QwpWebSocketSenderTests
         private readonly CancellationTokenSource _cts = new();
         private Task? _acceptTask;
         private long _ackSequence;
+        private bool _echoExactly;
+        private long _seqTxnPerTable;
+        private int _frameCount;
 
         private EchoWebSocketServer(HttpListener listener) => _listener = listener;
 
         public int Port { get; private set; }
 
-        public static async Task<EchoWebSocketServer> StartAsync()
+        public int FrameCount => System.Threading.Volatile.Read(ref _frameCount);
+
+        /// <summary>Captures the X-QWP-Request-Durable-Ack upgrade header from the client.</summary>
+        public string? UpgradeHeaderDurableAck { get; private set; }
+
+        public static async Task<EchoWebSocketServer> StartAsync(bool echoExactly = false, long seqTxnPerTable = 0)
         {
             // Bind to an ephemeral port via the kernel by starting at a free socket.
             using var probe = new System.Net.Sockets.Socket(System.Net.Sockets.AddressFamily.InterNetwork,
@@ -105,7 +183,12 @@ public class QwpWebSocketSenderTests
             listener.Prefixes.Add($"http://127.0.0.1:{port}/");
             listener.Start();
 
-            var server = new EchoWebSocketServer(listener) { Port = port };
+            var server = new EchoWebSocketServer(listener)
+            {
+                Port = port,
+                _echoExactly = echoExactly,
+                _seqTxnPerTable = seqTxnPerTable,
+            };
             server._acceptTask = Task.Run(server.AcceptLoop);
             await Task.Yield();
             return server;
@@ -119,6 +202,7 @@ public class QwpWebSocketSenderTests
             try
             {
                 var ctx = await _listener.GetContextAsync().ConfigureAwait(false);
+                UpgradeHeaderDurableAck = ctx.Request.Headers["X-QWP-Request-Durable-Ack"];
                 var wsCtx = await ctx.AcceptWebSocketAsync(subProtocol: null).ConfigureAwait(false);
                 using var ws = wsCtx.WebSocket;
 
@@ -133,14 +217,25 @@ public class QwpWebSocketSenderTests
                     catch { break; }
 
                     if (result.MessageType == WebSocketMessageType.Close) break;
+                    System.Threading.Interlocked.Increment(ref _frameCount);
                     if (result.Count >= 4 && !_firstFramePrefix.Task.IsCompleted)
                     {
                         _firstFramePrefix.TrySetResult(new[] { buf[0], buf[1], buf[2], buf[3] });
                     }
+
+                    if (_echoExactly)
+                    {
+                        // Echo path: send back the exact incoming bytes (used by ping tests).
+                        var echo = new byte[result.Count];
+                        Array.Copy(buf, echo, result.Count);
+                        await ws.SendAsync(echo, WebSocketMessageType.Binary,
+                                           endOfMessage: true, _cts.Token).ConfigureAwait(false);
+                        continue;
+                    }
+
                     // Reply with a STATUS_OK frame so the sender's InFlightWindow drains.
-                    // Sequence numbers issued by the queue start at 0 (per WebSocketSendQueue
-                    // SendLoopAsync's Interlocked.Increment then -1).
                     var ack = WebSocketResponse.Success(_ackSequence++);
+                    if (_seqTxnPerTable > 0) ack.AddTableEntry("trades", _seqTxnPerTable);
                     var ackBuf = new byte[ack.SerializedSize()];
                     ack.WriteTo(ackBuf);
                     await ws.SendAsync(ackBuf, WebSocketMessageType.Binary,

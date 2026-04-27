@@ -16,7 +16,7 @@
  *
  ******************************************************************************/
 
-using System.Runtime.CompilerServices;
+using System.Buffers.Binary;
 using QuestDB.Enums;
 using QuestDB.Utils;
 
@@ -167,7 +167,7 @@ internal sealed class QwpBitWriter
         {
             throw new IngressError(ErrorCode.BufferOverflow, "QwpBitWriter buffer overflow");
         }
-        Unsafe.WriteUnaligned(ref _destination[_position], value);
+        BinaryPrimitives.WriteInt32LittleEndian(_destination.AsSpan(_position, 4), value);
         _position += 4;
     }
 
@@ -179,7 +179,7 @@ internal sealed class QwpBitWriter
         {
             throw new IngressError(ErrorCode.BufferOverflow, "QwpBitWriter buffer overflow");
         }
-        Unsafe.WriteUnaligned(ref _destination[_position], value);
+        BinaryPrimitives.WriteInt64LittleEndian(_destination.AsSpan(_position, 8), value);
         _position += 8;
     }
 

@@ -16,7 +16,7 @@
  *
  ******************************************************************************/
 
-using System.Runtime.CompilerServices;
+using System.Buffers.Binary;
 using System.Text;
 
 namespace QuestDB.Qwp;
@@ -74,8 +74,15 @@ internal sealed class PinnedAppendBuffer
     ///     Returns a read-only memory view suitable for handing to
     ///     <see cref="System.Net.Sockets.Socket.SendAsync(System.ReadOnlyMemory{byte}, System.Net.Sockets.SocketFlags, System.Threading.CancellationToken)"/>
     ///     or <see cref="System.Net.WebSockets.ClientWebSocket.SendAsync(System.ReadOnlyMemory{byte}, System.Net.WebSockets.WebSocketMessageType, bool, System.Threading.CancellationToken)"/>.
-    ///     Stable across the lifetime of the underlying array (POH).
     /// </summary>
+    /// <remarks>
+    ///     The view's address is stable for the underlying POH array's lifetime — but a
+    ///     resize-triggering append (<see cref="PutByte(byte)"/>, <see cref="PutBlockOfBytes"/>, etc.)
+    ///     swaps in a fresh array, leaving any previously-returned <see cref="ReadOnlyMemory{T}"/>
+    ///     pointing at the now-stale backing. Treat the returned memory as valid only until
+    ///     the next mutation. Typical pattern: write everything, call <c>AsReadOnlyMemory</c>
+    ///     once, hand to <c>SendAsync</c>.
+    /// </remarks>
     public ReadOnlyMemory<byte> AsReadOnlyMemory(int offset, int length) => _array.AsMemory(offset, length);
 
     /// <summary>
@@ -113,35 +120,35 @@ internal sealed class PinnedAppendBuffer
     public void PutShort(short value)
     {
         EnsureCapacity(2);
-        Unsafe.WriteUnaligned(ref _array[_position], value);
+        BinaryPrimitives.WriteInt16LittleEndian(_array.AsSpan(_position), value);
         _position += 2;
     }
 
     public void PutInt(int value)
     {
         EnsureCapacity(4);
-        Unsafe.WriteUnaligned(ref _array[_position], value);
+        BinaryPrimitives.WriteInt32LittleEndian(_array.AsSpan(_position), value);
         _position += 4;
     }
 
     public void PutLong(long value)
     {
         EnsureCapacity(8);
-        Unsafe.WriteUnaligned(ref _array[_position], value);
+        BinaryPrimitives.WriteInt64LittleEndian(_array.AsSpan(_position), value);
         _position += 8;
     }
 
     public void PutFloat(float value)
     {
         EnsureCapacity(4);
-        Unsafe.WriteUnaligned(ref _array[_position], value);
+        BinaryPrimitives.WriteSingleLittleEndian(_array.AsSpan(_position), value);
         _position += 4;
     }
 
     public void PutDouble(double value)
     {
         EnsureCapacity(8);
-        Unsafe.WriteUnaligned(ref _array[_position], value);
+        BinaryPrimitives.WriteDoubleLittleEndian(_array.AsSpan(_position), value);
         _position += 8;
     }
 

@@ -54,6 +54,10 @@ public record SenderOptions
         "auto_flush_interval", "init_buf_size", "max_buf_size", "max_name_len", "username", "password", "token",
         "request_min_throughput", "auth_timeout", "request_timeout", "retry_timeout",
         "pool_timeout", "tls_verify", "tls_roots", "tls_roots_password", "own_socket", "gzip",
+        // QWP keys
+        "in_flight_window", "max_schemas_per_connection", "max_datagram_size", "multicast_ttl",
+        // Tolerated forward-compat keys (parsed but not yet acted upon)
+        "target", "failover", "compression", "compression_level",
     };
 
     private string _addr = "localhost:9000";
@@ -85,6 +89,10 @@ public record SenderOptions
     private string? _tokenY;
     private string? _username;
     private X509Certificate2? _clientCert;
+    private int _inFlightWindow;
+    private int _maxSchemasPerConnection = 65535;
+    private int _maxDatagramSize = 1400;
+    private int _multicastTtl;
 
     /// <summary>
     ///     Construct a <see cref="SenderOptions" /> object with default values.
@@ -106,9 +114,13 @@ public record SenderOptions
         ParseStringWithDefault(nameof(addr), "localhost:9000", out _addr!);
         ParseAddresses();
         ParseEnumWithDefault(nameof(auto_flush), "on", out _autoFlush);
-        ParseIntThatMayBeOff(nameof(auto_flush_rows), IsHttp() ? "75000" : "600", out _autoFlushRows);
-        ParseIntThatMayBeOff(nameof(auto_flush_bytes), int.MaxValue.ToString(), out _autoFlushBytes);
-        ParseMillisecondsThatMayBeOff(nameof(auto_flush_interval), "1000", out _autoFlushInterval);
+        ParseIntThatMayBeOff(nameof(auto_flush_rows), DefaultAutoFlushRows(), out _autoFlushRows);
+        ParseIntThatMayBeOff(nameof(auto_flush_bytes), DefaultAutoFlushBytes(), out _autoFlushBytes);
+        ParseMillisecondsThatMayBeOff(nameof(auto_flush_interval), DefaultAutoFlushIntervalMs(), out _autoFlushInterval);
+        ParseIntWithDefault(nameof(in_flight_window), DefaultInFlightWindow(), out _inFlightWindow);
+        ParseIntWithDefault(nameof(max_schemas_per_connection), "65535", out _maxSchemasPerConnection);
+        ParseIntWithDefault(nameof(max_datagram_size), "1400", out _maxDatagramSize);
+        ParseIntWithDefault(nameof(multicast_ttl), "0", out _multicastTtl);
         ParseBoolWithDefault(nameof(gzip), "false", out _gzip);
         ParseIntWithDefault(nameof(init_buf_size), "65536", out _initBufSize);
         ParseIntWithDefault(nameof(max_buf_size), "104857600", out _maxBufSize);
@@ -125,6 +137,32 @@ public record SenderOptions
         ParseStringWithDefault(nameof(tls_roots), null, out _tlsRoots);
         ParseStringWithDefault(nameof(tls_roots_password), null, out _tlsRootsPassword);
         ParseBoolWithDefault(nameof(own_socket), "true", out _ownSocket);
+        ValidateQwp();
+    }
+
+    private string DefaultAutoFlushRows()
+    {
+        if (IsHttp()) return "75000";
+        if (IsWebSocket()) return "1000";
+        return "600";
+    }
+
+    private string DefaultAutoFlushBytes()
+    {
+        if (IsWebSocket()) return "0";
+        return int.MaxValue.ToString();
+    }
+
+    private string DefaultAutoFlushIntervalMs()
+    {
+        if (IsWebSocket()) return "100";
+        return "1000";
+    }
+
+    private string DefaultInFlightWindow()
+    {
+        if (IsWebSocket()) return "128";
+        return "0";
     }
 
     /// <summary>
@@ -133,7 +171,10 @@ public record SenderOptions
     /// </summary>
     /// <remarks>
     ///     Available protocols: <see cref="ProtocolType.http" />, <see cref="ProtocolType.https" />,
-    ///     <see cref="ProtocolType.tcp" />, <see cref="ProtocolType.tcps" />
+    ///     <see cref="ProtocolType.tcp" />, <see cref="ProtocolType.tcps" />,
+    ///     <see cref="ProtocolType.ws" />, <see cref="ProtocolType.wss" />,
+    ///     <see cref="ProtocolType.udp" />.
+    ///     The ws/wss/udp schemes are experimental and select the QWP binary wire protocol.
     /// </remarks>
     [JsonIgnore]
     public ProtocolType protocol
@@ -196,8 +237,11 @@ public record SenderOptions
 
     /// <summary>
     ///     Sets the number of rows to batch before auto-flushing.
-    ///     Defaults to <c>75000</c>.
     /// </summary>
+    /// <remarks>
+    ///     Per-protocol defaults: <c>75000</c> for http/https, <c>1000</c> for ws/wss, <c>600</c> for tcp/tcps.
+    ///     Not supported on udp (rejected at parse / build time).
+    /// </remarks>
     public int auto_flush_rows
     {
         get => _autoFlushRows;
@@ -206,8 +250,11 @@ public record SenderOptions
 
     /// <summary>
     ///     Sets the number of bytes to batch before auto-flushing.
-    ///     Defaults to <see cref="int.MaxValue" />.
     /// </summary>
+    /// <remarks>
+    ///     Per-protocol defaults: <see cref="int.MaxValue" /> for http/https/tcp/tcps,
+    ///     <c>0</c> (off; rows-only auto-flush) for ws/wss. Not supported on udp.
+    /// </remarks>
     public int auto_flush_bytes
     {
         get => _autoFlushBytes;
@@ -421,8 +468,8 @@ public record SenderOptions
     ///     Defaults to <see cref="TlsVerifyType.on" />.
     /// </summary>
     /// <remarks>
-    ///     Available protocols: <see cref="ProtocolType.http" />, <see cref="ProtocolType.https" />,
-    ///     <see cref="ProtocolType.tcp" />, <see cref="ProtocolType.tcps" />
+    ///     Applies to TLS-enabled protocols: <see cref="ProtocolType.https" />,
+    ///     <see cref="ProtocolType.tcps" />, <see cref="ProtocolType.wss" />.
     /// </remarks>
     public TlsVerifyType tls_verify
     {
@@ -501,10 +548,14 @@ public record SenderOptions
             {
                 case ProtocolType.http:
                 case ProtocolType.https:
+                case ProtocolType.ws:
+                case ProtocolType.wss:
                     return 9000;
                 case ProtocolType.tcp:
                 case ProtocolType.tcps:
                     return 9009;
+                case ProtocolType.udp:
+                    return 9007;
                 default:
                     throw new NotImplementedException();
             }
@@ -518,6 +569,57 @@ public record SenderOptions
     {
         get => _clientCert;
         set => _clientCert = value;
+    }
+
+    /// <summary>
+    ///     Maximum number of unacknowledged batches in flight for the QWP WebSocket sender.
+    /// </summary>
+    /// <remarks>
+    ///     Experimental. WebSocket-only. When <c>1</c> the sender operates synchronously
+    ///     (each batch waits for an ACK). When <c>&gt; 1</c> the sender pipelines asynchronously.
+    ///     Defaults to <c>128</c> for <see cref="ProtocolType.ws"/>/<see cref="ProtocolType.wss"/>;
+    ///     not applicable to <see cref="ProtocolType.udp"/>.
+    /// </remarks>
+    public int in_flight_window
+    {
+        get => _inFlightWindow;
+        set => _inFlightWindow = value;
+    }
+
+    /// <summary>
+    ///     Maximum number of distinct schemas the QWP WebSocket sender will register on a single connection.
+    /// </summary>
+    /// <remarks>
+    ///     Experimental. WebSocket-only. Defaults to <c>65535</c>.
+    /// </remarks>
+    public int max_schemas_per_connection
+    {
+        get => _maxSchemasPerConnection;
+        set => _maxSchemasPerConnection = value;
+    }
+
+    /// <summary>
+    ///     Maximum datagram payload size for the QWP UDP sender, in bytes.
+    /// </summary>
+    /// <remarks>
+    ///     Experimental. UDP-only. Defaults to <c>1400</c>.
+    /// </remarks>
+    public int max_datagram_size
+    {
+        get => _maxDatagramSize;
+        set => _maxDatagramSize = value;
+    }
+
+    /// <summary>
+    ///     Multicast TTL for the QWP UDP sender. Range 0–255. Defaults to <c>0</c>.
+    /// </summary>
+    /// <remarks>
+    ///     Experimental. UDP-only.
+    /// </remarks>
+    public int multicast_ttl
+    {
+        get => _multicastTtl;
+        set => _multicastTtl = value;
     }
 
     private void ParseIntWithDefault(string name, string defaultValue, out int field)
@@ -590,6 +692,13 @@ public record SenderOptions
         }
 
         var splits = confStr.Split("::");
+
+        // udps:: is intercepted before enum-parse: there is no TLS variant of UDP.
+        if (string.Equals(splits[0], "udps", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new IngressError(ErrorCode.ConfigError, "TLS is not supported for UDP");
+        }
+
         var paramString = splits[1];
 
         // Parse addresses manually before using DbConnectionStringBuilder
@@ -640,7 +749,223 @@ public record SenderOptions
 
     internal bool IsTcp()
     {
-        return !IsHttp();
+        switch (protocol)
+        {
+            case ProtocolType.tcp:
+            case ProtocolType.tcps:
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    internal bool IsWebSocket()
+    {
+        switch (protocol)
+        {
+            case ProtocolType.ws:
+            case ProtocolType.wss:
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    internal bool IsUdp()
+    {
+        return protocol == ProtocolType.udp;
+    }
+
+    internal bool IsQwp()
+    {
+        return IsWebSocket() || IsUdp();
+    }
+
+    internal bool IsTls()
+    {
+        switch (protocol)
+        {
+            case ProtocolType.https:
+            case ProtocolType.tcps:
+            case ProtocolType.wss:
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    private bool WasExplicitlySet(string keyName)
+    {
+        return _connectionStringBuilder is not null && _connectionStringBuilder.ContainsKey(keyName);
+    }
+
+    /// <summary>
+    ///     Enforces protocol-specific constraints for QWP transports.
+    ///     Mirrors Java <c>LineSenderBuilder.validateParameters()</c> for ws/wss/udp.
+    /// </summary>
+    internal void ValidateQwp()
+    {
+        if (IsUdp())
+        {
+            if (WasExplicitlySet(nameof(in_flight_window)))
+            {
+                throw new IngressError(ErrorCode.ConfigError,
+                                       "in-flight window size is not supported for UDP transport");
+            }
+
+            if (WasExplicitlySet(nameof(auto_flush_rows)))
+            {
+                throw new IngressError(ErrorCode.ConfigError,
+                                       "auto flush rows is not supported for UDP transport");
+            }
+
+            if (WasExplicitlySet(nameof(auto_flush_interval)))
+            {
+                throw new IngressError(ErrorCode.ConfigError,
+                                       "auto flush interval is not supported for UDP transport");
+            }
+
+            if (WasExplicitlySet(nameof(auto_flush_bytes)))
+            {
+                throw new IngressError(ErrorCode.ConfigError,
+                                       "auto flush bytes is not supported for UDP transport");
+            }
+
+            if (WasExplicitlySet(nameof(auto_flush)) && _autoFlush == AutoFlushType.off)
+            {
+                throw new IngressError(ErrorCode.ConfigError,
+                                       "disabling auto-flush is not supported for UDP transport");
+            }
+
+            if (WasExplicitlySet(nameof(tls_verify)))
+            {
+                throw new IngressError(ErrorCode.ConfigError,
+                                       "TLS is not supported for UDP transport");
+            }
+
+            if (WasExplicitlySet(nameof(token)))
+            {
+                throw new IngressError(ErrorCode.ConfigError,
+                                       "HTTP token authentication is not supported for UDP transport");
+            }
+
+            if (WasExplicitlySet(nameof(username)) || WasExplicitlySet(nameof(password)))
+            {
+                throw new IngressError(ErrorCode.ConfigError,
+                                       "username/password authentication is not supported for UDP transport");
+            }
+
+            if (_maxDatagramSize <= 0)
+            {
+                throw new IngressError(ErrorCode.ConfigError,
+                                       "max_datagram_size must be positive");
+            }
+
+            if (_multicastTtl < 0 || _multicastTtl > 255)
+            {
+                throw new IngressError(ErrorCode.ConfigError,
+                                       "multicast_ttl must be in the range 0..255");
+            }
+        }
+
+        if (IsWebSocket())
+        {
+            if (WasExplicitlySet(nameof(init_buf_size)) || WasExplicitlySet(nameof(max_buf_size)))
+            {
+                throw new IngressError(ErrorCode.ConfigError,
+                                       "buffer capacity is not supported for WebSocket transport");
+            }
+
+            if (_autoFlush == AutoFlushType.off)
+            {
+                throw new IngressError(ErrorCode.ConfigError,
+                                       "disabling auto-flush is not supported for WebSocket protocol");
+            }
+        }
+
+        if (!IsWebSocket() && WasExplicitlySet(nameof(max_schemas_per_connection)))
+        {
+            throw new IngressError(ErrorCode.ConfigError,
+                                   "max schemas per connection is only supported for WebSocket transport");
+        }
+
+        // The UDP branch above already rejects in_flight_window with a UDP-specific message.
+        // For HTTP/TCP, surface the WS-only nature of the key.
+        if (!IsWebSocket() && !IsUdp() && WasExplicitlySet(nameof(in_flight_window)))
+        {
+            throw new IngressError(ErrorCode.ConfigError,
+                                   "in-flight window size is only supported for WebSocket transport");
+        }
+
+        if (!IsUdp() && (WasExplicitlySet(nameof(max_datagram_size)) || WasExplicitlySet(nameof(multicast_ttl))))
+        {
+            throw new IngressError(ErrorCode.ConfigError,
+                                   "max_datagram_size/multicast_ttl are only supported for UDP transport");
+        }
+    }
+
+    /// <summary>
+    ///     Returns true if a property name is permitted in the config-string output for the
+    ///     current <see cref="protocol"/>. Mirrors <see cref="ValidateQwp"/>'s rejection rules
+    ///     so that <c>SenderOptions(o.ToString())</c> survives the round trip.
+    /// </summary>
+    private bool IsSerialisableForCurrentProtocol(string propertyName)
+    {
+        if (IsUdp())
+        {
+            switch (propertyName)
+            {
+                case nameof(in_flight_window):
+                case nameof(auto_flush_rows):
+                case nameof(auto_flush_interval):
+                case nameof(auto_flush_bytes):
+                case nameof(token):
+                case nameof(username):
+                case nameof(password):
+                case nameof(tls_verify):
+                case nameof(tls_roots):
+                case nameof(tls_roots_password):
+                case nameof(init_buf_size):
+                case nameof(max_buf_size):
+                case nameof(max_schemas_per_connection):
+                    return false;
+                case nameof(auto_flush):
+                    // ValidateQwp rejects only auto_flush=off on UDP; auto_flush=on is fine.
+                    return _autoFlush != AutoFlushType.off;
+            }
+        }
+
+        if (IsWebSocket())
+        {
+            switch (propertyName)
+            {
+                case nameof(init_buf_size):
+                case nameof(max_buf_size):
+                case nameof(max_datagram_size):
+                case nameof(multicast_ttl):
+                    return false;
+                case nameof(auto_flush):
+                    return _autoFlush != AutoFlushType.off;
+            }
+        }
+
+        if (!IsWebSocket() && propertyName == nameof(max_schemas_per_connection))
+        {
+            return false;
+        }
+
+        if (!IsWebSocket() && propertyName == nameof(in_flight_window))
+        {
+            return false;
+        }
+
+        if (!IsUdp() &&
+            (propertyName == nameof(max_datagram_size) || propertyName == nameof(multicast_ttl)))
+        {
+            return false;
+        }
+
+        return true;
     }
 
     /// <summary>
@@ -659,6 +984,13 @@ public record SenderOptions
             }
 
             if (prop.IsDefined(typeof(JsonIgnoreAttribute), false))
+            {
+                continue;
+            }
+
+            // Skip properties that ValidateQwp would reject on re-parse for the current
+            // protocol; otherwise ToString → SenderOptions(s) round-trip would throw.
+            if (!IsSerialisableForCurrentProtocol(prop.Name))
             {
                 continue;
             }
@@ -721,6 +1053,7 @@ public record SenderOptions
     /// </returns>
     public ISender Build()
     {
+        ValidateQwp();
         return Sender.New(this);
     }
 

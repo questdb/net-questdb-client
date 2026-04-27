@@ -79,6 +79,13 @@ public static class Sender
             case ProtocolType.tcp:
             case ProtocolType.tcps:
                 return new TcpSender(options);
+            case ProtocolType.ws:
+            case ProtocolType.wss:
+                throw new NotImplementedException(
+                    "QWP WebSocket sender is not yet implemented. The ws/wss schemes are reserved for an upcoming release.");
+            case ProtocolType.udp:
+                throw new NotImplementedException(
+                    "QWP UDP sender is not yet implemented. The udp scheme is reserved for an upcoming release.");
         }
 
         throw new NotImplementedException();

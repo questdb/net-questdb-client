@@ -53,4 +53,28 @@ public enum ProtocolType
     ///     HTTP transport with TLS.
     /// </summary>
     https,
+
+    /// <summary>
+    ///     QWP WebSocket transport.
+    /// </summary>
+    /// <remarks>
+    ///     Experimental. Used by the QuestDB binary wire protocol (QWP) over WebSocket.
+    /// </remarks>
+    ws,
+
+    /// <summary>
+    ///     QWP WebSocket transport with TLS.
+    /// </summary>
+    /// <remarks>
+    ///     Experimental. Used by the QuestDB binary wire protocol (QWP) over WebSocket Secure.
+    /// </remarks>
+    wss,
+
+    /// <summary>
+    ///     QWP UDP transport.
+    /// </summary>
+    /// <remarks>
+    ///     Experimental. Fire-and-forget datagram transport for the QuestDB binary wire protocol (QWP).
+    /// </remarks>
+    udp,
 }

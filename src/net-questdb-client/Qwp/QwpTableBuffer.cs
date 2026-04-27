@@ -117,6 +117,25 @@ internal sealed class QwpTableBuffer
     ///     callers must treat <c>null</c> as "duplicate column in this row, skip the write"
     ///     to match ILP first-value-wins semantics.
     /// </summary>
+    /// <summary>
+    ///     Gets or creates the designated-timestamp column. Java uses an empty-name slot
+    ///     for the designated timestamp; this entry point bypasses the name validation
+    ///     that <see cref="GetOrCreateColumn"/> applies for regular columns.
+    /// </summary>
+    public ColumnBuffer GetOrCreateDesignatedTimestampColumn(byte type)
+    {
+        var existing = LookupColumn("", type);
+        if (existing is not null)
+        {
+            if (existing.Size > _rowCount) return existing; // duplicate write within the row → first wins
+            _inProgressColumnCount++;
+            return existing;
+        }
+        var col = CreateColumn("", type, useNullBitmap: true);
+        _inProgressColumnCount++;
+        return col;
+    }
+
     public ColumnBuffer? GetOrCreateColumn(string name, byte type, bool useNullBitmap)
     {
         if (string.IsNullOrEmpty(name))

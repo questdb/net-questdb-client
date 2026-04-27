@@ -84,8 +84,7 @@ public static class Sender
                 throw new NotImplementedException(
                     "QWP WebSocket sender is not yet implemented. The ws/wss schemes are reserved for an upcoming release.");
             case ProtocolType.udp:
-                throw new NotImplementedException(
-                    "QWP UDP sender is not yet implemented. The udp scheme is reserved for an upcoming release.");
+                return new QwpUdpSender(options);
         }
 
         throw new NotImplementedException();

@@ -19,6 +19,7 @@
 using NUnit.Framework;
 using QuestDB;
 using QuestDB.Enums;
+using QuestDB.Senders;
 using QuestDB.Utils;
 
 namespace net_questdb_client_tests.Qwp.Client;
@@ -231,41 +232,35 @@ public class LineSenderBuilderUdpTests
     }
 
     [Test]
-    public void UdpScheme_FactoryReturnsNotImplementedForNow()
-    {
-        // PR0: UDP sender is not implemented yet; factory throws a descriptive
-        // NotImplementedException. Replace this assertion with an instance-of check
-        // when QwpUdpSender lands in PR6.
-        var options = new SenderOptions("udp::addr=localhost:9007;");
-        Assert.That(() => options.Build(),
-                    Throws.TypeOf<NotImplementedException>()
-                          .With.Message.Contains("QWP UDP sender is not yet implemented"));
-    }
-
-    // ---- Pending: tests that need an actual UDP sender to exist ----
-
-    [Test]
     public void UdpScheme_BuildsQwpUdpSender()
     {
-        Assert.Inconclusive("Awaiting PR6: QwpUdpSender production code.");
+        var options = new SenderOptions("udp::addr=localhost:9007;");
+        using var sender = options.Build();
+        Assert.That(sender, Is.TypeOf<QwpUdpSender>());
     }
 
     [Test]
     public void UdpScheme_CustomMaxDatagramSize_RoundTripsToSender()
     {
-        Assert.Inconclusive("Awaiting PR6: QwpUdpSender production code.");
+        var options = new SenderOptions("udp::addr=localhost:9007;max_datagram_size=2048;");
+        using var sender = (QwpUdpSender)options.Build();
+        Assert.That(sender.MaxDatagramSize, Is.EqualTo(2048));
     }
 
     [Test]
     public void UdpScheme_CustomMulticastTtl_RoundTripsToSender()
     {
-        Assert.Inconclusive("Awaiting PR6: QwpUdpSender production code.");
+        var options = new SenderOptions("udp::addr=localhost:9007;multicast_ttl=4;");
+        using var sender = (QwpUdpSender)options.Build();
+        Assert.That(sender.MulticastTtl, Is.EqualTo(4));
     }
 
     [Test]
     public void Udp_TransportEnum_BuildsSender()
     {
-        Assert.Inconclusive("Awaiting PR6: programmatic SenderOptions.protocol=udp + Build() integration.");
+        var options = new SenderOptions { protocol = ProtocolType.udp, addr = "localhost:9007" };
+        using var sender = options.Build();
+        Assert.That(sender, Is.TypeOf<QwpUdpSender>());
     }
 
     [Test]

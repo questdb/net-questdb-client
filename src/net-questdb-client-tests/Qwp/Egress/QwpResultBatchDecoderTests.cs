@@ -1,0 +1,452 @@
+/*******************************************************************************
+ *     ___                  _   ____  ____
+ *    / _ \ _   _  ___  ___| |_|  _ \| __ )
+ *   | | | | | | |/ _ \/ __| __| | | |  _ \
+ *   | |_| | |_| |  __/\__ \ |_| |_| | |_) |
+ *    \__\_\\__,_|\___||___/\__|____/|____/
+ *
+ *  Copyright (c) 2014-2019 Appsicle
+ *  Copyright (c) 2019-2026 QuestDB
+ *
+ *  Licensed under the Apache License, Version 2.0 (the "License");
+ *  you may not use this file except in compliance with the License.
+ *  You may obtain a copy of the License at
+ *
+ *  http://www.apache.org/licenses/LICENSE-2.0
+ *
+ ******************************************************************************/
+
+using System.Buffers.Binary;
+using System.Text;
+using NUnit.Framework;
+using QuestDB.Qwp;
+using QuestDB.Qwp.Egress;
+
+namespace net_questdb_client_tests.Qwp.Egress;
+
+/// <summary>
+///     Frame-level tests for the RESULT_BATCH wire decoder. Hand-builds payloads
+///     with the same byte layout the server emits and checks the decoder's
+///     batch view + error paths.
+/// </summary>
+[TestFixture]
+public class QwpResultBatchDecoderTests
+{
+    [Test]
+    public void DecodesSingleNonNullableLongColumn()
+    {
+        var bytes = new FrameBuilder()
+            .WithRowCount(3)
+            .AddNonNullableColumn("v", QwpConstants.TYPE_LONG, valueWriter: w =>
+            {
+                w.WriteLongLE(10L);
+                w.WriteLongLE(20L);
+                w.WriteLongLE(30L);
+            })
+            .Build();
+        var batch = Decode(bytes);
+
+        Assert.That(batch.RowCount, Is.EqualTo(3));
+        Assert.That(batch.ColumnCount, Is.EqualTo(1));
+        Assert.That(batch.GetColumnWireType(0), Is.EqualTo(QwpConstants.TYPE_LONG));
+        Assert.That(batch.GetLongValue(0, 0), Is.EqualTo(10L));
+        Assert.That(batch.GetLongValue(0, 1), Is.EqualTo(20L));
+        Assert.That(batch.GetLongValue(0, 2), Is.EqualTo(30L));
+    }
+
+    [Test]
+    public void DecodesNullableLongColumn()
+    {
+        // 4 rows: rows 1 and 3 null. bitmap byte = 0b0000_1010 = 0x0A. dense values: 100, 200.
+        var bytes = new FrameBuilder()
+            .WithRowCount(4)
+            .AddNullableColumn("v", QwpConstants.TYPE_LONG,
+                bitmap: new byte[] { 0b0000_1010 },
+                valueWriter: w =>
+                {
+                    w.WriteLongLE(100L);
+                    w.WriteLongLE(200L);
+                })
+            .Build();
+        var batch = Decode(bytes);
+
+        Assert.That(batch.IsNull(0, 0), Is.False);
+        Assert.That(batch.IsNull(0, 1), Is.True);
+        Assert.That(batch.IsNull(0, 2), Is.False);
+        Assert.That(batch.IsNull(0, 3), Is.True);
+        Assert.That(batch.GetLongValue(0, 0), Is.EqualTo(100L));
+        Assert.That(batch.GetLongValue(0, 2), Is.EqualTo(200L));
+    }
+
+    [Test]
+    public void DecodesMultipleColumnsInOrder()
+    {
+        var bytes = new FrameBuilder()
+            .WithRowCount(2)
+            .AddNonNullableColumn("a", QwpConstants.TYPE_INT, w =>
+            {
+                w.WriteIntLE(7);
+                w.WriteIntLE(8);
+            })
+            .AddNonNullableColumn("b", QwpConstants.TYPE_VARCHAR, w =>
+            {
+                // offsets: 0, 5, 8. bytes: "alphabd"  wait, need clean strings.
+                // "alpha" + "bd" = 5 + 2 = 7 bytes total.
+                w.WriteIntLE(0);
+                w.WriteIntLE(5);
+                w.WriteIntLE(7);
+                w.WriteUtf8("alpha");
+                w.WriteUtf8("bd");
+            })
+            .Build();
+        var batch = Decode(bytes);
+
+        Assert.That(batch.ColumnCount, Is.EqualTo(2));
+        Assert.That(batch.GetIntValue(0, 0), Is.EqualTo(7));
+        Assert.That(batch.GetIntValue(0, 1), Is.EqualTo(8));
+        Assert.That(batch.GetString(1, 0), Is.EqualTo("alpha"));
+        Assert.That(batch.GetString(1, 1), Is.EqualTo("bd"));
+    }
+
+    [Test]
+    public void DecodesDecimal64ColumnPicksUpScale()
+    {
+        var bytes = new FrameBuilder()
+            .WithRowCount(2)
+            .AddDecimalColumn("d", QwpConstants.TYPE_DECIMAL64, scale: 4,
+                valueWriter: w =>
+                {
+                    w.WriteLongLE(12345L);
+                    w.WriteLongLE(67890L);
+                })
+            .Build();
+        var batch = Decode(bytes);
+        Assert.That(batch.GetLayout(0).Info!.DecimalScale, Is.EqualTo((sbyte)4));
+        Assert.That(batch.GetLongValue(0, 0), Is.EqualTo(12345L));
+        Assert.That(batch.GetLongValue(0, 1), Is.EqualTo(67890L));
+    }
+
+    [Test]
+    public void DecodesGeohashColumnPicksUpPrecision()
+    {
+        // Precision 12 bits = 2 bytes per value.
+        var bytes = new FrameBuilder()
+            .WithRowCount(2)
+            .AddGeohashColumn("g", precisionBits: 12, valueWriter: w =>
+            {
+                // 0x0FFF, 0x0123 — written low byte first.
+                w.WriteByte(0xFF);
+                w.WriteByte(0x0F);
+                w.WriteByte(0x23);
+                w.WriteByte(0x01);
+            })
+            .Build();
+        var batch = Decode(bytes);
+        Assert.That(batch.GetLayout(0).Info!.GeohashPrecisionBits, Is.EqualTo(12));
+    }
+
+    [Test]
+    public void RejectsBadMagic()
+    {
+        var bytes = new FrameBuilder().WithRowCount(0).Build();
+        // Stomp the magic bytes.
+        bytes[0] = 0xDE; bytes[1] = 0xAD; bytes[2] = 0xBE; bytes[3] = 0xEF;
+        Assert.That(() => Decode(bytes),
+            Throws.TypeOf<QwpDecodeException>().With.Message.Contains("bad magic"));
+    }
+
+    [Test]
+    public void RejectsUnsupportedVersion()
+    {
+        var bytes = new FrameBuilder().WithRowCount(0).Build();
+        bytes[4] = 99;
+        Assert.That(() => Decode(bytes),
+            Throws.TypeOf<QwpDecodeException>().With.Message.Contains("unsupported version"));
+    }
+
+    [Test]
+    public void RejectsZstdFlagWithClearError()
+    {
+        var bytes = new FrameBuilder().WithRowCount(0).Build();
+        bytes[QwpConstants.HEADER_OFFSET_FLAGS] |= QwpConstants.FLAG_ZSTD;
+        Assert.That(() => Decode(bytes),
+            Throws.TypeOf<QwpDecodeException>().With.Message.Contains("FLAG_ZSTD"));
+    }
+
+    [Test]
+    public void RejectsGorillaFlagWithClearError()
+    {
+        var bytes = new FrameBuilder().WithRowCount(0).Build();
+        bytes[QwpConstants.HEADER_OFFSET_FLAGS] |= QwpConstants.FLAG_GORILLA;
+        Assert.That(() => Decode(bytes),
+            Throws.TypeOf<QwpDecodeException>().With.Message.Contains("FLAG_GORILLA"));
+    }
+
+    [Test]
+    public void RejectsDeltaSymbolDictFlagWithClearError()
+    {
+        var bytes = new FrameBuilder().WithRowCount(0).Build();
+        bytes[QwpConstants.HEADER_OFFSET_FLAGS] |= QwpConstants.FLAG_DELTA_SYMBOL_DICT;
+        Assert.That(() => Decode(bytes),
+            Throws.TypeOf<QwpDecodeException>().With.Message.Contains("FLAG_DELTA_SYMBOL_DICT"));
+    }
+
+    [Test]
+    public void RejectsWrongMsgKind()
+    {
+        var bytes = new FrameBuilder().WithRowCount(0).Build();
+        bytes[QwpConstants.HEADER_SIZE] = QwpEgressMsgKind.QUERY_ERROR;
+        Assert.That(() => Decode(bytes),
+            Throws.TypeOf<QwpDecodeException>().With.Message.Contains("expected RESULT_BATCH"));
+    }
+
+    [Test]
+    public void RejectsTruncatedTooShort()
+    {
+        var bytes = new byte[QwpConstants.HEADER_SIZE]; // header only, no body
+        BinaryPrimitives.WriteInt32LittleEndian(bytes, QwpConstants.MAGIC_MESSAGE);
+        bytes[4] = QwpConstants.VERSION_2;
+        Assert.That(() => Decode(bytes),
+            Throws.TypeOf<QwpDecodeException>().With.Message.Contains("too short"));
+    }
+
+    [Test]
+    public void RejectsRowCountOutOfRange()
+    {
+        // Row count 2_000_000 > MAX_ROWS_PER_BATCH (1_048_576).
+        var bytes = new FrameBuilder()
+            .WithRowCount(2_000_000)
+            .Build();
+        Assert.That(() => Decode(bytes),
+            Throws.TypeOf<QwpDecodeException>().With.Message.Contains("row_count"));
+    }
+
+    [Test]
+    public void RejectsSchemaModeReference()
+    {
+        var bytes = new FrameBuilder()
+            .WithRowCount(0)
+            .WithSchemaMode(QwpConstants.SCHEMA_MODE_REFERENCE)
+            .Build();
+        Assert.That(() => Decode(bytes),
+            Throws.TypeOf<QwpDecodeException>().With.Message.Contains("SCHEMA_MODE_REFERENCE"));
+    }
+
+    [Test]
+    public void RejectsUnknownSchemaMode()
+    {
+        var bytes = new FrameBuilder()
+            .WithRowCount(0)
+            .WithSchemaMode((byte)0xEE)
+            .Build();
+        Assert.That(() => Decode(bytes),
+            Throws.TypeOf<QwpDecodeException>().With.Message.Contains("unknown schema mode"));
+    }
+
+    [Test]
+    public void RejectsNonMonotonicStringOffsets()
+    {
+        var bytes = new FrameBuilder()
+            .WithRowCount(2)
+            .AddNonNullableColumn("v", QwpConstants.TYPE_VARCHAR, w =>
+            {
+                w.WriteIntLE(0);
+                w.WriteIntLE(5);
+                w.WriteIntLE(3);  // goes backwards — must reject.
+                w.WriteUtf8("abcde");
+            })
+            .Build();
+        Assert.That(() => Decode(bytes),
+            Throws.TypeOf<QwpDecodeException>().With.Message.Contains("offset"));
+    }
+
+    [Test]
+    public void RejectsSymbolColumnsForNow()
+    {
+        var bytes = new FrameBuilder()
+            .WithRowCount(1)
+            .AddNonNullableColumn("s", QwpConstants.TYPE_SYMBOL, w => { /* not actually reached */ })
+            .Build();
+        Assert.That(() => Decode(bytes),
+            Throws.TypeOf<QwpDecodeException>().With.Message.Contains("SYMBOL columns"));
+    }
+
+    [Test]
+    public void RejectsArrayColumnsForNow()
+    {
+        var bytes = new FrameBuilder()
+            .WithRowCount(1)
+            .AddNonNullableColumn("a", QwpConstants.TYPE_DOUBLE_ARRAY, w => { /* not actually reached */ })
+            .Build();
+        Assert.That(() => Decode(bytes),
+            Throws.TypeOf<QwpDecodeException>().With.Message.Contains("ARRAY"));
+    }
+
+    [Test]
+    public void DecoderResetsBatchAcrossSuccessiveDecodes()
+    {
+        // Decode a 2-column batch, then a 1-column batch with the same buffer; the
+        // second decode must not leak the first's column count.
+        var first = new FrameBuilder()
+            .WithRowCount(1)
+            .AddNonNullableColumn("a", QwpConstants.TYPE_INT, w => w.WriteIntLE(1))
+            .AddNonNullableColumn("b", QwpConstants.TYPE_INT, w => w.WriteIntLE(2))
+            .Build();
+        var second = new FrameBuilder()
+            .WithRowCount(1)
+            .AddNonNullableColumn("only", QwpConstants.TYPE_INT, w => w.WriteIntLE(99))
+            .Build();
+
+        var buf = new QwpBatchBuffer(64);
+        var dec = new QwpResultBatchDecoder();
+        buf.CopyFromPayload(first);
+        dec.Decode(buf);
+        Assert.That(buf.Batch.ColumnCount, Is.EqualTo(2));
+
+        buf.CopyFromPayload(second);
+        dec.Decode(buf);
+        Assert.That(buf.Batch.ColumnCount, Is.EqualTo(1));
+        Assert.That(buf.Batch.GetIntValue(0, 0), Is.EqualTo(99));
+    }
+
+    private static QwpColumnBatch Decode(byte[] bytes)
+    {
+        var buf = new QwpBatchBuffer(bytes.Length);
+        buf.CopyFromPayload(bytes);
+        new QwpResultBatchDecoder().Decode(buf);
+        return buf.Batch;
+    }
+
+    private sealed class FrameBuilder
+    {
+        private readonly List<Action<PayloadWriter>> _columnEmitters = new();
+        private readonly List<(string Name, byte WireType, byte? Scale, int? Precision)> _columnDefs = new();
+        private int _rowCount;
+        private byte _schemaMode = QwpConstants.SCHEMA_MODE_FULL;
+
+        public FrameBuilder WithRowCount(int rowCount) { _rowCount = rowCount; return this; }
+        public FrameBuilder WithSchemaMode(byte mode) { _schemaMode = mode; return this; }
+
+        public FrameBuilder AddNonNullableColumn(string name, byte wireType, Action<PayloadWriter> valueWriter)
+        {
+            _columnDefs.Add((name, wireType, null, null));
+            _columnEmitters.Add(w =>
+            {
+                w.WriteByte(0); // null flag = 0 (no nulls)
+                valueWriter(w);
+            });
+            return this;
+        }
+
+        public FrameBuilder AddNullableColumn(string name, byte wireType, byte[] bitmap, Action<PayloadWriter> valueWriter)
+        {
+            _columnDefs.Add((name, wireType, null, null));
+            _columnEmitters.Add(w =>
+            {
+                w.WriteByte(1); // null flag = 1
+                w.WriteRaw(bitmap);
+                valueWriter(w);
+            });
+            return this;
+        }
+
+        public FrameBuilder AddDecimalColumn(string name, byte wireType, byte scale, Action<PayloadWriter> valueWriter)
+        {
+            _columnDefs.Add((name, wireType, scale, null));
+            _columnEmitters.Add(w =>
+            {
+                w.WriteByte(0);    // null flag
+                w.WriteByte(scale); // scale prefix
+                valueWriter(w);
+            });
+            return this;
+        }
+
+        public FrameBuilder AddGeohashColumn(string name, int precisionBits, Action<PayloadWriter> valueWriter)
+        {
+            _columnDefs.Add((name, QwpConstants.TYPE_GEOHASH, null, precisionBits));
+            _columnEmitters.Add(w =>
+            {
+                w.WriteByte(0);
+                w.WriteVarint(precisionBits);
+                valueWriter(w);
+            });
+            return this;
+        }
+
+        public byte[] Build()
+        {
+            var w = new PayloadWriter();
+            // Header (12B): magic(4) + version(1) + flags(1) + 6 zero pad bytes.
+            w.WriteIntLE(QwpConstants.MAGIC_MESSAGE);
+            w.WriteByte(QwpConstants.VERSION_2);
+            w.WriteByte(0); // flags
+            for (var i = 0; i < QwpConstants.HEADER_SIZE - 6; i++) w.WriteByte(0);
+
+            // Body.
+            w.WriteByte(QwpEgressMsgKind.RESULT_BATCH);
+            w.WriteLongLE(0L);   // request_id
+            w.WriteVarint(0L);    // batch_seq
+            w.WriteVarint(0L);    // table name length (empty)
+            w.WriteVarint(_rowCount);
+            w.WriteVarint(_columnDefs.Count);
+            w.WriteByte(_schemaMode);
+            w.WriteVarint(0);     // schema_id
+
+            if (_schemaMode == QwpConstants.SCHEMA_MODE_FULL)
+            {
+                foreach (var (name, wireType, _, _) in _columnDefs)
+                {
+                    var nameBytes = Encoding.UTF8.GetBytes(name);
+                    w.WriteVarint(nameBytes.Length);
+                    w.WriteRaw(nameBytes);
+                    w.WriteByte(wireType);
+                }
+            }
+
+            // Per-column wire bytes.
+            foreach (var emit in _columnEmitters)
+            {
+                emit(w);
+            }
+            return w.ToArray();
+        }
+    }
+
+    private sealed class PayloadWriter
+    {
+        private readonly List<byte> _bytes = new();
+
+        public void WriteByte(byte v) => _bytes.Add(v);
+        public void WriteByte(int v) => _bytes.Add((byte)v);
+        public void WriteRaw(byte[] data) => _bytes.AddRange(data);
+        public void WriteUtf8(string s) => _bytes.AddRange(Encoding.UTF8.GetBytes(s));
+
+        public void WriteIntLE(int v)
+        {
+            Span<byte> b = stackalloc byte[4];
+            BinaryPrimitives.WriteInt32LittleEndian(b, v);
+            for (var i = 0; i < 4; i++) _bytes.Add(b[i]);
+        }
+
+        public void WriteLongLE(long v)
+        {
+            Span<byte> b = stackalloc byte[8];
+            BinaryPrimitives.WriteInt64LittleEndian(b, v);
+            for (var i = 0; i < 8; i++) _bytes.Add(b[i]);
+        }
+
+        public void WriteVarint(long value)
+        {
+            var v = (ulong)value;
+            while (v > 0x7F)
+            {
+                _bytes.Add((byte)((v & 0x7F) | 0x80));
+                v >>= 7;
+            }
+            _bytes.Add((byte)v);
+        }
+
+        public byte[] ToArray() => _bytes.ToArray();
+    }
+}

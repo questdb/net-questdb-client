@@ -22,3 +22,10 @@
   header: |-
     [.NET client library](https://github.com/questdb/net-questdb-client)
   conf: http::addr=localhost:9000;
+
+- name: qwp-ws-udp
+  lang: csharp
+  path: src/example-qwp/Program.cs
+  header: |-
+    [.NET client library](https://github.com/questdb/net-questdb-client)
+  conf: ws::addr=localhost:9000;

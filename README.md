@@ -135,6 +135,23 @@ Rather, this allows you to configure a backup database where data will be sent t
 
 The swap happens transparently within a given `retry_timeout`, and is performed in a round-robin fashion (try the next endpoint and write if it is available). Once a new endpoint is selected, it continues to be used for the lifetime of that `Sender`.
 
+### QWP transports (experimental)
+
+In addition to ILP over HTTP and TCP, the client also speaks the QuestDB Wire Protocol (QWP) over WebSocket and UDP. QWP is a binary, schema-aware protocol with smaller payloads, optional Gorilla timestamp compression, and durable acknowledgements over WebSocket.
+
+```csharp
+// WebSocket — durable acks, supports auto-flush:
+using var sender = Sender.New("ws::addr=localhost:9000;auto_flush=on;auto_flush_rows=10000;");
+
+// WSS — TLS:
+using var sender = Sender.New("wss::addr=localhost:9000;");
+
+// UDP — fire-and-forget, lowest latency, no acknowledgement:
+using var sender = Sender.New("udp::addr=localhost:9009;");
+```
+
+Both transports use the same builder API as the ILP senders (`.Table().Symbol().Column().AtNow()` etc.), so switching between them is just a connection-string change. See [`src/example-qwp/Program.cs`](src/example-qwp/Program.cs) for a runnable example.
+
 ## Configuration Parameters
 
 These options are set either using a config string, or by initialising QuestDBOptions.
@@ -142,7 +159,7 @@ These options are set either using a config string, or by initialising QuestDBOp
 The config string format is:
 
 ```
-{http/https/tcp/tcps}::addr={host}:{port};key1=val1;key2=val2;keyN=valN;
+{http/https/tcp/tcps/ws/wss/udp}::addr={host}:{port};key1=val1;key2=val2;keyN=valN;
 ```
 
 | Name                     | Default                    | Description                                                                                                                                                                                                                   |

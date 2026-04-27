@@ -73,6 +73,13 @@ internal sealed class QwpPinnedBufferWriter : IQwpBufferWriter
     /// <summary>Read-only span over the bytes written so far.</summary>
     public ReadOnlySpan<byte> AsReadOnlySpan() => _array.AsSpan(0, _position);
 
+    /// <summary>
+    ///     Underlying pinned <see cref="byte"/> array. For native-style encoders that need
+    ///     a <c>byte[]</c> + offset (like <see cref="QwpGorillaEncoder"/>) — combine with
+    ///     <see cref="Position"/> for the destination offset.
+    /// </summary>
+    internal byte[] UnderlyingArray => _array;
+
     public void EnsureCapacity(int additionalBytes)
     {
         var required = (long)_position + additionalBytes;

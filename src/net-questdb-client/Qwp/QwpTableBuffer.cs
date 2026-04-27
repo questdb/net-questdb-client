@@ -90,6 +90,20 @@ internal sealed class QwpTableBuffer
     public void SetSchemaId(int schemaId) => _schemaId = schemaId;
 
     /// <summary>
+    ///     Returns a snapshot of the per-column (name, wireTypeCode) pairs in column order.
+    ///     Used by <see cref="QwpColumnWriter"/> to emit the FULL-schema table header.
+    /// </summary>
+    public QwpColumnDef[] GetColumnDefs()
+    {
+        var defs = new QwpColumnDef[_columns.Count];
+        for (var i = 0; i < _columns.Count; i++)
+        {
+            defs[i] = new QwpColumnDef(_columns[i].Name, _columns[i].Type);
+        }
+        return defs;
+    }
+
+    /// <summary>
     ///     Returns an existing column with the given name and type, or <c>null</c> if absent.
     ///     Hits the same sequential-cursor fast path as <see cref="GetOrCreateColumn"/>; on
     ///     a type mismatch — fast path or hash path — throws an
@@ -376,6 +390,50 @@ internal sealed class QwpTableBuffer
         public int ValueCount => _valueCount;
 
         public bool HasNulls => _hasNulls;
+
+        /// <summary>Latched decimal scale (-1 when no decimal value has been added).</summary>
+        public int DecimalScale => _decimalScale;
+
+        /// <summary>Latched geohash precision in bits (-1 when no geohash value has been added).</summary>
+        public int GeoHashPrecision => _geohashPrecision;
+
+        /// <summary>Total bytes of UTF-8 data accumulated by <c>AddString</c> for VARCHAR / BINARY columns.</summary>
+        public int StringDataSize => _stringData?.Length ?? 0;
+
+        // Internal memory accessors used by QwpColumnWriter. Each returns a view backed by
+        // the column's POH-pinned storage; the views are valid until the next mutation.
+        internal ReadOnlyMemory<byte> DataMemory =>
+            _dataBuffer is null ? ReadOnlyMemory<byte>.Empty : _dataBuffer.AsReadOnlyMemory(0, _dataBuffer.Length);
+
+        internal ReadOnlyMemory<byte> StringOffsetsMemory =>
+            _stringOffsets is null ? ReadOnlyMemory<byte>.Empty : _stringOffsets.AsReadOnlyMemory(0, _stringOffsets.Length);
+
+        internal ReadOnlyMemory<byte> StringDataMemory =>
+            _stringData is null ? ReadOnlyMemory<byte>.Empty : _stringData.AsReadOnlyMemory(0, _stringData.Length);
+
+        internal ReadOnlyMemory<byte> AuxDataMemory =>
+            _auxBuffer is null ? ReadOnlyMemory<byte>.Empty : _auxBuffer.AsReadOnlyMemory(0, _auxBuffer.Length);
+
+        internal ReadOnlyMemory<byte> NullBitmapMemory(int bitmapBytes)
+        {
+            EnsureNullBitmapCapacity(bitmapBytes * 8);
+            return _nullBitmap.AsMemory(0, bitmapBytes);
+        }
+
+        internal ReadOnlySpan<byte> ArrayDimsSpan =>
+            _arrayDims is null ? ReadOnlySpan<byte>.Empty : System.Runtime.InteropServices.CollectionsMarshal.AsSpan(_arrayDims);
+
+        internal ReadOnlySpan<int> ArrayShapesSpan =>
+            _arrayShapes is null ? ReadOnlySpan<int>.Empty : System.Runtime.InteropServices.CollectionsMarshal.AsSpan(_arrayShapes);
+
+        internal ReadOnlySpan<double> DoubleArrayDataSpan =>
+            _doubleArrayData is null ? ReadOnlySpan<double>.Empty : System.Runtime.InteropServices.CollectionsMarshal.AsSpan(_doubleArrayData);
+
+        internal ReadOnlySpan<long> LongArrayDataSpan =>
+            _longArrayData is null ? ReadOnlySpan<long>.Empty : System.Runtime.InteropServices.CollectionsMarshal.AsSpan(_longArrayData);
+
+        internal IReadOnlyList<string> SymbolList =>
+            (IReadOnlyList<string>?)_symbolList ?? Array.Empty<string>();
 
         public bool IsNull(int rowIndex)
         {

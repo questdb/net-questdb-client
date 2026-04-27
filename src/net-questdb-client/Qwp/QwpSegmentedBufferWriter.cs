@@ -59,6 +59,16 @@ internal sealed class QwpSegmentedBufferWriter : IQwpBufferWriter
     public Span<byte> GetWritableSpan() => _currentChunk.GetWritableSpan();
 
     /// <summary>
+    ///     Live chunk's underlying pinned <see cref="byte"/> array (for native-style
+    ///     encoders that need a <c>byte[]</c> + offset). Pair with
+    ///     <see cref="CurrentChunkPosition"/> for the destination offset.
+    /// </summary>
+    internal byte[] CurrentChunkUnderlyingArray => _currentChunk.UnderlyingArray;
+
+    /// <summary>Live chunk's local write position (chunk-local, not global).</summary>
+    internal int CurrentChunkPosition => _currentChunk.Position;
+
+    /// <summary>
     ///     Snapshot of the writer's contents as an ordered list of byte spans. Includes
     ///     all flushed by-reference segments and the live chunk's written bytes (if any).
     ///     The returned list is a fresh copy — safe to enumerate while the writer continues

@@ -163,6 +163,27 @@ public class QwpSegmentedBufferWriterTests
     }
 
     [Test]
-    [Ignore("Awaiting PR 3 (QwpTableBuffer) + PR 6 (QwpColumnWriter): cross-component test for Gorilla encoding via segmented buffer.")]
-    public void GorillaEncodingViaSegmentedBufferRoundTrips() { }
+    public void GorillaEncodingViaSegmentedBufferRoundTrips()
+    {
+        // Pre-flush a by-reference segment so flushedBytes > 0 — this is the scenario
+        // that exercises QwpColumnWriter's GetWritableArray + Skip pair against the
+        // live chunk (not the flushed-and-replaced one). Detailed coverage lives in
+        // QwpColumnWriterTests; this guard test just confirms the segmented sink
+        // accepts an in-place encoder write without corrupting accumulated segments.
+        var table = new QwpTableBuffer("t");
+        var col = table.GetOrCreateColumn("ts", QwpConstants.TYPE_TIMESTAMP, true)!;
+        var baseTs = 1_000_000_000L;
+        for (var i = 0; i < 10; i++) { col.AddLong(baseTs + i * 1_000_000L); table.NextRow(); }
+
+        var sink = new QwpSegmentedBufferWriter();
+        sink.PutBlockOfBytes(new byte[32]);
+        Assert.That(sink.Position, Is.EqualTo(32));
+
+        var writer = new QwpColumnWriter();
+        writer.SetBuffer(sink);
+        writer.EncodeTable(table, useSchemaRef: false, useGlobalSymbols: false, useGorilla: true);
+
+        Assert.That(sink.Position, Is.GreaterThan(32));
+        Assert.That(sink.Segments.Count, Is.GreaterThan(1));
+    }
 }

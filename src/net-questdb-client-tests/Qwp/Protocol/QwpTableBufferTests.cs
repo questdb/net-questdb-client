@@ -480,11 +480,81 @@ public class QwpTableBufferTests
     }
 
     // ---- Decimal column support (PR 3c) ----
-    [Test] public void AddDecimal64PrecisionLoss() => Assert.Inconclusive(AwaitingDecimal);
-    [Test] public void AddDecimal64RescaleOverflow() => Assert.Inconclusive(AwaitingDecimal);
-    [Test] public void AddDecimal128PrecisionLoss() => Assert.Inconclusive(AwaitingDecimal);
-    [Test] public void AddDecimal128RescaleOverflow() => Assert.Inconclusive(AwaitingDecimal);
-    [Test] public void CancelRowResetsDecimalScaleOnLateAddedColumn() => Assert.Inconclusive(AwaitingDecimal);
+
+    [Test]
+    public void AddDecimal64PrecisionLoss()
+    {
+        var table = new QwpTableBuffer("t");
+        var col = table.GetOrCreateColumn("d", QwpConstants.TYPE_DECIMAL64, true)!;
+        col.AddDecimal64(100, 2);                  // first row latches scale = 2
+        table.NextRow();
+        // Second row at scale 4 with trailing fractional digits — rescaling to scale 2
+        // would lose precision (12345 / 100 = 123 remainder 45).
+        Assert.That(() => col.AddDecimal64(12345, 4),
+                    Throws.TypeOf<IngressError>().With.Message.Contains("precision loss"));
+    }
+
+    [Test]
+    public void AddDecimal64RescaleOverflow()
+    {
+        var table = new QwpTableBuffer("t");
+        var col = table.GetOrCreateColumn("d", QwpConstants.TYPE_DECIMAL64, true)!;
+        col.AddDecimal64(1, 5);                    // first row latches scale = 5
+        table.NextRow();
+        // Second row at scale 0 with a large value — multiplying by 10^5 exceeds long range.
+        Assert.That(() => col.AddDecimal64(long.MaxValue / 10, 0),
+                    Throws.TypeOf<IngressError>().With.Message.EndsWith(
+                        "Decimal64 overflow: rescaling from scale 0 to 5 exceeds 64-bit capacity"));
+    }
+
+    [Test]
+    public void AddDecimal128PrecisionLoss()
+    {
+        var table = new QwpTableBuffer("t");
+        var col = table.GetOrCreateColumn("d", QwpConstants.TYPE_DECIMAL128, true)!;
+        col.AddDecimal128(0, 100, 2);              // first row latches scale = 2
+        table.NextRow();
+        // Second row at scale 4 — rescaling 12345 from scale 4 to scale 2 loses precision.
+        Assert.That(() => col.AddDecimal128(0, 12345, 4),
+                    Throws.TypeOf<IngressError>().With.Message.Contains("precision loss"));
+    }
+
+    [Test]
+    public void AddDecimal128RescaleOverflow()
+    {
+        var table = new QwpTableBuffer("t");
+        var col = table.GetOrCreateColumn("d", QwpConstants.TYPE_DECIMAL128, true)!;
+        col.AddDecimal128(0, 1, 10);               // first row latches scale = 10
+        table.NextRow();
+        // (high=long.MaxValue/2, low=long.MaxValue, scale=0) — multiplying by 10^10
+        // exceeds 128-bit signed range.
+        Assert.That(() => col.AddDecimal128(long.MaxValue / 2, long.MaxValue, 0),
+                    Throws.TypeOf<IngressError>().With.Message.EndsWith(
+                        "Decimal128 overflow: rescaling from scale 0 to 10 exceeds 128-bit capacity"));
+    }
+
+    [Test]
+    public void CancelRowResetsDecimalScaleOnLateAddedColumn()
+    {
+        var table = new QwpTableBuffer("t");
+        table.GetOrCreateColumn("a", QwpConstants.TYPE_LONG, false)!.AddLong(0);
+        table.NextRow();
+
+        // Late-added decimal column with scale 5 in the in-progress row.
+        table.GetOrCreateColumn("a", QwpConstants.TYPE_LONG, false)!.AddLong(1);
+        var col = table.GetOrCreateColumn("d", QwpConstants.TYPE_DECIMAL64, true)!;
+        col.AddDecimal64(100, 5);
+        table.CancelCurrentRow();
+
+        // After cancel: decimalScale must be reset, so a value at a different scale
+        // succeeds (no rescale, latches the new scale).
+        table.GetOrCreateColumn("a", QwpConstants.TYPE_LONG, false)!.AddLong(1);
+        Assert.That(() => col.AddDecimal64(42, 3), Throws.Nothing);
+        table.NextRow();
+
+        Assert.That(col.Size, Is.EqualTo(2));
+        Assert.That(col.ValueCount, Is.EqualTo(1));
+    }
 
     // ---- Array column support (PR 3d) ----
     [Test] public void AddDoubleArrayNullOnNonNullableColumn() => Assert.Inconclusive(AwaitingArray);

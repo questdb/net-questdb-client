@@ -17,6 +17,7 @@
  ******************************************************************************/
 
 using System.Buffers.Binary;
+using System.Numerics;
 using System.Text;
 using QuestDB.Utils;
 
@@ -281,6 +282,7 @@ internal sealed class QwpTableBuffer
         private bool _storeGlobalSymbolIdsOnly;
         private int _maxGlobalSymbolId = -1;
 
+        private int _decimalScale = -1;
         private int _geohashPrecision = -1;
         private bool _hasNulls;
         private int _size;
@@ -411,6 +413,131 @@ internal sealed class QwpTableBuffer
             _dataBuffer!.PutDouble(value);
             _valueCount++;
             _size++;
+        }
+
+        /// <summary>
+        ///     Adds a Decimal64 value with the given scale. The first <c>AddDecimal64</c>
+        ///     call latches the column's scale; subsequent calls at a different scale are
+        ///     rescaled to match. Throws on precision loss (downscaling with a non-zero
+        ///     fractional remainder) or 64-bit overflow (upscaling that exceeds long range).
+        /// </summary>
+        public void AddDecimal64(long unscaledValue, int scale)
+        {
+            long stored;
+            if (_decimalScale == -1)
+            {
+                _decimalScale = scale;
+                stored = unscaledValue;
+            }
+            else if (_decimalScale != scale)
+            {
+                stored = Rescale64(unscaledValue, scale, _decimalScale);
+            }
+            else
+            {
+                stored = unscaledValue;
+            }
+            _dataBuffer!.PutLong(stored);
+            _valueCount++;
+            _size++;
+        }
+
+        /// <summary>
+        ///     Adds a Decimal128 value with the given scale. The first <c>AddDecimal128</c>
+        ///     call latches the column's scale; subsequent calls at a different scale are
+        ///     rescaled to match. Throws on precision loss or 128-bit overflow.
+        /// </summary>
+        public void AddDecimal128(long high, long low, int scale)
+        {
+            long storedHigh, storedLow;
+            if (_decimalScale == -1)
+            {
+                _decimalScale = scale;
+                storedHigh = high;
+                storedLow = low;
+            }
+            else if (_decimalScale != scale)
+            {
+                (storedHigh, storedLow) = Rescale128(high, low, scale, _decimalScale);
+            }
+            else
+            {
+                storedHigh = high;
+                storedLow = low;
+            }
+            _dataBuffer!.PutLong(storedHigh);
+            _dataBuffer!.PutLong(storedLow);
+            _valueCount++;
+            _size++;
+        }
+
+        private long Rescale64(long unscaled, int fromScale, int toScale)
+        {
+            var diff = toScale - fromScale;
+            BigInteger result;
+            if (diff > 0)
+            {
+                result = (BigInteger)unscaled * BigInteger.Pow(10, diff);
+            }
+            else
+            {
+                var divisor = BigInteger.Pow(10, -diff);
+                var quotient = BigInteger.DivRem((BigInteger)unscaled, divisor, out var remainder);
+                if (!remainder.IsZero)
+                {
+                    throw new IngressError(Enums.ErrorCode.InvalidName,
+                        $"column '{Name}' cannot rescale decimal from scale {fromScale} to {toScale} without precision loss");
+                }
+                result = quotient;
+            }
+            if (result < long.MinValue || result > long.MaxValue)
+            {
+                throw new IngressError(Enums.ErrorCode.InvalidName,
+                    $"Decimal64 overflow: rescaling from scale {fromScale} to {toScale} exceeds 64-bit capacity");
+            }
+            return (long)result;
+        }
+
+        private (long high, long low) Rescale128(long high, long low, int fromScale, int toScale)
+        {
+            var input = Pack128(high, low);
+            var diff = toScale - fromScale;
+            BigInteger result;
+            if (diff > 0)
+            {
+                result = input * BigInteger.Pow(10, diff);
+            }
+            else
+            {
+                var divisor = BigInteger.Pow(10, -diff);
+                var quotient = BigInteger.DivRem(input, divisor, out var remainder);
+                if (!remainder.IsZero)
+                {
+                    throw new IngressError(Enums.ErrorCode.InvalidName,
+                        $"column '{Name}' cannot rescale decimal from scale {fromScale} to {toScale} without precision loss");
+                }
+                result = quotient;
+            }
+            var max128 = (BigInteger.One << 127) - 1;
+            var min128 = -(BigInteger.One << 127);
+            if (result < min128 || result > max128)
+            {
+                throw new IngressError(Enums.ErrorCode.InvalidName,
+                    $"Decimal128 overflow: rescaling from scale {fromScale} to {toScale} exceeds 128-bit capacity");
+            }
+            return Unpack128(result);
+        }
+
+        private static BigInteger Pack128(long high, long low) =>
+            ((BigInteger)high << 64) | (BigInteger)(ulong)low;
+
+        private static (long high, long low) Unpack128(BigInteger value)
+        {
+            var lowMask = (BigInteger.One << 64) - 1;
+            var lowBig = value & lowMask;
+            var high = (long)(value >> 64);
+            var low = (long)(ulong)lowBig;
+            return (high, low);
         }
 
         public void AddGeoHash(long value, int precision)
@@ -612,6 +739,19 @@ internal sealed class QwpTableBuffer
                         _dataBuffer!.PutLong(long.MinValue);
                         _dataBuffer!.PutLong(long.MinValue);
                         break;
+                    case QwpConstants.TYPE_DECIMAL64:
+                        _dataBuffer!.PutLong(long.MinValue); // DECIMAL64_NULL
+                        break;
+                    case QwpConstants.TYPE_DECIMAL128:
+                        _dataBuffer!.PutLong(long.MinValue); // DECIMAL128_HI_NULL
+                        _dataBuffer!.PutLong(0L);            // DECIMAL128_LO_NULL
+                        break;
+                    case QwpConstants.TYPE_DECIMAL256:
+                        _dataBuffer!.PutLong(long.MinValue); // DECIMAL256_HH_NULL
+                        _dataBuffer!.PutLong(0L);
+                        _dataBuffer!.PutLong(0L);
+                        _dataBuffer!.PutLong(0L);
+                        break;
                     case QwpConstants.TYPE_VARCHAR:
                     case QwpConstants.TYPE_BINARY:
                         _stringOffsets!.PutInt(CheckedStringOffset(_stringData!.Length));
@@ -684,6 +824,7 @@ internal sealed class QwpTableBuffer
             // Type-specific metadata reverts to "freshly created" when truncated to zero.
             if (newValueCount == 0)
             {
+                _decimalScale = -1;
                 _geohashPrecision = -1;
                 _storeGlobalSymbolIdsOnly = false;
                 _maxGlobalSymbolId = -1;
@@ -706,6 +847,7 @@ internal sealed class QwpTableBuffer
             }
             _stringData?.Truncate();
             if (_nullBitmap.Length > 0) Array.Clear(_nullBitmap, 0, _nullBitmap.Length);
+            _decimalScale = -1;
             _geohashPrecision = -1;
             _storeGlobalSymbolIdsOnly = false;
             _maxGlobalSymbolId = -1;

@@ -58,6 +58,11 @@ public class QwpConstantsTests
         Assert.That(QwpConstants.GetFixedTypeSize(QwpConstants.TYPE_SYMBOL), Is.EqualTo(-1));
         Assert.That(QwpConstants.GetFixedTypeSize(QwpConstants.TYPE_DOUBLE_ARRAY), Is.EqualTo(-1));
         Assert.That(QwpConstants.GetFixedTypeSize(QwpConstants.TYPE_LONG_ARRAY), Is.EqualTo(-1));
+
+        // .NET divergence from Java main: BINARY is variable-width (-1) and IPv4 is
+        // 4 bytes fixed. Java's helpers omit both — see QwpConstants doc comment.
+        Assert.That(QwpConstants.GetFixedTypeSize(QwpConstants.TYPE_BINARY), Is.EqualTo(-1));
+        Assert.That(QwpConstants.GetFixedTypeSize(QwpConstants.TYPE_IPv4), Is.EqualTo(4));
     }
 
     [Test]
@@ -75,9 +80,16 @@ public class QwpConstantsTests
         Assert.That(QwpConstants.GetTypeName(QwpConstants.TYPE_DECIMAL256), Is.EqualTo("DECIMAL256"));
         Assert.That(QwpConstants.GetTypeName(QwpConstants.TYPE_CHAR), Is.EqualTo("CHAR"));
 
+        // .NET divergence from Java main: BINARY/IPv4 names are returned rather than UNKNOWN.
+        Assert.That(QwpConstants.GetTypeName(QwpConstants.TYPE_BINARY), Is.EqualTo("BINARY"));
+        Assert.That(QwpConstants.GetTypeName(QwpConstants.TYPE_IPv4), Is.EqualTo("IPv4"));
+
         // The high bit is not part of the type code on main; bytes with it set are unknown.
         var badInt = unchecked((byte)(QwpConstants.TYPE_INT | 0x80));
         Assert.That(QwpConstants.GetTypeName(badInt), Does.StartWith("UNKNOWN"));
+
+        // 0x19 is past the valid range — no name assigned.
+        Assert.That(QwpConstants.GetTypeName(0x19), Does.StartWith("UNKNOWN"));
     }
 
     [Test]
@@ -111,6 +123,10 @@ public class QwpConstantsTests
         Assert.That(QwpConstants.IsFixedWidthType(QwpConstants.TYPE_VARCHAR), Is.False);
         Assert.That(QwpConstants.IsFixedWidthType(QwpConstants.TYPE_DOUBLE_ARRAY), Is.False);
         Assert.That(QwpConstants.IsFixedWidthType(QwpConstants.TYPE_LONG_ARRAY), Is.False);
+
+        // .NET divergence from Java main: BINARY is variable-width; IPv4 is fixed (4 bytes).
+        Assert.That(QwpConstants.IsFixedWidthType(QwpConstants.TYPE_BINARY), Is.False);
+        Assert.That(QwpConstants.IsFixedWidthType(QwpConstants.TYPE_IPv4), Is.True);
     }
 
     [Test]

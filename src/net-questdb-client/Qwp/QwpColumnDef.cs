@@ -44,17 +44,19 @@ internal sealed class QwpColumnDef : IEquatable<QwpColumnDef>
     public string TypeName => QwpConstants.GetTypeName(TypeCode);
 
     /// <summary>
-    ///     Validates that this column has a recognised wire type code (0x01..0x16).
+    ///     Validates that this column has a recognised wire type code (0x01..0x18).
     /// </summary>
     /// <remarks>
-    ///     NB: Java main rejects 0x17 (TYPE_BINARY) and 0x18 (TYPE_IPv4) here even though
-    ///     those codes are emitted elsewhere — a latent inconsistency on main that we
-    ///     mirror so the .NET contract matches.
+    ///     .NET diverges from Java main here: Java's <c>QwpColumnDef.validate()</c> rejects
+    ///     0x17 (<see cref="QwpConstants.TYPE_BINARY"/>) and 0x18 (<see cref="QwpConstants.TYPE_IPv4"/>)
+    ///     even though both codes are emitted elsewhere in the protocol — a latent bug. The
+    ///     .NET implementation accepts the full 0x01..0x18 range. When upstream catches up,
+    ///     this divergence vanishes.
     /// </remarks>
-    /// <exception cref="ArgumentException">Type code is not in 0x01..0x16.</exception>
+    /// <exception cref="ArgumentException">Type code is not in 0x01..0x18.</exception>
     public void Validate()
     {
-        var valid = TypeCode >= QwpConstants.TYPE_BOOLEAN && TypeCode <= QwpConstants.TYPE_CHAR;
+        var valid = TypeCode >= QwpConstants.TYPE_BOOLEAN && TypeCode <= QwpConstants.TYPE_IPv4;
         if (!valid)
         {
             throw new ArgumentException(

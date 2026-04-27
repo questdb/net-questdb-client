@@ -154,6 +154,8 @@ internal static class QwpConstants
             case TYPE_LONG256:
             case TYPE_DECIMAL256:
                 return 32;
+            case TYPE_IPv4:
+                return 4;
             case TYPE_GEOHASH:
                 return -1;
             default:
@@ -187,9 +189,11 @@ internal static class QwpConstants
             case TYPE_DECIMAL64: return "DECIMAL64";
             case TYPE_DECIMAL128: return "DECIMAL128";
             case TYPE_DECIMAL256: return "DECIMAL256";
-            // NB: Java main does not include TYPE_BINARY (0x17) or TYPE_IPv4 (0x18) in
-            // GetTypeName, so they fall through to UNKNOWN. Mirroring that latent
-            // inconsistency on purpose to match the Java contract.
+            // .NET deliberately diverges from Java main, which omits BINARY and IPv4 here
+            // (a latent bug — both codes are emitted elsewhere in the protocol). When
+            // upstream catches up, this case becomes a no-op.
+            case TYPE_BINARY: return "BINARY";
+            case TYPE_IPv4: return "IPv4";
             default: return "UNKNOWN(" + typeCode + ")";
         }
     }
@@ -218,6 +222,7 @@ internal static class QwpConstants
             case TYPE_DECIMAL64:
             case TYPE_DECIMAL128:
             case TYPE_DECIMAL256:
+            case TYPE_IPv4:  // 4 bytes fixed; .NET adds, Java main omits (latent bug).
                 return true;
             default:
                 return false;

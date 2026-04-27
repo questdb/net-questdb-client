@@ -16,7 +16,7 @@
  *
  ******************************************************************************/
 
-using System.Runtime.InteropServices;
+using System.Buffers.Binary;
 using NUnit.Framework;
 using QuestDB.Qwp;
 using QuestDB.Utils;
@@ -24,189 +24,171 @@ using QuestDB.Utils;
 namespace net_questdb_client_tests.Qwp.Protocol;
 
 /// <summary>
-///     Mirrors <c>QwpBitWriterTest.java</c> on Java main 64b7ee69. .NET allocates the test buffer
-///     via <see cref="Marshal"/> rather than <c>Unsafe.malloc</c>; semantically equivalent.
+///     Mirrors <c>QwpBitWriterTest.java</c> on Java main 64b7ee69. The .NET writer accepts
+///     a managed <see cref="byte"/> array slice rather than a raw native pointer; the
+///     overflow / round-trip semantics are identical.
 /// </summary>
 [TestFixture]
 public class QwpBitWriterTests
 {
-    private static nint AllocBuffer(long bytes) => Marshal.AllocHGlobal((nint)bytes);
-    private static void FreeBuffer(nint addr) => Marshal.FreeHGlobal(addr);
-
     [Test]
     public void FlushThrowsOnOverflow()
     {
-        var ptr = AllocBuffer(1);
-        try
-        {
-            var writer = new QwpBitWriter();
-            writer.Reset(ptr, 1);
-            writer.WriteBits(0xFF, 8);
-            writer.WriteBits(0x3, 4); // bits sit in the bit buffer
-            Assert.That(() => writer.Flush(),
-                        Throws.TypeOf<IngressError>().With.Message.Contains("buffer overflow"));
-        }
-        finally { FreeBuffer(ptr); }
+        var buf = new byte[1];
+        var writer = new QwpBitWriter();
+        writer.Reset(buf, 0, buf.Length);
+        writer.WriteBits(0xFF, 8);
+        writer.WriteBits(0x3, 4); // bits sit in the bit buffer
+        Assert.That(() => writer.Flush(),
+                    Throws.TypeOf<IngressError>().With.Message.Contains("buffer overflow"));
     }
 
     [Test]
     public void WriteBitsThrowsOnOverflow()
     {
-        var ptr = AllocBuffer(4);
-        try
-        {
-            var writer = new QwpBitWriter();
-            writer.Reset(ptr, 4);
-            writer.WriteBits(unchecked((int)0xFFFF_FFFF), 32); // fills the buffer
-            Assert.That(() => writer.WriteBits(1, 8),
-                        Throws.TypeOf<IngressError>().With.Message.Contains("buffer overflow"));
-        }
-        finally { FreeBuffer(ptr); }
+        var buf = new byte[4];
+        var writer = new QwpBitWriter();
+        writer.Reset(buf, 0, buf.Length);
+        writer.WriteBits(unchecked((int)0xFFFF_FFFF), 32); // fills the buffer
+        Assert.That(() => writer.WriteBits(1, 8),
+                    Throws.TypeOf<IngressError>().With.Message.Contains("buffer overflow"));
     }
 
     [Test]
     public void WriteBitsWithinCapacitySucceeds()
     {
-        var ptr = AllocBuffer(8);
-        try
-        {
-            var writer = new QwpBitWriter();
-            writer.Reset(ptr, 8);
-            const long expected = unchecked((long)0xDEAD_BEEF_CAFE_BABEUL);
-            writer.WriteBits(expected, 64);
-            writer.Flush();
-            Assert.That((long)(writer.Position - ptr), Is.EqualTo(8));
-            Assert.That(Marshal.ReadInt64(ptr), Is.EqualTo(expected));
-        }
-        finally { FreeBuffer(ptr); }
+        var buf = new byte[8];
+        var writer = new QwpBitWriter();
+        writer.Reset(buf, 0, buf.Length);
+        const long expected = unchecked((long)0xDEAD_BEEF_CAFE_BABEUL);
+        writer.WriteBits(expected, 64);
+        writer.Flush();
+        Assert.That(writer.BytesWritten, Is.EqualTo(8));
+        Assert.That(BinaryPrimitives.ReadInt64LittleEndian(buf), Is.EqualTo(expected));
     }
 
     [Test]
     public void WriteByteThrowsOnOverflow()
     {
-        var ptr = AllocBuffer(1);
-        try
-        {
-            var writer = new QwpBitWriter();
-            writer.Reset(ptr, 1);
-            writer.WriteByte(0x42);
-            Assert.That(() => writer.WriteByte(0x43),
-                        Throws.TypeOf<IngressError>().With.Message.Contains("buffer overflow"));
-        }
-        finally { FreeBuffer(ptr); }
+        var buf = new byte[1];
+        var writer = new QwpBitWriter();
+        writer.Reset(buf, 0, buf.Length);
+        writer.WriteByte(0x42);
+        Assert.That(() => writer.WriteByte(0x43),
+                    Throws.TypeOf<IngressError>().With.Message.Contains("buffer overflow"));
     }
 
     [Test]
     public void WriteIntThrowsOnOverflow()
     {
-        var ptr = AllocBuffer(4);
-        try
-        {
-            var writer = new QwpBitWriter();
-            writer.Reset(ptr, 4);
-            writer.WriteInt(42);
-            Assert.That(() => writer.WriteInt(99),
-                        Throws.TypeOf<IngressError>().With.Message.Contains("buffer overflow"));
-        }
-        finally { FreeBuffer(ptr); }
+        var buf = new byte[4];
+        var writer = new QwpBitWriter();
+        writer.Reset(buf, 0, buf.Length);
+        writer.WriteInt(42);
+        Assert.That(() => writer.WriteInt(99),
+                    Throws.TypeOf<IngressError>().With.Message.Contains("buffer overflow"));
     }
 
     [Test]
     public void WriteLongThrowsOnOverflow()
     {
-        var ptr = AllocBuffer(8);
-        try
-        {
-            var writer = new QwpBitWriter();
-            writer.Reset(ptr, 8);
-            writer.WriteLong(42L);
-            Assert.That(() => writer.WriteLong(99L),
-                        Throws.TypeOf<IngressError>().With.Message.Contains("buffer overflow"));
-        }
-        finally { FreeBuffer(ptr); }
+        var buf = new byte[8];
+        var writer = new QwpBitWriter();
+        writer.Reset(buf, 0, buf.Length);
+        writer.WriteLong(42L);
+        Assert.That(() => writer.WriteLong(99L),
+                    Throws.TypeOf<IngressError>().With.Message.Contains("buffer overflow"));
     }
 
     [Test]
     public void FinishReturnsBytesWritten()
     {
-        var ptr = AllocBuffer(16);
-        try
-        {
-            var writer = new QwpBitWriter();
-            writer.Reset(ptr, 16);
-            writer.WriteByte(0x01);
-            writer.WriteInt(0x02030405);
-            writer.WriteLong(0x06070809_0A0B0C0DL);
-            Assert.That(writer.Finish(), Is.EqualTo(13));
-        }
-        finally { FreeBuffer(ptr); }
+        var buf = new byte[16];
+        var writer = new QwpBitWriter();
+        writer.Reset(buf, 0, buf.Length);
+        writer.WriteByte(0x01);
+        writer.WriteInt(0x02030405);
+        writer.WriteLong(0x06070809_0A0B0C0DL);
+        Assert.That(writer.Finish(), Is.EqualTo(13));
     }
 
     [Test]
     public void AlignToByteIsNoopWhenAlreadyAligned()
     {
-        var ptr = AllocBuffer(4);
-        try
-        {
-            var writer = new QwpBitWriter();
-            writer.Reset(ptr, 4);
-            writer.WriteByte(0xAA);
-            writer.AlignToByte(); // already aligned, must not advance
-            Assert.That((long)(writer.Position - ptr), Is.EqualTo(1));
-        }
-        finally { FreeBuffer(ptr); }
+        var buf = new byte[4];
+        var writer = new QwpBitWriter();
+        writer.Reset(buf, 0, buf.Length);
+        writer.WriteByte(0xAA);
+        writer.AlignToByte();
+        Assert.That(writer.BytesWritten, Is.EqualTo(1));
     }
 
     [Test]
     public void AlignToByteFlushesPartialBits()
     {
-        var ptr = AllocBuffer(4);
-        try
-        {
-            var writer = new QwpBitWriter();
-            writer.Reset(ptr, 4);
-            writer.WriteBits(0b101, 3);
-            writer.AlignToByte();
-            Assert.That((long)(writer.Position - ptr), Is.EqualTo(1));
-            Assert.That(Marshal.ReadByte(ptr), Is.EqualTo((byte)0b101));
-        }
-        finally { FreeBuffer(ptr); }
+        var buf = new byte[4];
+        var writer = new QwpBitWriter();
+        writer.Reset(buf, 0, buf.Length);
+        writer.WriteBits(0b101, 3);
+        writer.AlignToByte();
+        Assert.That(writer.BytesWritten, Is.EqualTo(1));
+        Assert.That(buf[0], Is.EqualTo((byte)0b101));
     }
 
     [Test]
     public void WriteBitArbitraryNumBitsRoundTripsLsbFirst()
     {
-        // Verifies LSB-first packing: writing 4 bits 0b1101 (=13) emits the byte 0x0D
-        // when followed by a flush.
-        var ptr = AllocBuffer(2);
-        try
-        {
-            var writer = new QwpBitWriter();
-            writer.Reset(ptr, 2);
-            writer.WriteBits(0b1101, 4);
-            writer.WriteBits(0b0010, 4);
-            writer.Flush();
-            // Bits are packed LSB-first: first 4 bits → low nibble; next 4 bits → high nibble.
-            // 0b1101 (low) | 0b0010 << 4 (high) = 0x2D
-            Assert.That(Marshal.ReadByte(ptr), Is.EqualTo((byte)0x2D));
-        }
-        finally { FreeBuffer(ptr); }
+        // Verifies LSB-first packing: writing 4 bits 0b1101 then 4 bits 0b0010 yields
+        // a single byte 0x2D = 0b0010_1101.
+        var buf = new byte[2];
+        var writer = new QwpBitWriter();
+        writer.Reset(buf, 0, buf.Length);
+        writer.WriteBits(0b1101, 4);
+        writer.WriteBits(0b0010, 4);
+        writer.Flush();
+        Assert.That(buf[0], Is.EqualTo((byte)0x2D));
     }
 
     [Test]
     public void WriteBitsRejectsZeroAndNegative()
     {
-        var ptr = AllocBuffer(8);
-        try
-        {
-            var writer = new QwpBitWriter();
-            writer.Reset(ptr, 8);
-            Assert.That(() => writer.WriteBits(0, 0),
-                        Throws.TypeOf<ArgumentOutOfRangeException>());
-            Assert.That(() => writer.WriteBits(0, 65),
-                        Throws.TypeOf<ArgumentOutOfRangeException>());
-        }
-        finally { FreeBuffer(ptr); }
+        var buf = new byte[8];
+        var writer = new QwpBitWriter();
+        writer.Reset(buf, 0, buf.Length);
+        Assert.That(() => writer.WriteBits(0, 0),
+                    Throws.TypeOf<ArgumentOutOfRangeException>());
+        Assert.That(() => writer.WriteBits(0, 65),
+                    Throws.TypeOf<ArgumentOutOfRangeException>());
+    }
+
+    [Test]
+    public void ResetWithOffsetWritesIntoSlice()
+    {
+        // The writer should respect the offset + capacity — bytes outside the slice are not touched.
+        var buf = new byte[10];
+        var writer = new QwpBitWriter();
+        writer.Reset(buf, 2, 4);
+        writer.WriteInt(unchecked((int)0xCAFE_BABE));
+        Assert.That(writer.BytesWritten, Is.EqualTo(4));
+        Assert.That(BinaryPrimitives.ReadInt32LittleEndian(buf.AsSpan(2, 4)),
+                    Is.EqualTo(unchecked((int)0xCAFE_BABE)));
+        // Bytes outside the slice remain zero.
+        Assert.That(buf[0], Is.EqualTo((byte)0));
+        Assert.That(buf[1], Is.EqualTo((byte)0));
+        Assert.That(buf[6], Is.EqualTo((byte)0));
+    }
+
+    [Test]
+    public void ResetRejectsOutOfRangeOffsetOrCapacity()
+    {
+        var buf = new byte[4];
+        var writer = new QwpBitWriter();
+        Assert.That(() => writer.Reset(buf, 5, 0),
+                    Throws.TypeOf<ArgumentOutOfRangeException>());
+        Assert.That(() => writer.Reset(buf, 2, 5),
+                    Throws.TypeOf<ArgumentOutOfRangeException>());
+        Assert.That(() => writer.Reset(null!, 0, 0),
+                    Throws.TypeOf<ArgumentNullException>());
     }
 
     // ---- Pending: needs QwpGorillaEncoder which lands in PR 2 ----

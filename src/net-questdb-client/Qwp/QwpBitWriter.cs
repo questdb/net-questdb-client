@@ -24,33 +24,49 @@ namespace QuestDB.Qwp;
 
 /// <summary>
 ///     Bit-level writer for QWP v1. Bits are written LSB-first within each byte and packed
-///     sequentially across byte boundaries. Output is to native memory (caller-supplied address).
+///     sequentially across byte boundaries. Output is to a caller-supplied <see cref="byte"/>
+///     array slice (typically backed by <see cref="PinnedAppendBuffer"/>).
 /// </summary>
 /// <remarks>
 ///     Experimental. Mirrors <c>QwpBitWriter.java</c> on Java main 64b7ee69. Up to 64 bits
 ///     are buffered before flushing to memory. <see cref="Flush"/> must be called before
 ///     reading the output.
 /// </remarks>
-internal sealed unsafe class QwpBitWriter
+internal sealed class QwpBitWriter
 {
-    private byte* _startAddress;
-    private byte* _currentAddress;
-    private byte* _endAddress;
+    private byte[] _destination = Array.Empty<byte>();
+    private int _start;
+    private int _end;
+    private int _position;
     private ulong _bitBuffer;
     private int _bitsInBuffer;
 
-    /// <summary>Resets the writer to write to <paramref name="address"/> bounded by <paramref name="capacity"/>.</summary>
-    public void Reset(nint address, long capacity)
+    /// <summary>
+    ///     Resets the writer to write into <paramref name="destination"/> at <paramref name="offset"/>
+    ///     for up to <paramref name="capacity"/> bytes.
+    /// </summary>
+    public void Reset(byte[] destination, int offset, int capacity)
     {
-        _startAddress = (byte*)address;
-        _currentAddress = (byte*)address;
-        _endAddress = (byte*)address + capacity;
+        if (destination is null) throw new ArgumentNullException(nameof(destination));
+        if ((uint)offset > (uint)destination.Length ||
+            (uint)capacity > (uint)(destination.Length - offset))
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(capacity), "destination range is out of bounds");
+        }
+        _destination = destination;
+        _start = offset;
+        _end = offset + capacity;
+        _position = offset;
         _bitBuffer = 0;
         _bitsInBuffer = 0;
     }
 
-    /// <summary>Current write position as an address.</summary>
-    public nint Position => (nint)_currentAddress;
+    /// <summary>Current write position as an offset into the destination array.</summary>
+    public int Position => _position;
+
+    /// <summary>Bytes written since the last <see cref="Reset"/> (excluding any partial bit buffer).</summary>
+    public int BytesWritten => _position - _start;
 
     /// <summary>Aligns to the next byte boundary by padding with zeros. No-op if already aligned.</summary>
     public void AlignToByte()
@@ -61,29 +77,27 @@ internal sealed unsafe class QwpBitWriter
         }
     }
 
-    /// <summary>
-    ///     Flushes any partial bits in the buffer to memory. Throws on overflow.
-    /// </summary>
+    /// <summary>Flushes any partial bits in the buffer to memory. Throws on overflow.</summary>
     /// <exception cref="IngressError">Buffer is full.</exception>
     public void Flush()
     {
         if (_bitsInBuffer > 0)
         {
-            if (_currentAddress >= _endAddress)
+            if (_position >= _end)
             {
                 throw new IngressError(ErrorCode.BufferOverflow, "QwpBitWriter buffer overflow");
             }
-            *_currentAddress++ = (byte)_bitBuffer;
+            _destination[_position++] = (byte)_bitBuffer;
             _bitBuffer = 0;
             _bitsInBuffer = 0;
         }
     }
 
-    /// <summary>Flushes and returns the number of bytes written since the last <see cref="Reset"/>.</summary>
+    /// <summary>Flushes and returns the number of bytes written since <see cref="Reset"/>.</summary>
     public int Finish()
     {
         Flush();
-        return (int)(_currentAddress - _startAddress);
+        return _position - _start;
     }
 
     /// <summary>Writes a single bit (only the LSB of <paramref name="bit"/> is used).</summary>
@@ -123,11 +137,11 @@ internal sealed unsafe class QwpBitWriter
 
             while (_bitsInBuffer >= 8)
             {
-                if (_currentAddress >= _endAddress)
+                if (_position >= _end)
                 {
                     throw new IngressError(ErrorCode.BufferOverflow, "QwpBitWriter buffer overflow");
                 }
-                *_currentAddress++ = (byte)_bitBuffer;
+                _destination[_position++] = (byte)_bitBuffer;
                 _bitBuffer >>= 8;
                 _bitsInBuffer -= 8;
             }
@@ -138,35 +152,35 @@ internal sealed unsafe class QwpBitWriter
     public void WriteByte(int value)
     {
         AlignToByte();
-        if (_currentAddress >= _endAddress)
+        if (_position >= _end)
         {
             throw new IngressError(ErrorCode.BufferOverflow, "QwpBitWriter buffer overflow");
         }
-        *_currentAddress++ = (byte)value;
+        _destination[_position++] = (byte)value;
     }
 
     /// <summary>Writes a 32-bit little-endian integer after byte-aligning. Throws on overflow.</summary>
     public void WriteInt(int value)
     {
         AlignToByte();
-        if (_currentAddress + 4 > _endAddress)
+        if (_position + 4 > _end)
         {
             throw new IngressError(ErrorCode.BufferOverflow, "QwpBitWriter buffer overflow");
         }
-        Unsafe.WriteUnaligned(_currentAddress, value);
-        _currentAddress += 4;
+        Unsafe.WriteUnaligned(ref _destination[_position], value);
+        _position += 4;
     }
 
     /// <summary>Writes a 64-bit little-endian long after byte-aligning. Throws on overflow.</summary>
     public void WriteLong(long value)
     {
         AlignToByte();
-        if (_currentAddress + 8 > _endAddress)
+        if (_position + 8 > _end)
         {
             throw new IngressError(ErrorCode.BufferOverflow, "QwpBitWriter buffer overflow");
         }
-        Unsafe.WriteUnaligned(_currentAddress, value);
-        _currentAddress += 8;
+        Unsafe.WriteUnaligned(ref _destination[_position], value);
+        _position += 8;
     }
 
     /// <summary>Writes a signed value as two's complement in <paramref name="numBits"/> bits.</summary>

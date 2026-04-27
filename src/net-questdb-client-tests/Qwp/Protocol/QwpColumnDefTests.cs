@@ -30,8 +30,9 @@ public class QwpColumnDefTests
     [Test]
     public void ValidateAcceptsAllValidTypes()
     {
-        // The Java fixture is intentionally 21 entries; BINARY (0x17) and IPv4 (0x18)
-        // are excluded because validate() rejects them — see QwpColumnDef.Validate.
+        // .NET accepts the full 0x01..0x18 range. Java's fixture is 21 entries because
+        // its Validate() rejects BINARY (0x17) / IPv4 (0x18) — see QwpColumnDef.Validate
+        // doc comment for the divergence rationale.
         byte[] validTypes =
         {
             QwpConstants.TYPE_BOOLEAN,
@@ -55,6 +56,8 @@ public class QwpColumnDefTests
             QwpConstants.TYPE_DECIMAL128,
             QwpConstants.TYPE_DECIMAL256,
             QwpConstants.TYPE_CHAR,
+            QwpConstants.TYPE_BINARY, // .NET-only acceptance
+            QwpConstants.TYPE_IPv4,   // .NET-only acceptance
         };
         foreach (var type in validTypes)
         {
@@ -84,9 +87,8 @@ public class QwpColumnDefTests
     [Test]
     public void ValidateRejectsInvalidType()
     {
-        // 0x17 (TYPE_BINARY) is a latent main inconsistency: emitted elsewhere but
-        // rejected here. Mirroring Java exactly.
-        var col = new QwpColumnDef("bad", 0x17);
+        // 0x19 is past the highest valid type code (0x18 = TYPE_IPv4).
+        var col = new QwpColumnDef("bad", 0x19);
         Assert.That(() => col.Validate(), Throws.TypeOf<ArgumentException>());
     }
 

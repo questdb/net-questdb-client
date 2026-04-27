@@ -191,17 +191,23 @@ public class QwpBitWriterTests
                     Throws.TypeOf<ArgumentNullException>());
     }
 
-    // ---- Pending: needs QwpGorillaEncoder which lands in PR 2 ----
+    // ---- Cross-component coverage: bit writer used by QwpGorillaEncoder ----
 
     [Test]
     public void GorillaEncoderThrowsOnInsufficientCapacityForFirstTimestamp()
     {
-        Assert.Inconclusive("Awaiting PR 2: QwpGorillaEncoder.");
+        var encoder = new QwpGorillaEncoder();
+        var dst = new byte[4]; // < 8 bytes for the first timestamp
+        Assert.That(() => encoder.EncodeTimestamps(dst, 0, new long[] { 1000L }),
+                    Throws.TypeOf<IngressError>().With.Message.Contains("buffer overflow"));
     }
 
     [Test]
     public void GorillaEncoderThrowsOnInsufficientCapacityForSecondTimestamp()
     {
-        Assert.Inconclusive("Awaiting PR 2: QwpGorillaEncoder.");
+        var encoder = new QwpGorillaEncoder();
+        var dst = new byte[12]; // < 16 for both seed timestamps
+        Assert.That(() => encoder.EncodeTimestamps(dst, 0, new long[] { 1000L, 2000L }),
+                    Throws.TypeOf<IngressError>().With.Message.Contains("buffer overflow"));
     }
 }

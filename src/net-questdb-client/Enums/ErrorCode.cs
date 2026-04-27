@@ -97,4 +97,9 @@ public enum ErrorCode
     ///     Bad configuration.
     /// </summary>
     InvalidArrayShapeError,
+
+    /// <summary>
+    ///     A write attempted to advance past the end of a fixed-capacity buffer.
+    /// </summary>
+    BufferOverflow,
 }

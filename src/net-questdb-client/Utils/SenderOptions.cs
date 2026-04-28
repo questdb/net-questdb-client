@@ -94,12 +94,59 @@ public record SenderOptions
     private int _maxDatagramSize = 1400;
     private int _multicastTtl;
 
+    // Tracks property names mutated via setters when the record is constructed
+    // programmatically (the parameterless constructor or `with`-syntax). The
+    // config-string constructor records the same information in
+    // _connectionStringBuilder; ValidateQwp folds both signals together via
+    // WasExplicitlySet.
+    private HashSet<string> _programmaticMutations = new();
+
     /// <summary>
     ///     Construct a <see cref="SenderOptions" /> object with default values.
     /// </summary>
     public SenderOptions()
     {
         ParseAddresses();
+    }
+
+    // Custom copy constructor for `with`-syntax: deep-clones the mutation tracker so
+    // that mutating the copy does not also mutate the original's tracker.
+    protected SenderOptions(SenderOptions other)
+    {
+        _addr = other._addr;
+        _addresses = new List<string>(other._addresses);
+        _authTimeout = other._authTimeout;
+        _autoFlush = other._autoFlush;
+        _autoFlushBytes = other._autoFlushBytes;
+        _autoFlushInterval = other._autoFlushInterval;
+        _autoFlushRows = other._autoFlushRows;
+        _connectionStringBuilder = other._connectionStringBuilder;
+        _gzip = other._gzip;
+        _initBufSize = other._initBufSize;
+        _maxBufSize = other._maxBufSize;
+        _maxNameLen = other._maxNameLen;
+        _ownSocket = other._ownSocket;
+        _password = other._password;
+        _poolTimeout = other._poolTimeout;
+        _protocol = other._protocol;
+        _protocol_version = other._protocol_version;
+        _requestMinThroughput = other._requestMinThroughput;
+        _requestTimeout = other._requestTimeout;
+        _retryTimeout = other._retryTimeout;
+        _tlsCa = other._tlsCa;
+        _tlsRoots = other._tlsRoots;
+        _tlsRootsPassword = other._tlsRootsPassword;
+        _tlsVerify = other._tlsVerify;
+        _token = other._token;
+        _tokenX = other._tokenX;
+        _tokenY = other._tokenY;
+        _username = other._username;
+        _clientCert = other._clientCert;
+        _inFlightWindow = other._inFlightWindow;
+        _maxSchemasPerConnection = other._maxSchemasPerConnection;
+        _maxDatagramSize = other._maxDatagramSize;
+        _multicastTtl = other._multicastTtl;
+        _programmaticMutations = new HashSet<string>(other._programmaticMutations);
     }
 
     /// <summary>
@@ -232,7 +279,11 @@ public record SenderOptions
     public AutoFlushType auto_flush
     {
         get => _autoFlush;
-        set => _autoFlush = value;
+        set
+        {
+            _autoFlush = value;
+            _programmaticMutations.Add(nameof(auto_flush));
+        }
     }
 
     /// <summary>
@@ -245,7 +296,11 @@ public record SenderOptions
     public int auto_flush_rows
     {
         get => _autoFlushRows;
-        set => _autoFlushRows = value;
+        set
+        {
+            _autoFlushRows = value;
+            _programmaticMutations.Add(nameof(auto_flush_rows));
+        }
     }
 
     /// <summary>
@@ -258,7 +313,11 @@ public record SenderOptions
     public int auto_flush_bytes
     {
         get => _autoFlushBytes;
-        set => _autoFlushBytes = value;
+        set
+        {
+            _autoFlushBytes = value;
+            _programmaticMutations.Add(nameof(auto_flush_bytes));
+        }
     }
 
     /// <summary>
@@ -274,7 +333,11 @@ public record SenderOptions
     public TimeSpan auto_flush_interval
     {
         get => _autoFlushInterval;
-        set => _autoFlushInterval = value;
+        set
+        {
+            _autoFlushInterval = value;
+            _programmaticMutations.Add(nameof(auto_flush_interval));
+        }
     }
 
     /// <summary>
@@ -305,7 +368,11 @@ public record SenderOptions
     public int init_buf_size
     {
         get => _initBufSize;
-        set => _initBufSize = value;
+        set
+        {
+            _initBufSize = value;
+            _programmaticMutations.Add(nameof(init_buf_size));
+        }
     }
 
     /// <summary>
@@ -320,7 +387,11 @@ public record SenderOptions
     public int max_buf_size
     {
         get => _maxBufSize;
-        set => _maxBufSize = value;
+        set
+        {
+            _maxBufSize = value;
+            _programmaticMutations.Add(nameof(max_buf_size));
+        }
     }
 
     /// <summary>
@@ -349,7 +420,11 @@ public record SenderOptions
     public string? username
     {
         get => _username;
-        set => _username = value;
+        set
+        {
+            _username = value;
+            _programmaticMutations.Add(nameof(username));
+        }
     }
 
     /// <summary>
@@ -364,7 +439,11 @@ public record SenderOptions
     public string? password
     {
         get => _password;
-        set => _password = value;
+        set
+        {
+            _password = value;
+            _programmaticMutations.Add(nameof(password));
+        }
     }
 
     /// <summary>
@@ -378,7 +457,11 @@ public record SenderOptions
     public string? token
     {
         get => _token;
-        set => _token = value;
+        set
+        {
+            _token = value;
+            _programmaticMutations.Add(nameof(token));
+        }
     }
 
     /// <summary>
@@ -474,7 +557,11 @@ public record SenderOptions
     public TlsVerifyType tls_verify
     {
         get => _tlsVerify;
-        set => _tlsVerify = value;
+        set
+        {
+            _tlsVerify = value;
+            _programmaticMutations.Add(nameof(tls_verify));
+        }
     }
 
     /// <summary>
@@ -583,7 +670,11 @@ public record SenderOptions
     public int in_flight_window
     {
         get => _inFlightWindow;
-        set => _inFlightWindow = value;
+        set
+        {
+            _inFlightWindow = value;
+            _programmaticMutations.Add(nameof(in_flight_window));
+        }
     }
 
     /// <summary>
@@ -595,7 +686,11 @@ public record SenderOptions
     public int max_schemas_per_connection
     {
         get => _maxSchemasPerConnection;
-        set => _maxSchemasPerConnection = value;
+        set
+        {
+            _maxSchemasPerConnection = value;
+            _programmaticMutations.Add(nameof(max_schemas_per_connection));
+        }
     }
 
     /// <summary>
@@ -607,7 +702,11 @@ public record SenderOptions
     public int max_datagram_size
     {
         get => _maxDatagramSize;
-        set => _maxDatagramSize = value;
+        set
+        {
+            _maxDatagramSize = value;
+            _programmaticMutations.Add(nameof(max_datagram_size));
+        }
     }
 
     /// <summary>
@@ -619,7 +718,11 @@ public record SenderOptions
     public int multicast_ttl
     {
         get => _multicastTtl;
-        set => _multicastTtl = value;
+        set
+        {
+            _multicastTtl = value;
+            _programmaticMutations.Add(nameof(multicast_ttl));
+        }
     }
 
     private void ParseIntWithDefault(string name, string defaultValue, out int field)
@@ -796,7 +899,11 @@ public record SenderOptions
 
     private bool WasExplicitlySet(string keyName)
     {
-        return _connectionStringBuilder is not null && _connectionStringBuilder.ContainsKey(keyName);
+        if (_connectionStringBuilder is not null && _connectionStringBuilder.ContainsKey(keyName))
+        {
+            return true;
+        }
+        return _programmaticMutations.Contains(keyName);
     }
 
     /// <summary>

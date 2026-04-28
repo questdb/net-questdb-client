@@ -266,9 +266,120 @@ public class LineSenderBuilderUdpTests
     [Test]
     public void ProgrammaticUdpConfig_InFlightWindow_RejectedAtBuild()
     {
-        // Programmatic-mutation validator path is not yet wired (current ValidateQwp uses the
-        // _connectionStringBuilder.ContainsKey check, which only fires for config-string input).
-        Assert.Inconclusive("Awaiting programmatic-mutation validator path; see qwp_plan_v2.md PR6.");
+        var options = new SenderOptions { protocol = ProtocolType.udp, addr = "localhost:9007", in_flight_window = 128 };
+        Assert.That(() => options.Build(),
+            Throws.TypeOf<IngressError>().With.Message.Contains("in-flight window"));
+    }
+
+    [Test]
+    public void ProgrammaticUdpConfig_AutoFlushRows_RejectedAtBuild()
+    {
+        var options = new SenderOptions { protocol = ProtocolType.udp, addr = "localhost:9007", auto_flush_rows = 100 };
+        Assert.That(() => options.Build(),
+            Throws.TypeOf<IngressError>().With.Message.Contains("auto flush rows"));
+    }
+
+    [Test]
+    public void ProgrammaticUdpConfig_AutoFlushInterval_RejectedAtBuild()
+    {
+        var options = new SenderOptions
+        {
+            protocol = ProtocolType.udp,
+            addr = "localhost:9007",
+            auto_flush_interval = TimeSpan.FromMilliseconds(500),
+        };
+        Assert.That(() => options.Build(),
+            Throws.TypeOf<IngressError>().With.Message.Contains("auto flush interval"));
+    }
+
+    [Test]
+    public void ProgrammaticUdpConfig_AutoFlushBytes_RejectedAtBuild()
+    {
+        var options = new SenderOptions
+        {
+            protocol = ProtocolType.udp,
+            addr = "localhost:9007",
+            auto_flush_bytes = 4096,
+        };
+        Assert.That(() => options.Build(),
+            Throws.TypeOf<IngressError>().With.Message.Contains("auto flush bytes"));
+    }
+
+    [Test]
+    public void ProgrammaticUdpConfig_AutoFlushOff_RejectedAtBuild()
+    {
+        var options = new SenderOptions
+        {
+            protocol = ProtocolType.udp,
+            addr = "localhost:9007",
+            auto_flush = AutoFlushType.off,
+        };
+        Assert.That(() => options.Build(),
+            Throws.TypeOf<IngressError>().With.Message.Contains("auto-flush"));
+    }
+
+    [Test]
+    public void ProgrammaticUdpConfig_TlsVerify_RejectedAtBuild()
+    {
+        var options = new SenderOptions
+        {
+            protocol = ProtocolType.udp,
+            addr = "localhost:9007",
+            tls_verify = TlsVerifyType.unsafe_off,
+        };
+        Assert.That(() => options.Build(),
+            Throws.TypeOf<IngressError>().With.Message.Contains("TLS"));
+    }
+
+    [Test]
+    public void ProgrammaticUdpConfig_Token_RejectedAtBuild()
+    {
+        var options = new SenderOptions
+        {
+            protocol = ProtocolType.udp,
+            addr = "localhost:9007",
+            token = "abc",
+        };
+        Assert.That(() => options.Build(),
+            Throws.TypeOf<IngressError>());
+    }
+
+    [Test]
+    public void ProgrammaticUdpConfig_UsernamePassword_RejectedAtBuild()
+    {
+        var options = new SenderOptions
+        {
+            protocol = ProtocolType.udp,
+            addr = "localhost:9007",
+            username = "admin",
+            password = "secret",
+        };
+        Assert.That(() => options.Build(),
+            Throws.TypeOf<IngressError>());
+    }
+
+    [Test]
+    public void ProgrammaticUdpConfig_WithSyntax_InFlightWindow_RejectedAtBuild()
+    {
+        // `with`-syntax goes through the synthesized copy constructor; verify the
+        // mutation tracker is deep-cloned so the new options carries its own
+        // _programmaticMutations independent of the original.
+        var baseOptions = new SenderOptions { protocol = ProtocolType.udp, addr = "localhost:9007" };
+        var mutated = baseOptions with { in_flight_window = 64 };
+
+        // The base options should still build fine — its tracker doesn't carry
+        // the mutated copy's in_flight_window flag.
+        Assert.That(() => baseOptions.Build(), Throws.Nothing);
+        Assert.That(() => mutated.Build(),
+            Throws.TypeOf<IngressError>().With.Message.Contains("in-flight window"));
+    }
+
+    [Test]
+    public void ProgrammaticUdpConfig_DefaultBuildSucceeds()
+    {
+        // No problematic mutations applied — build is allowed.
+        var options = new SenderOptions { protocol = ProtocolType.udp, addr = "localhost:9007" };
+        Assert.That(() => options.Build(), Throws.Nothing);
     }
 
     // ---- Divergent: tests whose Java behaviour the .NET wrapper does not replicate ----

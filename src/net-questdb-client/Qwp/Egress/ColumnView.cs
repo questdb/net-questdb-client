@@ -140,19 +140,153 @@ internal sealed class ColumnView
         return payload.Slice(_layout.StringBytesOffset + startOffset, endOffset - startOffset).ToArray();
     }
 
-    // ---- PR 9d / 11 long tail (decimal128/256, long256, arrays, symbols, uuid) ----
+    // ---- §3.1 — accessors for the long-tail wire types (decimal128/256, long256,
+    // arrays, symbols, uuid). Wired against the layouts populated by §3.2.b/c/d/e/f. ----
 
-    public long GetDecimal128High(int row) => throw NotYetImplemented(nameof(GetDecimal128High));
-    public long GetDecimal128Low(int row) => throw NotYetImplemented(nameof(GetDecimal128Low));
-    public long GetLong256Word(int row, int wordIndex) => throw NotYetImplemented(nameof(GetLong256Word));
-    public double[] GetDoubleArrayElements(int row) => throw NotYetImplemented(nameof(GetDoubleArrayElements));
-    public long[] GetLongArrayElements(int row) => throw NotYetImplemented(nameof(GetLongArrayElements));
-    public int GetArrayNDims(int row) => throw NotYetImplemented(nameof(GetArrayNDims));
-    public int GetSymbolId(int row) => throw NotYetImplemented(nameof(GetSymbolId));
-    public string? GetSymbol(int row) => throw NotYetImplemented(nameof(GetSymbol));
-    public long GetUuidHi(int row) => throw NotYetImplemented(nameof(GetUuidHi));
-    public long GetUuidLo(int row) => throw NotYetImplemented(nameof(GetUuidLo));
+    /// <summary>
+    ///     Returns the high 64 bits of a Decimal128 row. Storage layout is (hi, lo) so
+    ///     the high half sits at the row's first 8 bytes; <see cref="GetDecimal128Low"/>
+    ///     reads the second 8.
+    /// </summary>
+    public long GetDecimal128High(int row)
+    {
+        var idx = _layout!.DenseIndex(row);
+        return BinaryPrimitives.ReadInt64LittleEndian(
+            _batch!.Payload.Slice(_layout.ValuesOffset + idx * 16, 8));
+    }
 
-    private static NotImplementedException NotYetImplemented(string member) =>
-        new($"ColumnView.{member} not yet implemented (lands in PR 9d / 11)");
+    public long GetDecimal128Low(int row)
+    {
+        var idx = _layout!.DenseIndex(row);
+        return BinaryPrimitives.ReadInt64LittleEndian(
+            _batch!.Payload.Slice(_layout.ValuesOffset + idx * 16 + 8, 8));
+    }
+
+    /// <summary>
+    ///     Returns one 64-bit word of a LONG256 row. <paramref name="wordIndex"/> is in
+    ///     [0, 4). The wire stores the four words in storage order; consumers needing
+    ///     the full 256-bit value walk index 0..3.
+    /// </summary>
+    public long GetLong256Word(int row, int wordIndex)
+    {
+        if ((uint)wordIndex >= 4)
+        {
+            throw new ArgumentOutOfRangeException(nameof(wordIndex), "must be in [0, 4)");
+        }
+        var idx = _layout!.DenseIndex(row);
+        return BinaryPrimitives.ReadInt64LittleEndian(
+            _batch!.Payload.Slice(_layout.ValuesOffset + idx * 32 + wordIndex * 8, 8));
+    }
+
+    /// <summary>UUID high 64 bits (the second 8 bytes of the row's 16-byte payload).</summary>
+    public long GetUuidHi(int row)
+    {
+        var idx = _layout!.DenseIndex(row);
+        return BinaryPrimitives.ReadInt64LittleEndian(
+            _batch!.Payload.Slice(_layout.ValuesOffset + idx * 16 + 8, 8));
+    }
+
+    /// <summary>UUID low 64 bits (the first 8 bytes of the row's 16-byte payload).</summary>
+    public long GetUuidLo(int row)
+    {
+        var idx = _layout!.DenseIndex(row);
+        return BinaryPrimitives.ReadInt64LittleEndian(
+            _batch!.Payload.Slice(_layout.ValuesOffset + idx * 16, 8));
+    }
+
+    /// <summary>
+    ///     Returns the SYMBOL local-dict id for the row, or -1 when the row is null.
+    ///     The id resolves against the column's local dict (or, in delta mode, the
+    ///     decoder's connection-scoped dict aliased through
+    ///     <see cref="QwpColumnLayout.SymbolEntriesBuffer"/>) — see <see cref="GetSymbol"/>
+    ///     for the resolved string.
+    /// </summary>
+    public int GetSymbolId(int row)
+    {
+        if (IsNull(row)) return -1;
+        return _layout!.SymbolRowIds![row];
+    }
+
+    /// <summary>
+    ///     Resolves a SYMBOL row to its UTF-8 string. Returns null on null rows.
+    ///     Dispatches on <see cref="QwpColumnLayout.SymbolHeapBuffer"/>: when non-null
+    ///     (delta mode), reads from the decoder's connection-scoped dict; when null
+    ///     (non-delta), reads inline from the payload at
+    ///     <see cref="QwpColumnLayout.SymbolDictHeapOffset"/>.
+    /// </summary>
+    public string? GetSymbol(int row)
+    {
+        if (IsNull(row)) return null;
+        var id = _layout!.SymbolRowIds![row];
+        // Packed entry: low 32 = offset, high 32 = length.
+        var entriesBuffer = _layout.SymbolEntriesBuffer
+            ?? throw new InvalidOperationException("SYMBOL column has no entries buffer");
+        var packed = BinaryPrimitives.ReadInt64LittleEndian(entriesBuffer.AsSpan(id * 8, 8));
+        var offset = (int)(uint)packed;
+        var length = (int)(packed >> 32);
+        if (length == 0) return string.Empty;
+
+        if (_layout.SymbolHeapBuffer is { } heap)
+        {
+            // Delta-mode: heap aliases the decoder's connection dict.
+            return Encoding.UTF8.GetString(heap.AsSpan(offset, length));
+        }
+        // Non-delta: heap is inline in the payload.
+        return Encoding.UTF8.GetString(
+            _batch!.Payload.Slice(_layout.SymbolDictHeapOffset + offset, length));
+    }
+
+    /// <summary>Returns the rank (number of dimensions) of the array at <paramref name="row"/>.</summary>
+    public int GetArrayNDims(int row)
+    {
+        if (IsNull(row)) return 0;
+        var rowOffset = _layout!.ArrayRowOffsets![row];
+        return _batch!.Payload[rowOffset];
+    }
+
+    /// <summary>
+    ///     Returns the row's array elements as a freshly-allocated <c>double[]</c>
+    ///     (flattened by C-order traversal). Returns an empty array on null rows.
+    /// </summary>
+    public double[] GetDoubleArrayElements(int row)
+    {
+        if (IsNull(row)) return Array.Empty<double>();
+        var rowOffset = _layout!.ArrayRowOffsets![row];
+        var rowLength = _layout.ArrayRowLengths![row];
+        if (rowLength == 0) return Array.Empty<double>();
+        var payload = _batch!.Payload;
+        var nDims = payload[rowOffset];
+        var elementsStart = rowOffset + 1 + 4 * nDims;
+        var elementsBytes = rowOffset + rowLength - elementsStart;
+        var count = elementsBytes / 8;
+        var arr = new double[count];
+        for (var i = 0; i < count; i++)
+        {
+            arr[i] = BinaryPrimitives.ReadDoubleLittleEndian(payload.Slice(elementsStart + i * 8, 8));
+        }
+        return arr;
+    }
+
+    /// <summary>
+    ///     Returns the row's array elements as a freshly-allocated <c>long[]</c>.
+    ///     Same flattening contract as <see cref="GetDoubleArrayElements"/>.
+    /// </summary>
+    public long[] GetLongArrayElements(int row)
+    {
+        if (IsNull(row)) return Array.Empty<long>();
+        var rowOffset = _layout!.ArrayRowOffsets![row];
+        var rowLength = _layout.ArrayRowLengths![row];
+        if (rowLength == 0) return Array.Empty<long>();
+        var payload = _batch!.Payload;
+        var nDims = payload[rowOffset];
+        var elementsStart = rowOffset + 1 + 4 * nDims;
+        var elementsBytes = rowOffset + rowLength - elementsStart;
+        var count = elementsBytes / 8;
+        var arr = new long[count];
+        for (var i = 0; i < count; i++)
+        {
+            arr[i] = BinaryPrimitives.ReadInt64LittleEndian(payload.Slice(elementsStart + i * 8, 8));
+        }
+        return arr;
+    }
 }

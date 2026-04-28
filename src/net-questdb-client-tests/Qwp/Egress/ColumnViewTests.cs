@@ -88,15 +88,74 @@ public class ColumnViewTests
         Assert.That(view.GetLongValue(2), Is.EqualTo(200L));
     }
 
+    // ---- §3.1 — accessors for the long-tail wire types (decimal128/256, long256,
+    // symbols, uuid, arrays). End-to-end coverage lives on QwpResultBatchDecoderTests
+    // (decoder populates the layout state ColumnView reads); this test verifies the
+    // four ones with simple-enough fixtures to hand-build a layout.
+
     [Test]
-    public void DeferredAccessorsThrow()
+    public void GetUuidHiLoReadsBothLimbs()
+    {
+        var lo = unchecked((long)0xDEADBEEF_CAFEBABEUL);
+        var hi = unchecked((long)0xFEEDFACE_DEADBEEFUL);
+        var bytes = new byte[16];
+        BinaryPrimitives.WriteInt64LittleEndian(bytes.AsSpan(0, 8), lo);
+        BinaryPrimitives.WriteInt64LittleEndian(bytes.AsSpan(8, 8), hi);
+
+        var buf = new QwpBatchBuffer(bytes.Length);
+        buf.CopyFromPayload(bytes);
+        var batch = new QwpColumnBatch();
+        batch.Reset(buf, 1);
+        batch.Layouts.Add(new QwpColumnLayout
+        {
+            Info = new QwpEgressColumnInfo { WireType = QwpConstants.TYPE_UUID },
+            ValuesOffset = 0,
+            NullBitmapOffset = -1,
+            NonNullCount = 1,
+        });
+
+        var view = new ColumnView();
+        view.BindToColumn(batch, 0);
+        Assert.That(view.GetUuidLo(0), Is.EqualTo(lo));
+        Assert.That(view.GetUuidHi(0), Is.EqualTo(hi));
+    }
+
+    [Test]
+    public void GetDecimal128HighLowReadsBothLimbs()
+    {
+        // Storage order: hi at offset 0, lo at offset 8 (matches AddDecimal128).
+        var hi = 0x0123_4567_89AB_CDEFL;
+        var lo = unchecked((long)0xFEDC_BA98_7654_3210UL);
+        var bytes = new byte[16];
+        BinaryPrimitives.WriteInt64LittleEndian(bytes.AsSpan(0, 8), hi);
+        BinaryPrimitives.WriteInt64LittleEndian(bytes.AsSpan(8, 8), lo);
+
+        var buf = new QwpBatchBuffer(bytes.Length);
+        buf.CopyFromPayload(bytes);
+        var batch = new QwpColumnBatch();
+        batch.Reset(buf, 1);
+        batch.Layouts.Add(new QwpColumnLayout
+        {
+            Info = new QwpEgressColumnInfo { WireType = QwpConstants.TYPE_DECIMAL128, DecimalScale = 4 },
+            ValuesOffset = 0,
+            NullBitmapOffset = -1,
+            NonNullCount = 1,
+        });
+
+        var view = new ColumnView();
+        view.BindToColumn(batch, 0);
+        Assert.That(view.GetDecimal128High(0), Is.EqualTo(hi));
+        Assert.That(view.GetDecimal128Low(0), Is.EqualTo(lo));
+    }
+
+    [Test]
+    public void GetLong256WordRejectsOutOfRangeIndex()
     {
         var batch = BuildBatchWithLongColumn(new[] { 1L });
         var view = new ColumnView();
         view.BindToColumn(batch, 0);
-        Assert.That(() => view.GetDecimal128High(0), Throws.TypeOf<NotImplementedException>());
-        Assert.That(() => view.GetSymbolId(0), Throws.TypeOf<NotImplementedException>());
-        Assert.That(() => view.GetUuidHi(0), Throws.TypeOf<NotImplementedException>());
+        Assert.That(() => view.GetLong256Word(0, 4), Throws.TypeOf<ArgumentOutOfRangeException>());
+        Assert.That(() => view.GetLong256Word(0, -1), Throws.TypeOf<ArgumentOutOfRangeException>());
     }
 
     [Test]

@@ -86,6 +86,13 @@ internal sealed class ColumnView
     public long GetLongValue(int row)
     {
         var idx = _layout!.DenseIndex(row);
+        // §3.2b — Gorilla-decoded timestamps live in a managed buffer instead of
+        // the payload; ValuesOffset == -1 is the sentinel.
+        if (_layout.ValuesOffset < 0 && _layout.TimestampDecodeBuffer is not null)
+        {
+            return BinaryPrimitives.ReadInt64LittleEndian(
+                _layout.TimestampDecodeBuffer.AsSpan(idx * 8, 8));
+        }
         return BinaryPrimitives.ReadInt64LittleEndian(_batch!.Payload.Slice(_layout.ValuesOffset + idx * 8, 8));
     }
 

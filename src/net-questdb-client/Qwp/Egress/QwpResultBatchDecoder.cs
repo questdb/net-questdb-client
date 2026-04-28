@@ -67,6 +67,12 @@ internal sealed class QwpResultBatchDecoder
     // FLAG_DELTA_SYMBOL_DICT — read by ParseSymbolColumn to choose the delta path.
     private bool _deltaMode;
 
+    // §3.2b — true when the message carries FLAG_GORILLA. TIMESTAMP / TIMESTAMP_NANOS /
+    // DATE columns then prefix their data with a 1-byte encoding discriminator
+    // (0x00 raw / 0x01 Gorilla DoD bitstream).
+    private bool _gorillaMode;
+    private readonly QwpGorillaDecoder _gorillaDecoder = new();
+
     /// <summary>
     ///     Decodes the RESULT_BATCH frame whose payload has been copied into
     ///     <paramref name="buffer"/>. Populates <c>buffer.Batch</c> and <c>buffer.LayoutPool</c>.
@@ -95,10 +101,7 @@ internal sealed class QwpResultBatchDecoder
         {
             throw new QwpDecodeException("FLAG_ZSTD not yet supported by this decoder");
         }
-        if ((flags & QwpConstants.FLAG_GORILLA) != 0)
-        {
-            throw new QwpDecodeException("FLAG_GORILLA not yet supported by this decoder");
-        }
+        _gorillaMode = (flags & QwpConstants.FLAG_GORILLA) != 0;
         _deltaMode = (flags & QwpConstants.FLAG_DELTA_SYMBOL_DICT) != 0;
 
         var p = QwpConstants.HEADER_SIZE;
@@ -252,10 +255,13 @@ internal sealed class QwpResultBatchDecoder
                 return AdvanceFixed(layout, payload, p, sizeBytes: 4);
             case QwpConstants.TYPE_LONG:
             case QwpConstants.TYPE_DOUBLE:
+                return AdvanceFixed(layout, payload, p, sizeBytes: 8);
             case QwpConstants.TYPE_DATE:
             case QwpConstants.TYPE_TIMESTAMP:
             case QwpConstants.TYPE_TIMESTAMP_NANOS:
-                return AdvanceFixed(layout, payload, p, sizeBytes: 8);
+                // §3.2b — TIMESTAMP/TIMESTAMP_NANOS/DATE columns are Gorilla-eligible
+                // when the message has FLAG_GORILLA set; raw-only otherwise.
+                return ParseTimestampColumn(layout, payload, p);
             case QwpConstants.TYPE_UUID:
                 return AdvanceFixed(layout, payload, p, sizeBytes: 16);
             case QwpConstants.TYPE_LONG256:
@@ -338,6 +344,93 @@ internal sealed class QwpResultBatchDecoder
         layout.Info!.GeohashPrecisionBits = (int)precision;
         var bytesPerValue = ((int)precision + 7) >> 3;
         return AdvanceFixed(layout, payload, p, bytesPerValue);
+    }
+
+    /// <summary>
+    ///     §3.2b — TIMESTAMP / TIMESTAMP_NANOS / DATE column parser. With FLAG_GORILLA
+    ///     unset, the column is plain 8-byte fixed-width. With FLAG_GORILLA set, the
+    ///     column prefixes with a 1-byte encoding discriminator:
+    ///     <list type="bullet">
+    ///         <item><c>0x00</c> — raw 8-byte values inline (encoder fell back when row
+    ///             count &lt; 3 or compression worsened the stream).</item>
+    ///         <item><c>0x01</c> — Gorilla DoD bitstream. First two timestamps land
+    ///             uncompressed (16 bytes); the bit-packed delta-of-deltas follow.
+    ///             We decode into a per-column managed buffer (TimestampDecodeBuffer)
+    ///             and point ValuesOffset at it via the negative-offset sentinel
+    ///             pattern so ColumnView can read the long values uniformly.</item>
+    ///     </list>
+    /// </summary>
+    private int ParseTimestampColumn(QwpColumnLayout layout, ReadOnlySpan<byte> payload, int p)
+    {
+        var nonNull = layout.NonNullCount;
+        if (!_gorillaMode)
+        {
+            return AdvanceFixed(layout, payload, p, sizeBytes: 8);
+        }
+        if (p >= payload.Length)
+        {
+            throw new QwpDecodeException("truncated TIMESTAMP encoding byte");
+        }
+        var encoding = payload[p++];
+        layout.Info!.TimestampEncoding = encoding;
+        if (encoding == 0x00)
+        {
+            // Raw inline.
+            return AdvanceFixed(layout, payload, p, sizeBytes: 8);
+        }
+        if (encoding != 0x01)
+        {
+            throw new QwpDecodeException(
+                $"unknown TIMESTAMP encoding 0x{encoding:x2}");
+        }
+        // Gorilla. Encoder shortcuts nonNull < 3 to the 0x00 branch, so by the time
+        // we see 0x01 there are at least 3 values: two raw + ≥1 in the bitstream.
+        if (nonNull < 3)
+        {
+            throw new QwpDecodeException(
+                $"Gorilla-encoded column with nonNull<3: {nonNull}");
+        }
+        if (p + 16 > payload.Length)
+        {
+            throw new QwpDecodeException("truncated Gorilla prefix");
+        }
+        var firstTs = BinaryPrimitives.ReadInt64LittleEndian(payload.Slice(p, 8));
+        var secondTs = BinaryPrimitives.ReadInt64LittleEndian(payload.Slice(p + 8, 8));
+        var bitstreamStart = p + 16;
+        var decodeBuf = layout.EnsureTimestampDecodeBuffer(nonNull * 8);
+        BinaryPrimitives.WriteInt64LittleEndian(decodeBuf.AsSpan(0, 8), firstTs);
+        BinaryPrimitives.WriteInt64LittleEndian(decodeBuf.AsSpan(8, 8), secondTs);
+        var bitstreamLen = payload.Length - bitstreamStart;
+        if (bitstreamLen < 0) throw new QwpDecodeException("Gorilla bitstream past payload end");
+        // The decoder takes ReadOnlyMemory; copy the bitstream slice into an owned
+        // buffer so the ReadOnlyMemory aliases stable bytes for the decode loop.
+        // (QwpBatchBuffer.Payload is itself stable for the call duration, but
+        // ReadOnlyMemory<byte> from a span isn't directly constructible — use the
+        // payload-backed array slice explicitly.)
+        // Instead of allocating, build an Array-backed ReadOnlyMemory by walking back
+        // through the buffer's owning array via QwpBatchBuffer.PayloadMemory. We
+        // don't have direct access to that here; use a one-shot copy to a column-
+        // owned buffer for now. Allocation is per-batch, not per-row, so acceptable.
+        var bitstreamCopy = new byte[bitstreamLen];
+        payload.Slice(bitstreamStart, bitstreamLen).CopyTo(bitstreamCopy);
+        _gorillaDecoder.Reset(firstTs, secondTs, bitstreamCopy);
+        for (var i = 2; i < nonNull; i++)
+        {
+            BinaryPrimitives.WriteInt64LittleEndian(
+                decodeBuf.AsSpan(i * 8, 8),
+                _gorillaDecoder.DecodeNext());
+        }
+        // Park ValuesOffset at the sentinel (-1) so ColumnView dispatches to the
+        // managed timestamp-decode buffer rather than the payload offset.
+        layout.ValuesOffset = -1;
+        var bitPos = _gorillaDecoder.BitPosition;
+        var bitstreamBytes = (int)((bitPos + 7) >> 3);
+        var end = bitstreamStart + bitstreamBytes;
+        if (end > payload.Length)
+        {
+            throw new QwpDecodeException("truncated Gorilla bitstream");
+        }
+        return end;
     }
 
     /// <summary>

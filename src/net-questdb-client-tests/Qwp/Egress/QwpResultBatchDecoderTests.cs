@@ -173,13 +173,73 @@ public class QwpResultBatchDecoderTests
             Throws.TypeOf<QwpDecodeException>().With.Message.Contains("FLAG_ZSTD"));
     }
 
+    // RejectsGorillaFlagWithClearError lived here as a placeholder for "decoder
+    // rejects FLAG_GORILLA until §3.2b lands". §3.2b is now in; positive tests
+    // below cover the raw + Gorilla DoD encoding paths.
+
     [Test]
-    public void RejectsGorillaFlagWithClearError()
+    public void DecodesTimestampColumn_FlagGorillaRawEncoding()
     {
-        var bytes = new FrameBuilder().WithRowCount(0).Build();
-        bytes[QwpConstants.HEADER_OFFSET_FLAGS] |= QwpConstants.FLAG_GORILLA;
+        // Encoder discriminator byte 0x00 → values inline as 8-byte raw.
+        var timestamps = new[] { 1_000_000_000L, 1_001_000_000L, 1_002_000_000L };
+        var bytes = new FrameBuilder()
+            .WithRowCount(timestamps.Length)
+            .WithFlagGorilla()
+            .AddNonNullableColumn("ts", QwpConstants.TYPE_TIMESTAMP, w =>
+            {
+                w.WriteByte(0x00); // raw encoding
+                foreach (var t in timestamps) w.WriteLongLE(t);
+            })
+            .Build();
+
+        var batch = Decode(bytes);
+        for (var i = 0; i < timestamps.Length; i++)
+        {
+            Assert.That(batch.GetLongValue(0, i), Is.EqualTo(timestamps[i]));
+        }
+    }
+
+    [Test]
+    public void DecodesTimestampColumn_FlagGorillaDoDEncoding_RoundTripsTimestamps()
+    {
+        // Five timestamps with constant 1ns delta — the encoder hits the 1-bit DoD=0
+        // bucket for rows 2-4 after the two raw seeds.
+        var timestamps = new[] { 100_000L, 100_001L, 100_002L, 100_003L, 100_004L };
+        var encoded = new byte[QwpGorillaEncoder.CalculateEncodedSize(timestamps)];
+        var encoder = new QwpGorillaEncoder();
+        var encodedLen = encoder.EncodeTimestamps(encoded, 0, timestamps);
+
+        var bytes = new FrameBuilder()
+            .WithRowCount(timestamps.Length)
+            .WithFlagGorilla()
+            .AddNonNullableColumn("ts", QwpConstants.TYPE_TIMESTAMP, w =>
+            {
+                w.WriteByte(0x01); // Gorilla DoD encoding
+                w.WriteRaw(encoded.AsSpan(0, encodedLen).ToArray());
+            })
+            .Build();
+
+        var batch = Decode(bytes);
+        for (var i = 0; i < timestamps.Length; i++)
+        {
+            Assert.That(batch.GetLongValue(0, i), Is.EqualTo(timestamps[i]),
+                $"row {i} must round-trip through Gorilla decode");
+        }
+    }
+
+    [Test]
+    public void DecodesTimestampColumn_FlagGorillaUnknownEncodingByteRejects()
+    {
+        var bytes = new FrameBuilder()
+            .WithRowCount(1)
+            .WithFlagGorilla()
+            .AddNonNullableColumn("ts", QwpConstants.TYPE_TIMESTAMP, w =>
+            {
+                w.WriteByte(0x42); // not 0x00 or 0x01
+            })
+            .Build();
         Assert.That(() => Decode(bytes),
-            Throws.TypeOf<QwpDecodeException>().With.Message.Contains("FLAG_GORILLA"));
+            Throws.TypeOf<QwpDecodeException>().With.Message.Contains("unknown TIMESTAMP encoding"));
     }
 
     // RejectsDeltaSymbolDictFlagWithClearError used to live here as a placeholder for
@@ -487,6 +547,12 @@ public class QwpResultBatchDecoderTests
             return this;
         }
 
+        // §3.2b — when set, the build emits FLAG_GORILLA. TIMESTAMP columns then
+        // prefix their per-column data with a 1-byte encoding discriminator
+        // (0x00 raw / 0x01 Gorilla DoD).
+        private bool _gorillaFlag;
+        public FrameBuilder WithFlagGorilla() { _gorillaFlag = true; return this; }
+
         public FrameBuilder AddNonNullableColumn(string name, byte wireType, Action<PayloadWriter> valueWriter)
         {
             _columnDefs.Add((name, wireType, null, null));
@@ -540,7 +606,9 @@ public class QwpResultBatchDecoderTests
             // Header (12B): magic(4) + version(1) + flags(1) + 6 zero pad bytes.
             w.WriteIntLE(QwpConstants.MAGIC_MESSAGE);
             w.WriteByte(QwpConstants.VERSION_2);
-            var flags = (byte)(_deltaEntries is not null ? QwpConstants.FLAG_DELTA_SYMBOL_DICT : 0);
+            var flags = (byte)(
+                (_deltaEntries is not null ? QwpConstants.FLAG_DELTA_SYMBOL_DICT : 0)
+                | (_gorillaFlag ? QwpConstants.FLAG_GORILLA : 0));
             w.WriteByte(flags);
             for (var i = 0; i < QwpConstants.HEADER_SIZE - 6; i++) w.WriteByte(0);
 

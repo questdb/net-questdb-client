@@ -213,6 +213,75 @@ internal sealed class QwpTableBuffer
         _committedColumnCount = _columns.Count;
         _inProgressColumnCount = 0;
         _rowCount = 0;
+        // §1.4 — flush-and-batch headroom tracking is per-batch state; clears with the buffer.
+        _committedDatagramEstimate = 0;
+        _headroomCommittedSampleCount = 0;
+        _headroomEwmaRowGrowth = 0;
+        _headroomLastRowGrowth = 0;
+        _headroomSchemaColumnCount = -1;
+    }
+
+    // §1.4 — flush-and-batch headroom tracking. Owned by QwpTableBuffer so per-table
+    // state survives across queries on the same buffer; only the UDP sender reads /
+    // writes these fields today (WS sender doesn't pre-flush at row commit time).
+    //
+    // The shift-by-2 EWMA matches Java's ADAPTIVE_HEADROOM_EWMA_SHIFT = 2 (α = 1/4):
+    //   ewma += (rowGrowth - ewma) >> 2.
+    // PredictNextRowGrowth returns max(lastGrowth, ewma) once at least two samples
+    // have been observed — see Java's TableHeadroomState.predictNextRowGrowth.
+    private long _committedDatagramEstimate;
+    private int _headroomCommittedSampleCount;
+    private long _headroomEwmaRowGrowth;
+    private long _headroomLastRowGrowth;
+    private int _headroomSchemaColumnCount = -1;
+
+    /// <summary>Running estimate of the encoded datagram size for the currently-committed rows.</summary>
+    public long CommittedDatagramEstimate => _committedDatagramEstimate;
+
+    /// <summary>
+    ///     Records that one more row was committed, advancing the running datagram-size
+    ///     estimate and the headroom predictor's EWMA. <paramref name="newDatagramSize"/>
+    ///     is the full estimated encoded size after this row was committed (typically
+    ///     produced by <see cref="EstimateEncodedDatagramSize"/>(<see cref="RowCount"/>)).
+    /// </summary>
+    public void RecordCommittedRow(int newDatagramSize)
+    {
+        var growth = newDatagramSize - _committedDatagramEstimate;
+        _committedDatagramEstimate = newDatagramSize;
+
+        var currentColumnCount = _columns.Count;
+        if (_headroomSchemaColumnCount != currentColumnCount)
+        {
+            // Schema added/removed columns mid-batch — reset the predictor so stale
+            // row sizes from the prior schema don't bias new predictions.
+            _headroomCommittedSampleCount = 0;
+            _headroomEwmaRowGrowth = 0;
+            _headroomLastRowGrowth = 0;
+            _headroomSchemaColumnCount = currentColumnCount;
+        }
+
+        _headroomLastRowGrowth = growth;
+        if (_headroomCommittedSampleCount == 0)
+        {
+            _headroomEwmaRowGrowth = growth;
+        }
+        else
+        {
+            _headroomEwmaRowGrowth += (growth - _headroomEwmaRowGrowth) >> 2;
+        }
+        if (_headroomCommittedSampleCount < int.MaxValue) _headroomCommittedSampleCount++;
+    }
+
+    /// <summary>
+    ///     Returns the predicted byte growth of the next row, or <c>0</c> while there
+    ///     aren't enough samples to estimate. Mirrors Java's
+    ///     <c>TableHeadroomState.predictNextRowGrowth</c>: <c>max(lastGrowth, ewma)</c>
+    ///     once two or more rows have committed.
+    /// </summary>
+    public long PredictNextRowGrowth()
+    {
+        if (_headroomCommittedSampleCount < 2) return 0;
+        return Math.Max(_headroomLastRowGrowth, _headroomEwmaRowGrowth);
     }
 
     /// <summary>

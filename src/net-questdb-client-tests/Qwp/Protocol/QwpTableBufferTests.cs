@@ -551,6 +551,73 @@ public class QwpTableBufferTests
         Assert.That(estimate, Is.EqualTo(actual));
     }
 
+    // ---- §1.4 — RecordCommittedRow + PredictNextRowGrowth ----
+
+    [Test]
+    public void PredictNextRowGrowth_ReturnsZeroWithFewerThanTwoSamples()
+    {
+        var table = new QwpTableBuffer("t");
+        var col = table.GetOrCreateColumn("v", QwpConstants.TYPE_LONG, false)!;
+
+        Assert.That(table.PredictNextRowGrowth(), Is.EqualTo(0));
+
+        col.AddLong(1); table.NextRow();
+        table.RecordCommittedRow((int)table.EstimateEncodedDatagramSize(table.RowCount));
+        Assert.That(table.PredictNextRowGrowth(), Is.EqualTo(0), "still <2 samples");
+    }
+
+    [Test]
+    public void PredictNextRowGrowth_ConvergesToActualRowGrowthOnSteadyState()
+    {
+        var table = new QwpTableBuffer("t");
+        var col = table.GetOrCreateColumn("v", QwpConstants.TYPE_LONG, false)!;
+
+        for (var i = 0; i < 10; i++)
+        {
+            col.AddLong(i);
+            table.NextRow();
+            table.RecordCommittedRow((int)table.EstimateEncodedDatagramSize(table.RowCount));
+        }
+
+        // Each LONG row contributes 8 wire bytes (the value) + 0 bitmap (non-nullable).
+        // The table-block / schema headers stay constant after the first row, so growth
+        // per row is a steady 8 bytes once the schema is established.
+        Assert.That(table.PredictNextRowGrowth(), Is.EqualTo(8L));
+    }
+
+    [Test]
+    public void RecordCommittedRow_AdvancesCommittedDatagramEstimate()
+    {
+        var table = new QwpTableBuffer("t");
+        var col = table.GetOrCreateColumn("v", QwpConstants.TYPE_LONG, false)!;
+
+        col.AddLong(1); table.NextRow();
+        var firstEstimate = (int)table.EstimateEncodedDatagramSize(table.RowCount);
+        table.RecordCommittedRow(firstEstimate);
+        Assert.That(table.CommittedDatagramEstimate, Is.EqualTo(firstEstimate));
+
+        col.AddLong(2); table.NextRow();
+        var secondEstimate = (int)table.EstimateEncodedDatagramSize(table.RowCount);
+        table.RecordCommittedRow(secondEstimate);
+        Assert.That(table.CommittedDatagramEstimate, Is.EqualTo(secondEstimate));
+    }
+
+    [Test]
+    public void Reset_ClearsHeadroomTracking()
+    {
+        var table = new QwpTableBuffer("t");
+        var col = table.GetOrCreateColumn("v", QwpConstants.TYPE_LONG, false)!;
+        for (var i = 0; i < 5; i++)
+        {
+            col.AddLong(i); table.NextRow();
+            table.RecordCommittedRow((int)table.EstimateEncodedDatagramSize(table.RowCount));
+        }
+
+        table.Reset();
+        Assert.That(table.CommittedDatagramEstimate, Is.EqualTo(0));
+        Assert.That(table.PredictNextRowGrowth(), Is.EqualTo(0));
+    }
+
     [Test]
     public void EstimateEncodedDatagramSize_NullableColumnWithSomeNullsMatchesEncoder()
     {

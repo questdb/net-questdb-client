@@ -318,6 +318,37 @@ internal sealed class QwpUdpSender : ISender
         }
 
         table.NextRow();
+
+        // §1.4 — proactive pre-flush. Update the running datagram estimate +
+        // headroom EWMA, then flush now if the predicted next-row growth would push
+        // us past max_datagram_size on the very next AtNow. No in-progress row to
+        // preserve here — we just committed it — so this is a simpler full-buffer
+        // flush than FlushTableSync's capture/restore dance.
+        if (maxSize > 0)
+        {
+            var newEstimate = table.EstimateEncodedDatagramSize(table.RowCount);
+            table.RecordCommittedRow(newEstimate);
+            var predictedGrowth = table.PredictNextRowGrowth();
+            if (predictedGrowth > 0 && newEstimate + predictedGrowth > maxSize)
+            {
+                FlushFullTableSync(table, ct);
+            }
+        }
+    }
+
+    /// <summary>
+    ///     Flushes a fully-committed table (no in-progress row) as one datagram and
+    ///     resets it for the next batch. Used by the §1.4 proactive pre-flush path
+    ///     where the user just committed a row and the predictor says the next row
+    ///     would overflow.
+    /// </summary>
+    private void FlushFullTableSync(QwpTableBuffer table, CancellationToken ct)
+    {
+        ct.ThrowIfCancellationRequested();
+        _encoder.Encode(table, useSchemaRef: false);
+        _socket.SendTo(_encoder.AsReadOnlySpan(), SocketFlags.None, _remoteEndPoint);
+        table.Reset();
+        _lastFlush = DateTime.UtcNow;
     }
 
     /// <summary>

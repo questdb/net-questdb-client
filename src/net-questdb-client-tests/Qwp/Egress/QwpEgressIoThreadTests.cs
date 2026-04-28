@@ -185,6 +185,68 @@ public class QwpEgressIoThreadTests
     }
 
     [Test]
+    public async Task RequestCancelEmitsCancelFrame()
+    {
+        // §3.3 — RequestCancel queues a CANCEL frame; the IO thread sends it on the
+        // next loop iteration. Verifies the frame's wire layout (msg_kind + request_id).
+        using var fake = new FakeWebSocketChannel();
+        using var io = new QwpEgressIoThread(fake, bufferPoolSize: 1);
+        io.Start();
+
+        await io.SubmitQueryAsync(new QueryRequest(99, new byte[] { 0x00 }));
+        // Give the IO thread time to enter the receive loop.
+        await Task.Delay(50);
+        io.RequestCancel(requestId: 99);
+
+        // The cancel goes out before the next ReceiveAsync. Drain the fake's sent
+        // frames; we expect 2: the original query + the CANCEL.
+        // Wait briefly for the cancel to be drained from the pending field.
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(2);
+        while (fake.SentFrames.Count < 2 && DateTime.UtcNow < deadline)
+        {
+            await Task.Delay(20);
+        }
+        Assert.That(fake.SentFrames.Count, Is.GreaterThanOrEqualTo(2));
+        var cancelFrame = fake.SentFrames.Skip(1).First();
+        Assert.That(cancelFrame[0], Is.EqualTo(QwpEgressMsgKind.CANCEL));
+        Assert.That(BinaryPrimitives.ReadInt64LittleEndian(cancelFrame.AsSpan(1, 8)),
+            Is.EqualTo(99L));
+    }
+
+    [Test]
+    public async Task CacheResetFrameAppliesToDecoderWithoutEmittingEvent()
+    {
+        // §3.3 — CACHE_RESET arrives between queries; consumed silently by the IO
+        // thread (no QueryEvent published). The decoder's ApplyCacheReset wipes the
+        // connection-scoped dict / schema cache.
+        using var fake = new FakeWebSocketChannel();
+        using var io = new QwpEgressIoThread(fake, bufferPoolSize: 1);
+        io.Start();
+
+        // Build a CACHE_RESET frame: header + msg_kind(0x17) + reset_mask(0x01).
+        var frame = new byte[QwpConstants.HEADER_SIZE + 2];
+        BinaryPrimitives.WriteInt32LittleEndian(frame, QwpConstants.MAGIC_MESSAGE);
+        frame[4] = QwpConstants.VERSION_2;
+        frame[QwpConstants.HEADER_SIZE] = QwpEgressMsgKind.CACHE_RESET;
+        frame[QwpConstants.HEADER_SIZE + 1] = QwpEgressMsgKind.RESET_MASK_DICT;
+
+        // Stage the CACHE_RESET frame followed by a RESULT_END so the query terminates.
+        var endFrame = new byte[QwpConstants.HEADER_SIZE + 1 + 8 + 2];
+        BinaryPrimitives.WriteInt32LittleEndian(endFrame, QwpConstants.MAGIC_MESSAGE);
+        endFrame[4] = QwpConstants.VERSION_2;
+        endFrame[QwpConstants.HEADER_SIZE] = QwpEgressMsgKind.RESULT_END;
+        // request_id (8B) + final_seq varint(0) + total_rows varint(0) — all zeros.
+
+        fake.EnqueueInboundBinary(frame);
+        fake.EnqueueInboundBinary(endFrame);
+        await io.SubmitQueryAsync(new QueryRequest(1, new byte[] { 0x00 }));
+
+        // Only the RESULT_END produces an event — CACHE_RESET is consumed silently.
+        var ev = io.TakeEvent();
+        Assert.That(ev.Kind, Is.EqualTo(QueryEvent.KIND_END));
+    }
+
+    [Test]
     public async Task ShutdownDuringInFlightQueryEmitsTransportError()
     {
         using var fake = new FakeWebSocketChannel();

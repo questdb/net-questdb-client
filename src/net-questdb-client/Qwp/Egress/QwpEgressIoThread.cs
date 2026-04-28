@@ -132,6 +132,30 @@ internal sealed class QwpEgressIoThread : IDisposable
     }
 
     /// <summary>Signals shutdown. The run task drains and exits cleanly.</summary>
+    /// <summary>
+    ///     §3.3 — Queues a CANCEL frame for <paramref name="requestId"/>. The IO thread
+    ///     interrupts its current receive wait, sends the CANCEL, then resumes
+    ///     receiving. Safe to call from any thread. Concurrent cancels coalesce — the
+    ///     latest id wins.
+    /// </summary>
+    public void RequestCancel(long requestId)
+    {
+        Interlocked.Exchange(ref _pendingCancelRequestId, requestId);
+        Volatile.Read(ref _wakeUp).TrySetResult();
+    }
+
+    /// <summary>Pending cancel request id, or -1 when no cancel is queued.</summary>
+    private long _pendingCancelRequestId = -1;
+
+    /// <summary>
+    ///     Wake-up signal the receive loop races against <see cref="ReadCompleteFrameAsync"/>.
+    ///     <see cref="RequestCancel"/> completes this TCS to break out of the receive
+    ///     wait without disturbing the in-flight ReceiveAsync (which we keep alive
+    ///     across iterations because <see cref="System.Net.WebSockets.WebSocket"/>
+    ///     forbids overlapping reads).
+    /// </summary>
+    private TaskCompletionSource _wakeUp = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
     public void Shutdown()
     {
         _closed = true;
@@ -198,23 +222,61 @@ internal sealed class QwpEgressIoThread : IDisposable
                     continue;
                 }
 
+                Task<int>? pendingRecv = null;
                 while (!currentQueryDone && !ct.IsCancellationRequested)
                 {
+                    // §3.3 — install a fresh wake-up TCS *before* draining the cancel
+                    // field, so any concurrent RequestCancel will signal this new TCS
+                    // and we can't lose the wake-up. Subsequent steps:
+                    //   1. drain pending CANCEL (Interlocked.Exchange coalesces).
+                    //   2. race the in-flight ReceiveAsync against the wake-up TCS.
+                    //   3. on wake-up, loop back to drain again — keep the recv task
+                    //      alive (WebSocket forbids overlapping reads).
+                    var wake = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                    Volatile.Write(ref _wakeUp, wake);
+
+                    var pendingCancel = Interlocked.Exchange(ref _pendingCancelRequestId, -1L);
+                    if (pendingCancel >= 0)
+                    {
+                        try
+                        {
+                            await SendCancelAsync(pendingCancel, ct).ConfigureAwait(false);
+                        }
+                        catch (Exception e) when (e is not OperationCanceledException)
+                        {
+                            EmitTransportError($"CANCEL send failed: {e.Message}");
+                            currentQueryDone = true;
+                            break;
+                        }
+                    }
+
+                    pendingRecv ??= ReadCompleteFrameAsync(ct).AsTask();
+                    var winner = await Task.WhenAny(pendingRecv, wake.Task).ConfigureAwait(false);
+                    if (winner != pendingRecv)
+                    {
+                        // Wake-up fired: a RequestCancel landed. Loop to drain it.
+                        // pendingRecv stays alive — we'll race against it again.
+                        continue;
+                    }
+
                     int frameLen;
                     try
                     {
-                        frameLen = await ReadCompleteFrameAsync(ct).ConfigureAwait(false);
+                        frameLen = await pendingRecv.ConfigureAwait(false);
                     }
                     catch (OperationCanceledException)
                     {
+                        pendingRecv = null;
                         break;
                     }
                     catch (Exception e)
                     {
+                        pendingRecv = null;
                         EmitTransportError($"recv failed: {e.Message}");
                         currentQueryDone = true;
                         break;
                     }
+                    pendingRecv = null;
 
                     if (frameLen < 0)
                     {
@@ -283,8 +345,10 @@ internal sealed class QwpEgressIoThread : IDisposable
                 HandleQueryError(payload);
                 return true;
             case QwpEgressMsgKind.CACHE_RESET:
-                // Decoder doesn't need to apply the reset until FLAG_DELTA_SYMBOL_DICT
-                // lands; ignore for the PR 11b subset. Frame is consumed silently.
+                // §3.3 — CACHE_RESET wipes the connection-scoped SYMBOL dict and / or
+                // schema-fingerprint cache on the decoder. No user-visible event —
+                // CACHE_RESET arrives between queries, not within one.
+                HandleCacheReset(payload);
                 return false;
             default:
                 EmitTransportError($"unknown msg_kind 0x{msgKind:x2}");
@@ -385,9 +449,41 @@ internal sealed class QwpEgressIoThread : IDisposable
         _events.Offer(BorrowEvent().AsError(status, message));
     }
 
+    /// <summary>
+    ///     §3.3 — emits a CANCEL frame for the given request id. Wire layout:
+    ///     <c>msg_kind:u8 (CANCEL=0x14) | request_id:i64-le</c>. Server cancels the
+    ///     in-flight query and responds with a QUERY_ERROR carrying STATUS_CANCELLED.
+    /// </summary>
+    private async ValueTask SendCancelAsync(long requestId, CancellationToken ct)
+    {
+        var frame = new byte[1 + 8];
+        frame[0] = QwpEgressMsgKind.CANCEL;
+        System.Buffers.Binary.BinaryPrimitives.WriteInt64LittleEndian(frame.AsSpan(1, 8), requestId);
+        await _channel.SendBinaryAsync(frame, ct).ConfigureAwait(false);
+    }
+
     private void EmitError(byte status, string message)
     {
         _events.Offer(BorrowEvent().AsError(status, message));
+    }
+
+    /// <summary>
+    ///     §3.3 — applies a CACHE_RESET frame's reset_mask byte to the decoder so
+    ///     subsequent batches' delta-symbol-dict / schema-reference offsets re-sync
+    ///     with the server. No user-visible event — CACHE_RESET arrives between
+    ///     queries.
+    /// </summary>
+    private void HandleCacheReset(ArraySegment<byte> payload)
+    {
+        // Body: msg_kind(1) + reset_mask(1).
+        var p = QwpConstants.HEADER_SIZE + 1;
+        if (p >= payload.Count)
+        {
+            EmitTransportError("CACHE_RESET frame truncated before reset_mask");
+            return;
+        }
+        var resetMask = payload[p];
+        _decoder.ApplyCacheReset(resetMask);
     }
 
     private void EmitTransportError(string message)

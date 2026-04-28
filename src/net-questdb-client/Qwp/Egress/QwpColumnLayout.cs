@@ -80,6 +80,26 @@ internal sealed class QwpColumnLayout
     public int SymbolDictSize { get; set; }
 
     /// <summary>
+    ///     SYMBOL (delta mode only): aliases the decoder's connection-scoped dict heap
+    ///     buffer. Non-null indicates delta mode — consumers slice
+    ///     <c>SymbolHeapBuffer.AsSpan(0, SymbolHeapBufferLength)</c> for the heap. In
+    ///     non-delta mode this is null and the heap is read inline from the payload at
+    ///     <see cref="SymbolDictHeapOffset"/>.
+    /// </summary>
+    public byte[]? SymbolHeapBuffer { get; set; }
+
+    /// <summary>Valid byte length within <see cref="SymbolHeapBuffer"/> (delta mode only).</summary>
+    public int SymbolHeapBufferLength { get; set; }
+
+    /// <summary>
+    ///     SYMBOL (delta mode only): aliases the decoder's connection-scoped packed
+    ///     entries buffer. <see cref="SymbolDictSize"/> bounds the valid bytes
+    ///     (<c>SymbolDictSize * 8</c>). Null in non-delta mode — entries live in
+    ///     <see cref="OwnedEntries"/>.
+    /// </summary>
+    public byte[]? SymbolEntriesBuffer { get; set; }
+
+    /// <summary>
     ///     Version of the dict currently bound to this layout. Encoding:
     ///     <list type="bullet">
     ///         <item>delta mode: <c>connDictGeneration &lt;&lt; 1</c> (bit 0 clear)</item>
@@ -140,6 +160,9 @@ internal sealed class QwpColumnLayout
         SymbolDictHeapOffset = 0;
         SymbolDictEntriesOffset = 0;
         SymbolDictSize = 0;
+        SymbolHeapBuffer = null;
+        SymbolHeapBufferLength = 0;
+        SymbolEntriesBuffer = null;
         NextOffset = 0;
         // SymbolStringCache + SymbolDictVersion / SymbolCacheVersion intentionally left
         // alone — the lazy invalidation in QwpColumnBatch will compare and wipe on first

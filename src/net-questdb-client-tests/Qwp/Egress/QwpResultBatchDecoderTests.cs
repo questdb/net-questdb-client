@@ -182,14 +182,9 @@ public class QwpResultBatchDecoderTests
             Throws.TypeOf<QwpDecodeException>().With.Message.Contains("FLAG_GORILLA"));
     }
 
-    [Test]
-    public void RejectsDeltaSymbolDictFlagWithClearError()
-    {
-        var bytes = new FrameBuilder().WithRowCount(0).Build();
-        bytes[QwpConstants.HEADER_OFFSET_FLAGS] |= QwpConstants.FLAG_DELTA_SYMBOL_DICT;
-        Assert.That(() => Decode(bytes),
-            Throws.TypeOf<QwpDecodeException>().With.Message.Contains("FLAG_DELTA_SYMBOL_DICT"));
-    }
+    // RejectsDeltaSymbolDictFlagWithClearError used to live here as a placeholder for
+    // "decoder rejects FLAG_DELTA_SYMBOL_DICT until §3.2c lands". §3.2c is now in;
+    // the positive delta-mode tests below exercise the decoder's real behaviour.
 
     [Test]
     public void RejectsWrongMsgKind()
@@ -309,6 +304,106 @@ public class QwpResultBatchDecoderTests
             Throws.TypeOf<QwpDecodeException>().With.Message.Contains("symbol index out of range"));
     }
 
+    // ---- §3.2c — FLAG_DELTA_SYMBOL_DICT + connection-scoped dict ----
+
+    [Test]
+    public void DecodesDeltaSymbolColumn_FirstBatchPopulatesConnDict()
+    {
+        // Delta section adds two entries from index 0; SYMBOL column then references
+        // ids 0/1 against the connection dict (no per-column dict on the wire).
+        var bytes = new FrameBuilder()
+            .WithRowCount(2)
+            .WithDeltaSymbolDict(deltaStart: 0, entries: new[] { "AAPL", "MSFT" })
+            .AddNonNullableColumn("sym", QwpConstants.TYPE_SYMBOL, w =>
+            {
+                // Delta-mode SYMBOL column has no per-column dict header — just
+                // per-row varint(id).
+                w.WriteVarint(0); w.WriteVarint(1);
+            })
+            .Build();
+
+        var decoder = new QwpResultBatchDecoder();
+        var buf = new QwpBatchBuffer(bytes.Length);
+        buf.CopyFromPayload(bytes);
+        decoder.Decode(buf);
+
+        var layout = buf.Batch.GetLayout(0);
+        Assert.That(layout.SymbolDictSize, Is.EqualTo(2));
+        Assert.That(layout.SymbolHeapBuffer, Is.Not.Null,
+            "delta-mode column aliases the decoder's connection dict heap");
+        Assert.That(layout.SymbolEntriesBuffer, Is.Not.Null);
+        Assert.That(layout.SymbolRowIds![0], Is.EqualTo(0));
+        Assert.That(layout.SymbolRowIds[1], Is.EqualTo(1));
+    }
+
+    [Test]
+    public void DecodesDeltaSymbolColumn_SecondBatchAppendsToConnDict()
+    {
+        // Reuse the same decoder across two batches: first adds {AAPL, MSFT}, second
+        // appends {GOOG} via deltaStart=2. SYMBOL column on second batch references id 2.
+        var first = new FrameBuilder()
+            .WithRowCount(1)
+            .WithDeltaSymbolDict(deltaStart: 0, entries: new[] { "AAPL", "MSFT" })
+            .AddNonNullableColumn("sym", QwpConstants.TYPE_SYMBOL, w => w.WriteVarint(0))
+            .Build();
+        var second = new FrameBuilder()
+            .WithRowCount(1)
+            .WithDeltaSymbolDict(deltaStart: 2, entries: new[] { "GOOG" })
+            .AddNonNullableColumn("sym", QwpConstants.TYPE_SYMBOL, w => w.WriteVarint(2))
+            .Build();
+
+        var decoder = new QwpResultBatchDecoder();
+        var buf = new QwpBatchBuffer(Math.Max(first.Length, second.Length));
+        buf.CopyFromPayload(first);
+        decoder.Decode(buf);
+        buf.CopyFromPayload(second);
+        decoder.Decode(buf);
+
+        Assert.That(buf.Batch.GetLayout(0).SymbolDictSize, Is.EqualTo(3));
+        Assert.That(buf.Batch.GetLayout(0).SymbolRowIds![0], Is.EqualTo(2));
+    }
+
+    [Test]
+    public void DecodesDeltaSymbolColumn_RejectsOutOfSyncDeltaStart()
+    {
+        // Fresh decoder has _connDictSize=0, but message claims deltaStart=5.
+        var bytes = new FrameBuilder()
+            .WithRowCount(0)
+            .WithDeltaSymbolDict(deltaStart: 5, entries: new[] { "X" })
+            .Build();
+        Assert.That(() => Decode(bytes),
+            Throws.TypeOf<QwpDecodeException>().With.Message.Contains("out of sync"));
+    }
+
+    [Test]
+    public void ApplyCacheReset_WipesConnDict()
+    {
+        var first = new FrameBuilder()
+            .WithRowCount(1)
+            .WithDeltaSymbolDict(deltaStart: 0, entries: new[] { "AAPL" })
+            .AddNonNullableColumn("sym", QwpConstants.TYPE_SYMBOL, w => w.WriteVarint(0))
+            .Build();
+        var afterReset = new FrameBuilder()
+            .WithRowCount(1)
+            .WithDeltaSymbolDict(deltaStart: 0, entries: new[] { "MSFT" })
+            .AddNonNullableColumn("sym", QwpConstants.TYPE_SYMBOL, w => w.WriteVarint(0))
+            .Build();
+
+        var decoder = new QwpResultBatchDecoder();
+        var buf = new QwpBatchBuffer(Math.Max(first.Length, afterReset.Length));
+        buf.CopyFromPayload(first);
+        decoder.Decode(buf);
+
+        // Server emits CACHE_RESET → decoder clears the connection dict; next batch's
+        // deltaStart=0 is now in sync.
+        decoder.ApplyCacheReset(QwpEgressMsgKind.RESET_MASK_DICT);
+
+        buf.CopyFromPayload(afterReset);
+        decoder.Decode(buf);
+        Assert.That(buf.Batch.GetLayout(0).SymbolDictSize, Is.EqualTo(1),
+            "post-reset dict has only the new entry");
+    }
+
     [Test]
     public void DecodesSymbolColumn_RejectsDictSizeAboveRowCount()
     {
@@ -379,6 +474,19 @@ public class QwpResultBatchDecoderTests
         public FrameBuilder WithRowCount(int rowCount) { _rowCount = rowCount; return this; }
         public FrameBuilder WithSchemaMode(byte mode) { _schemaMode = mode; return this; }
 
+        // §3.2c — when set, the build emits FLAG_DELTA_SYMBOL_DICT in the header and
+        // injects the delta section (deltaStart / deltaCount / per-entry-bytes) right
+        // after the request_id + batch_seq prelude. Caller passes the deltaStart and
+        // the new entries to append.
+        private long _deltaStart = -1;
+        private List<string>? _deltaEntries;
+        public FrameBuilder WithDeltaSymbolDict(long deltaStart, IEnumerable<string> entries)
+        {
+            _deltaStart = deltaStart;
+            _deltaEntries = entries.ToList();
+            return this;
+        }
+
         public FrameBuilder AddNonNullableColumn(string name, byte wireType, Action<PayloadWriter> valueWriter)
         {
             _columnDefs.Add((name, wireType, null, null));
@@ -432,13 +540,28 @@ public class QwpResultBatchDecoderTests
             // Header (12B): magic(4) + version(1) + flags(1) + 6 zero pad bytes.
             w.WriteIntLE(QwpConstants.MAGIC_MESSAGE);
             w.WriteByte(QwpConstants.VERSION_2);
-            w.WriteByte(0); // flags
+            var flags = (byte)(_deltaEntries is not null ? QwpConstants.FLAG_DELTA_SYMBOL_DICT : 0);
+            w.WriteByte(flags);
             for (var i = 0; i < QwpConstants.HEADER_SIZE - 6; i++) w.WriteByte(0);
 
             // Body.
             w.WriteByte(QwpEgressMsgKind.RESULT_BATCH);
             w.WriteLongLE(0L);   // request_id
             w.WriteVarint(0L);    // batch_seq
+
+            // §3.2c — delta section between batch_seq and the table block.
+            if (_deltaEntries is not null)
+            {
+                w.WriteVarint(_deltaStart);
+                w.WriteVarint(_deltaEntries.Count);
+                foreach (var e in _deltaEntries)
+                {
+                    var bytes = Encoding.UTF8.GetBytes(e);
+                    w.WriteVarint(bytes.Length);
+                    w.WriteRaw(bytes);
+                }
+            }
+
             w.WriteVarint(0L);    // table name length (empty)
             w.WriteVarint(_rowCount);
             w.WriteVarint(_columnDefs.Count);

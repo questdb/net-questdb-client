@@ -42,6 +42,32 @@ internal sealed class QwpResultBatchDecoder
     private const int MAX_ROWS_PER_BATCH = 1_048_576;
 
     /// <summary>
+    ///     Hard cap on the connection-scoped SYMBOL dict's entry count. Mirrors Java's
+    ///     <c>MAX_CONN_DICT_SIZE</c> guard. A hostile server that never emits CACHE_RESET
+    ///     can't drive _connDictSize past this without being rejected first.
+    /// </summary>
+    private const int MAX_CONN_DICT_SIZE = 8_388_608;
+
+    /// <summary>
+    ///     Hard cap on the connection-scoped SYMBOL dict's UTF-8 heap. 256 MiB matches
+    ///     Java's MAX_CONN_DICT_HEAP_BYTES. Servers approaching this cap are expected to
+    ///     emit CACHE_RESET.
+    /// </summary>
+    private const int MAX_CONN_DICT_HEAP_BYTES = 256 * 1024 * 1024;
+
+    // §3.2c — connection-scoped SYMBOL dict state. Reused across batches on the same
+    // decoder instance; FLAG_DELTA_SYMBOL_DICT messages append new entries; CACHE_RESET
+    // (§3.3c) wipes them. SYMBOL columns in delta mode reference these buffers via
+    // QwpColumnLayout.SymbolHeapBuffer / SymbolEntriesBuffer.
+    private byte[] _connDictHeapBytes = Array.Empty<byte>();
+    private int _connDictHeapLength;
+    private byte[] _connDictEntries = Array.Empty<byte>(); // packed (offset:i32 | length:i32<<32)
+    private int _connDictSize;
+    // True for the duration of a Decode() call when the message carries
+    // FLAG_DELTA_SYMBOL_DICT — read by ParseSymbolColumn to choose the delta path.
+    private bool _deltaMode;
+
+    /// <summary>
     ///     Decodes the RESULT_BATCH frame whose payload has been copied into
     ///     <paramref name="buffer"/>. Populates <c>buffer.Batch</c> and <c>buffer.LayoutPool</c>.
     /// </summary>
@@ -73,10 +99,7 @@ internal sealed class QwpResultBatchDecoder
         {
             throw new QwpDecodeException("FLAG_GORILLA not yet supported by this decoder");
         }
-        if ((flags & QwpConstants.FLAG_DELTA_SYMBOL_DICT) != 0)
-        {
-            throw new QwpDecodeException("FLAG_DELTA_SYMBOL_DICT not yet supported by this decoder");
-        }
+        _deltaMode = (flags & QwpConstants.FLAG_DELTA_SYMBOL_DICT) != 0;
 
         var p = QwpConstants.HEADER_SIZE;
 
@@ -94,6 +117,15 @@ internal sealed class QwpResultBatchDecoder
         p += 8;
         // batchSeq follows; same — not surfaced yet, owned by IO thread.
         ReadVarint(payload, ref p, out _);
+
+        // §3.2c — delta section sits between the request_id/batchSeq prelude and the
+        // table block. New SYMBOL dict entries since the last batch are appended to the
+        // connection-scoped dict here so the per-column delta-mode SYMBOL parse below
+        // can reference dict ids straight against the updated dict.
+        if (_deltaMode)
+        {
+            p = ParseDeltaSymbolDict(payload, p);
+        }
 
         // Table block: name, row_count, column_count, schema, columns.
         ReadVarint(payload, ref p, out var nameLen);
@@ -196,7 +228,7 @@ internal sealed class QwpResultBatchDecoder
         value = v;
     }
 
-    private static int ParseColumn(QwpColumnLayout layout, ReadOnlySpan<byte> payload, int rowCount, int p)
+    private int ParseColumn(QwpColumnLayout layout, ReadOnlySpan<byte> payload, int rowCount, int p)
     {
         p = ParseNullSection(layout, payload, rowCount, p);
         var wt = layout.Info!.WireType;
@@ -309,6 +341,96 @@ internal sealed class QwpResultBatchDecoder
     }
 
     /// <summary>
+    ///     §3.3c — clears the connection-scoped SYMBOL dict when CACHE_RESET arrives
+    ///     with the dict-clear bit set. Caller is the IO thread on a CACHE_RESET frame
+    ///     (wiring lands in §3.3); the decoder is the right place because it owns the
+    ///     dict state.
+    /// </summary>
+    public void ApplyCacheReset(byte resetMask)
+    {
+        if ((resetMask & QwpEgressMsgKind.RESET_MASK_DICT) != 0)
+        {
+            _connDictSize = 0;
+            _connDictHeapLength = 0;
+            // Capacity stays — server is expected to start refilling immediately
+            // and we'd just realloc back up otherwise.
+        }
+    }
+
+    /// <summary>
+    ///     §3.2c — appends new dict entries from the message's delta section to the
+    ///     connection-scoped SYMBOL dict. Wire layout:
+    ///     <list type="number">
+    ///         <item><c>delta_start: varint</c> — must equal current <see cref="_connDictSize"/>.</item>
+    ///         <item><c>delta_count: varint</c></item>
+    ///         <item>per new entry: <c>len:varint, utf8_bytes</c></item>
+    ///     </list>
+    ///     Bounds checks reject hostile (delta_start, delta_count) pairs that would
+    ///     overflow the int sample count or the configured heap cap.
+    /// </summary>
+    private int ParseDeltaSymbolDict(ReadOnlySpan<byte> payload, int p)
+    {
+        ReadVarint(payload, ref p, out var deltaStart);
+        ReadVarint(payload, ref p, out var deltaCount);
+        if (deltaStart < 0 || deltaCount < 0
+            || deltaStart > MAX_CONN_DICT_SIZE
+            || deltaCount > MAX_CONN_DICT_SIZE - deltaStart)
+        {
+            throw new QwpDecodeException(
+                $"delta symbol section out of range: start={deltaStart}, count={deltaCount}");
+        }
+        if (deltaStart != _connDictSize)
+        {
+            throw new QwpDecodeException(
+                $"delta symbol dict out of sync: expected start={_connDictSize}, got={deltaStart}");
+        }
+        var newSize = _connDictSize + (int)deltaCount;
+        EnsureConnDictEntriesCapacity(newSize * 8);
+        for (long i = 0; i < deltaCount; i++)
+        {
+            ReadVarint(payload, ref p, out var entryLen);
+            if (entryLen < 0 || entryLen > int.MaxValue || p + entryLen > payload.Length)
+            {
+                throw new QwpDecodeException("truncated delta symbol entry");
+            }
+            var len = (int)entryLen;
+            var newHeapPos = (long)_connDictHeapLength + len;
+            if (newHeapPos > MAX_CONN_DICT_HEAP_BYTES)
+            {
+                throw new QwpDecodeException(
+                    $"connection SYMBOL dict heap exceeds cap ({MAX_CONN_DICT_HEAP_BYTES} bytes); " +
+                    "server must emit CACHE_RESET");
+            }
+            EnsureConnDictHeapCapacity((int)newHeapPos);
+            payload.Slice(p, len).CopyTo(_connDictHeapBytes.AsSpan(_connDictHeapLength, len));
+            var packed = (long)((uint)_connDictHeapLength) | ((long)len << 32);
+            BinaryPrimitives.WriteInt64LittleEndian(_connDictEntries.AsSpan(_connDictSize * 8, 8), packed);
+            _connDictSize++;
+            _connDictHeapLength = (int)newHeapPos;
+            p += len;
+        }
+        return p;
+    }
+
+    private void EnsureConnDictEntriesCapacity(int requiredBytes)
+    {
+        if (_connDictEntries.Length >= requiredBytes) return;
+        var newCap = Math.Max(_connDictEntries.Length * 2, Math.Max(512 * 8, requiredBytes));
+        var bigger = new byte[newCap];
+        Array.Copy(_connDictEntries, bigger, _connDictSize * 8);
+        _connDictEntries = bigger;
+    }
+
+    private void EnsureConnDictHeapCapacity(int required)
+    {
+        if (_connDictHeapBytes.Length >= required) return;
+        var newCap = Math.Max(_connDictHeapBytes.Length * 2, Math.Max(4096, required));
+        var bigger = new byte[newCap];
+        Array.Copy(_connDictHeapBytes, bigger, _connDictHeapLength);
+        _connDictHeapBytes = bigger;
+    }
+
+    /// <summary>
     ///     §3.2e — parses a non-delta SYMBOL column. Wire format:
     ///     <list type="number">
     ///         <item><c>dict_size:varint</c></item>
@@ -324,47 +446,71 @@ internal sealed class QwpResultBatchDecoder
     ///     Delta-mode (<c>FLAG_DELTA_SYMBOL_DICT</c>) and the connection-scoped dict
     ///     are §3.2c — this parser handles only per-message local dicts.
     /// </summary>
-    private static int ParseSymbolColumn(
+    private int ParseSymbolColumn(
         QwpColumnLayout layout,
         ReadOnlySpan<byte> payload,
         int rowCount,
         int p)
     {
-        ReadVarint(payload, ref p, out var dictSizeVarint);
-        if (dictSizeVarint < 0 || dictSizeVarint > rowCount)
+        int dictSize;
+        if (_deltaMode)
         {
-            throw new QwpDecodeException(
-                $"SYMBOL dict size out of range: {dictSizeVarint} (rowCount={rowCount})");
+            // §3.2c — delta mode: no per-column dict; ids reference the connection
+            // dict already populated by ParseDeltaSymbolDict. Layout aliases the
+            // decoder's connection buffers so ColumnView reads dict entries / heap
+            // through them.
+            dictSize = _connDictSize;
+            layout.SymbolHeapBuffer = _connDictHeapBytes;
+            layout.SymbolHeapBufferLength = _connDictHeapLength;
+            layout.SymbolEntriesBuffer = _connDictEntries;
+            layout.SymbolDictSize = dictSize;
+            // SymbolDictHeapOffset is meaningless in delta mode; clear to a sentinel
+            // so a stale value from a previous non-delta batch doesn't mislead readers.
+            layout.SymbolDictHeapOffset = -1;
+            layout.SymbolDictEntriesOffset = -1;
         }
-        var dictSize = (int)dictSizeVarint;
-
-        // Dict entries live inline in the payload starting here. Capture the base
-        // offset so per-entry offsets can be stored relative to it.
-        var dictBase = p;
-        layout.SymbolDictHeapOffset = dictBase;
-
-        var entries = layout.EnsureOwnedEntries(dictSize * 8);
-        for (var e = 0; e < dictSize; e++)
+        else
         {
-            ReadVarint(payload, ref p, out var entryLenVarint);
-            if (entryLenVarint < 0 || entryLenVarint > int.MaxValue || p + entryLenVarint > payload.Length)
+            ReadVarint(payload, ref p, out var dictSizeVarint);
+            if (dictSizeVarint < 0 || dictSizeVarint > rowCount)
             {
-                throw new QwpDecodeException("truncated SYMBOL dict entry");
+                throw new QwpDecodeException(
+                    $"SYMBOL dict size out of range: {dictSizeVarint} (rowCount={rowCount})");
             }
-            var lenBytes = (int)entryLenVarint;
-            var offset = p - dictBase;
-            // Pack (offset:i32 | length:i32<<32) into one 8-byte slot. ColumnView's
-            // GetSymbol (when §3.1 wires it) reads the slot, splits, and decodes the
-            // dict-heap UTF-8 region.
-            var packed = (long)((uint)offset) | ((long)lenBytes << 32);
-            BinaryPrimitives.WriteInt64LittleEndian(entries.AsSpan(e * 8, 8), packed);
-            p += lenBytes;
+            dictSize = (int)dictSizeVarint;
+
+            // Dict entries live inline in the payload starting here. Capture the base
+            // offset so per-entry offsets can be stored relative to it.
+            var dictBase = p;
+            layout.SymbolDictHeapOffset = dictBase;
+            // Non-delta — clear delta-mode buffer aliases left over from a prior batch.
+            layout.SymbolHeapBuffer = null;
+            layout.SymbolHeapBufferLength = 0;
+
+            var entries = layout.EnsureOwnedEntries(dictSize * 8);
+            for (var e = 0; e < dictSize; e++)
+            {
+                ReadVarint(payload, ref p, out var entryLenVarint);
+                if (entryLenVarint < 0 || entryLenVarint > int.MaxValue || p + entryLenVarint > payload.Length)
+                {
+                    throw new QwpDecodeException("truncated SYMBOL dict entry");
+                }
+                var lenBytes = (int)entryLenVarint;
+                var offset = p - dictBase;
+                // Pack (offset:i32 | length:i32<<32) into one 8-byte slot. ColumnView's
+                // GetSymbol (when §3.1 wires it) reads the slot, splits, and decodes the
+                // dict-heap UTF-8 region.
+                var packed = (long)((uint)offset) | ((long)lenBytes << 32);
+                BinaryPrimitives.WriteInt64LittleEndian(entries.AsSpan(e * 8, 8), packed);
+                p += lenBytes;
+            }
+            layout.SymbolDictSize = dictSize;
+            layout.SymbolEntriesBuffer = entries;
+            // SymbolDictEntriesOffset stays unset — entry storage lives in OwnedEntries
+            // (managed) rather than at a payload offset, since the wire format encodes
+            // entries as varints rather than as fixed 8-byte packed longs.
+            layout.SymbolDictEntriesOffset = -1;
         }
-        layout.SymbolDictSize = dictSize;
-        // SymbolDictEntriesOffset stays unset — entry storage lives in OwnedEntries
-        // (managed) rather than at a payload offset, since the wire format encodes
-        // entries as varints rather than as fixed 8-byte packed longs.
-        layout.SymbolDictEntriesOffset = -1;
 
         // Per-row ids. NULL rows are skipped — their slot in SymbolRowIds stays at
         // the previous value, but the IsNull check on the layout's null bitmap
@@ -386,8 +532,8 @@ internal sealed class QwpResultBatchDecoder
             layout.SymbolRowIds[i] = (int)idVarint;
         }
 
-        // The accessor path uses SymbolDictHeapOffset + OwnedEntries + SymbolRowIds;
-        // ValuesOffset is unused for SYMBOL columns.
+        // The accessor path uses SymbolDictHeapOffset/Buffer + SymbolEntriesBuffer
+        // + SymbolRowIds; ValuesOffset is unused for SYMBOL columns.
         layout.ValuesOffset = 0;
         return p;
     }

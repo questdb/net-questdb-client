@@ -261,14 +261,66 @@ public class QwpResultBatchDecoderTests
     }
 
     [Test]
-    public void RejectsSymbolColumnsForNow()
+    public void DecodesSymbolColumn_LocalDictAndPerRowIds()
+    {
+        // Two unique symbols ("AAPL", "MSFT"), three rows assigning ids 0, 1, 0.
+        // Wire layout: dict_size_varint(2) | per-entry(varint_len + utf8) | per-row varint(id).
+        var bytes = new FrameBuilder()
+            .WithRowCount(3)
+            .AddNonNullableColumn("sym", QwpConstants.TYPE_SYMBOL, w =>
+            {
+                w.WriteVarint(2);                  // dict_size
+                w.WriteVarint(4); w.WriteUtf8("AAPL");
+                w.WriteVarint(4); w.WriteUtf8("MSFT");
+                w.WriteVarint(0); w.WriteVarint(1); w.WriteVarint(0);
+            })
+            .Build();
+
+        var batch = Decode(bytes);
+        var layout = batch.GetLayout(0);
+        Assert.That(layout.SymbolDictSize, Is.EqualTo(2));
+        Assert.That(layout.SymbolRowIds, Is.Not.Null);
+        Assert.That(layout.SymbolRowIds![0], Is.EqualTo(0));
+        Assert.That(layout.SymbolRowIds[1], Is.EqualTo(1));
+        Assert.That(layout.SymbolRowIds[2], Is.EqualTo(0));
+        Assert.That(layout.OwnedEntries, Is.Not.Null);
+        // First packed entry: low 32 = offset (dict-heap-relative), high 32 = length.
+        var packed = System.Buffers.Binary.BinaryPrimitives.ReadInt64LittleEndian(
+            layout.OwnedEntries.AsSpan(0, 8));
+        var off0 = (int)(uint)packed;
+        var len0 = (int)(packed >> 32);
+        Assert.That(len0, Is.EqualTo(4));
+        Assert.That(off0, Is.GreaterThanOrEqualTo(0)); // varint(4)=1 byte → offset = 1
+    }
+
+    [Test]
+    public void DecodesSymbolColumn_RejectsOutOfRangeId()
     {
         var bytes = new FrameBuilder()
             .WithRowCount(1)
-            .AddNonNullableColumn("s", QwpConstants.TYPE_SYMBOL, w => { /* not actually reached */ })
+            .AddNonNullableColumn("sym", QwpConstants.TYPE_SYMBOL, w =>
+            {
+                w.WriteVarint(1);
+                w.WriteVarint(1); w.WriteUtf8("X");
+                w.WriteVarint(99);  // id 99 — out of range vs dict_size=1
+            })
             .Build();
         Assert.That(() => Decode(bytes),
-            Throws.TypeOf<QwpDecodeException>().With.Message.Contains("SYMBOL columns"));
+            Throws.TypeOf<QwpDecodeException>().With.Message.Contains("symbol index out of range"));
+    }
+
+    [Test]
+    public void DecodesSymbolColumn_RejectsDictSizeAboveRowCount()
+    {
+        var bytes = new FrameBuilder()
+            .WithRowCount(2)
+            .AddNonNullableColumn("sym", QwpConstants.TYPE_SYMBOL, w =>
+            {
+                w.WriteVarint(99);  // dict claims 99 entries but rowCount=2
+            })
+            .Build();
+        Assert.That(() => Decode(bytes),
+            Throws.TypeOf<QwpDecodeException>().With.Message.Contains("SYMBOL dict size out of range"));
     }
 
     [Test]

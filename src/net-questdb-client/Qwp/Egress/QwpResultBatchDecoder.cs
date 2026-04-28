@@ -240,7 +240,7 @@ internal sealed class QwpResultBatchDecoder
             case QwpConstants.TYPE_GEOHASH:
                 return ParseGeohashColumn(layout, payload, p);
             case QwpConstants.TYPE_SYMBOL:
-                throw new QwpDecodeException("SYMBOL columns not yet supported by this decoder");
+                return ParseSymbolColumn(layout, payload, rowCount, p);
             case QwpConstants.TYPE_DOUBLE_ARRAY:
             case QwpConstants.TYPE_LONG_ARRAY:
                 throw new QwpDecodeException("ARRAY columns not yet supported by this decoder");
@@ -306,6 +306,90 @@ internal sealed class QwpResultBatchDecoder
         layout.Info!.GeohashPrecisionBits = (int)precision;
         var bytesPerValue = ((int)precision + 7) >> 3;
         return AdvanceFixed(layout, payload, p, bytesPerValue);
+    }
+
+    /// <summary>
+    ///     §3.2e — parses a non-delta SYMBOL column. Wire format:
+    ///     <list type="number">
+    ///         <item><c>dict_size:varint</c></item>
+    ///         <item>per dict entry: <c>len:varint, utf8_bytes</c></item>
+    ///         <item>per non-null row: <c>id:varint</c></item>
+    ///     </list>
+    ///     Dict entries are unpacked into the column's owned-entries buffer as
+    ///     <c>(offset:i32 | length:i32&lt;&lt;32)</c> packed longs so per-row symbol
+    ///     lookup is one packed-long load + a UTF-8 decode against the inline
+    ///     dict-heap region of the payload. Per-row ids are materialised into
+    ///     <see cref="QwpColumnLayout.SymbolRowIds"/> for O(1) random access.
+    ///     <para/>
+    ///     Delta-mode (<c>FLAG_DELTA_SYMBOL_DICT</c>) and the connection-scoped dict
+    ///     are §3.2c — this parser handles only per-message local dicts.
+    /// </summary>
+    private static int ParseSymbolColumn(
+        QwpColumnLayout layout,
+        ReadOnlySpan<byte> payload,
+        int rowCount,
+        int p)
+    {
+        ReadVarint(payload, ref p, out var dictSizeVarint);
+        if (dictSizeVarint < 0 || dictSizeVarint > rowCount)
+        {
+            throw new QwpDecodeException(
+                $"SYMBOL dict size out of range: {dictSizeVarint} (rowCount={rowCount})");
+        }
+        var dictSize = (int)dictSizeVarint;
+
+        // Dict entries live inline in the payload starting here. Capture the base
+        // offset so per-entry offsets can be stored relative to it.
+        var dictBase = p;
+        layout.SymbolDictHeapOffset = dictBase;
+
+        var entries = layout.EnsureOwnedEntries(dictSize * 8);
+        for (var e = 0; e < dictSize; e++)
+        {
+            ReadVarint(payload, ref p, out var entryLenVarint);
+            if (entryLenVarint < 0 || entryLenVarint > int.MaxValue || p + entryLenVarint > payload.Length)
+            {
+                throw new QwpDecodeException("truncated SYMBOL dict entry");
+            }
+            var lenBytes = (int)entryLenVarint;
+            var offset = p - dictBase;
+            // Pack (offset:i32 | length:i32<<32) into one 8-byte slot. ColumnView's
+            // GetSymbol (when §3.1 wires it) reads the slot, splits, and decodes the
+            // dict-heap UTF-8 region.
+            var packed = (long)((uint)offset) | ((long)lenBytes << 32);
+            BinaryPrimitives.WriteInt64LittleEndian(entries.AsSpan(e * 8, 8), packed);
+            p += lenBytes;
+        }
+        layout.SymbolDictSize = dictSize;
+        // SymbolDictEntriesOffset stays unset — entry storage lives in OwnedEntries
+        // (managed) rather than at a payload offset, since the wire format encodes
+        // entries as varints rather than as fixed 8-byte packed longs.
+        layout.SymbolDictEntriesOffset = -1;
+
+        // Per-row ids. NULL rows are skipped — their slot in SymbolRowIds stays at
+        // the previous value, but the IsNull check on the layout's null bitmap
+        // gates lookups.
+        if (layout.SymbolRowIds is null || layout.SymbolRowIds.Length < rowCount)
+        {
+            layout.SymbolRowIds = new int[Math.Max(rowCount, 16)];
+        }
+        var noNulls = layout.NullBitmapOffset < 0;
+        var nonNullIdx = layout.NonNullIdx;
+        for (var i = 0; i < rowCount; i++)
+        {
+            if (!noNulls && nonNullIdx![i] < 0) continue;
+            ReadVarint(payload, ref p, out var idVarint);
+            if (idVarint < 0 || idVarint >= dictSize)
+            {
+                throw new QwpDecodeException($"symbol index out of range: {idVarint}");
+            }
+            layout.SymbolRowIds[i] = (int)idVarint;
+        }
+
+        // The accessor path uses SymbolDictHeapOffset + OwnedEntries + SymbolRowIds;
+        // ValuesOffset is unused for SYMBOL columns.
+        layout.ValuesOffset = 0;
+        return p;
     }
 
     private static int ParseNullSection(QwpColumnLayout layout, ReadOnlySpan<byte> payload, int rowCount, int p)

@@ -32,11 +32,29 @@ namespace QuestDB.Senders;
 ///     ship in PR 6c).
 /// </summary>
 /// <remarks>
-///     Experimental. Builds rows into a per-table <see cref="QwpTableBuffer"/>;
-///     <see cref="Send"/> encodes each table via <see cref="QwpWebSocketEncoder"/>
-///     and ships it as a UDP datagram. Local symbol dictionaries (no global / delta
-///     dict). Full schema (no schema refs) — UDP is fire-and-forget so there's no
-///     server state to reference.
+///     <para>
+///         Experimental. Builds rows into a per-table <see cref="QwpTableBuffer"/>;
+///         <see cref="Send"/> encodes each table via <see cref="QwpWebSocketEncoder"/>
+///         and ships it as a UDP datagram. Local symbol dictionaries (no global /
+///         delta dict). Full schema (no schema refs) — UDP is fire-and-forget so
+///         there's no server state to reference.
+///     </para>
+///     <para>
+///         §2.2 — auto-flush thresholds (<c>auto_flush_rows</c>, <c>auto_flush_bytes</c>,
+///         <c>auto_flush_interval</c>) are deliberately rejected for UDP via
+///         <see cref="QuestDB.Utils.SenderOptions.ValidateQwp"/>. Java's UDP path
+///         doesn't auto-flush either: matching that behaviour keeps the parity contract
+///         simple and avoids surprising callers who expect a fire-and-forget transport
+///         to ship exactly when they call <see cref="Send"/>. Workloads that need
+///         time-bounded delivery should use the QWP-WS transport (where auto-flush is
+///         wired per §2.1) or call <see cref="Send"/> on a periodic timer.
+///     </para>
+///     <para>
+///         The §1.4 EWMA flush-and-batch loop (proactive pre-flush during
+///         <see cref="AtNanos"/>) is the UDP-specific story for keeping each datagram
+///         under <c>max_datagram_size</c>. It's distinct from auto-flush — auto-flush
+///         is about batch-end timing; flush-and-batch is about per-datagram size.
+///     </para>
 /// </remarks>
 internal sealed class QwpUdpSender : ISender
 {

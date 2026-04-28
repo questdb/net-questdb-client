@@ -57,7 +57,12 @@ public class Program
     }
     
     public static void RunConnectionChurnVsServerBench2(ManualConfig config)
-    { 
+    {
         BenchmarkRunner.Run<BenchConnectionChurnVsServer2>(config);
+    }
+
+    public static void RunQwpBench(ManualConfig config)
+    {
+        BenchmarkRunner.Run<BenchQwp>(config);
     }
 }

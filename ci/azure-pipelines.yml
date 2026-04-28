@@ -104,3 +104,19 @@ steps:
     summaryFileLocation: '$(Agent.TempDirectory)/**/coverage.cobertura.xml'
     codecoverageTool: 'cobertura'
   condition: succeededOrFailed()
+
+# §4.2 — AOT publish smoke. Verifies the example-aot project (which exercises
+# both ILP and QWP-UDP send paths) actually publishes under PublishAot=true.
+# Catches trim-unsafe / dynamic-code regressions (reflection on internals,
+# unsafe BinaryFormatter use, etc.) before they hit downstream users. Linux-only
+# because PublishAot needs platform-specific native toolchains and the
+# regression catch is the same on every OS — running once is enough.
+- task: DotNetCoreCLI@2
+  displayName: 'AOT publish smoke (example-aot)'
+  inputs:
+    command: 'publish'
+    projects: 'src/example-aot/example-aot.csproj'
+    arguments: '--configuration $(buildConfiguration) --runtime linux-x64 --no-self-contained=false /p:PublishAot=true'
+    publishWebProjects: false
+    zipAfterPublish: false
+  condition: eq(variables['osName'], 'Linux')

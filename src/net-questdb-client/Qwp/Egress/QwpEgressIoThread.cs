@@ -350,9 +350,50 @@ internal sealed class QwpEgressIoThread : IDisposable
                 // CACHE_RESET arrives between queries, not within one.
                 HandleCacheReset(payload);
                 return false;
+            case QwpEgressMsgKind.SERVER_INFO:
+                // §3.4 — SERVER_INFO arrives once per v2 connection, typically before any
+                // query response. Decode it so QwpQueryClient can read the connected
+                // node's role/epoch for failover-reset notification.
+                HandleServerInfo(payload);
+                return false;
             default:
                 EmitTransportError($"unknown msg_kind 0x{msgKind:x2}");
                 return true;
+        }
+    }
+
+    /// <summary>
+    ///     §3.4 — most recently observed <see cref="QwpServerInfo"/> for this connection,
+    ///     or null if no SERVER_INFO frame has arrived yet. Refreshed on every
+    ///     SERVER_INFO arrival; the QwpQueryClient reads it after reconnect to pass to
+    ///     <c>OnFailoverReset</c>.
+    /// </summary>
+    public QwpServerInfo? LastServerInfo => Volatile.Read(ref _lastServerInfo);
+
+    /// <summary>
+    ///     §3.4 — primes <see cref="LastServerInfo"/> with a value the caller already
+    ///     read off the channel before the IO thread started. Used by
+    ///     <c>QwpQueryClient</c>'s connect bootstrap, which consumes the initial
+    ///     SERVER_INFO frame to apply the role filter — once the IO thread takes over,
+    ///     it would otherwise have no record of the value.
+    /// </summary>
+    public void SeedServerInfo(QwpServerInfo info)
+    {
+        Volatile.Write(ref _lastServerInfo, info);
+    }
+
+    private QwpServerInfo? _lastServerInfo;
+
+    private void HandleServerInfo(ArraySegment<byte> payload)
+    {
+        try
+        {
+            var info = QwpServerInfoDecoder.Decode(payload.AsSpan());
+            Volatile.Write(ref _lastServerInfo, info);
+        }
+        catch (QwpDecodeException e)
+        {
+            EmitTransportError($"SERVER_INFO decode failed: {e.Message}");
         }
     }
 

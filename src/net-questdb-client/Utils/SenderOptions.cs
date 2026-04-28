@@ -99,6 +99,17 @@ public record SenderOptions
     // config-string constructor records the same information in
     // _connectionStringBuilder; ValidateQwp folds both signals together via
     // WasExplicitlySet.
+    //
+    // Properties whose setters MUST add to this set (to keep ValidateQwp's
+    // programmatic-mutation checks honest — see §2.4 audit, 2026-04-28):
+    //   auto_flush, auto_flush_rows, auto_flush_bytes, auto_flush_interval,
+    //   init_buf_size, max_buf_size, username, password, token, tls_verify,
+    //   in_flight_window, max_schemas_per_connection, max_datagram_size,
+    //   multicast_ttl.
+    // Adding a new property to ValidateQwp's WasExplicitlySet checks REQUIRES
+    // adding the corresponding _programmaticMutations.Add(nameof(...)) line in
+    // the property's setter — otherwise programmatic-only mutations bypass the
+    // QWP-protocol-specific rejection.
     private HashSet<string> _programmaticMutations = new();
 
     /// <summary>

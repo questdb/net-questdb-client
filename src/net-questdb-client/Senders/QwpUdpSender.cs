@@ -49,6 +49,12 @@ internal sealed class QwpUdpSender : ISender
     private string? _currentTableName;
     private bool _disposed;
     private DateTime _lastFlush = DateTime.MinValue;
+    // Reusable scratch for FlushTableSync's per-column snapshots. Grows to the peak
+    // column count seen across this sender's lifetime; never shrinks. Each flush
+    // clears the slots it touched after the restore pass so VARCHAR / SYMBOL strings
+    // and array data don't get pinned past the user's row commit.
+    private QwpTableBuffer.InProgressSnapshot[] _flushSnapshotScratch =
+        Array.Empty<QwpTableBuffer.InProgressSnapshot>();
 
     public QwpUdpSender(SenderOptions options)
     {
@@ -338,11 +344,15 @@ internal sealed class QwpUdpSender : ISender
         // committed row count so the encoder sees clean state. The snapshot is a value-
         // type struct (no boxing on the row-commit path) — see InProgressSnapshot.
         var rowCount = table.RowCount;
-        var snapshots = new QwpTableBuffer.InProgressSnapshot[table.ColumnCount];
-        for (var i = 0; i < table.ColumnCount; i++)
+        var columnCount = table.ColumnCount;
+        if (_flushSnapshotScratch.Length < columnCount)
+        {
+            _flushSnapshotScratch = new QwpTableBuffer.InProgressSnapshot[columnCount];
+        }
+        for (var i = 0; i < columnCount; i++)
         {
             var col = table.GetColumn(i);
-            snapshots[i] = col.CaptureInProgressRowState(rowCount);
+            _flushSnapshotScratch[i] = col.CaptureInProgressRowState(rowCount);
             if (col.Size > rowCount) col.TruncateTo(rowCount);
         }
 
@@ -352,10 +362,17 @@ internal sealed class QwpUdpSender : ISender
 
         // Phase 3: reset the table and replay the in-progress row as the new row 0.
         table.Reset();
-        for (var i = 0; i < table.ColumnCount; i++)
+        for (var i = 0; i < columnCount; i++)
         {
-            table.GetColumn(i).RestoreInProgressRowState(in snapshots[i]);
+            table.GetColumn(i).RestoreInProgressRowState(in _flushSnapshotScratch[i]);
         }
+
+        // Wipe the slots we just consumed so the scratch doesn't pin strings or array
+        // data after the user's row commit. The fields are references the column
+        // already owns post-Restore, so leaving them pinned isn't a memory leak in
+        // steady state — but a CancelRow + extended idle would let stale references
+        // outlive the value the user actually committed.
+        Array.Clear(_flushSnapshotScratch, 0, columnCount);
 
         _lastFlush = DateTime.UtcNow;
     }

@@ -83,18 +83,83 @@ public class QwpUdpSenderTests
     }
 
     [Test]
-    public void OversizeDatagramThrowsWhenMaxSet()
+    public void SingleRowExceedingMaxDatagramSizeThrowsAtCommit()
     {
         using var receiver = new UdpClient(new IPEndPoint(IPAddress.Loopback, 0));
         var port = ((IPEndPoint)receiver.Client.LocalEndPoint!).Port;
 
-        // Cap max_datagram_size very low so even one row exceeds it.
+        // Cap max_datagram_size below a single row's encoded size — AtNow itself throws.
         using var sender = (QwpUdpSender)new SenderOptions($"udp::addr=127.0.0.1:{port};max_datagram_size=8;").Build();
-        sender.Table("trades")
-              .Column("v", 1L)
-              .AtNow();
-        Assert.That(() => sender.Send(),
+        sender.Table("trades").Column("v", 1L);
+        Assert.That(() => sender.AtNow(),
                     Throws.TypeOf<IngressError>().With.Message.Contains("max_datagram_size"));
+    }
+
+    [Test]
+    public async Task MultiRowBatchExceedingMaxDatagramSizeSplitsIntoDatagrams()
+    {
+        using var receiver = new UdpClient(new IPEndPoint(IPAddress.Loopback, 0));
+        var port = ((IPEndPoint)receiver.Client.LocalEndPoint!).Port;
+
+        // Sized so 2-3 LONG rows fit per datagram. With 12 rows we expect ~4-6 datagrams.
+        using var sender = (QwpUdpSender)new SenderOptions(
+            $"udp::addr=127.0.0.1:{port};max_datagram_size=80;").Build();
+        for (var i = 0; i < 12; i++)
+        {
+            sender.Table("trades").Column("v", (long)i).At(DateTime.UtcNow);
+        }
+        await sender.SendAsync();
+
+        // Drain everything the receiver got. Multiple datagrams must arrive — exact
+        // count depends on per-datagram fit but must be >= 2 (the user-visible win).
+        var datagrams = new List<byte[]>();
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(2);
+        while (DateTime.UtcNow < deadline)
+        {
+            try
+            {
+                var task = receiver.ReceiveAsync();
+                if (await Task.WhenAny(task, Task.Delay(200)) != task) break;
+                datagrams.Add(task.Result.Buffer);
+            }
+            catch { break; }
+        }
+        Assert.That(datagrams.Count, Is.GreaterThanOrEqualTo(2),
+            "12-row batch must split into at least 2 datagrams under max_datagram_size=80");
+        foreach (var d in datagrams)
+        {
+            Assert.That(d.Length, Is.LessThanOrEqualTo(80),
+                "every emitted datagram must respect max_datagram_size");
+        }
+    }
+
+    [Test]
+    public async Task FlushPreservesInProgressRow()
+    {
+        using var receiver = new UdpClient(new IPEndPoint(IPAddress.Loopback, 0));
+        var port = ((IPEndPoint)receiver.Client.LocalEndPoint!).Port;
+
+        // Tight cap so committing the 4th row triggers a flush mid-batch.
+        using var sender = (QwpUdpSender)new SenderOptions(
+            $"udp::addr=127.0.0.1:{port};max_datagram_size=80;").Build();
+        sender.Table("t").Column("v", 1L).At(DateTime.UtcNow);
+        sender.Table("t").Column("v", 2L).At(DateTime.UtcNow);
+        sender.Table("t").Column("v", 3L).At(DateTime.UtcNow);
+        // The 4th row triggers a flush of [1,2,3] and seeds the next datagram with row 4.
+        sender.Table("t").Column("v", 4L).At(DateTime.UtcNow);
+        await sender.SendAsync();
+
+        // Two datagrams expected. Walk receiver until idle.
+        var receivedCount = 0;
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(2);
+        while (DateTime.UtcNow < deadline)
+        {
+            var task = receiver.ReceiveAsync();
+            if (await Task.WhenAny(task, Task.Delay(200)) != task) break;
+            receivedCount++;
+        }
+        Assert.That(receivedCount, Is.GreaterThanOrEqualTo(2),
+            "the auto-flushed prefix and the trailing remainder both ship");
     }
 
     [Test]

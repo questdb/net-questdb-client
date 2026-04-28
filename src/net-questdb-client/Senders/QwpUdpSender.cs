@@ -277,9 +277,86 @@ internal sealed class QwpUdpSender : ISender
 
     public void AtNanos(long timestampNanos, CancellationToken ct = default)
     {
-        var col = RequireTable().GetOrCreateDesignatedTimestampColumn(QwpConstants.TYPE_TIMESTAMP_NANOS);
-        col.AddLong(timestampNanos);
-        RequireTable().NextRow();
+        ThrowIfDisposed();
+        var table = RequireTable();
+        var ts = table.GetOrCreateDesignatedTimestampColumn(QwpConstants.TYPE_TIMESTAMP_NANOS);
+        ts.AddLong(timestampNanos);
+
+        // Flush-and-batch: if committing this row would push the datagram past
+        // max_datagram_size, ship the committed prefix as one datagram and keep the
+        // in-progress row as the seed of the next. Mirrors Java's
+        // commitCurrentRow → flushCommittedPrefixPreservingCurrentRow path.
+        var maxSize = Options.max_datagram_size;
+        if (maxSize > 0)
+        {
+            var estimateWithRow = table.EstimateEncodedDatagramSize(table.RowCount + 1);
+            if (estimateWithRow > maxSize)
+            {
+                if (table.RowCount == 0)
+                {
+                    throw new IngressError(ErrorCode.ServerFlushError,
+                        $"single row of estimated size {estimateWithRow} bytes exceeds " +
+                        $"max_datagram_size={maxSize}. " +
+                        "Use HTTP or WebSocket transport for large rows, or raise max_datagram_size.");
+                }
+                FlushTableSync(table, ct);
+                estimateWithRow = table.EstimateEncodedDatagramSize(1);
+                if (estimateWithRow > maxSize)
+                {
+                    throw new IngressError(ErrorCode.ServerFlushError,
+                        $"single row of estimated size {estimateWithRow} bytes exceeds " +
+                        $"max_datagram_size={maxSize} after flushing the prior batch. " +
+                        "Use HTTP or WebSocket transport for large rows, or raise max_datagram_size.");
+                }
+            }
+        }
+
+        table.NextRow();
+    }
+
+    /// <summary>
+    ///     Encodes the table's currently-committed rows, ships them as a single QWP1
+    ///     datagram, then resets the table and re-stages the in-progress row as the
+    ///     seed of the next datagram. Synchronous because the commit path inside
+    ///     <see cref="AtNanos"/> is also synchronous; the async <see cref="SendAsync"/>
+    ///     path uses the same encoder output but ships through
+    ///     <c>Socket.SendToAsync</c> for I/O completion ports.
+    /// </summary>
+    /// <remarks>
+    ///     The in-progress row's per-column data sits at index <c>table.RowCount</c>
+    ///     when this method runs (the user wrote it; the timestamp column was just
+    ///     populated by <see cref="AtNanos"/>). The encoder reads up to
+    ///     <c>col.ValueCount</c> per-column bytes, which would include the in-progress
+    ///     row — so we capture+truncate per column, encode the trimmed prefix, reset
+    ///     the table, and replay the captured values as the new row 0.
+    /// </remarks>
+    private void FlushTableSync(QwpTableBuffer table, CancellationToken ct)
+    {
+        ct.ThrowIfCancellationRequested();
+
+        // Phase 1: snapshot in-progress data per column, then trim each column to the
+        // committed row count so the encoder sees clean state.
+        var rowCount = table.RowCount;
+        var snapshots = new object?[table.ColumnCount];
+        for (var i = 0; i < table.ColumnCount; i++)
+        {
+            var col = table.GetColumn(i);
+            snapshots[i] = col.CaptureInProgressRowState(rowCount);
+            if (col.Size > rowCount) col.TruncateTo(rowCount);
+        }
+
+        // Phase 2: encode + ship the committed prefix as one datagram.
+        _encoder.Encode(table, useSchemaRef: false);
+        _socket.SendTo(_encoder.AsReadOnlySpan(), SocketFlags.None, _remoteEndPoint);
+
+        // Phase 3: reset the table and replay the in-progress row as the new row 0.
+        table.Reset();
+        for (var i = 0; i < table.ColumnCount; i++)
+        {
+            table.GetColumn(i).RestoreInProgressRowState(snapshots[i]);
+        }
+
+        _lastFlush = DateTime.UtcNow;
     }
 
     public ValueTask AtNanosAsync(long timestampNanos, CancellationToken ct = default)
@@ -308,8 +385,13 @@ internal sealed class QwpUdpSender : ISender
             var datagram = _encoder.AsReadOnlyMemory();
             if (Options.max_datagram_size > 0 && size > Options.max_datagram_size)
             {
+                // Belt-and-braces guard: AtNanos's pre-flush keeps each datagram under
+                // max_datagram_size during normal use. This branch only fires if the
+                // user disabled the cap (max_datagram_size=0) mid-batch, then re-enabled
+                // it before Send — surface the same error shape so callers can react.
                 throw new IngressError(ErrorCode.ServerFlushError,
-                    $"encoded datagram {size} bytes exceeds max_datagram_size={Options.max_datagram_size}; fragmentation lands in PR 6c");
+                    $"encoded datagram {size} bytes exceeds max_datagram_size={Options.max_datagram_size}. " +
+                    "Use HTTP or WebSocket transport for large rows, or raise max_datagram_size.");
             }
             await _socket.SendToAsync(datagram, SocketFlags.None, _remoteEndPoint, ct).ConfigureAwait(false);
             table.Reset();

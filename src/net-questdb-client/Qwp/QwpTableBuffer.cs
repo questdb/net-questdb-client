@@ -792,6 +792,40 @@ internal sealed class QwpTableBuffer
             _size++;
         }
 
+        /// <summary>
+        ///     Adds a Decimal256 value with the given scale. <paramref name="hh"/> is the
+        ///     most-significant 64 bits, <paramref name="ll"/> the least; the wire layout
+        ///     emits them in reverse storage order (least-significant first), matching
+        ///     Java's QwpColumnWriter.WriteDecimal256Column. The first call latches the
+        ///     column's scale; subsequent calls at a different scale rescale via BigInteger.
+        ///     Throws on precision loss or 256-bit overflow.
+        /// </summary>
+        public void AddDecimal256(long hh, long hl, long lh, long ll, int scale)
+        {
+            long sHh, sHl, sLh, sLl;
+            if (_decimalScale == -1)
+            {
+                _decimalScale = scale;
+                sHh = hh; sHl = hl; sLh = lh; sLl = ll;
+            }
+            else if (_decimalScale != scale)
+            {
+                (sHh, sHl, sLh, sLl) = Rescale256(hh, hl, lh, ll, scale, _decimalScale);
+            }
+            else
+            {
+                sHh = hh; sHl = hl; sLh = lh; sLl = ll;
+            }
+            // Storage order: hh, hl, lh, ll (most-significant first). Wire order reversed
+            // by QwpColumnWriter.WriteDecimal256Column.
+            _dataBuffer!.PutLong(sHh);
+            _dataBuffer!.PutLong(sHl);
+            _dataBuffer!.PutLong(sLh);
+            _dataBuffer!.PutLong(sLl);
+            _valueCount++;
+            _size++;
+        }
+
         private long Rescale64(long unscaled, int fromScale, int toScale)
         {
             var diff = toScale - fromScale;
@@ -859,6 +893,53 @@ internal sealed class QwpTableBuffer
             var high = (long)(value >> 64);
             var low = (long)(ulong)lowBig;
             return (high, low);
+        }
+
+        private (long hh, long hl, long lh, long ll) Rescale256(
+            long hh, long hl, long lh, long ll, int fromScale, int toScale)
+        {
+            var input = Pack256(hh, hl, lh, ll);
+            var diff = toScale - fromScale;
+            BigInteger result;
+            if (diff > 0)
+            {
+                result = input * BigInteger.Pow(10, diff);
+            }
+            else
+            {
+                var divisor = BigInteger.Pow(10, -diff);
+                var quotient = BigInteger.DivRem(input, divisor, out var remainder);
+                if (!remainder.IsZero)
+                {
+                    throw new IngressError(Enums.ErrorCode.InvalidName,
+                        $"column '{Name}' cannot rescale decimal from scale {fromScale} to {toScale} without precision loss");
+                }
+                result = quotient;
+            }
+            var max256 = (BigInteger.One << 255) - 1;
+            var min256 = -(BigInteger.One << 255);
+            if (result < min256 || result > max256)
+            {
+                throw new IngressError(Enums.ErrorCode.InvalidName,
+                    $"Decimal256 overflow: rescaling from scale {fromScale} to {toScale} exceeds 256-bit capacity");
+            }
+            return Unpack256(result);
+        }
+
+        private static BigInteger Pack256(long hh, long hl, long lh, long ll) =>
+            ((BigInteger)hh << 192)
+            | ((BigInteger)(ulong)hl << 128)
+            | ((BigInteger)(ulong)lh << 64)
+            | (BigInteger)(ulong)ll;
+
+        private static (long hh, long hl, long lh, long ll) Unpack256(BigInteger value)
+        {
+            var mask = (BigInteger.One << 64) - 1;
+            var ll = (long)(ulong)(value & mask);
+            var lh = (long)(ulong)((value >> 64) & mask);
+            var hl = (long)(ulong)((value >> 128) & mask);
+            var hh = (long)(value >> 192); // signed extraction for the top 64 bits
+            return (hh, hl, lh, ll);
         }
 
         /// <summary>Snapshot of per-row dimensionality entries for an array column.</summary>
@@ -1405,6 +1486,19 @@ internal sealed class QwpTableBuffer
                         IntAux = _decimalScale,
                     };
                 }
+                case QwpConstants.TYPE_DECIMAL256:
+                {
+                    var off = committedRowCount * 32;
+                    return new InProgressSnapshot
+                    {
+                        WireType = Type,
+                        Long0 = BinaryPrimitives.ReadInt64LittleEndian(_dataBuffer!.AsReadOnlySpan(off, 8)),       // hh
+                        Long1 = BinaryPrimitives.ReadInt64LittleEndian(_dataBuffer.AsReadOnlySpan(off + 8, 8)),    // hl
+                        Long2 = BinaryPrimitives.ReadInt64LittleEndian(_dataBuffer.AsReadOnlySpan(off + 16, 8)),   // lh
+                        Long3 = BinaryPrimitives.ReadInt64LittleEndian(_dataBuffer.AsReadOnlySpan(off + 24, 8)),   // ll
+                        IntAux = _decimalScale,
+                    };
+                }
                 case QwpConstants.TYPE_GEOHASH:
                 {
                     var v = BinaryPrimitives.ReadInt64LittleEndian(
@@ -1494,6 +1588,9 @@ internal sealed class QwpTableBuffer
                     break;
                 case QwpConstants.TYPE_DECIMAL128:
                     AddDecimal128(snapshot.Long0, snapshot.Long1, snapshot.IntAux);
+                    break;
+                case QwpConstants.TYPE_DECIMAL256:
+                    AddDecimal256(snapshot.Long0, snapshot.Long1, snapshot.Long2, snapshot.Long3, snapshot.IntAux);
                     break;
                 case QwpConstants.TYPE_GEOHASH:
                     AddGeoHash(snapshot.Long0, snapshot.IntAux);

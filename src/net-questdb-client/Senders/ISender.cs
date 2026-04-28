@@ -421,6 +421,31 @@ public interface ISender : IDisposable
     /// <returns>The sender instance for fluent call chaining.</returns>
     public ISender Column(ReadOnlySpan<char> name, decimal value);
 
+    /// <summary>
+    ///     Writes a Decimal256 column from explicit 64-bit limbs. The .NET <see cref="decimal"/>
+    ///     type is 96-bit so <see cref="Column(ReadOnlySpan{char}, decimal)"/> always fits in
+    ///     Decimal128; use this overload to ship native 256-bit decimals (e.g. from
+    ///     <see cref="System.Numerics.BigInteger"/>) without precision loss.
+    /// </summary>
+    /// <param name="name">Column name.</param>
+    /// <param name="hh">Most-significant 64 bits of the unscaled mantissa (signed).</param>
+    /// <param name="hl">Bits 128–191 of the mantissa (unsigned).</param>
+    /// <param name="lh">Bits 64–127 of the mantissa (unsigned).</param>
+    /// <param name="ll">Least-significant 64 bits of the mantissa (unsigned).</param>
+    /// <param name="scale">Decimal scale (number of fractional digits).</param>
+    /// <returns>The sender instance for fluent call chaining.</returns>
+    /// <remarks>
+    ///     QWP-only (ws/wss/udp). HTTP/TCP senders throw <see cref="System.NotSupportedException"/>.
+    ///     The first call on a column latches its scale; subsequent calls at a different scale
+    ///     are rescaled via <see cref="System.Numerics.BigInteger"/>; precision-losing rescales
+    ///     and 256-bit overflows throw <see cref="IngressError"/>.
+    /// </remarks>
+    public ISender ColumnDecimal256(ReadOnlySpan<char> name, long hh, long hl, long lh, long ll, int scale)
+    {
+        throw new NotSupportedException(
+            "ColumnDecimal256 is only supported on the QWP transports (ws/wss/udp).");
+    }
+
 
     /// <summary>
     ///     Writes a DECIMAL column with the specified name using the ILP binary decimal layout.

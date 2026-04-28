@@ -183,6 +183,34 @@ public class QwpUdpSenderTests
     // ---- PR A: decimal + array Column overloads ----
 
     [Test]
+    public async Task ColumnDecimal256SendsWithScalePrefix()
+    {
+        using var receiver = new UdpClient(new IPEndPoint(IPAddress.Loopback, 0));
+        var port = ((IPEndPoint)receiver.Client.LocalEndPoint!).Port;
+
+        using var sender = (QwpUdpSender)new SenderOptions($"udp::addr=127.0.0.1:{port};").Build();
+        // Native 256-bit decimal — beyond .NET decimal's 96-bit mantissa.
+        sender.Table("t")
+              .ColumnDecimal256("d", hh: 1, hl: 2, lh: 3, ll: 4, scale: 10)
+              .At(DateTime.UtcNow);
+        await sender.SendAsync();
+
+        var bytes = await ReceiveOne(receiver);
+        Assert.That(ContainsByte(bytes, QwpConstants.TYPE_DECIMAL256), Is.True,
+            "datagram should advertise the column as DECIMAL256");
+    }
+
+    [Test]
+    public void ColumnDecimal256OnHttpSenderThrowsNotSupported()
+    {
+        // HTTP/TCP senders inherit the default ISender.ColumnDecimal256 stub which
+        // throws NotSupportedException. Confirms the API gate is in place.
+        using var sender = new SenderOptions("http::addr=localhost:9000;").Build();
+        Assert.That(() => sender.ColumnDecimal256("d", 0, 0, 0, 0, 0),
+            Throws.TypeOf<NotSupportedException>());
+    }
+
+    [Test]
     public async Task DecimalColumnSendsAsDecimal64WhenSmall()
     {
         using var receiver = new UdpClient(new IPEndPoint(IPAddress.Loopback, 0));

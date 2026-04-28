@@ -198,6 +198,13 @@ internal sealed class QwpUdpSender : ISender
         return this;
     }
 
+    public ISender ColumnDecimal256(ReadOnlySpan<char> name, long hh, long hl, long lh, long ll, int scale)
+    {
+        var col = RequireTable().GetOrCreateColumn(name.ToString(), QwpConstants.TYPE_DECIMAL256, useNullBitmap: true);
+        col?.AddDecimal256(hh, hl, lh, ll, scale);
+        return this;
+    }
+
     public ISender Column<T>(ReadOnlySpan<char> name, IEnumerable<T> value, IEnumerable<int> shape) where T : struct
     {
         var wireType = QwpColumnEncoding.WireTypeForArrayElement(typeof(T));

@@ -913,8 +913,96 @@ public class QwpTableBufferTests
     }
 
     [Test]
-    [Ignore("Awaiting raw-payload AddDoubleArrayPayload API (Java's appendToBufPtr hook for >3D arrays). PR 3d only ships the typed 1D/2D overloads.")]
-    public void AddDoubleArrayPayloadSupportsHigherDimensionalShape() { }
+    public void AddDoubleArraySupportsHigherDimensionalShape()
+    {
+        // .NET-idiomatic counterpart of Java's testAddDoubleArrayPayloadSupportsHigherDimensionalShape:
+        // the typed (values, shape) overload covers ≥3D ranks without the raw-pointer hook.
+        var table = new QwpTableBuffer("t");
+        var col = table.GetOrCreateColumn("arr", QwpConstants.TYPE_DOUBLE_ARRAY, false)!;
+
+        Span<int> shape = stackalloc int[] { 2, 1, 1, 2 };
+        Span<double> values = stackalloc double[] { 1.0, 2.0, 3.0, 4.0 };
+        col.AddDoubleArray(values, shape);
+        table.NextRow();
+
+        Assert.That(col.ValueCount, Is.EqualTo(1));
+        var dims = col.GetArrayDims();
+        var shapes = col.GetArrayShapes();
+        Assert.That(dims[0], Is.EqualTo((byte)4));
+        Assert.That(shapes[0], Is.EqualTo(2));
+        Assert.That(shapes[1], Is.EqualTo(1));
+        Assert.That(shapes[2], Is.EqualTo(1));
+        Assert.That(shapes[3], Is.EqualTo(2));
+        Assert.That(col.GetDoubleArrayData(),
+            Is.EqualTo(new[] { 1.0, 2.0, 3.0, 4.0 }));
+    }
+
+    [Test]
+    public void AddDoubleArrayWithShapeRejectsMismatchedLength()
+    {
+        var table = new QwpTableBuffer("t");
+        var col = table.GetOrCreateColumn("arr", QwpConstants.TYPE_DOUBLE_ARRAY, false)!;
+        Assert.That(
+            () =>
+            {
+                Span<int> shape = stackalloc int[] { 2, 3 };
+                Span<double> values = stackalloc double[] { 1.0, 2.0, 3.0 }; // expected 6
+                col.AddDoubleArray(values, shape);
+            },
+            Throws.ArgumentException);
+    }
+
+    [Test]
+    public void AddDoubleArrayWithShapeRejectsEmptyShape()
+    {
+        var table = new QwpTableBuffer("t");
+        var col = table.GetOrCreateColumn("arr", QwpConstants.TYPE_DOUBLE_ARRAY, false)!;
+        Assert.That(
+            () =>
+            {
+                ReadOnlySpan<int> shape = ReadOnlySpan<int>.Empty;
+                ReadOnlySpan<double> values = ReadOnlySpan<double>.Empty;
+                col.AddDoubleArray(values, shape);
+            },
+            Throws.ArgumentException);
+    }
+
+    [Test]
+    public void AddDoubleArrayWithShapeRejectsZeroDimension()
+    {
+        var table = new QwpTableBuffer("t");
+        var col = table.GetOrCreateColumn("arr", QwpConstants.TYPE_DOUBLE_ARRAY, false)!;
+        Assert.That(
+            () =>
+            {
+                Span<int> shape = stackalloc int[] { 2, 0, 3 };
+                ReadOnlySpan<double> values = ReadOnlySpan<double>.Empty;
+                col.AddDoubleArray(values, shape);
+            },
+            Throws.ArgumentException);
+    }
+
+    [Test]
+    public void AddLongArraySupportsHigherDimensionalShape()
+    {
+        var table = new QwpTableBuffer("t");
+        var col = table.GetOrCreateColumn("arr", QwpConstants.TYPE_LONG_ARRAY, false)!;
+
+        Span<int> shape = stackalloc int[] { 1, 2, 3 };
+        Span<long> values = stackalloc long[] { 10, 20, 30, 40, 50, 60 };
+        col.AddLongArray(values, shape);
+        table.NextRow();
+
+        Assert.That(col.ValueCount, Is.EqualTo(1));
+        var dims = col.GetArrayDims();
+        var shapes = col.GetArrayShapes();
+        Assert.That(dims[0], Is.EqualTo((byte)3));
+        Assert.That(shapes[0], Is.EqualTo(1));
+        Assert.That(shapes[1], Is.EqualTo(2));
+        Assert.That(shapes[2], Is.EqualTo(3));
+        Assert.That(col.GetLongArrayData(),
+            Is.EqualTo(new[] { 10L, 20L, 30L, 40L, 50L, 60L }));
+    }
 
     [Test]
     public void AddLongArrayNullOnNonNullableColumn()

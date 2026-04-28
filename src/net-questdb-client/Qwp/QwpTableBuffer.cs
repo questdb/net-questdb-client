@@ -994,6 +994,31 @@ internal sealed class QwpTableBuffer
             _size++;
         }
 
+        /// <summary>
+        ///     Appends an n-dimensional double array. <paramref name="values"/> is the
+        ///     row-major flattened payload; <paramref name="shape"/> describes the
+        ///     dimensions (length-N where N is the rank). Java parity (via
+        ///     <c>addDoubleArrayPayload</c>) is the higher-rank case (≥3D); the typed
+        ///     <see cref="AddDoubleArray(double[])"/> and
+        ///     <see cref="AddDoubleArray(double[,])"/> overloads remain the natural
+        ///     entry points for 1D / 2D.
+        /// </summary>
+        /// <exception cref="ArgumentException">
+        ///     Thrown when <paramref name="shape"/> is empty, has more than 32
+        ///     dimensions, contains a non-positive value, or its product disagrees
+        ///     with <paramref name="values"/>.Length.
+        /// </exception>
+        public void AddDoubleArray(ReadOnlySpan<double> values, ReadOnlySpan<int> shape)
+        {
+            var elemCount = ValidateArrayShape(shape, values.Length);
+            _arrayDims!.Add((byte)shape.Length);
+            for (var d = 0; d < shape.Length; d++) _arrayShapes!.Add(shape[d]);
+            for (var i = 0; i < values.Length; i++) _doubleArrayData!.Add(values[i]);
+            _arrayBodyRunningBytes += 1 + 4 * shape.Length + 8 * elemCount;
+            _valueCount++;
+            _size++;
+        }
+
         public void AddLongArray(long[]? values)
         {
             if (values is null) { AddNull(); return; }
@@ -1026,6 +1051,49 @@ internal sealed class QwpTableBuffer
             _arrayBodyRunningBytes += 1 + 4 * 2 + 8 * dim0 * dim1;
             _valueCount++;
             _size++;
+        }
+
+        /// <summary>
+        ///     Appends an n-dimensional long array. Mirrors
+        ///     <see cref="AddDoubleArray(ReadOnlySpan{double}, ReadOnlySpan{int})"/>;
+        ///     see that overload for shape contract.
+        /// </summary>
+        public void AddLongArray(ReadOnlySpan<long> values, ReadOnlySpan<int> shape)
+        {
+            var elemCount = ValidateArrayShape(shape, values.Length);
+            _arrayDims!.Add((byte)shape.Length);
+            for (var d = 0; d < shape.Length; d++) _arrayShapes!.Add(shape[d]);
+            for (var i = 0; i < values.Length; i++) _longArrayData!.Add(values[i]);
+            _arrayBodyRunningBytes += 1 + 4 * shape.Length + 8 * elemCount;
+            _valueCount++;
+            _size++;
+        }
+
+        /// <summary>
+        ///     Validates an array shape against the supplied flattened-value count.
+        ///     Returns the product of the shape on success. Caps rank at 32 to match
+        ///     Java's <c>QwpTableBuffer.ArrayCapture.shape</c>; the wire format itself
+        ///     allows up to 255 dims via the 1-byte ndims prefix.
+        /// </summary>
+        private static int ValidateArrayShape(ReadOnlySpan<int> shape, int valueCount)
+        {
+            if (shape.Length == 0)
+                throw new ArgumentException("shape must contain at least one dimension", nameof(shape));
+            if (shape.Length > 32)
+                throw new ArgumentException($"shape rank {shape.Length} exceeds maximum of 32", nameof(shape));
+            var elemCount = 1;
+            for (var d = 0; d < shape.Length; d++)
+            {
+                if (shape[d] <= 0)
+                    throw new ArgumentException(
+                        $"shape[{d}] = {shape[d]} must be > 0", nameof(shape));
+                elemCount = checked(elemCount * shape[d]);
+            }
+            if (elemCount != valueCount)
+                throw new ArgumentException(
+                    $"values.Length {valueCount} disagrees with shape product {elemCount}",
+                    nameof(shape));
+            return elemCount;
         }
 
         public void AddGeoHash(long value, int precision)

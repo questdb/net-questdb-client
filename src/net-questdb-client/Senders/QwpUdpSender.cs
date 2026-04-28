@@ -342,6 +342,27 @@ internal sealed class QwpUdpSender : ISender
     ///     where the user just committed a row and the predictor says the next row
     ///     would overflow.
     /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         §1.10 — sync vs async flush tradeoff. Both <see cref="FlushFullTableSync"/>
+    ///         and <see cref="FlushTableSync"/> use <c>_socket.SendTo</c> (the synchronous
+    ///         overload), not <c>SendToAsync</c>. The reason is structural: the call sites
+    ///         live inside the synchronous <see cref="AtNanos"/> commit path, where blocking
+    ///         on the kernel send is acceptable because UDP datagrams complete almost
+    ///         instantly on loopback / LAN. <see cref="SendAsync"/> conversely awaits
+    ///         <c>SendToAsync</c> so its callers don't tie up a thread while the kernel
+    ///         buffer drains under heavy load.
+    ///     </para>
+    ///     <para>
+    ///         If a future workload needs a true non-blocking row-commit path, the
+    ///         right shape is a small bounded background-sender Task with its own
+    ///         queue: AtNanos enqueues an encoded-and-ready datagram; the sender Task
+    ///         drains and ships. Roughly +200 LoC of plumbing and a new failure mode
+    ///         (queue-backpressure) — not worth the complexity for v1 since UDP
+    ///         <c>SendTo</c> blocking is dominated by socket-buffer churn, not
+    ///         network latency.
+    ///     </para>
+    /// </remarks>
     private void FlushFullTableSync(QwpTableBuffer table, CancellationToken ct)
     {
         ct.ThrowIfCancellationRequested();

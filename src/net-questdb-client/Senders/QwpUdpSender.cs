@@ -335,9 +335,10 @@ internal sealed class QwpUdpSender : ISender
         ct.ThrowIfCancellationRequested();
 
         // Phase 1: snapshot in-progress data per column, then trim each column to the
-        // committed row count so the encoder sees clean state.
+        // committed row count so the encoder sees clean state. The snapshot is a value-
+        // type struct (no boxing on the row-commit path) — see InProgressSnapshot.
         var rowCount = table.RowCount;
-        var snapshots = new object?[table.ColumnCount];
+        var snapshots = new QwpTableBuffer.InProgressSnapshot[table.ColumnCount];
         for (var i = 0; i < table.ColumnCount; i++)
         {
             var col = table.GetColumn(i);
@@ -353,7 +354,7 @@ internal sealed class QwpUdpSender : ISender
         table.Reset();
         for (var i = 0; i < table.ColumnCount; i++)
         {
-            table.GetColumn(i).RestoreInProgressRowState(snapshots[i]);
+            table.GetColumn(i).RestoreInProgressRowState(in snapshots[i]);
         }
 
         _lastFlush = DateTime.UtcNow;

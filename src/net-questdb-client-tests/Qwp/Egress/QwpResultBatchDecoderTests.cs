@@ -276,15 +276,71 @@ public class QwpResultBatchDecoderTests
             Throws.TypeOf<QwpDecodeException>().With.Message.Contains("row_count"));
     }
 
+    // ---- §3.2d — SCHEMA_MODE_REFERENCE + schema fingerprint cache ----
+
     [Test]
-    public void RejectsSchemaModeReference()
+    public void DecodesSchemaModeReference_AfterSchemaFullRegistration()
     {
+        // First batch: SCHEMA_MODE_FULL with one LONG column "v" — registers schema_id=0.
+        // Second batch: SCHEMA_MODE_REFERENCE with schema_id=0 — resolves to the same schema.
+        var first = new FrameBuilder()
+            .WithRowCount(1)
+            .AddNonNullableColumn("v", QwpConstants.TYPE_LONG, w => w.WriteLongLE(42L))
+            .Build();
+        var second = new FrameBuilder()
+            .WithRowCount(1)
+            .WithSchemaMode(QwpConstants.SCHEMA_MODE_REFERENCE)
+            .AddNonNullableColumn("v", QwpConstants.TYPE_LONG, w => w.WriteLongLE(99L))
+            .Build();
+
+        var decoder = new QwpResultBatchDecoder();
+        var buf = new QwpBatchBuffer(Math.Max(first.Length, second.Length));
+        buf.CopyFromPayload(first);
+        decoder.Decode(buf);
+
+        buf.CopyFromPayload(second);
+        decoder.Decode(buf);
+
+        Assert.That(buf.Batch.GetLayout(0).Info!.Name, Is.EqualTo("v"));
+        Assert.That(buf.Batch.GetLayout(0).Info!.WireType, Is.EqualTo(QwpConstants.TYPE_LONG));
+        Assert.That(buf.Batch.GetLongValue(0, 0), Is.EqualTo(99L));
+    }
+
+    [Test]
+    public void DecodesSchemaModeReference_RejectsUnregisteredSchemaId()
+    {
+        // Reference a schema_id that was never registered.
         var bytes = new FrameBuilder()
             .WithRowCount(0)
             .WithSchemaMode(QwpConstants.SCHEMA_MODE_REFERENCE)
             .Build();
         Assert.That(() => Decode(bytes),
-            Throws.TypeOf<QwpDecodeException>().With.Message.Contains("SCHEMA_MODE_REFERENCE"));
+            Throws.TypeOf<QwpDecodeException>().With.Message.Contains("not registered"));
+    }
+
+    [Test]
+    public void ApplyCacheReset_WipesSchemaRegistry()
+    {
+        var first = new FrameBuilder()
+            .WithRowCount(1)
+            .AddNonNullableColumn("v", QwpConstants.TYPE_LONG, w => w.WriteLongLE(1L))
+            .Build();
+        var refOnly = new FrameBuilder()
+            .WithRowCount(0)
+            .WithSchemaMode(QwpConstants.SCHEMA_MODE_REFERENCE)
+            .Build();
+
+        var decoder = new QwpResultBatchDecoder();
+        var buf = new QwpBatchBuffer(Math.Max(first.Length, refOnly.Length));
+        buf.CopyFromPayload(first);
+        decoder.Decode(buf);
+
+        decoder.ApplyCacheReset(QwpEgressMsgKind.RESET_MASK_SCHEMAS);
+
+        // Post-reset: the schema-ref message should no longer resolve.
+        buf.CopyFromPayload(refOnly);
+        Assert.That(() => decoder.Decode(buf),
+            Throws.TypeOf<QwpDecodeException>().With.Message.Contains("not registered"));
     }
 
     [Test]

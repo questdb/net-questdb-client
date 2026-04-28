@@ -73,6 +73,14 @@ internal sealed class QwpResultBatchDecoder
     private bool _gorillaMode;
     private readonly QwpGorillaDecoder _gorillaDecoder = new();
 
+    // §3.2d — connection-scoped schema registry. SCHEMA_MODE_FULL frames record the
+    // parsed (name, wireType) tuples keyed by server-assigned schema_id; subsequent
+    // SCHEMA_MODE_REFERENCE frames resolve back through this registry, eliminating
+    // the per-message column-header repetition. CACHE_RESET (§3.3c) bit 1 wipes it.
+    /// <summary>Hard cap on the schema registry — matches Java's MAX_SCHEMAS_PER_CONNECTION.</summary>
+    private const int MAX_SCHEMAS_PER_CONNECTION = 65_535;
+    private readonly Dictionary<int, QwpEgressColumnInfo[]> _schemaRegistry = new();
+
     /// <summary>
     ///     Decodes the RESULT_BATCH frame whose payload has been copied into
     ///     <paramref name="buffer"/>. Populates <c>buffer.Batch</c> and <c>buffer.LayoutPool</c>.
@@ -156,40 +164,67 @@ internal sealed class QwpResultBatchDecoder
         // Schema mode + schema_id.
         if (p >= payload.Length) throw new QwpDecodeException("truncated schema mode");
         var schemaMode = payload[p++];
-        ReadVarint(payload, ref p, out _); // schema_id, ignored until SCHEMA_MODE_REFERENCE lands
-
-        if (schemaMode == QwpConstants.SCHEMA_MODE_REFERENCE)
+        ReadVarint(payload, ref p, out var schemaIdVar);
+        if (schemaIdVar < 0 || schemaIdVar >= MAX_SCHEMAS_PER_CONNECTION)
         {
-            throw new QwpDecodeException("SCHEMA_MODE_REFERENCE not yet supported by this decoder");
+            throw new QwpDecodeException($"schema_id out of range: {schemaIdVar}");
         }
-        if (schemaMode != QwpConstants.SCHEMA_MODE_FULL)
+        var schemaId = (int)schemaIdVar;
+
+        // Reset the layout pool size.
+        var pool = buffer.LayoutPool;
+        while (pool.Count < columnCount) pool.Add(new QwpColumnLayout());
+        for (var i = 0; i < columnCount; i++) pool[i].Clear();
+
+        QwpEgressColumnInfo[] columnInfos;
+        if (schemaMode == QwpConstants.SCHEMA_MODE_FULL)
+        {
+            columnInfos = new QwpEgressColumnInfo[columnCount];
+            for (var i = 0; i < columnCount; i++)
+            {
+                ReadVarint(payload, ref p, out var colNameLen);
+                if (colNameLen < 0 || colNameLen > QwpConstants.MAX_COLUMN_NAME_LENGTH)
+                {
+                    throw new QwpDecodeException($"column name length out of range: {colNameLen}");
+                }
+                if (p + colNameLen + 1 > payload.Length)
+                {
+                    throw new QwpDecodeException("truncated column def");
+                }
+                var colName = colNameLen == 0
+                    ? string.Empty
+                    : Encoding.UTF8.GetString(payload.Slice(p, (int)colNameLen));
+                p += (int)colNameLen;
+                var wireType = payload[p++];
+                columnInfos[i] = new QwpEgressColumnInfo { Name = colName, WireType = wireType };
+            }
+            // §3.2d — register the schema by id so SCHEMA_MODE_REFERENCE messages
+            // can resolve back to it without re-shipping the headers.
+            _schemaRegistry[schemaId] = columnInfos;
+        }
+        else if (schemaMode == QwpConstants.SCHEMA_MODE_REFERENCE)
+        {
+            if (!_schemaRegistry.TryGetValue(schemaId, out var registered))
+            {
+                throw new QwpDecodeException(
+                    $"schema id {schemaId} not registered on this connection");
+            }
+            if (registered.Length != columnCount)
+            {
+                throw new QwpDecodeException(
+                    $"schema id {schemaId} column count mismatch: " +
+                    $"registered={registered.Length}, frame={columnCount}");
+            }
+            columnInfos = registered;
+        }
+        else
         {
             throw new QwpDecodeException($"unknown schema mode 0x{schemaMode:x2}");
         }
 
-        // Reset the layout pool size and seed the column infos.
-        var pool = buffer.LayoutPool;
-        while (pool.Count < columnCount) pool.Add(new QwpColumnLayout());
-
         for (var i = 0; i < columnCount; i++)
         {
-            var layout = pool[i];
-            layout.Clear();
-            ReadVarint(payload, ref p, out var colNameLen);
-            if (colNameLen < 0 || colNameLen > QwpConstants.MAX_COLUMN_NAME_LENGTH)
-            {
-                throw new QwpDecodeException($"column name length out of range: {colNameLen}");
-            }
-            if (p + colNameLen + 1 > payload.Length)
-            {
-                throw new QwpDecodeException("truncated column def");
-            }
-            var colName = colNameLen == 0
-                ? string.Empty
-                : Encoding.UTF8.GetString(payload.Slice(p, (int)colNameLen));
-            p += (int)colNameLen;
-            var wireType = payload[p++];
-            layout.Info = new QwpEgressColumnInfo { Name = colName, WireType = wireType };
+            pool[i].Info = columnInfos[i];
         }
 
         // Reset the user-facing batch view BEFORE column parsing so layouts the parser
@@ -521,6 +556,11 @@ internal sealed class QwpResultBatchDecoder
             _connDictHeapLength = 0;
             // Capacity stays — server is expected to start refilling immediately
             // and we'd just realloc back up otherwise.
+        }
+        if ((resetMask & QwpEgressMsgKind.RESET_MASK_SCHEMAS) != 0)
+        {
+            // §3.2d — schema-fingerprint cache reset.
+            _schemaRegistry.Clear();
         }
     }
 

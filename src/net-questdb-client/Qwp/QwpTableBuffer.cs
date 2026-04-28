@@ -216,6 +216,62 @@ internal sealed class QwpTableBuffer
     }
 
     /// <summary>
+    ///     Returns an exact (or safe over-) estimate of the wire-byte size that
+    ///     <see cref="QwpWebSocketEncoder.Encode"/> would produce for a datagram
+    ///     containing the first <paramref name="rowCount"/> rows of this table in
+    ///     SCHEMA_MODE_FULL. Used by <c>QwpUdpSender</c>'s flush-and-batch path to
+    ///     decide whether the next row commit would push the datagram over
+    ///     <c>max_datagram_size</c>.
+    /// </summary>
+    /// <remarks>
+    ///     Mirrors the byte counts emitted by <see cref="QwpColumnWriter"/> for the
+    ///     non-Gorilla, non-symbol-delta path (the only path UDP uses today). The
+    ///     estimate accounts for: 12-byte QWP1 envelope, table-block headers,
+    ///     per-column schema entries, per-column null section + per-type body. SYMBOL
+    ///     and ARRAY column estimates walk the per-column lists since their wire size
+    ///     is data-dependent; everything else closes form.
+    /// </remarks>
+    public int EstimateEncodedDatagramSize(int rowCount)
+    {
+        if (rowCount == 0) return 0;
+
+        var size = QwpConstants.HEADER_SIZE; // QWP1 envelope.
+
+        // Table block headers.
+        var tableNameBytes = Encoding.UTF8.GetByteCount(TableName);
+        size += VarintSize((long)tableNameBytes) + tableNameBytes;
+        size += VarintSize(rowCount);
+        size += VarintSize(_columns.Count);
+        size += 1; // schema_mode byte
+        size += VarintSize(_schemaId < 0 ? 0 : _schemaId);
+
+        // Per-column schema entries (FULL mode).
+        for (var i = 0; i < _columns.Count; i++)
+        {
+            var col = _columns[i];
+            var colNameBytes = Encoding.UTF8.GetByteCount(col.Name);
+            size += VarintSize((long)colNameBytes) + colNameBytes;
+            size += 1; // wire-type byte
+        }
+
+        // Per-column data sections.
+        for (var i = 0; i < _columns.Count; i++)
+        {
+            size += _columns[i].EstimateWireBytes(rowCount);
+        }
+
+        return size;
+    }
+
+    private static int VarintSize(long value)
+    {
+        var v = (ulong)value;
+        var bytes = 1;
+        while (v >= 0x80) { v >>= 7; bytes++; }
+        return bytes;
+    }
+
+    /// <summary>
     ///     Drops every committed row from each column while preserving the in-progress
     ///     row's per-column data. Used by <c>QwpUdpSender</c>'s flush-and-batch path:
     ///     when a freshly-staged row would overflow <c>max_datagram_size</c>, the
@@ -958,6 +1014,142 @@ internal sealed class QwpTableBuffer
                 _valueCount++;
             }
             _size++;
+        }
+
+        /// <summary>
+        ///     Returns the wire-byte size this column would emit when encoded into a
+        ///     <paramref name="rowCount"/>-row datagram. Mirrors the byte counts in
+        ///     <see cref="QwpColumnWriter"/>'s non-Gorilla / non-global-symbol path.
+        /// </summary>
+        internal int EstimateWireBytes(int rowCount)
+        {
+            // Null header: 1 flag byte + (rowCount + 7) / 8 bytes of bitmap when any nulls exist.
+            var size = 1;
+            if (UseNullBitmap && _hasNulls)
+            {
+                size += (rowCount + 7) / 8;
+            }
+
+            var nonNullCount = UseNullBitmap ? _valueCount : rowCount;
+
+            switch (Type)
+            {
+                case QwpConstants.TYPE_BOOLEAN:
+                    size += (nonNullCount + 7) / 8; // bit-packed on the wire
+                    break;
+                case QwpConstants.TYPE_BYTE:
+                    size += nonNullCount;
+                    break;
+                case QwpConstants.TYPE_SHORT:
+                case QwpConstants.TYPE_CHAR:
+                    size += nonNullCount * 2;
+                    break;
+                case QwpConstants.TYPE_INT:
+                case QwpConstants.TYPE_FLOAT:
+                    size += nonNullCount * 4;
+                    break;
+                case QwpConstants.TYPE_LONG:
+                case QwpConstants.TYPE_DOUBLE:
+                case QwpConstants.TYPE_DATE:
+                case QwpConstants.TYPE_TIMESTAMP:
+                case QwpConstants.TYPE_TIMESTAMP_NANOS:
+                    size += nonNullCount * 8;
+                    break;
+                case QwpConstants.TYPE_UUID:
+                    size += nonNullCount * 16;
+                    break;
+                case QwpConstants.TYPE_LONG256:
+                    size += nonNullCount * 32;
+                    break;
+                case QwpConstants.TYPE_DECIMAL64:
+                    size += 1 + nonNullCount * 8; // scale byte + values
+                    break;
+                case QwpConstants.TYPE_DECIMAL128:
+                    size += 1 + nonNullCount * 16;
+                    break;
+                case QwpConstants.TYPE_DECIMAL256:
+                    size += 1 + nonNullCount * 32;
+                    break;
+                case QwpConstants.TYPE_GEOHASH:
+                {
+                    var precision = _geohashPrecision > 0 ? _geohashPrecision : 1;
+                    size += VarintSizeStatic(precision);
+                    size += nonNullCount * ((precision + 7) / 8);
+                    break;
+                }
+                case QwpConstants.TYPE_VARCHAR:
+                case QwpConstants.TYPE_BINARY:
+                    // (nonNullCount + 1) int32 offsets + actual UTF-8 / opaque bytes.
+                    size += 4 * (nonNullCount + 1) + (_stringData?.Length ?? 0);
+                    break;
+                case QwpConstants.TYPE_SYMBOL:
+                    size += EstimateSymbolWireBytes(nonNullCount);
+                    break;
+                case QwpConstants.TYPE_DOUBLE_ARRAY:
+                case QwpConstants.TYPE_LONG_ARRAY:
+                    size += EstimateArrayWireBytes();
+                    break;
+                default:
+                    // Unknown type — be safe by reporting a large estimate so the caller
+                    // pre-flushes rather than under-counting.
+                    size += nonNullCount * 32;
+                    break;
+            }
+            return size;
+        }
+
+        private int EstimateSymbolWireBytes(int nonNullCount)
+        {
+            // Local-dict path: dict_size_varint + per-entry(varint_len + utf8_bytes)
+            //                + per-value varint id (one per non-null row).
+            var size = VarintSizeStatic(_symbolList?.Count ?? 0);
+            if (_symbolList is not null)
+            {
+                for (var i = 0; i < _symbolList.Count; i++)
+                {
+                    var entryBytes = Encoding.UTF8.GetByteCount(_symbolList[i]);
+                    size += VarintSizeStatic(entryBytes) + entryBytes;
+                }
+            }
+            // Per-value indices: each row stores a 4-byte int local-dict index in
+            // _dataBuffer, encoded as a varint on the wire. Walk the stored indices
+            // for an exact count rather than over-estimating at 5 bytes/row.
+            if (_dataBuffer is not null)
+            {
+                var bytes = _dataBuffer.AsReadOnlySpan(0, nonNullCount * 4);
+                for (var i = 0; i < nonNullCount; i++)
+                {
+                    var id = BinaryPrimitives.ReadInt32LittleEndian(bytes.Slice(i * 4, 4));
+                    size += VarintSizeStatic(id);
+                }
+            }
+            return size;
+        }
+
+        private int EstimateArrayWireBytes()
+        {
+            // Per-row: 1 byte nDims + 4 bytes per dim shape + 8 bytes per element.
+            // Walk the dims/shapes lists which already track per-row layout exactly.
+            if (_arrayDims is null || _arrayShapes is null) return 0;
+            var size = 0;
+            var shapeCursor = 0;
+            for (var i = 0; i < _arrayDims.Count; i++)
+            {
+                var nDims = _arrayDims[i];
+                size += 1 + 4 * nDims; // header
+                var elemCount = 1;
+                for (var d = 0; d < nDims; d++) elemCount *= _arrayShapes[shapeCursor++];
+                size += 8 * elemCount;
+            }
+            return size;
+        }
+
+        private static int VarintSizeStatic(long value)
+        {
+            var v = (ulong)value;
+            var bytes = 1;
+            while (v >= 0x80) { v >>= 7; bytes++; }
+            return bytes;
         }
 
         /// <summary>

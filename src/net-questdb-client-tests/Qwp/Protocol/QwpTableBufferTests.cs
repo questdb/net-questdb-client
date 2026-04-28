@@ -462,6 +462,112 @@ public class QwpTableBufferTests
         Assert.That(col.Size, Is.EqualTo(0));
     }
 
+    // ---- EstimateEncodedDatagramSize (PR D2) ----
+
+    [Test]
+    public void EstimateEncodedDatagramSize_ZeroRowsReturnsZero()
+    {
+        var table = new QwpTableBuffer("t");
+        Assert.That(table.EstimateEncodedDatagramSize(0), Is.EqualTo(0));
+    }
+
+    [Test]
+    public void EstimateEncodedDatagramSize_SingleColumnLongMatchesEncoder()
+    {
+        var table = new QwpTableBuffer("trades");
+        var col = table.GetOrCreateColumn("v", QwpConstants.TYPE_LONG, false)!;
+        for (var i = 0; i < 5; i++) { col.AddLong(i); table.NextRow(); }
+
+        var estimate = table.EstimateEncodedDatagramSize(table.RowCount);
+        var encoder = new QwpWebSocketEncoder();
+        var actual = encoder.Encode(table, useSchemaRef: false);
+
+        Assert.That(estimate, Is.EqualTo(actual));
+    }
+
+    [Test]
+    public void EstimateEncodedDatagramSize_MixedColumnsMatchesEncoder()
+    {
+        var table = new QwpTableBuffer("metrics");
+        var sym = table.GetOrCreateColumn("sym", QwpConstants.TYPE_SYMBOL, true)!;
+        var price = table.GetOrCreateColumn("price", QwpConstants.TYPE_DOUBLE, false)!;
+        var name = table.GetOrCreateColumn("name", QwpConstants.TYPE_VARCHAR, true)!;
+        sym.AddSymbol("AAPL"); price.AddDouble(123.45); name.AddString("alpha");
+        table.NextRow();
+        sym.AddSymbol("MSFT"); price.AddDouble(67.89); name.AddString("beta");
+        table.NextRow();
+        sym.AddSymbol("AAPL"); price.AddDouble(11.11); name.AddString("gamma");
+        table.NextRow();
+
+        var estimate = table.EstimateEncodedDatagramSize(table.RowCount);
+        var encoder = new QwpWebSocketEncoder();
+        var actual = encoder.Encode(table, useSchemaRef: false);
+
+        Assert.That(estimate, Is.EqualTo(actual));
+    }
+
+    [Test]
+    public void EstimateEncodedDatagramSize_DecimalColumnMatchesEncoder()
+    {
+        var table = new QwpTableBuffer("t");
+        var col = table.GetOrCreateColumn("price", QwpConstants.TYPE_DECIMAL64, false)!;
+        col.AddDecimal64(12345, scale: 2); table.NextRow();
+        col.AddDecimal64(67890, scale: 2); table.NextRow();
+
+        var estimate = table.EstimateEncodedDatagramSize(table.RowCount);
+        var encoder = new QwpWebSocketEncoder();
+        var actual = encoder.Encode(table, useSchemaRef: false);
+
+        Assert.That(estimate, Is.EqualTo(actual));
+    }
+
+    [Test]
+    public void EstimateEncodedDatagramSize_DoubleArrayMatchesEncoder()
+    {
+        var table = new QwpTableBuffer("t");
+        var col = table.GetOrCreateColumn("a", QwpConstants.TYPE_DOUBLE_ARRAY, false)!;
+        col.AddDoubleArray(new[] { 1.0, 2.0 }); table.NextRow();
+        col.AddDoubleArray(new[] { 3.0, 4.0, 5.0 }); table.NextRow();
+
+        var estimate = table.EstimateEncodedDatagramSize(table.RowCount);
+        var encoder = new QwpWebSocketEncoder();
+        var actual = encoder.Encode(table, useSchemaRef: false);
+
+        Assert.That(estimate, Is.EqualTo(actual));
+    }
+
+    [Test]
+    public void EstimateEncodedDatagramSize_GeohashMatchesEncoder()
+    {
+        var table = new QwpTableBuffer("t");
+        var col = table.GetOrCreateColumn("g", QwpConstants.TYPE_GEOHASH, false)!;
+        col.AddGeoHash(0xCAFE, precision: 16); table.NextRow();
+        col.AddGeoHash(0xBEEF, precision: 16); table.NextRow();
+
+        var estimate = table.EstimateEncodedDatagramSize(table.RowCount);
+        var encoder = new QwpWebSocketEncoder();
+        var actual = encoder.Encode(table, useSchemaRef: false);
+
+        Assert.That(estimate, Is.EqualTo(actual));
+    }
+
+    [Test]
+    public void EstimateEncodedDatagramSize_NullableColumnWithSomeNullsMatchesEncoder()
+    {
+        var table = new QwpTableBuffer("t");
+        var col = table.GetOrCreateColumn("v", QwpConstants.TYPE_LONG, useNullBitmap: true)!;
+        col.AddLong(1); table.NextRow();
+        // Skip writing — NextRow pads with null.
+        table.NextRow();
+        col.AddLong(3); table.NextRow();
+
+        var estimate = table.EstimateEncodedDatagramSize(table.RowCount);
+        var encoder = new QwpWebSocketEncoder();
+        var actual = encoder.Encode(table, useSchemaRef: false);
+
+        Assert.That(estimate, Is.EqualTo(actual));
+    }
+
     [Test]
     public void CancelRowResetsGeohashPrecisionOnLateAddedColumn()
     {

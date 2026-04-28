@@ -281,7 +281,7 @@ internal sealed class QwpResultBatchDecoder
                 return ParseSymbolColumn(layout, payload, rowCount, p);
             case QwpConstants.TYPE_DOUBLE_ARRAY:
             case QwpConstants.TYPE_LONG_ARRAY:
-                throw new QwpDecodeException("ARRAY columns not yet supported by this decoder");
+                return ParseArrayColumn(layout, payload, rowCount, p);
             default:
                 throw new QwpDecodeException($"unsupported wire type 0x{wt:x2}");
         }
@@ -344,6 +344,80 @@ internal sealed class QwpResultBatchDecoder
         layout.Info!.GeohashPrecisionBits = (int)precision;
         var bytesPerValue = ((int)precision + 7) >> 3;
         return AdvanceFixed(layout, payload, p, bytesPerValue);
+    }
+
+    /// <summary>
+    ///     §3.2f — TYPE_DOUBLE_ARRAY / TYPE_LONG_ARRAY column parser. Per non-null row:
+    ///     <list type="number">
+    ///         <item><c>n_dims:u8</c> in [1, <see cref="QuestDB.Utils.SenderOptions.ARRAY_MAX_DIMENSIONS"/>]</item>
+    ///         <item><c>dim_size_0:i32 .. dim_size_{n_dims-1}:i32</c> — each ≥1</item>
+    ///         <item>8-byte elements (double or long; same wire size either way) —
+    ///             count = <c>product(dim_sizes)</c></item>
+    ///     </list>
+    ///     ArrayRowOffsets / ArrayRowLengths on the layout track per-row payload byte
+    ///     ranges (offsets into <see cref="QwpBatchBuffer.Payload"/>) so ColumnView
+    ///     accessors (§3.1) can read values + dims/shape per row in O(1).
+    ///     Hostile-server guards: rank out of range, dim ≤ 0, element-count overflow,
+    ///     truncated payload.
+    /// </summary>
+    private static int ParseArrayColumn(QwpColumnLayout layout, ReadOnlySpan<byte> payload, int rowCount, int p)
+    {
+        layout.ValuesOffset = p;
+
+        // Per-row offset / length tables. Sized to the row count so consumer-side
+        // dense-index lookup is O(1).
+        if (layout.ArrayRowOffsets is null || layout.ArrayRowOffsets.Length < rowCount)
+        {
+            layout.ArrayRowOffsets = new int[Math.Max(rowCount, 16)];
+        }
+        if (layout.ArrayRowLengths is null || layout.ArrayRowLengths.Length < rowCount)
+        {
+            layout.ArrayRowLengths = new int[Math.Max(rowCount, 16)];
+        }
+
+        const long maxArrayElements = (int.MaxValue - 1024) / 8L;
+        var noNulls = layout.NullBitmapOffset < 0;
+        var nonNullIdx = layout.NonNullIdx;
+
+        for (var i = 0; i < rowCount; i++)
+        {
+            if (!noNulls && nonNullIdx![i] < 0)
+            {
+                layout.ArrayRowOffsets[i] = 0;
+                layout.ArrayRowLengths[i] = 0;
+                continue;
+            }
+            if (p + 1 > payload.Length) throw new QwpDecodeException("truncated ARRAY header");
+            int nDims = payload[p];
+            if (nDims < 1 || nDims > QuestDB.Utils.SenderOptions.ARRAY_MAX_DIMENSIONS)
+            {
+                throw new QwpDecodeException(
+                    $"invalid array dimensions: {nDims} (must be 1-{QuestDB.Utils.SenderOptions.ARRAY_MAX_DIMENSIONS})");
+            }
+            var headerEnd = p + 1 + 4 * nDims;
+            if (headerEnd > payload.Length) throw new QwpDecodeException("truncated ARRAY dims");
+            long elements = 1;
+            for (var d = 0; d < nDims; d++)
+            {
+                var dl = BinaryPrimitives.ReadInt32LittleEndian(payload.Slice(p + 1 + 4 * d, 4));
+                if (dl < 1)
+                {
+                    throw new QwpDecodeException($"ARRAY dim {d} must be >= 1: {dl}");
+                }
+                elements *= dl;
+                if (elements > maxArrayElements)
+                {
+                    throw new QwpDecodeException(
+                        $"ARRAY element count exceeds limit ({elements} > {maxArrayElements})");
+                }
+            }
+            var rowEnd = headerEnd + 8 * elements;
+            if (rowEnd > payload.Length) throw new QwpDecodeException("truncated ARRAY payload");
+            layout.ArrayRowOffsets[i] = p;
+            layout.ArrayRowLengths[i] = (int)(rowEnd - p);
+            p = (int)rowEnd;
+        }
+        return p;
     }
 
     /// <summary>

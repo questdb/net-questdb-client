@@ -478,15 +478,76 @@ public class QwpResultBatchDecoderTests
             Throws.TypeOf<QwpDecodeException>().With.Message.Contains("SYMBOL dict size out of range"));
     }
 
+    // ---- §3.2f — DOUBLE_ARRAY / LONG_ARRAY column decode ----
+
     [Test]
-    public void RejectsArrayColumnsForNow()
+    public void DecodesDoubleArrayColumn_1D()
+    {
+        var bytes = new FrameBuilder()
+            .WithRowCount(2)
+            .AddNonNullableColumn("a", QwpConstants.TYPE_DOUBLE_ARRAY, w =>
+            {
+                // Row 0: 3-element 1D array.
+                w.WriteByte(1); w.WriteIntLE(3);
+                w.WriteLongLE(BitConverter.DoubleToInt64Bits(1.0));
+                w.WriteLongLE(BitConverter.DoubleToInt64Bits(2.0));
+                w.WriteLongLE(BitConverter.DoubleToInt64Bits(3.0));
+                // Row 1: 2-element 1D array.
+                w.WriteByte(1); w.WriteIntLE(2);
+                w.WriteLongLE(BitConverter.DoubleToInt64Bits(10.0));
+                w.WriteLongLE(BitConverter.DoubleToInt64Bits(20.0));
+            })
+            .Build();
+        var batch = Decode(bytes);
+        var layout = batch.GetLayout(0);
+        Assert.That(layout.ArrayRowOffsets, Is.Not.Null);
+        Assert.That(layout.ArrayRowLengths, Is.Not.Null);
+        Assert.That(layout.ArrayRowLengths![0], Is.EqualTo(1 + 4 + 24)); // header + 3*8
+        Assert.That(layout.ArrayRowLengths[1], Is.EqualTo(1 + 4 + 16));  // header + 2*8
+    }
+
+    [Test]
+    public void DecodesLongArrayColumn_2D()
     {
         var bytes = new FrameBuilder()
             .WithRowCount(1)
-            .AddNonNullableColumn("a", QwpConstants.TYPE_DOUBLE_ARRAY, w => { /* not actually reached */ })
+            .AddNonNullableColumn("a", QwpConstants.TYPE_LONG_ARRAY, w =>
+            {
+                w.WriteByte(2); w.WriteIntLE(2); w.WriteIntLE(3); // 2x3 array
+                for (var v = 1L; v <= 6L; v++) w.WriteLongLE(v);
+            })
+            .Build();
+        var batch = Decode(bytes);
+        var layout = batch.GetLayout(0);
+        Assert.That(layout.ArrayRowLengths![0], Is.EqualTo(1 + 8 + 48)); // 1 + 4*2 + 8*6
+    }
+
+    [Test]
+    public void DecodesArrayColumn_RejectsZeroDimSize()
+    {
+        var bytes = new FrameBuilder()
+            .WithRowCount(1)
+            .AddNonNullableColumn("a", QwpConstants.TYPE_DOUBLE_ARRAY, w =>
+            {
+                w.WriteByte(1); w.WriteIntLE(0); // dim 0 has size 0
+            })
             .Build();
         Assert.That(() => Decode(bytes),
-            Throws.TypeOf<QwpDecodeException>().With.Message.Contains("ARRAY"));
+            Throws.TypeOf<QwpDecodeException>().With.Message.Contains("must be >= 1"));
+    }
+
+    [Test]
+    public void DecodesArrayColumn_RejectsRankAboveLimit()
+    {
+        var bytes = new FrameBuilder()
+            .WithRowCount(1)
+            .AddNonNullableColumn("a", QwpConstants.TYPE_DOUBLE_ARRAY, w =>
+            {
+                w.WriteByte(99); // rank > ARRAY_MAX_DIMENSIONS (32)
+            })
+            .Build();
+        Assert.That(() => Decode(bytes),
+            Throws.TypeOf<QwpDecodeException>().With.Message.Contains("invalid array dimensions"));
     }
 
     [Test]

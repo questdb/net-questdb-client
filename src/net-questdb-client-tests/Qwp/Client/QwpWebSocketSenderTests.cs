@@ -260,6 +260,67 @@ public class QwpWebSocketSenderTests
         return condition();
     }
 
+    // ---- §2.1 — auto-flush thresholds wired into AtNanos ----
+
+    [Test]
+    public async Task AutoFlushRows_TripsSendBeforeExplicitSend()
+    {
+        await using var server = await EchoWebSocketServer.StartAsync();
+        var options = new SenderOptions(
+            $"ws::addr=127.0.0.1:{server.Port};in_flight_window=1;auto_flush=on;auto_flush_rows=3;");
+        using var sender = (QwpWebSocketSender)options.Build();
+
+        // Stage three rows; the 3rd commit trips auto_flush_rows=3 inside AtNanos.
+        for (var i = 0; i < 3; i++)
+        {
+            sender.Table("trades").Column("v", (long)i).At(DateTime.UtcNow);
+        }
+
+        // Without an explicit Send: the server should already have received a frame.
+        Assert.That(WaitFor(() => server.FrameCount >= 1, TimeSpan.FromSeconds(2)), Is.True,
+            "auto_flush_rows trip should send the buffered batch without an explicit Send");
+    }
+
+    [Test]
+    public async Task AutoFlushBelowThresholds_DoesNotSendOnRowCommit()
+    {
+        await using var server = await EchoWebSocketServer.StartAsync();
+        // High row + interval thresholds — a small short-lived batch trips none of them.
+        // (WS doesn't permit auto_flush=off via ValidateQwp; instead we set thresholds
+        // wide enough that the few rows we stage never trigger a flush.)
+        var options = new SenderOptions(
+            $"ws::addr=127.0.0.1:{server.Port};in_flight_window=1;auto_flush_rows=1000;auto_flush_interval=10000;");
+        using var sender = (QwpWebSocketSender)options.Build();
+
+        for (var i = 0; i < 5; i++)
+        {
+            sender.Table("trades").Column("v", (long)i).At(DateTime.UtcNow);
+        }
+
+        // Brief settle: no frame should arrive — neither threshold tripped.
+        await Task.Delay(200);
+        Assert.That(server.FrameCount, Is.EqualTo(0));
+    }
+
+    [Test]
+    public async Task AutoFlushInterval_TripsAfterElapsed()
+    {
+        await using var server = await EchoWebSocketServer.StartAsync();
+        var options = new SenderOptions(
+            $"ws::addr=127.0.0.1:{server.Port};in_flight_window=1;auto_flush=on;auto_flush_interval=50;auto_flush_rows=off;auto_flush_bytes=off;");
+        using var sender = (QwpWebSocketSender)options.Build();
+
+        // First row commit — sets _lastFlush implicitly via Send if no rows tripped, or
+        // remains MinValue otherwise. Brief sleep to ensure the next commit's interval
+        // check sees more than 50ms elapsed.
+        sender.Table("trades").Column("v", 1L).At(DateTime.UtcNow);
+        await Task.Delay(80);
+        sender.Table("trades").Column("v", 2L).At(DateTime.UtcNow);
+
+        Assert.That(WaitFor(() => server.FrameCount >= 1, TimeSpan.FromSeconds(2)), Is.True,
+            "auto_flush_interval should trip on the second commit when elapsed > 50ms");
+    }
+
     /// <summary>
     ///     Minimal HttpListener-backed WebSocket server used by the smoke tests above.
     ///     Accepts one connection, records incoming frames, and stays alive until the

@@ -294,12 +294,57 @@ internal sealed class QwpWebSocketSender : ISender
         var col = RequireTable().GetOrCreateDesignatedTimestampColumn(QwpConstants.TYPE_TIMESTAMP_NANOS);
         col.AddLong(timestampNanos);
         RequireTable().NextRow();
+        MaybeAutoFlush(ct);
     }
 
     public ValueTask AtNanosAsync(long timestampNanos, CancellationToken ct = default)
     {
-        AtNanos(timestampNanos, ct);
-        return ValueTask.CompletedTask;
+        var col = RequireTable().GetOrCreateDesignatedTimestampColumn(QwpConstants.TYPE_TIMESTAMP_NANOS);
+        col.AddLong(timestampNanos);
+        RequireTable().NextRow();
+        return MaybeAutoFlushAsync(ct);
+    }
+
+    /// <summary>
+    ///     §2.1 — checks the configured auto-flush thresholds and ships the buffered
+    ///     rows when any tripped. Mirrors <c>AbstractSender.FlushIfNecessary</c>:
+    ///     <list type="bullet">
+    ///         <item><see cref="SenderOptions.auto_flush_rows"/> — buffered row count cap.</item>
+    ///         <item><see cref="SenderOptions.auto_flush_bytes"/> — buffered byte budget
+    ///             (mirrors <c>AbstractSender</c>'s <c>Length</c>; for QWP we use the
+    ///             count of tables-with-rows since the wire-byte total is paid only at
+    ///             encode time).</item>
+    ///         <item><see cref="SenderOptions.auto_flush_interval"/> — wall-clock interval
+    ///             since the last flush.</item>
+    ///     </list>
+    ///     Disabled when <see cref="SenderOptions.auto_flush"/> = <c>off</c> or any individual
+    ///     threshold is non-positive. WebSocket has no transaction concept so no
+    ///     <c>WithinTransaction</c> guard is required.
+    /// </summary>
+    private void MaybeAutoFlush(CancellationToken ct)
+    {
+        if (ShouldAutoFlush()) Send(ct);
+    }
+
+    private ValueTask MaybeAutoFlushAsync(CancellationToken ct)
+    {
+        return ShouldAutoFlush() ? new ValueTask(SendAsync(ct)) : ValueTask.CompletedTask;
+    }
+
+    private bool ShouldAutoFlush()
+    {
+        if (Options.auto_flush != Enums.AutoFlushType.on) return false;
+        if (Options.auto_flush_rows > 0 && RowCount >= Options.auto_flush_rows) return true;
+        if (Options.auto_flush_bytes > 0 && Length >= Options.auto_flush_bytes) return true;
+        if (Options.auto_flush_interval > TimeSpan.Zero)
+        {
+            // Seed the timer on the first commit so the interval is measured from
+            // sender construction-or-flush, not DateTime.MinValue (which would trip
+            // the threshold instantly). Mirrors AbstractSender.GuardLastFlushNotSet.
+            if (_lastFlush == DateTime.MinValue) _lastFlush = DateTime.UtcNow;
+            else if (DateTime.UtcNow - _lastFlush >= Options.auto_flush_interval) return true;
+        }
+        return false;
     }
 
     public void AtNow(CancellationToken ct = default) => AtNanos(DateTime.UtcNow.Ticks * 100, ct);

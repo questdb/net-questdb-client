@@ -215,6 +215,35 @@ internal sealed class QwpTableBuffer
         _rowCount = 0;
     }
 
+    /// <summary>
+    ///     Drops every committed row from each column while preserving the in-progress
+    ///     row's per-column data. Used by <c>QwpUdpSender</c>'s flush-and-batch path:
+    ///     when a freshly-staged row would overflow <c>max_datagram_size</c>, the
+    ///     committed prefix flushes as one datagram and the in-progress row becomes
+    ///     the seed of the next datagram. After this call the table reports
+    ///     <see cref="RowCount"/> = 0 with each touched column carrying exactly one
+    ///     pre-committed value at index 0; the next <see cref="NextRow"/> commits it
+    ///     as row 0 of the new datagram.
+    /// </summary>
+    /// <remarks>
+    ///     Type-specific column metadata (decimal scale, geohash precision, symbol
+    ///     dictionary) resets per-column to "freshly created" — appropriate because
+    ///     UDP datagrams are stand-alone QWP1 messages and each carries its own full
+    ///     schema header. The in-progress row's value re-establishes any per-type
+    ///     state (e.g. the first AddDecimal64 after the trim re-latches the scale).
+    /// </remarks>
+    public void RetainInProgressRow()
+    {
+        for (var i = 0; i < _columns.Count; i++)
+        {
+            _columns[i].RetainInProgressRow(_rowCount);
+        }
+        _rowCount = 0;
+        // Cursor + in-progress counters survive: the user is still in the middle of
+        // building the row, so AtNow's NextRow pass and any subsequent Column lookups
+        // need to keep behaving as if no flush had happened.
+    }
+
     /// <summary>Clears the buffer completely, including column definitions.</summary>
     public void Clear()
     {
@@ -929,6 +958,235 @@ internal sealed class QwpTableBuffer
                 _valueCount++;
             }
             _size++;
+        }
+
+        /// <summary>
+        ///     Drops every committed row from this column while preserving the
+        ///     in-progress row's value (if any). Called from
+        ///     <see cref="QwpTableBuffer.RetainInProgressRow"/> on the flush-and-batch path.
+        ///     Per-type metadata (decimal scale, geohash precision, symbol dictionary)
+        ///     resets to "freshly created"; the next add re-establishes any per-type state.
+        /// </summary>
+        /// <param name="committedRowCount">
+        ///     Number of fully-committed rows at the time of the call (i.e. the table's
+        ///     current <see cref="QwpTableBuffer.RowCount"/>). The column's stored values
+        ///     beyond this index represent the in-progress row.
+        /// </param>
+        internal void RetainInProgressRow(int committedRowCount)
+        {
+            // No in-progress data to preserve — fast path: just drop everything committed.
+            if (_size <= committedRowCount)
+            {
+                TruncateTo(0);
+                return;
+            }
+
+            // _size > committedRowCount means the user's current row wrote a value to
+            // this column. By construction (first-value-wins on duplicate writes) the
+            // in-progress row writes at most one value per column, so _size is exactly
+            // committedRowCount + 1 here.
+            switch (Type)
+            {
+                case QwpConstants.TYPE_BOOLEAN:
+                {
+                    var raw = _dataBuffer!.AsReadOnlySpan(committedRowCount, 1)[0];
+                    TruncateTo(0);
+                    AddBoolean(raw != 0);
+                    break;
+                }
+                case QwpConstants.TYPE_BYTE:
+                {
+                    var v = _dataBuffer!.AsReadOnlySpan(committedRowCount, 1)[0];
+                    TruncateTo(0);
+                    AddByte(v);
+                    break;
+                }
+                case QwpConstants.TYPE_SHORT:
+                {
+                    var v = BinaryPrimitives.ReadInt16LittleEndian(
+                        _dataBuffer!.AsReadOnlySpan(committedRowCount * 2, 2));
+                    TruncateTo(0);
+                    AddShort(v);
+                    break;
+                }
+                case QwpConstants.TYPE_CHAR:
+                {
+                    var v = BinaryPrimitives.ReadInt16LittleEndian(
+                        _dataBuffer!.AsReadOnlySpan(committedRowCount * 2, 2));
+                    TruncateTo(0);
+                    AddShort(v); // Char column stores chars as int16; AddShort matches.
+                    break;
+                }
+                case QwpConstants.TYPE_INT:
+                case QwpConstants.TYPE_FLOAT:
+                {
+                    var bytes = _dataBuffer!.AsReadOnlySpan(committedRowCount * 4, 4).ToArray();
+                    TruncateTo(0);
+                    if (Type == QwpConstants.TYPE_INT)
+                    {
+                        AddInt(BinaryPrimitives.ReadInt32LittleEndian(bytes));
+                    }
+                    else
+                    {
+                        AddFloat(BinaryPrimitives.ReadSingleLittleEndian(bytes));
+                    }
+                    break;
+                }
+                case QwpConstants.TYPE_LONG:
+                case QwpConstants.TYPE_TIMESTAMP:
+                case QwpConstants.TYPE_TIMESTAMP_NANOS:
+                case QwpConstants.TYPE_DATE:
+                case QwpConstants.TYPE_DOUBLE:
+                {
+                    var bytes = _dataBuffer!.AsReadOnlySpan(committedRowCount * 8, 8).ToArray();
+                    TruncateTo(0);
+                    if (Type == QwpConstants.TYPE_DOUBLE)
+                    {
+                        AddDouble(BinaryPrimitives.ReadDoubleLittleEndian(bytes));
+                    }
+                    else
+                    {
+                        AddLong(BinaryPrimitives.ReadInt64LittleEndian(bytes));
+                    }
+                    break;
+                }
+                case QwpConstants.TYPE_UUID:
+                {
+                    var lo = BinaryPrimitives.ReadInt64LittleEndian(
+                        _dataBuffer!.AsReadOnlySpan(committedRowCount * 16, 8));
+                    var hi = BinaryPrimitives.ReadInt64LittleEndian(
+                        _dataBuffer!.AsReadOnlySpan(committedRowCount * 16 + 8, 8));
+                    TruncateTo(0);
+                    AddLong(lo);
+                    AddLong(hi); // UUID column stores two longs; the public Sender.Column(Guid) splits the same way.
+                    break;
+                }
+                case QwpConstants.TYPE_LONG256:
+                {
+                    var bytes = _dataBuffer!.AsReadOnlySpan(committedRowCount * 32, 32).ToArray();
+                    TruncateTo(0);
+                    for (var i = 0; i < 4; i++)
+                    {
+                        AddLong(BinaryPrimitives.ReadInt64LittleEndian(bytes.AsSpan(i * 8, 8)));
+                    }
+                    break;
+                }
+                case QwpConstants.TYPE_DECIMAL64:
+                {
+                    var v = BinaryPrimitives.ReadInt64LittleEndian(
+                        _dataBuffer!.AsReadOnlySpan(committedRowCount * 8, 8));
+                    var scale = _decimalScale;
+                    TruncateTo(0);
+                    AddDecimal64(v, scale);
+                    break;
+                }
+                case QwpConstants.TYPE_DECIMAL128:
+                {
+                    var hi = BinaryPrimitives.ReadInt64LittleEndian(
+                        _dataBuffer!.AsReadOnlySpan(committedRowCount * 16, 8));
+                    var lo = BinaryPrimitives.ReadInt64LittleEndian(
+                        _dataBuffer!.AsReadOnlySpan(committedRowCount * 16 + 8, 8));
+                    var scale = _decimalScale;
+                    TruncateTo(0);
+                    AddDecimal128(hi, lo, scale);
+                    break;
+                }
+                case QwpConstants.TYPE_GEOHASH:
+                {
+                    var v = BinaryPrimitives.ReadInt64LittleEndian(
+                        _dataBuffer!.AsReadOnlySpan(committedRowCount * 8, 8));
+                    var precision = _geohashPrecision;
+                    TruncateTo(0);
+                    AddGeoHash(v, precision);
+                    break;
+                }
+                case QwpConstants.TYPE_VARCHAR:
+                case QwpConstants.TYPE_BINARY:
+                {
+                    // _stringOffsets has (_valueCount + 1) int32 entries; the in-progress
+                    // string lives between committedRowCount and committedRowCount + 1.
+                    var startOff = BinaryPrimitives.ReadInt32LittleEndian(
+                        _stringOffsets!.AsReadOnlySpan(committedRowCount * 4, 4));
+                    var endOff = BinaryPrimitives.ReadInt32LittleEndian(
+                        _stringOffsets.AsReadOnlySpan((committedRowCount + 1) * 4, 4));
+                    var s = endOff > startOff
+                        ? Encoding.UTF8.GetString(_stringData!.AsReadOnlySpan(startOff, endOff - startOff))
+                        : string.Empty;
+                    TruncateTo(0);
+                    AddString(s);
+                    break;
+                }
+                case QwpConstants.TYPE_SYMBOL:
+                {
+                    // For local-dict symbols the in-progress dataBuffer slot is an int32
+                    // index into _symbolList. AddSymbol re-resolves the same string and
+                    // re-adds it (re-establishing the dict at index 0 in the trimmed column).
+                    var idx = BinaryPrimitives.ReadInt32LittleEndian(
+                        _dataBuffer!.AsReadOnlySpan(committedRowCount * 4, 4));
+                    var symbol = _symbolList![idx];
+                    TruncateTo(0);
+                    AddSymbol(symbol);
+                    break;
+                }
+                case QwpConstants.TYPE_DOUBLE_ARRAY:
+                case QwpConstants.TYPE_LONG_ARRAY:
+                {
+                    // The in-progress array entry is the last one in the dims/shapes/data lists.
+                    var nDims = _arrayDims![_arrayDims.Count - 1];
+                    var shapeStart = 0;
+                    for (var i = 0; i < _arrayDims.Count - 1; i++) shapeStart += _arrayDims[i];
+                    var shapes = _arrayShapes!.GetRange(shapeStart, nDims);
+                    var elemCount = 1;
+                    for (var d = 0; d < nDims; d++) elemCount *= shapes[d];
+                    if (Type == QwpConstants.TYPE_DOUBLE_ARRAY)
+                    {
+                        var dataStart = _doubleArrayData!.Count - elemCount;
+                        var values = _doubleArrayData.GetRange(dataStart, elemCount).ToArray();
+                        TruncateTo(0);
+                        if (nDims == 1) AddDoubleArray(values);
+                        else
+                        {
+                            // Re-pack into 2D etc. Currently AddDoubleArray supports 1D + 2D only.
+                            if (nDims != 2)
+                            {
+                                throw new IngressError(Enums.ErrorCode.InvalidName,
+                                    $"RetainInProgressRow: unsupported array rank {nDims} for column '{Name}'");
+                            }
+                            var arr2 = new double[shapes[0], shapes[1]];
+                            var idx = 0;
+                            for (var i = 0; i < shapes[0]; i++)
+                            for (var j = 0; j < shapes[1]; j++)
+                                arr2[i, j] = values[idx++];
+                            AddDoubleArray(arr2);
+                        }
+                    }
+                    else
+                    {
+                        var dataStart = _longArrayData!.Count - elemCount;
+                        var values = _longArrayData.GetRange(dataStart, elemCount).ToArray();
+                        TruncateTo(0);
+                        if (nDims == 1) AddLongArray(values);
+                        else
+                        {
+                            if (nDims != 2)
+                            {
+                                throw new IngressError(Enums.ErrorCode.InvalidName,
+                                    $"RetainInProgressRow: unsupported array rank {nDims} for column '{Name}'");
+                            }
+                            var arr2 = new long[shapes[0], shapes[1]];
+                            var idx = 0;
+                            for (var i = 0; i < shapes[0]; i++)
+                            for (var j = 0; j < shapes[1]; j++)
+                                arr2[i, j] = values[idx++];
+                            AddLongArray(arr2);
+                        }
+                    }
+                    break;
+                }
+                default:
+                    throw new IngressError(Enums.ErrorCode.InvalidName,
+                        $"RetainInProgressRow: unsupported column type 0x{Type:X2} on column '{Name}'");
+            }
         }
 
         internal void TruncateTo(int newSize)

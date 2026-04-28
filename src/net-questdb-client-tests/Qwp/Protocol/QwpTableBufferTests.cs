@@ -306,9 +306,161 @@ public class QwpTableBufferTests
         Assert.That(colC.ValueCount, Is.EqualTo(0));
     }
 
+    // ---- RetainInProgressRow (PR D — UDP flush-and-batch) ----
+
     [Test]
-    [Ignore("Awaiting RetainInProgressRow API surface (Java-specific helper not in PR 3a scope; revisit with PR 3b microbatch state retention).")]
-    public void RetainInProgressRowFastClearsUnstagedNullableColumn() { }
+    public void RetainInProgressRow_NoInProgressData_ClearsAllColumns()
+    {
+        var table = new QwpTableBuffer("t");
+        var col = table.GetOrCreateColumn("v", QwpConstants.TYPE_LONG, false)!;
+        col.AddLong(1);
+        table.NextRow();
+        col.AddLong(2);
+        table.NextRow();
+
+        // No in-progress row at this point — _size == _rowCount.
+        table.RetainInProgressRow();
+
+        Assert.That(table.RowCount, Is.EqualTo(0));
+        Assert.That(col.Size, Is.EqualTo(0));
+        Assert.That(col.ValueCount, Is.EqualTo(0));
+    }
+
+    [Test]
+    public void RetainInProgressRow_LongColumn_PreservesLastValue()
+    {
+        var table = new QwpTableBuffer("t");
+        var col = table.GetOrCreateColumn("v", QwpConstants.TYPE_LONG, false)!;
+        col.AddLong(10);
+        table.NextRow();
+        col.AddLong(20);
+        table.NextRow();
+        // Stage a third row.
+        col.AddLong(30);
+
+        table.RetainInProgressRow();
+
+        Assert.That(table.RowCount, Is.EqualTo(0));
+        Assert.That(col.Size, Is.EqualTo(1));
+        Assert.That(col.ValueCount, Is.EqualTo(1));
+        Assert.That(BinaryPrimitives.ReadInt64LittleEndian(col.DataMemory.Span), Is.EqualTo(30L));
+    }
+
+    [Test]
+    public void RetainInProgressRow_VarcharColumn_PreservesString()
+    {
+        var table = new QwpTableBuffer("t");
+        var col = table.GetOrCreateColumn("v", QwpConstants.TYPE_VARCHAR, false)!;
+        col.AddString("alpha");
+        table.NextRow();
+        col.AddString("beta");
+        table.NextRow();
+        col.AddString("gamma");  // in-progress
+
+        table.RetainInProgressRow();
+
+        Assert.That(col.Size, Is.EqualTo(1));
+        // Read back via the string offsets: offset[0]=0, offset[1]=5 (utf8 length of "gamma").
+        Assert.That(col.StringDataSize, Is.EqualTo(5));
+    }
+
+    [Test]
+    public void RetainInProgressRow_DecimalColumn_PreservesScale()
+    {
+        var table = new QwpTableBuffer("t");
+        var col = table.GetOrCreateColumn("d", QwpConstants.TYPE_DECIMAL64, false)!;
+        col.AddDecimal64(12345L, scale: 2);
+        table.NextRow();
+        col.AddDecimal64(67890L, scale: 2);
+        table.NextRow();
+        col.AddDecimal64(99999L, scale: 2);  // in-progress
+
+        table.RetainInProgressRow();
+
+        Assert.That(col.Size, Is.EqualTo(1));
+        Assert.That(col.DecimalScale, Is.EqualTo(2));
+        Assert.That(BinaryPrimitives.ReadInt64LittleEndian(col.DataMemory.Span), Is.EqualTo(99999L));
+    }
+
+    [Test]
+    public void RetainInProgressRow_GeohashColumn_PreservesPrecision()
+    {
+        var table = new QwpTableBuffer("t");
+        var col = table.GetOrCreateColumn("g", QwpConstants.TYPE_GEOHASH, false)!;
+        col.AddGeoHash(0xCAFE, precision: 16);
+        table.NextRow();
+        col.AddGeoHash(0xBEEF, precision: 16);  // in-progress
+
+        table.RetainInProgressRow();
+
+        Assert.That(col.Size, Is.EqualTo(1));
+        Assert.That(col.GeoHashPrecision, Is.EqualTo(16));
+        Assert.That(BinaryPrimitives.ReadInt64LittleEndian(col.DataMemory.Span), Is.EqualTo(0xBEEFL));
+    }
+
+    [Test]
+    public void RetainInProgressRow_SymbolColumn_PreservesValueAndResetsLocalDict()
+    {
+        var table = new QwpTableBuffer("t");
+        var col = table.GetOrCreateColumn("s", QwpConstants.TYPE_SYMBOL, false)!;
+        col.AddSymbol("AAPL");
+        table.NextRow();
+        col.AddSymbol("MSFT");  // in-progress
+
+        table.RetainInProgressRow();
+
+        Assert.That(col.Size, Is.EqualTo(1));
+        Assert.That(col.SymbolDictionarySize, Is.EqualTo(1));
+        // The retained "MSFT" lands at local-dict index 0 of the trimmed column.
+        Assert.That(BinaryPrimitives.ReadInt32LittleEndian(col.DataMemory.Span), Is.EqualTo(0));
+    }
+
+    [Test]
+    public void RetainInProgressRow_DoubleArrayColumn_PreservesArray()
+    {
+        var table = new QwpTableBuffer("t");
+        var col = table.GetOrCreateColumn("a", QwpConstants.TYPE_DOUBLE_ARRAY, false)!;
+        col.AddDoubleArray(new[] { 1.0, 2.0 });
+        table.NextRow();
+        col.AddDoubleArray(new[] { 3.0, 4.0, 5.0 });  // in-progress
+
+        table.RetainInProgressRow();
+
+        Assert.That(col.Size, Is.EqualTo(1));
+        Assert.That(col.GetDoubleArrayData(), Is.EqualTo(new[] { 3.0, 4.0, 5.0 }));
+    }
+
+    [Test]
+    public void RetainInProgressRow_MultiColumnMixedInProgress()
+    {
+        var table = new QwpTableBuffer("t");
+        var colA = table.GetOrCreateColumn("a", QwpConstants.TYPE_LONG, false)!;
+        var colB = table.GetOrCreateColumn("b", QwpConstants.TYPE_VARCHAR, true)!;
+        colA.AddLong(1); colB.AddString("alpha");
+        table.NextRow();
+        // In-progress: write to colA but not colB. NextRow not yet called.
+        colA.AddLong(2);
+
+        table.RetainInProgressRow();
+
+        Assert.That(table.RowCount, Is.EqualTo(0));
+        Assert.That(colA.Size, Is.EqualTo(1));
+        Assert.That(colB.Size, Is.EqualTo(0)); // colB had no in-progress write
+        Assert.That(BinaryPrimitives.ReadInt64LittleEndian(colA.DataMemory.Span), Is.EqualTo(2L));
+    }
+
+    [Test]
+    public void RetainInProgressRow_ResetsRowCountToZero()
+    {
+        var table = new QwpTableBuffer("t");
+        var col = table.GetOrCreateColumn("v", QwpConstants.TYPE_LONG, false)!;
+        for (var i = 0; i < 5; i++) { col.AddLong(i); table.NextRow(); }
+
+        table.RetainInProgressRow();
+
+        Assert.That(table.RowCount, Is.EqualTo(0));
+        Assert.That(col.Size, Is.EqualTo(0));
+    }
 
     [Test]
     public void CancelRowResetsGeohashPrecisionOnLateAddedColumn()

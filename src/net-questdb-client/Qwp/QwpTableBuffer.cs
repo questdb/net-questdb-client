@@ -876,6 +876,17 @@ internal sealed class QwpTableBuffer
         public void AddDoubleArray(double[]? values)
         {
             if (values is null) { AddNull(); return; }
+            AddDoubleArray((ReadOnlySpan<double>)values);
+        }
+
+        /// <summary>
+        ///     Span overload for 1D double arrays. Avoids the array allocation that
+        ///     <see cref="AddDoubleArray(double[])"/> imposes when callers have a
+        ///     <see cref="ReadOnlySpan{T}"/>, <see cref="System.Collections.Generic.List{T}"/>
+        ///     backing span, or stack-allocated buffer.
+        /// </summary>
+        public void AddDoubleArray(ReadOnlySpan<double> values)
+        {
             _arrayDims!.Add(1);
             _arrayShapes!.Add(values.Length);
             for (var i = 0; i < values.Length; i++) _doubleArrayData!.Add(values[i]);
@@ -905,6 +916,12 @@ internal sealed class QwpTableBuffer
         public void AddLongArray(long[]? values)
         {
             if (values is null) { AddNull(); return; }
+            AddLongArray((ReadOnlySpan<long>)values);
+        }
+
+        /// <summary>Span overload for 1D long arrays. Mirrors <see cref="AddDoubleArray(ReadOnlySpan{double})"/>.</summary>
+        public void AddLongArray(ReadOnlySpan<long> values)
+        {
             _arrayDims!.Add(1);
             _arrayShapes!.Add(values.Length);
             for (var i = 0; i < values.Length; i++) _longArrayData!.Add(values[i]);

@@ -16,6 +16,8 @@
  *
  ******************************************************************************/
 
+using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 using QuestDB.Enums;
 using QuestDB.Utils;
 
@@ -140,6 +142,19 @@ internal static class QwpColumnEncoding
     ///     path. Materialises the enumerable once and validates that its element
     ///     count matches the product of the supplied shape.
     /// </summary>
+    /// <remarks>
+    ///     §1.5 fast paths skip boxing + double-allocation when the input is already
+    ///     a <c>T[]</c> or <c>List&lt;T&gt;</c>:
+    ///     <list type="bullet">
+    ///         <item><c>T[]</c> — pass straight to the column's span overload.</item>
+    ///         <item><c>List&lt;T&gt;</c> — alias the backing span via
+    ///             <see cref="CollectionsMarshal.AsSpan{T}"/>, no copy.</item>
+    ///         <item>generic <c>IEnumerable&lt;T&gt;</c> — copy into a typed
+    ///             <c>List&lt;double&gt;</c> / <c>List&lt;long&gt;</c> directly via
+    ///             <see cref="Unsafe.As{TFrom,TTo}"/> reinterpret, skipping the
+    ///             <c>(double)(object)item</c> box-and-unbox round-trip.</item>
+    ///     </list>
+    /// </remarks>
     public static void AddArray<T>(QwpTableBuffer.ColumnBuffer col, IEnumerable<T> value, IEnumerable<int> shape)
         where T : struct
     {
@@ -164,55 +179,93 @@ internal static class QwpColumnEncoding
 
         if (typeof(T) == typeof(double))
         {
-            var data = new List<double>();
-            foreach (var item in value) data.Add((double)(object)item);
-            if (data.Count != expected)
+            ReadOnlySpan<double> dataSpan;
+            List<double>? owned = null;
+            if (value is double[] arr)
+            {
+                dataSpan = arr;
+            }
+            else if (value is List<double> list)
+            {
+                dataSpan = CollectionsMarshal.AsSpan(list);
+            }
+            else
+            {
+                owned = new List<double>();
+                foreach (var item in value)
+                {
+                    var tmp = item;
+                    owned.Add(Unsafe.As<T, double>(ref tmp));
+                }
+                dataSpan = CollectionsMarshal.AsSpan(owned);
+            }
+            if (dataSpan.Length != expected)
             {
                 throw new IngressError(ErrorCode.InvalidApiCall,
-                    $"array element count {data.Count} does not match shape product {expected}");
+                    $"array element count {dataSpan.Length} does not match shape product {expected}");
             }
-            ApplyDoubleArray(col, shapeList, data);
+            ApplyDoubleArray(col, shapeList, dataSpan);
         }
         else
         {
-            var data = new List<long>();
-            foreach (var item in value) data.Add((long)(object)item);
-            if (data.Count != expected)
+            ReadOnlySpan<long> dataSpan;
+            List<long>? owned = null;
+            if (value is long[] arr)
+            {
+                dataSpan = arr;
+            }
+            else if (value is List<long> list)
+            {
+                dataSpan = CollectionsMarshal.AsSpan(list);
+            }
+            else
+            {
+                owned = new List<long>();
+                foreach (var item in value)
+                {
+                    var tmp = item;
+                    owned.Add(Unsafe.As<T, long>(ref tmp));
+                }
+                dataSpan = CollectionsMarshal.AsSpan(owned);
+            }
+            if (dataSpan.Length != expected)
             {
                 throw new IngressError(ErrorCode.InvalidApiCall,
-                    $"array element count {data.Count} does not match shape product {expected}");
+                    $"array element count {dataSpan.Length} does not match shape product {expected}");
             }
-            ApplyLongArray(col, shapeList, data);
+            ApplyLongArray(col, shapeList, dataSpan);
         }
     }
 
-    /// <summary>Routes a 1D <see cref="ReadOnlySpan{T}"/> to the column's array Add path.</summary>
+    /// <summary>
+    ///     Routes a 1D <see cref="ReadOnlySpan{T}"/> to the column's array Add path.
+    ///     §1.6 — when <c>T == double</c> / <c>long</c>, reinterprets via
+    ///     <see cref="MemoryMarshal.Cast{TFrom,TTo}(ReadOnlySpan{TFrom})"/> and feeds
+    ///     the new span overload on <see cref="QwpTableBuffer.ColumnBuffer"/>, skipping
+    ///     the per-element copy + array allocation the previous path imposed.
+    /// </summary>
     public static void AddArray<T>(QwpTableBuffer.ColumnBuffer col, ReadOnlySpan<T> value)
         where T : struct
     {
         if (typeof(T) == typeof(double))
         {
-            var arr = new double[value.Length];
-            for (var i = 0; i < value.Length; i++) arr[i] = (double)(object)value[i];
-            col.AddDoubleArray(arr);
+            col.AddDoubleArray(MemoryMarshal.Cast<T, double>(value));
             return;
         }
         if (typeof(T) == typeof(long))
         {
-            var arr = new long[value.Length];
-            for (var i = 0; i < value.Length; i++) arr[i] = (long)(object)value[i];
-            col.AddLongArray(arr);
+            col.AddLongArray(MemoryMarshal.Cast<T, long>(value));
             return;
         }
         throw new IngressError(ErrorCode.InvalidApiCall,
             $"unsupported array element type {typeof(T).Name}; QWP supports double and long arrays");
     }
 
-    private static void ApplyDoubleArray(QwpTableBuffer.ColumnBuffer col, List<int> shape, List<double> data)
+    private static void ApplyDoubleArray(QwpTableBuffer.ColumnBuffer col, List<int> shape, ReadOnlySpan<double> data)
     {
         if (shape.Count == 1)
         {
-            col.AddDoubleArray(data.ToArray());
+            col.AddDoubleArray(data);
             return;
         }
         if (shape.Count == 2)
@@ -228,11 +281,11 @@ internal static class QwpColumnEncoding
         throw RankUnsupported(shape.Count);
     }
 
-    private static void ApplyLongArray(QwpTableBuffer.ColumnBuffer col, List<int> shape, List<long> data)
+    private static void ApplyLongArray(QwpTableBuffer.ColumnBuffer col, List<int> shape, ReadOnlySpan<long> data)
     {
         if (shape.Count == 1)
         {
-            col.AddLongArray(data.ToArray());
+            col.AddLongArray(data);
             return;
         }
         if (shape.Count == 2)

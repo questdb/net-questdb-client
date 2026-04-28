@@ -152,6 +152,20 @@ using var sender = Sender.New("udp::addr=localhost:9009;");
 
 Both transports use the same builder API as the ILP senders (`.Table().Symbol().Column().AtNow()` etc.), so switching between them is just a connection-string change. See [`src/example-qwp/Program.cs`](src/example-qwp/Program.cs) for a runnable example.
 
+#### Picking a transport
+
+| Transport | Encoding | Acknowledgement | TLS | Auto-flush | Typical use case |
+| --------- | -------- | --------------- | --- | ---------- | ---------------- |
+| `http`/`https` | ILP text | per-batch HTTP response | yes | rows / bytes / interval | server-side ingest, batch jobs, anything needing per-request error handling |
+| `tcp`/`tcps` | ILP text | none (server-side disk fsync feedback only) | yes | rows / bytes / interval | sustained high-throughput streaming where ILP is the operator default |
+| `ws`/`wss` | QWP binary | per-batch ack frame; opt-in durable ack via `request_durable_ack=on` | yes | rows / bytes / interval | new deployments wanting smaller wire payloads + durability signal in one connection |
+| `udp` | QWP binary | none (fire-and-forget) | no | not supported (use timer + explicit `Send()` for bounded latency) | low-latency LAN ingest where occasional packet loss is acceptable; multicast |
+
+Notes:
+- The QWP-WS transport supports the same auto-flush thresholds as the ILP transports — see the table at the top of `Configuration Parameters`. The default for WS is `auto_flush_rows=1000`, `auto_flush_interval=100ms`.
+- The QWP-UDP transport caps each datagram at `max_datagram_size` (default 1400 bytes — typical Ethernet MTU after IP+UDP headers) and proactively splits multi-row batches across multiple datagrams. A single row that exceeds the cap throws — use HTTP or WebSocket for that case.
+- QWP egress (read-side, query results) is internal-only today; there is no public Sender-style entry point yet.
+
 ## Configuration Parameters
 
 These options are set either using a config string, or by initialising QuestDBOptions.

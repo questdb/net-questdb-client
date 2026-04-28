@@ -133,6 +133,122 @@ public class QwpWebSocketSenderTests
         Assert.That(server.UpgradeHeaderDurableAck, Is.EqualTo("true"));
     }
 
+    // ---- PR A: decimal + array Column overloads ----
+
+    [Test]
+    public async Task DecimalColumnRoutesToDecimal64WhenSmall()
+    {
+        await using var server = await EchoWebSocketServer.StartAsync();
+        var options = new SenderOptions($"ws::addr=127.0.0.1:{server.Port};in_flight_window=1;");
+        using var sender = (QwpWebSocketSender)options.Build();
+
+        sender.Table("trades").Column("price", 123.45m).At(DateTime.UtcNow);
+        await sender.SendAsync();
+
+        var frame = await server.WaitForFirstFrameAsync(TimeSpan.FromSeconds(2));
+        Assert.That(ContainsByte(frame, QwpConstants.TYPE_DECIMAL64), Is.True);
+    }
+
+    [Test]
+    public async Task DecimalColumnRoutesToDecimal128WhenLarge()
+    {
+        await using var server = await EchoWebSocketServer.StartAsync();
+        var options = new SenderOptions($"ws::addr=127.0.0.1:{server.Port};in_flight_window=1;");
+        using var sender = (QwpWebSocketSender)options.Build();
+
+        sender.Table("t").Column("big", decimal.MaxValue).At(DateTime.UtcNow);
+        await sender.SendAsync();
+
+        var frame = await server.WaitForFirstFrameAsync(TimeSpan.FromSeconds(2));
+        Assert.That(ContainsByte(frame, QwpConstants.TYPE_DECIMAL128), Is.True);
+    }
+
+    [Test]
+    public async Task DoubleArrayColumn1D()
+    {
+        await using var server = await EchoWebSocketServer.StartAsync();
+        var options = new SenderOptions($"ws::addr=127.0.0.1:{server.Port};in_flight_window=1;");
+        using var sender = (QwpWebSocketSender)options.Build();
+
+        sender.Table("t").Column("data", new[] { 1.0, 2.0, 3.0 }).At(DateTime.UtcNow);
+        await sender.SendAsync();
+
+        var frame = await server.WaitForFirstFrameAsync(TimeSpan.FromSeconds(2));
+        Assert.That(ContainsByte(frame, QwpConstants.TYPE_DOUBLE_ARRAY), Is.True);
+    }
+
+    [Test]
+    public async Task DoubleArrayColumn2D()
+    {
+        await using var server = await EchoWebSocketServer.StartAsync();
+        var options = new SenderOptions($"ws::addr=127.0.0.1:{server.Port};in_flight_window=1;");
+        using var sender = (QwpWebSocketSender)options.Build();
+
+        sender.Table("t").Column("matrix", new[,] { { 1.0, 2.0 }, { 3.0, 4.0 } }).At(DateTime.UtcNow);
+        await sender.SendAsync();
+
+        var frame = await server.WaitForFirstFrameAsync(TimeSpan.FromSeconds(2));
+        Assert.That(ContainsByte(frame, QwpConstants.TYPE_DOUBLE_ARRAY), Is.True);
+    }
+
+    [Test]
+    public async Task LongArrayColumn1D()
+    {
+        await using var server = await EchoWebSocketServer.StartAsync();
+        var options = new SenderOptions($"ws::addr=127.0.0.1:{server.Port};in_flight_window=1;");
+        using var sender = (QwpWebSocketSender)options.Build();
+
+        sender.Table("t").Column("counts", new[] { 1L, 2L, 3L }).At(DateTime.UtcNow);
+        await sender.SendAsync();
+
+        var frame = await server.WaitForFirstFrameAsync(TimeSpan.FromSeconds(2));
+        Assert.That(ContainsByte(frame, QwpConstants.TYPE_LONG_ARRAY), Is.True);
+    }
+
+    [Test]
+    public async Task ArrayViaIEnumerableAndShape()
+    {
+        await using var server = await EchoWebSocketServer.StartAsync();
+        var options = new SenderOptions($"ws::addr=127.0.0.1:{server.Port};in_flight_window=1;");
+        using var sender = (QwpWebSocketSender)options.Build();
+
+        sender.Table("t").Column<double>("matrix",
+            new List<double> { 1.0, 2.0, 3.0, 4.0 }, new[] { 2, 2 }).At(DateTime.UtcNow);
+        await sender.SendAsync();
+
+        var frame = await server.WaitForFirstFrameAsync(TimeSpan.FromSeconds(2));
+        Assert.That(ContainsByte(frame, QwpConstants.TYPE_DOUBLE_ARRAY), Is.True);
+    }
+
+    [Test]
+    public async Task NonDoubleNonLongArrayElementThrows()
+    {
+        await using var server = await EchoWebSocketServer.StartAsync();
+        var options = new SenderOptions($"ws::addr=127.0.0.1:{server.Port};");
+        using var sender = (QwpWebSocketSender)options.Build();
+        Assert.That(() => sender.Table("t").Column<int>("v", new[] { 1, 2 }, new[] { 2 }).At(DateTime.UtcNow),
+            Throws.TypeOf<IngressError>().With.Message.Contains("supports double and long arrays"));
+    }
+
+    [Test]
+    public async Task NullArrayIsNoop()
+    {
+        await using var server = await EchoWebSocketServer.StartAsync();
+        var options = new SenderOptions($"ws::addr=127.0.0.1:{server.Port};");
+        using var sender = (QwpWebSocketSender)options.Build();
+        // Adding a null array column followed by a real column should leave the row valid.
+        sender.Table("t").Column("opt", (Array?)null!).Column("real", 1L).At(DateTime.UtcNow);
+        await sender.SendAsync();
+        var frame = await server.WaitForFirstFrameAsync(TimeSpan.FromSeconds(2));
+        Assert.That(ContainsByte(frame, QwpConstants.TYPE_LONG), Is.True);
+    }
+
+    private static bool ContainsByte(byte[] bytes, byte target)
+    {
+        foreach (var b in bytes) if (b == target) return true;
+        return false;
+    }
+
     private static bool WaitFor(Func<bool> condition, TimeSpan timeout)
     {
         var deadline = Environment.TickCount64 + (long)timeout.TotalMilliseconds;
@@ -154,6 +270,7 @@ public class QwpWebSocketSenderTests
     {
         private readonly HttpListener _listener;
         private readonly TaskCompletionSource<byte[]> _firstFramePrefix = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource<byte[]> _firstFrameFull = new(TaskCreationOptions.RunContinuationsAsynchronously);
         private readonly CancellationTokenSource _cts = new();
         private Task? _acceptTask;
         private long _ackSequence;
@@ -197,6 +314,10 @@ public class QwpWebSocketSenderTests
         public Task<byte[]> WaitForFirstFramePrefixAsync(TimeSpan timeout) =>
             _firstFramePrefix.Task.WaitAsync(timeout);
 
+        /// <summary>Returns the full bytes of the first frame received (not just the 4-byte prefix).</summary>
+        public Task<byte[]> WaitForFirstFrameAsync(TimeSpan timeout) =>
+            _firstFrameFull.Task.WaitAsync(timeout);
+
         private async Task AcceptLoop()
         {
             try
@@ -221,6 +342,12 @@ public class QwpWebSocketSenderTests
                     if (result.Count >= 4 && !_firstFramePrefix.Task.IsCompleted)
                     {
                         _firstFramePrefix.TrySetResult(new[] { buf[0], buf[1], buf[2], buf[3] });
+                    }
+                    if (!_firstFrameFull.Task.IsCompleted)
+                    {
+                        var copy = new byte[result.Count];
+                        Array.Copy(buf, copy, result.Count);
+                        _firstFrameFull.TrySetResult(copy);
                     }
 
                     if (_echoExactly)

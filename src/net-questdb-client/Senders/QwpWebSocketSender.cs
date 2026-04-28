@@ -221,17 +221,48 @@ internal sealed class QwpWebSocketSender : ISender
         return this;
     }
 
-    public ISender Column(ReadOnlySpan<char> name, decimal value) =>
-        throw NotYetImplemented(nameof(Column) + "(decimal)");
+    public ISender Column(ReadOnlySpan<char> name, decimal value)
+    {
+        QwpColumnEncoding.EncodeDecimal(value, out var scale, out var high, out var low, out var fitsIn64);
+        if (fitsIn64)
+        {
+            var col = RequireTable().GetOrCreateColumn(name.ToString(), QwpConstants.TYPE_DECIMAL64, useNullBitmap: true);
+            col?.AddDecimal64(low, scale);
+        }
+        else
+        {
+            var col = RequireTable().GetOrCreateColumn(name.ToString(), QwpConstants.TYPE_DECIMAL128, useNullBitmap: true);
+            col?.AddDecimal128(high, low, scale);
+        }
+        return this;
+    }
 
-    public ISender Column<T>(ReadOnlySpan<char> name, IEnumerable<T> value, IEnumerable<int> shape) where T : struct =>
-        throw NotYetImplemented(nameof(Column) + "<T>(IEnumerable, shape)");
+    public ISender Column<T>(ReadOnlySpan<char> name, IEnumerable<T> value, IEnumerable<int> shape) where T : struct
+    {
+        var wireType = QwpColumnEncoding.WireTypeForArrayElement(typeof(T));
+        var col = RequireTable().GetOrCreateColumn(name.ToString(), wireType, useNullBitmap: true);
+        if (col is not null) QwpColumnEncoding.AddArray(col, value, shape);
+        return this;
+    }
 
-    public ISender Column(ReadOnlySpan<char> name, Array value) =>
-        throw NotYetImplemented(nameof(Column) + "(Array)");
+    public ISender Column(ReadOnlySpan<char> name, Array value)
+    {
+        if (value is null) return this;  // matches HTTP/TCP no-op semantics
+        var elementType = value.GetType().GetElementType()
+            ?? throw new IngressError(ErrorCode.InvalidApiCall, "array has no element type");
+        var wireType = QwpColumnEncoding.WireTypeForArrayElement(elementType);
+        var col = RequireTable().GetOrCreateColumn(name.ToString(), wireType, useNullBitmap: true);
+        if (col is not null) QwpColumnEncoding.AddArray(col, value);
+        return this;
+    }
 
-    public ISender Column<T>(ReadOnlySpan<char> name, ReadOnlySpan<T> value) where T : struct =>
-        throw NotYetImplemented(nameof(Column) + "<T>(ReadOnlySpan)");
+    public ISender Column<T>(ReadOnlySpan<char> name, ReadOnlySpan<T> value) where T : struct
+    {
+        var wireType = QwpColumnEncoding.WireTypeForArrayElement(typeof(T));
+        var col = RequireTable().GetOrCreateColumn(name.ToString(), wireType, useNullBitmap: true);
+        if (col is not null) QwpColumnEncoding.AddArray(col, value);
+        return this;
+    }
 
     public void At(DateTime value, CancellationToken ct = default) =>
         AtNanos((value.Ticks - 621355968000000000L) * 100, ct);
@@ -355,6 +386,4 @@ internal sealed class QwpWebSocketSender : ISender
         if (_disposed) throw new ObjectDisposedException(nameof(QwpWebSocketSender));
     }
 
-    private static IngressError NotYetImplemented(string member) =>
-        new(ErrorCode.InvalidApiCall, $"QwpWebSocketSender.{member} not yet implemented (lands in PR 8)");
 }

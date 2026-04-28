@@ -125,6 +125,106 @@ using var sender = Sender.New("https::addr=localhost:9009;tls_verify=unsafe_off;
 using var sender = Sender.New("tcps::addr=localhost:9009;tls_verify=unsafe_off;username=admin;token=NgdiOWDoQNUP18WOnb1xkkEG5TzPYMda5SiUOvT1K0U=;");
 ```
 
+### WebSocket / QWP (columnar binary, requires .NET 7+)
+
+The `ws::` and `wss::` schemes use the QuestDB columnar binary protocol (QWP) over a WebSocket. Compared to `http::` / `tcp::` (text ILP), QWP delivers higher sustained throughput at lower CPU cost — payloads are smaller because columns share schema once per connection.
+
+```csharp
+using var sender = Sender.New("ws::addr=localhost:9000;");
+sender.Table("trades")
+      .Symbol("symbol", "ETH-USD")
+      .Column("price", 2615.54)
+      .Column("amount", 0.00044)
+      .At(DateTime.UtcNow);
+sender.Send();
+```
+
+`wss::` adds TLS:
+
+```csharp
+using var sender = Sender.New("wss::addr=q.example.com:443;username=admin;password=quest;");
+```
+
+#### Pipelined async mode
+
+By default the WebSocket sender pipelines up to 128 batches in flight. Set `in_flight_window=1` to fall back to send-and-wait synchronous semantics:
+
+```csharp
+using var sender = Sender.New("ws::addr=localhost:9000;in_flight_window=1;");
+```
+
+#### Gorilla timestamp compression
+
+Set `gorilla=on` to enable delta-of-delta compression for timestamp columns. Best fit for steady-tick streams (sensor readings, evenly spaced ticks). The encoder transparently falls back to uncompressed per column when DoDs overflow int32:
+
+```csharp
+using var sender = Sender.New("ws::addr=localhost:9000;gorilla=on;");
+```
+
+For irregular timestamps (event-driven workloads) Gorilla can be larger than uncompressed; benchmark with your actual data before enabling.
+
+#### Durable acknowledgements
+
+Set `request_durable_ack=on` to opt into per-table object-store watermarks. The sender exposes them via the `IQwpWebSocketSender` interface:
+
+```csharp
+using var sender = Sender.New("ws::addr=localhost:9000;request_durable_ack=on;");
+sender.Table("trades").Column("v", 1L).At(DateTime.UtcNow);
+sender.Send();
+
+if (sender is IQwpWebSocketSender ws)
+{
+    long committed = ws.GetHighestAckedSeqTxn("trades");   // -1 if none yet
+    long durable   = ws.GetHighestDurableSeqTxn("trades"); // requires the opt-in
+    ws.Ping();                                             // wait for in-flight to drain
+}
+```
+
+#### Defaults
+
+| Knob                          | WebSocket default | HTTP / TCP for comparison       |
+|-------------------------------|-------------------|---------------------------------|
+| Default port                  | 9000              | 9000 (HTTP), 9009 (TCP)         |
+| Endpoint path                 | `/write/v4`       | `/write` (HTTP)                 |
+| `auto_flush_rows`             | 1000              | 75000 (HTTP), 600 (TCP)         |
+| `auto_flush_interval`         | 100 ms            | 1000 ms                         |
+| `auto_flush_bytes`            | `int.MaxValue`    | `int.MaxValue`                  |
+| `in_flight_window`            | 128               | n/a                             |
+| `close_timeout`               | 5000 ms           | n/a                             |
+| `max_schemas_per_connection`  | 65535             | n/a                             |
+| `request_durable_ack`         | `off`             | n/a                             |
+| `gorilla`                     | `off`             | n/a                             |
+
+#### Store-and-forward (durable client buffer)
+
+Set `sf_dir=/path/to/dir` to opt into the on-disk store-and-forward buffer. Outgoing batches are persisted to mmap'd segments before going on the wire, and a background I/O thread silently reconnects + replays whatever's still on disk if the network drops or the process restarts. User code never sees disconnects.
+
+```csharp
+using var sender = Sender.New(
+    "ws::addr=localhost:9000;sf_dir=/var/lib/myapp/qwp;sender_id=ingester-01;");
+```
+
+Each sender owns one slot directory at `<sf_dir>/<sender_id>/`. `sender_id` defaults to `"default"` and **must be unique per process** sharing the same `sf_dir`. To reclaim slots left by a crashed sibling process, set `drain_orphans=on`:
+
+```csharp
+using var sender = Sender.New(
+    "ws::addr=localhost:9000;sf_dir=/var/lib/myapp/qwp;sender_id=ingester-01;drain_orphans=on;");
+```
+
+SF caveats:
+
+- **Local filesystem only.** `FileShare.None` advisory locking does not behave reliably on NFS or other networked filesystems. Point `sf_dir` at a local disk.
+- **SF frames are larger.** The sender uses self-sufficient encoding (every frame carries the full schema + symbol dictionary) so any frame can be replayed against a fresh server connection. Expect somewhat larger payload-per-batch vs non-SF mode.
+- Only `sf_durability=memory` is supported in v1 (matches Java).
+
+#### Caveats
+
+- **`ws::` / `wss::` requires .NET 7 or later.** HTTP and TCP transports keep working on net6.0.
+- The transport disables system HTTP proxies by default; long-lived WebSocket connections rarely survive HTTP proxies. Pass an explicit `IWebProxy` to override if you have a WebSocket-aware proxy.
+- Multi-address `addr=h1,h2` is **not** supported on the WebSocket transport.
+- **Use long-lived senders.** WebSocket upgrade is significantly more expensive than an HTTP POST; create the sender once at startup and keep it alive for the process lifetime, rather than per request.
+- **Connect-string quoting differs from Java/Go.** This client parses connect strings via `System.Data.Common.DbConnectionStringBuilder`, which uses ADO.NET-style `'`/`"` quoting with internal doubling. Java and Go implement `;;` → `;` escaping. A connect string with a literal semicolon in a value (rare; mostly passwords or paths) parses differently across clients — quote the value or escape per the local parser.
+
 ### Multiple database endpoints
 
 The client can be configured with multiple `addr` entries pointing to different instances of QuestDB.
@@ -147,8 +247,8 @@ The config string format is:
 
 | Name                     | Default                    | Description                                                                                                                                                                                                                   |
 | ------------------------ | -------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `protocol` (schema)      | `http`                     | The transport protocol to use. Options are http(s)/tcp(s).                                                                                                                                                                    |
-| `addr`                   | `localhost:9000`           | The {host}:{port} pair denoting the QuestDB server. By default, port 9000 for HTTP, port 9009 for TCP.                                                                                                                        |
+| `protocol` (schema)      | `http`                     | The transport protocol to use. Options are http(s)/tcp(s)/ws(s). `ws::` / `wss::` requires .NET 7+.                                                                                                                            |
+| `addr`                   | `localhost:9000`           | The {host}:{port} pair denoting the QuestDB server. Default port 9000 for HTTP and ws/wss, 9009 for TCP.                                                                                                                       |
 | `auto_flush`             | `on`                       | Enables or disables auto-flushing functionality. By default, the buffer will be flushed every 75,000 rows, or every 1000ms, whichever comes first.                                                                            |
 | `auto_flush_rows`        | `75000 (HTTP)` `600 (TCP)` | The row count after which the buffer will be flushed. Effectively a batch size.                                                                                                                                               |
 | `auto_flush_bytes`       | `Int.MaxValue`             | The byte buffer length which when exceeded, will trigger a flush.                                                                                                                                                             |
@@ -170,6 +270,29 @@ The config string format is:
 | `retry_timeout`          | `10000`                    | The time period during which retries will be attempted, in milliseconds.                                                                                                                                                      |
 | `max_name_len`           | `127`                      | The maximum allowed bytes, in UTF-8 format, for column and table names.                                                                                                                                                       |
 | `protocol_version`       |                            | Explicitly specifies the version of InfluxDB Line Protocol to use for sender. Valid options are:<br>• protocol_version=1<br>• protocol_version=2<br>• protocol_version=3<br>• protocol_version=auto (default, if unspecified) |
+
+##### WebSocket / QWP-only parameters
+
+| Name                              | Default      | Description                                                                                              |
+| --------------------------------- | ------------ | -------------------------------------------------------------------------------------------------------- |
+| `in_flight_window`                | `128`        | Max pipelined batches awaiting ACK. Set to `1` for synchronous send-and-wait semantics.                  |
+| `close_timeout`                   | `5000` ms    | Per-flush ACK-drain timeout, applied to `Send` and `Dispose`.                                            |
+| `max_schemas_per_connection`      | `65535`      | Per-connection cap on distinct schema IDs. Hitting it requires recreating the sender.                    |
+| `gorilla`                         | `off`        | `on` / `off` — enables Gorilla DoD compression on timestamp columns.                                     |
+| `request_durable_ack`             | `off`        | `on` / `off` — opts into per-table object-store ACK watermarks (cast to `IQwpWebSocketSender`).         |
+| `sf_dir`                          |              | Path to a local directory enabling store-and-forward. Sets the SF stack on this sender.                  |
+| `sender_id`                       | `default`    | Slot identifier under `<sf_dir>/<sender_id>/`. Must be unique per process sharing the same `sf_dir`.     |
+| `sf_max_bytes`                    | `67108864`   | Per-segment rotation threshold in bytes (default 64 MiB).                                                |
+| `sf_max_total_bytes`              | `long.MaxValue` | Hard cap on total disk usage; back-pressures the producer when exceeded.                              |
+| `sf_durability`                   | `memory`     | Durability mode. Only `memory` is supported in v1.                                                       |
+| `sf_append_deadline_millis`       | `30000`      | Max wait when the disk cap is hit before `Send` throws.                                                  |
+| `reconnect_initial_backoff_millis`| `100`        | Starting backoff for reconnect attempts.                                                                 |
+| `reconnect_max_backoff_millis`    | `30000`      | Cap on per-attempt backoff.                                                                              |
+| `reconnect_max_duration_millis`   | `300000`     | Total per-outage budget; sender becomes terminal if exceeded.                                            |
+| `initial_connect_retry`           | `off`        | `on` makes the first connect honour the same backoff loop. Default is "fail fast on first connect".      |
+| `close_flush_timeout_millis`      | `5000`       | Max wait at `Dispose` for the SF engine to drain. `0` or `-1` for fast close.                            |
+| `drain_orphans`                   | `off`        | `on` adopts unlocked sibling slots on startup and drains them in the background.                         |
+| `max_background_drainers`         | `4`          | Cap on concurrent orphan-drain workers.                                                                  |
 
 ### Protocol Version
 

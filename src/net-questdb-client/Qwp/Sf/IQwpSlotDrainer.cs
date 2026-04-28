@@ -6,7 +6,7 @@
  *    \__\_\\__,_|\___||___/\__|____/|____/
  *
  *  Copyright (c) 2014-2019 Appsicle
- *  Copyright (c) 2019-2024 QuestDB
+ *  Copyright (c) 2019-2026 QuestDB
  *
  *  Licensed under the Apache License, Version 2.0 (the "License");
  *  you may not use this file except in compliance with the License.
@@ -22,45 +22,21 @@
  *
  ******************************************************************************/
 
-
-// ReSharper disable InconsistentNaming
-// ReSharper disable IdentifierTypo
-// ReSharper disable CommentTypo
-
-namespace QuestDB.Enums;
+namespace QuestDB.Qwp.Sf;
 
 /// <summary>
-///     Enum for protocol type.
+///     Drains all unacked envelopes from a single slot directory over a dedicated WebSocket
+///     connection. Implemented by the cursor engine in drain mode.
 /// </summary>
-public enum ProtocolType
+/// <remarks>
+///     The drainer reads the slot's segment ring from disk, replays envelopes to the server,
+///     advances the ack watermark, and trims segments as they're fully acked. Returns once
+///     <c>OldestFsn == NextFsn</c> (slot fully drained) or throws on terminal failure.
+///     <para />
+///     The pool that invokes this is responsible for the slot lock — implementations must NOT
+///     dispose the lock themselves.
+/// </remarks>
+internal interface IQwpSlotDrainer
 {
-    /// <summary>
-    ///     TCP transport.
-    /// </summary>
-    tcp,
-
-    /// <summary>
-    ///     TCP transport with TLS.
-    /// </summary>
-    tcps,
-
-    /// <summary>
-    ///     HTTP transport.
-    /// </summary>
-    http,
-
-    /// <summary>
-    ///     HTTP transport with TLS.
-    /// </summary>
-    https,
-
-    /// <summary>
-    ///     WebSocket transport carrying the QWP columnar binary ingest protocol.
-    /// </summary>
-    ws,
-
-    /// <summary>
-    ///     WebSocket transport with TLS.
-    /// </summary>
-    wss,
+    Task DrainAsync(string slotDirectory, CancellationToken cancellationToken);
 }

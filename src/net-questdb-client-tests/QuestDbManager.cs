@@ -8,8 +8,9 @@ namespace net_questdb_client_tests;
 /// </summary>
 public class QuestDbManager : IAsyncDisposable
 {
-    private const string DockerImage = "questdb/questdb:latest";
+    private const string DefaultImage = "questdb/questdb:latest";
     private const string ContainerNamePrefix = "questdb-test-";
+    private readonly string _dockerImage;
     private readonly string _containerName;
     private readonly HttpClient _httpClient;
     private readonly int _httpPort;
@@ -23,10 +24,17 @@ public class QuestDbManager : IAsyncDisposable
     /// </summary>
     /// <param name="port">ILP port (default: 9009)</param>
     /// <param name="httpPort">HTTP port (default: 9000)</param>
-    public QuestDbManager(int port = 9009, int httpPort = 9000)
+    /// <param name="dockerImage">
+    ///     Override the image; falls back to the <c>QUESTDB_IMAGE</c> env var, then
+    ///     <c>questdb/questdb:latest</c>.
+    /// </param>
+    public QuestDbManager(int port = 9009, int httpPort = 9000, string? dockerImage = null)
     {
         _port          = port;
         _httpPort      = httpPort;
+        _dockerImage   = dockerImage
+                         ?? Environment.GetEnvironmentVariable("QUESTDB_IMAGE")
+                         ?? DefaultImage;
         _containerName = $"{ContainerNamePrefix}{port}-{httpPort}-{Guid.NewGuid().ToString().Substring(0, 8)}";
         _httpClient    = new HttpClient { Timeout = TimeSpan.FromSeconds(5), };
     }
@@ -89,12 +97,12 @@ public class QuestDbManager : IAsyncDisposable
         // Check if image already exists locally
         if (await ImageExistsAsync())
         {
-            Console.WriteLine($"Docker image already exists locally: {DockerImage}");
+            Console.WriteLine($"Docker image already exists locally: {_dockerImage}");
             return;
         }
 
-        Console.WriteLine($"Pulling Docker image {DockerImage}...");
-        var (exitCode, output) = await RunDockerCommandAsync($"pull {DockerImage}");
+        Console.WriteLine($"Pulling Docker image {_dockerImage}...");
+        var (exitCode, output) = await RunDockerCommandAsync($"pull {_dockerImage}");
         if (exitCode != 0)
         {
             throw new InvalidOperationException($"Failed to pull Docker image: {output}");
@@ -110,7 +118,7 @@ public class QuestDbManager : IAsyncDisposable
     {
         // Use 'docker images' to check if image exists
         // Format: docker images --filter "reference=questdb/questdb:latest" --quiet
-        var (exitCode, output) = await RunDockerCommandAsync($"images --filter \"reference={DockerImage}\" --quiet");
+        var (exitCode, output) = await RunDockerCommandAsync($"images --filter \"reference={_dockerImage}\" --quiet");
 
         // If the image exists, output will contain the image ID
         // If it doesn't exist, output will be empty
@@ -152,7 +160,7 @@ public class QuestDbManager : IAsyncDisposable
                       $"-p {_port}:9009 " +
                       $"--name {_containerName} " +
                       volumeArg +
-                      DockerImage;
+                      _dockerImage;
 
         var (exitCode, output) = await RunDockerCommandAsync(runArgs);
         if (exitCode != 0)
@@ -209,6 +217,12 @@ public class QuestDbManager : IAsyncDisposable
     public string GetIlpEndpoint()
     {
         return $"localhost:{_port}";
+    }
+
+    /// <summary>Gets the WebSocket (QWP) endpoint for QuestDB. Shares the HTTP port.</summary>
+    public string GetWebSocketEndpoint()
+    {
+        return $"localhost:{_httpPort}";
     }
 
     /// <summary>

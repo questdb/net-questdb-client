@@ -6,7 +6,7 @@
  *    \__\_\\__,_|\___||___/\__|____/|____/
  *
  *  Copyright (c) 2014-2019 Appsicle
- *  Copyright (c) 2019-2024 QuestDB
+ *  Copyright (c) 2019-2026 QuestDB
  *
  *  Licensed under the Apache License, Version 2.0 (the "License");
  *  you may not use this file except in compliance with the License.
@@ -22,45 +22,34 @@
  *
  ******************************************************************************/
 
-
-// ReSharper disable InconsistentNaming
-// ReSharper disable IdentifierTypo
-// ReSharper disable CommentTypo
-
 namespace QuestDB.Enums;
 
 /// <summary>
-///     Enum for protocol type.
+///     QWP server response status codes (spec §13).
 /// </summary>
-public enum ProtocolType
+public enum QwpStatusCode : byte
 {
-    /// <summary>
-    ///     TCP transport.
-    /// </summary>
-    tcp,
+    /// <summary>Cumulative ACK. Sequence in the frame is the highest acknowledged batch.</summary>
+    Ok = 0x00,
 
     /// <summary>
-    ///     TCP transport with TLS.
+    ///     Object-store durability watermark. Per-table; the frame carries no batch sequence.
+    ///     Only emitted when the client requested durable acks during the upgrade.
     /// </summary>
-    tcps,
+    DurableAck = 0x02,
 
-    /// <summary>
-    ///     HTTP transport.
-    /// </summary>
-    http,
+    /// <summary>Column type incompatible with the existing table schema.</summary>
+    SchemaMismatch = 0x03,
 
-    /// <summary>
-    ///     HTTP transport with TLS.
-    /// </summary>
-    https,
+    /// <summary>Malformed message.</summary>
+    ParseError = 0x05,
 
-    /// <summary>
-    ///     WebSocket transport carrying the QWP columnar binary ingest protocol.
-    /// </summary>
-    ws,
+    /// <summary>Server-side internal error.</summary>
+    InternalError = 0x06,
 
-    /// <summary>
-    ///     WebSocket transport with TLS.
-    /// </summary>
-    wss,
+    /// <summary>Authorization failure.</summary>
+    SecurityError = 0x08,
+
+    /// <summary>Write failure (for example, table not accepting writes).</summary>
+    WriteError = 0x09,
 }

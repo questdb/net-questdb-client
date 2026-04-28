@@ -1,0 +1,197 @@
+/*******************************************************************************
+ *     ___                  _   ____  ____
+ *    / _ \ _   _  ___  ___| |_|  _ \| __ )
+ *   | | | | | | |/ _ \/ __| __| | | |  _ \
+ *   | |_| | |_| |  __/\__ \ |_| |_| | |_) |
+ *    \__\_\\__,_|\___||___/\__|____/|____/
+ *
+ *  Copyright (c) 2014-2019 Appsicle
+ *  Copyright (c) 2019-2026 QuestDB
+ *
+ *  Licensed under the Apache License, Version 2.0 (the "License");
+ *  you may not use this file except in compliance with the License.
+ *  You may obtain a copy of the License at
+ *
+ *  http://www.apache.org/licenses/LICENSE-2.0
+ *
+ *  Unless required by applicable law or agreed to in writing, software
+ *  distributed under the License is distributed on an "AS IS" BASIS,
+ *  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ *  See the License for the specific language governing permissions and
+ *  limitations under the License.
+ *
+ ******************************************************************************/
+
+using System.IO.MemoryMappedFiles;
+using System.Runtime.InteropServices;
+
+namespace QuestDB.Qwp.Sf;
+
+/// <summary>
+///     Thin wrapper around the file-I/O primitives used by store-and-forward.
+/// </summary>
+/// <remarks>
+///     Centralises the platform-specific bits: advisory exclusive-lock semantics
+///     (<see cref="OpenExclusive" />, <see cref="TryOpenExclusive" />), memory-mapped segment
+///     creation (<see cref="OpenMemoryMappedSegment" />), and page-size discovery for segment
+///     sizing.
+///     <para />
+///     The <see cref="OpenExclusive" /> and <see cref="TryOpenExclusive" /> helpers use
+///     <see cref="FileShare.None" /> as a portable advisory lock — held for the lifetime of the
+///     returned <see cref="FileStream" />, released on dispose or kernel-on-process-exit.
+///     This is unreliable on networked filesystems (NFS/SMB); SF is documented as local-FS only.
+/// </remarks>
+internal static class QwpFiles
+{
+    /// <summary>
+    ///     Opens <paramref name="path" /> with <see cref="FileShare.None" />, claiming an exclusive
+    ///     advisory lock for as long as the returned stream is alive. Throws if another process or
+    ///     thread already holds the lock.
+    /// </summary>
+    public static FileStream OpenExclusive(string path)
+    {
+        return new FileStream(
+            path,
+            FileMode.OpenOrCreate,
+            FileAccess.ReadWrite,
+            FileShare.None,
+            bufferSize: 4096,
+            FileOptions.None);
+    }
+
+    /// <summary>
+    ///     Like <see cref="OpenExclusive" /> but returns <c>null</c> instead of throwing when the
+    ///     file is already locked. Used by the orphan scanner to probe sibling slots without
+    ///     blowing up on a lock collision.
+    /// </summary>
+    public static FileStream? TryOpenExclusive(string path)
+    {
+        try
+        {
+            return OpenExclusive(path);
+        }
+        catch (IOException)
+        {
+            return null;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
+    ///     Opens or creates a fixed-size memory-mapped file at <paramref name="path" />. The file is
+    ///     pre-extended to <paramref name="capacityBytes" /> if smaller; subsequent
+    ///     <see cref="MemoryMappedFile.CreateViewAccessor()" /> calls give writeable views.
+    /// </summary>
+    /// <remarks>
+    ///     <para />
+    ///     The file is opened with <see cref="FileShare.Read" /> so other processes can inspect
+    ///     segments out-of-band (e.g. orphan-scanner drainers); writes still go through the same
+    ///     mmap region from the owning process.
+    ///     <para />
+    ///     Caller is responsible for disposing the returned <see cref="MemoryMappedFile" />, which
+    ///     also releases the underlying file handle.
+    /// </remarks>
+    public static MemoryMappedFile OpenMemoryMappedSegment(string path, long capacityBytes)
+    {
+        if (capacityBytes <= 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(capacityBytes));
+        }
+
+        // Pre-extend the file to the target size. CreateFromFile with a capacity will grow the
+        // file if needed but is finicky about open-sharing semantics across platforms; doing it
+        // ourselves up-front gives consistent behaviour on macOS / Linux / Windows.
+        EnsureFileLength(path, capacityBytes);
+
+        return MemoryMappedFile.CreateFromFile(
+            path,
+            FileMode.Open,
+            mapName: null,
+            capacityBytes,
+            MemoryMappedFileAccess.ReadWrite);
+    }
+
+    /// <summary>
+    ///     Ensures <paramref name="path" /> exists with at least <paramref name="length" /> bytes.
+    ///     Files smaller than the target are extended with zero bytes. Files larger are left alone.
+    /// </summary>
+    public static void EnsureFileLength(string path, long length)
+    {
+        using var fs = new FileStream(path, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.ReadWrite);
+        if (fs.Length < length)
+        {
+            fs.SetLength(length);
+        }
+    }
+
+    /// <summary>Truncates <paramref name="path" /> to <paramref name="length" /> bytes.</summary>
+    public static void Truncate(string path, long length)
+    {
+        using var fs = new FileStream(path, FileMode.Open, FileAccess.Write, FileShare.ReadWrite);
+        fs.SetLength(length);
+    }
+
+    /// <summary>Creates the directory if it does not already exist (no-op when present).</summary>
+    public static void EnsureDirectory(string path)
+    {
+        Directory.CreateDirectory(path);
+    }
+
+    /// <summary>Returns the OS memory-page size in bytes; useful for segment-size rounding.</summary>
+    public static int PageSize => Environment.SystemPageSize;
+
+    /// <summary>Lists immediate subdirectory paths under <paramref name="root" />.</summary>
+    public static IEnumerable<string> EnumerateSlotDirectories(string root)
+    {
+        if (!Directory.Exists(root))
+        {
+            return Array.Empty<string>();
+        }
+
+        return Directory.EnumerateDirectories(root);
+    }
+
+    /// <summary>Lists files in <paramref name="dir" /> matching <paramref name="searchPattern" />.</summary>
+    public static IEnumerable<string> EnumerateFiles(string dir, string searchPattern)
+    {
+        if (!Directory.Exists(dir))
+        {
+            return Array.Empty<string>();
+        }
+
+        return Directory.EnumerateFiles(dir, searchPattern);
+    }
+
+    /// <summary>Convenience for <see cref="File.Exists(string)" />.</summary>
+    public static bool Exists(string path) => File.Exists(path);
+
+    /// <summary>Convenience for <see cref="File.Delete(string)" />, no-op if absent.</summary>
+    public static void Delete(string path)
+    {
+        if (File.Exists(path))
+        {
+            File.Delete(path);
+        }
+    }
+
+    /// <summary>True when running on a non-local filesystem we know would misbehave with SF.</summary>
+    /// <remarks>
+    ///     This is best-effort heuristics; we don't try to be exhaustive. SF documents itself as
+    ///     "local filesystem only"; this method exists so callers can emit a warning when they
+    ///     spot an obvious mistake (e.g. an NFS mount).
+    /// </remarks>
+    public static bool LooksLikeNetworkPath(string path)
+    {
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+        {
+            // UNC paths: \\server\share\...
+            return path.StartsWith(@"\\", StringComparison.Ordinal);
+        }
+
+        // POSIX heuristic: NFS mounts typically live under /mnt or /net; not authoritative.
+        return false;
+    }
+}

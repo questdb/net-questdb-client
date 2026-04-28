@@ -79,6 +79,14 @@ public static class Sender
             case ProtocolType.tcp:
             case ProtocolType.tcps:
                 return new TcpSender(options);
+            case ProtocolType.ws:
+            case ProtocolType.wss:
+#if NET7_0_OR_GREATER
+                return new QwpWebSocketSender(options);
+#else
+                throw new IngressError(ErrorCode.ConfigError,
+                    "ws::/wss:: senders require .NET 7 or later; HTTP and TCP transports remain available on net6.0");
+#endif
         }
 
         throw new NotImplementedException();

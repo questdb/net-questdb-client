@@ -54,6 +54,13 @@ public record SenderOptions
         "auto_flush_interval", "init_buf_size", "max_buf_size", "max_name_len", "username", "password", "token",
         "request_min_throughput", "auth_timeout", "request_timeout", "retry_timeout",
         "pool_timeout", "tls_verify", "tls_roots", "tls_roots_password", "own_socket", "gzip",
+        // WebSocket / QWP keys.
+        "in_flight_window", "close_timeout", "max_schemas_per_connection", "gorilla", "request_durable_ack",
+        "sf_dir", "sender_id", "sf_max_bytes", "sf_max_total_bytes", "sf_durability",
+        "sf_append_deadline_millis", "reconnect_max_duration_millis", "reconnect_initial_backoff_millis",
+        "reconnect_max_backoff_millis", "initial_connect_retry", "close_flush_timeout_millis",
+        "drain_orphans", "max_background_drainers",
+        "token_x", "token_y",
     };
 
     private string _addr = "localhost:9000";
@@ -85,6 +92,27 @@ public record SenderOptions
     private string? _tokenY;
     private string? _username;
     private X509Certificate2? _clientCert;
+
+    // WebSocket / QWP knobs.
+    private int _inFlightWindow = 128;
+    private TimeSpan _closeTimeout = TimeSpan.FromMilliseconds(5000);
+    private int _maxSchemasPerConnection = 65535;
+    private bool _requestDurableAck;
+    private bool _gorilla;
+
+    private string? _sfDir;
+    private string _senderId = "default";
+    private long _sfMaxBytes = 64L * 1024 * 1024;
+    private long _sfMaxTotalBytes = long.MaxValue;
+    private string _sfDurability = "memory";
+    private TimeSpan _sfAppendDeadline = TimeSpan.FromMilliseconds(30000);
+    private TimeSpan _reconnectMaxDuration = TimeSpan.FromMilliseconds(300000);
+    private TimeSpan _reconnectInitialBackoff = TimeSpan.FromMilliseconds(100);
+    private TimeSpan _reconnectMaxBackoff = TimeSpan.FromMilliseconds(30000);
+    private bool _initialConnectRetry;
+    private TimeSpan _closeFlushTimeout = TimeSpan.FromMilliseconds(5000);
+    private bool _drainOrphans;
+    private int _maxBackgroundDrainers = 4;
 
     /// <summary>
     ///     Construct a <see cref="SenderOptions" /> object with default values.
@@ -125,7 +153,153 @@ public record SenderOptions
         ParseStringWithDefault(nameof(tls_roots), null, out _tlsRoots);
         ParseStringWithDefault(nameof(tls_roots_password), null, out _tlsRootsPassword);
         ParseBoolWithDefault(nameof(own_socket), "true", out _ownSocket);
+
+        // WebSocket / QWP knobs. Parsed unconditionally; ValidateWebSocketKeys throws if any
+        // appear with a non-WebSocket scheme.
+        ParseIntWithDefault(nameof(in_flight_window), "128", out _inFlightWindow);
+        ParseMillisecondsWithDefault(nameof(close_timeout), "5000", out _closeTimeout);
+        ParseIntWithDefault(nameof(max_schemas_per_connection), "65535", out _maxSchemasPerConnection);
+        ParseBoolOnOff(nameof(request_durable_ack), "off", out _requestDurableAck);
+        ParseBoolOnOff(nameof(gorilla), "off", out _gorilla);
+
+        ParseStringWithDefault(nameof(sf_dir), null, out _sfDir);
+        ParseStringWithDefault(nameof(sender_id), "default", out var senderIdRaw);
+        _senderId = senderIdRaw ?? "default";
+        ParseLongWithDefault(nameof(sf_max_bytes), (64L * 1024 * 1024).ToString(), out _sfMaxBytes);
+        ParseLongWithDefault(nameof(sf_max_total_bytes), long.MaxValue.ToString(), out _sfMaxTotalBytes);
+        ParseStringWithDefault(nameof(sf_durability), "memory", out var sfDurabilityRaw);
+        _sfDurability = sfDurabilityRaw ?? "memory";
+        if (!_sfDurability.Equals("memory", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new IngressError(ErrorCode.ConfigError,
+                $"`sf_durability` only accepts 'memory' in v1, got `{_sfDurability}`");
+        }
+
+        ParseMillisecondsWithDefault(nameof(sf_append_deadline_millis), "30000", out _sfAppendDeadline);
+        ParseMillisecondsWithDefault(nameof(reconnect_max_duration_millis), "300000", out _reconnectMaxDuration);
+        ParseMillisecondsWithDefault(nameof(reconnect_initial_backoff_millis), "100", out _reconnectInitialBackoff);
+        ParseMillisecondsWithDefault(nameof(reconnect_max_backoff_millis), "30000", out _reconnectMaxBackoff);
+        ParseBoolOnOff(nameof(initial_connect_retry), "off", out _initialConnectRetry);
+        ParseMillisecondsWithDefault(nameof(close_flush_timeout_millis), "5000", out _closeFlushTimeout);
+        ParseBoolOnOff(nameof(drain_orphans), "off", out _drainOrphans);
+        ParseIntWithDefault(nameof(max_background_drainers), "4", out _maxBackgroundDrainers);
+
+        ValidateWebSocketKeys();
+        ValidateAuthCombination();
+        ValidateTlsCombination();
+        ValidateMultiAddressForWebSocket();
+        ValidateGzipForWebSocket();
+
+        if (_autoFlush == AutoFlushType.off)
+        {
+            _autoFlushRows = -1;
+            _autoFlushBytes = -1;
+            _autoFlushInterval = TimeSpan.FromMilliseconds(-1);
+        }
+
+        if (IsWebSocket())
+        {
+            if (!IsKeyExplicit(nameof(auto_flush_rows))) _autoFlushRows = 1000;
+            if (!IsKeyExplicit(nameof(auto_flush_interval))) _autoFlushInterval = TimeSpan.FromMilliseconds(100);
+        }
     }
+
+    private void ValidateAuthCombination()
+    {
+        var hasUsername = !string.IsNullOrEmpty(_username);
+        var hasPassword = !string.IsNullOrEmpty(_password);
+        var hasToken = !string.IsNullOrEmpty(_token);
+
+        if (hasUsername && hasToken)
+        {
+            throw new IngressError(ErrorCode.ConfigError,
+                "`username` and `token` are mutually exclusive: pick Basic or Bearer auth, not both");
+        }
+
+        if (hasUsername && !hasPassword)
+        {
+            throw new IngressError(ErrorCode.ConfigError,
+                "`username` requires `password` for Basic auth");
+        }
+
+        if (hasPassword && !hasUsername)
+        {
+            throw new IngressError(ErrorCode.ConfigError,
+                "`password` requires `username` for Basic auth");
+        }
+    }
+
+    private void ValidateTlsCombination()
+    {
+        var hasRoots = !string.IsNullOrEmpty(_tlsRoots);
+        var hasRootsPassword = !string.IsNullOrEmpty(_tlsRootsPassword);
+
+        if (hasRootsPassword && !hasRoots)
+        {
+            throw new IngressError(ErrorCode.ConfigError,
+                "`tls_roots_password` requires `tls_roots`");
+        }
+    }
+
+    private void ValidateMultiAddressForWebSocket()
+    {
+        if (IsWebSocket() && _addresses.Count > 1)
+        {
+            throw new IngressError(ErrorCode.ConfigError,
+                $"multiple `addr` entries are not supported for ws/wss; got {_addresses.Count}");
+        }
+    }
+
+    private void ValidateGzipForWebSocket()
+    {
+        if (IsWebSocket() && IsKeyExplicit(nameof(gzip)) && _gzip)
+        {
+            throw new IngressError(ErrorCode.ConfigError,
+                "`gzip=on` is not supported with the ws:: or wss:: scheme");
+        }
+    }
+
+    private void ParseBoolOnOff(string name, string defaultValue, out bool field)
+    {
+        var raw = ReadOptionFromBuilder(name) ?? defaultValue;
+        field = raw switch
+        {
+            "on" => true,
+            "off" => false,
+            _ => throw new IngressError(ErrorCode.ConfigError, $"`{name}` must be 'on' or 'off', got `{raw}`"),
+        };
+    }
+
+    private bool IsKeyExplicit(string name)
+    {
+        return _connectionStringBuilder.ContainsKey(name);
+    }
+
+    private void ValidateWebSocketKeys()
+    {
+        if (IsWebSocket())
+        {
+            return;
+        }
+
+        foreach (var wsOnlyKey in WebSocketOnlyKeys)
+        {
+            if (IsKeyExplicit(wsOnlyKey))
+            {
+                throw new IngressError(ErrorCode.ConfigError,
+                    $"`{wsOnlyKey}` is only supported with the ws:: or wss:: scheme");
+            }
+        }
+    }
+
+    private static readonly string[] WebSocketOnlyKeys =
+    {
+        "in_flight_window", "close_timeout", "max_schemas_per_connection", "gorilla", "request_durable_ack",
+        "sf_dir", "sender_id", "sf_max_bytes", "sf_max_total_bytes", "sf_durability",
+        "sf_append_deadline_millis", "reconnect_max_duration_millis", "reconnect_initial_backoff_millis",
+        "reconnect_max_backoff_millis", "initial_connect_retry", "close_flush_timeout_millis",
+        "drain_orphans", "max_background_drainers",
+    };
 
     /// <summary>
     ///     Protocol type for the sender to use.
@@ -479,6 +653,170 @@ public record SenderOptions
     }
 
     /// <summary>
+    ///     Maximum number of unacknowledged batches in flight on a WebSocket connection.
+    ///     <c>1</c> selects synchronous mode (one batch at a time). Defaults to <c>128</c>.
+    ///     Only meaningful for <see cref="ProtocolType.ws" /> / <see cref="ProtocolType.wss" />.
+    /// </summary>
+    public int in_flight_window
+    {
+        get => _inFlightWindow;
+        set => _inFlightWindow = value;
+    }
+
+    /// <summary>
+    ///     Maximum time to wait for in-flight batches to drain on close. Defaults to 5 s.
+    ///     Only meaningful for WebSocket transports.
+    /// </summary>
+    public TimeSpan close_timeout
+    {
+        get => _closeTimeout;
+        set => _closeTimeout = value;
+    }
+
+    /// <summary>
+    ///     Hard cap on the number of distinct schemas (column-set permutations) registered on a
+    ///     single WebSocket connection. Defaults to <c>65535</c>, matching the wire schema-id range.
+    /// </summary>
+    public int max_schemas_per_connection
+    {
+        get => _maxSchemasPerConnection;
+        set => _maxSchemasPerConnection = value;
+    }
+
+    /// <summary>
+    ///     If <c>true</c>, requests <c>STATUS_DURABLE_ACK</c> frames from the server via the
+    ///     <c>X-QWP-Request-Durable-Ack</c> upgrade header. Off by default.
+    /// </summary>
+    public bool request_durable_ack
+    {
+        get => _requestDurableAck;
+        set => _requestDurableAck = value;
+    }
+
+    /// <summary>
+    ///     If <c>true</c>, the WebSocket sender enables Gorilla delta-of-delta compression for
+    ///     timestamp columns. Falls back to uncompressed per column when DoDs overflow int32.
+    ///     Off by default.
+    /// </summary>
+    public bool gorilla
+    {
+        get => _gorilla;
+        set => _gorilla = value;
+    }
+
+    /// <summary>
+    ///     Store-and-forward root directory. Setting this enables SF mode; the slot lives at
+    ///     <c>&lt;sf_dir&gt;/&lt;sender_id&gt;/</c>. <c>null</c> (default) keeps the sender on the
+    ///     in-memory async queue.
+    /// </summary>
+    public string? sf_dir
+    {
+        get => _sfDir;
+        set => _sfDir = value;
+    }
+
+    /// <summary>Slot identifier within <see cref="sf_dir" />. Defaults to <c>"default"</c>.</summary>
+    public string sender_id
+    {
+        get => _senderId;
+        set => _senderId = value;
+    }
+
+    /// <summary>Per-segment rotation threshold in bytes. Defaults to 64 MB.</summary>
+    public long sf_max_bytes
+    {
+        get => _sfMaxBytes;
+        set => _sfMaxBytes = value;
+    }
+
+    /// <summary>
+    ///     Hard cap on total bytes across all live segments in the slot. Defaults to <see cref="long.MaxValue" />
+    ///     (no cap); when set, the producer hits backpressure once full.
+    /// </summary>
+    public long sf_max_total_bytes
+    {
+        get => _sfMaxTotalBytes;
+        set => _sfMaxTotalBytes = value;
+    }
+
+    /// <summary>Durability tier. v1 only accepts <c>"memory"</c>.</summary>
+    public string sf_durability
+    {
+        get => _sfDurability;
+        set => _sfDurability = value;
+    }
+
+    /// <summary>
+    ///     Maximum time the producer waits at the SF backpressure barrier before throwing.
+    ///     Defaults to 30 s.
+    /// </summary>
+    public TimeSpan sf_append_deadline_millis
+    {
+        get => _sfAppendDeadline;
+        set => _sfAppendDeadline = value;
+    }
+
+    /// <summary>Total wall-clock budget for a single reconnect run. Defaults to 5 min.</summary>
+    public TimeSpan reconnect_max_duration_millis
+    {
+        get => _reconnectMaxDuration;
+        set => _reconnectMaxDuration = value;
+    }
+
+    /// <summary>First reconnect backoff. Defaults to 100 ms.</summary>
+    public TimeSpan reconnect_initial_backoff_millis
+    {
+        get => _reconnectInitialBackoff;
+        set => _reconnectInitialBackoff = value;
+    }
+
+    /// <summary>Maximum reconnect backoff after exponential growth. Defaults to 30 s.</summary>
+    public TimeSpan reconnect_max_backoff_millis
+    {
+        get => _reconnectMaxBackoff;
+        set => _reconnectMaxBackoff = value;
+    }
+
+    /// <summary>
+    ///     If <c>true</c>, the very first connection attempt also enters the reconnect-with-backoff
+    ///     loop. By default initial-connect failures are terminal — the user usually wants to know
+    ///     "couldn't reach server" immediately.
+    /// </summary>
+    public bool initial_connect_retry
+    {
+        get => _initialConnectRetry;
+        set => _initialConnectRetry = value;
+    }
+
+    /// <summary>
+    ///     Maximum time to wait for unacked SF frames to drain on <c>Sender.Dispose</c>.
+    ///     Defaults to 5 s.
+    /// </summary>
+    public TimeSpan close_flush_timeout_millis
+    {
+        get => _closeFlushTimeout;
+        set => _closeFlushTimeout = value;
+    }
+
+    /// <summary>
+    ///     If <c>true</c>, the sender scans <see cref="sf_dir" /> at startup for sibling slot
+    ///     directories left behind by crashed senders, claims their locks, and drains them in the
+    ///     background. Off by default.
+    /// </summary>
+    public bool drain_orphans
+    {
+        get => _drainOrphans;
+        set => _drainOrphans = value;
+    }
+
+    /// <summary>Cap on concurrent orphan-drain workers. Defaults to 4.</summary>
+    public int max_background_drainers
+    {
+        get => _maxBackgroundDrainers;
+        set => _maxBackgroundDrainers = value;
+    }
+
+    /// <summary>
     ///     Wrapper to extract the Host from <see cref="addr" />.
     /// </summary>
     [JsonIgnore]
@@ -501,6 +839,8 @@ public record SenderOptions
             {
                 case ProtocolType.http:
                 case ProtocolType.https:
+                case ProtocolType.ws:
+                case ProtocolType.wss:
                     return 9000;
                 case ProtocolType.tcp:
                 case ProtocolType.tcps:
@@ -525,6 +865,14 @@ public record SenderOptions
         if (!int.TryParse(ReadOptionFromBuilder(name) ?? defaultValue, out field))
         {
             throw new IngressError(ErrorCode.ConfigError, $"`{name}` should be convertible to an int.");
+        }
+    }
+
+    private void ParseLongWithDefault(string name, string defaultValue, out long field)
+    {
+        if (!long.TryParse(ReadOptionFromBuilder(name) ?? defaultValue, out field))
+        {
+            throw new IngressError(ErrorCode.ConfigError, $"`{name}` should be convertible to a long.");
         }
     }
 
@@ -640,7 +988,26 @@ public record SenderOptions
 
     internal bool IsTcp()
     {
-        return !IsHttp();
+        switch (protocol)
+        {
+            case ProtocolType.tcp:
+            case ProtocolType.tcps:
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    internal bool IsWebSocket()
+    {
+        switch (protocol)
+        {
+            case ProtocolType.ws:
+            case ProtocolType.wss:
+                return true;
+            default:
+                return false;
+        }
     }
 
     /// <summary>

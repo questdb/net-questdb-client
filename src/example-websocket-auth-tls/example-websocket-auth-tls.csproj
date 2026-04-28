@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+    <PropertyGroup>
+        <RootNamespace>QuestDBDemo</RootNamespace>
+        <Nullable>enable</Nullable>
+        <LangVersion>10</LangVersion>
+        <Title>QuestDB client - WebSocket / QWP Example with Authentication and TLS</Title>
+        <Description>Authenticated wss:// WebSocket (QWP columnar binary) example using the QuestDB ILP client</Description>
+        <TargetFrameworks>net7.0;net8.0;net9.0;net10.0</TargetFrameworks>
+        <OutputType>Exe</OutputType>
+        <!-- net7.0 is EOL but kept as the floor for ws/wss. -->
+        <CheckEolTargetFramework>false</CheckEolTargetFramework>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <ProjectReference Include="..\net-questdb-client\net-questdb-client.csproj"/>
+    </ItemGroup>
+
+</Project>

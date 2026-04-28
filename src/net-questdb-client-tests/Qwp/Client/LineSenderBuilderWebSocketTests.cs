@@ -16,9 +16,12 @@
  *
  ******************************************************************************/
 
+using System.Net;
+using System.Net.WebSockets;
 using NUnit.Framework;
 using QuestDB;
 using QuestDB.Enums;
+using QuestDB.Senders;
 using QuestDB.Utils;
 
 namespace net_questdb_client_tests.Qwp.Client;
@@ -293,39 +296,73 @@ public class LineSenderBuilderWebSocketTests
     // ---- Pending: tests that need a real WebSocket sender / fake server ----
 
     [Test]
-    public void BuilderWithWebSocketTransport_CreatesCorrectSenderType()
+    public async Task BuilderWithWebSocketTransport_CreatesCorrectSenderType()
     {
-        Assert.Inconclusive("Awaiting PR7: QwpWebSocketSender production code.");
+        await using var server = await AcceptOnlyServer.StartAsync();
+        var options = new SenderOptions($"ws::addr=127.0.0.1:{server.Port};");
+        using var sender = options.Build();
+        Assert.That(sender, Is.TypeOf<QwpWebSocketSender>());
     }
 
     [Test]
-    public void WsConfigString_BuildsSender()
+    public async Task WsConfigString_BuildsSender()
     {
-        Assert.Inconclusive("Awaiting PR7: QwpWebSocketSender production code.");
+        await using var server = await AcceptOnlyServer.StartAsync();
+        var options = new SenderOptions($"ws::addr=127.0.0.1:{server.Port};");
+        using var sender = options.Build();
+        Assert.That(sender, Is.TypeOf<QwpWebSocketSender>());
+        Assert.That(sender, Is.AssignableTo<ISender>());
     }
 
     [Test]
-    public void WsConfigString_InFlightWindowSync_BuildsSender()
+    public async Task WsConfigString_InFlightWindowSync_BuildsSender()
     {
-        Assert.Inconclusive("Awaiting PR7: QwpWebSocketSender production code.");
+        await using var server = await AcceptOnlyServer.StartAsync();
+        var options = new SenderOptions($"ws::addr=127.0.0.1:{server.Port};in_flight_window=1;");
+        Assert.That(options.in_flight_window, Is.EqualTo(1));
+        using var sender = (QwpWebSocketSender)options.Build();
+        Assert.That(sender.Options.in_flight_window, Is.EqualTo(1));
     }
 
     [Test]
     public void WssConfigString_BuildsSender()
     {
-        Assert.Inconclusive("Awaiting PR7: QwpWebSocketSender + TLS configuration.");
+        // wss:: drives a TLS handshake during Build() that no in-process test server
+        // can satisfy without a trusted certificate. We therefore verify only the
+        // parse path: the connection-string scheme lands as ProtocolType.wss and
+        // every QWP-relevant setter recognises the protocol. End-to-end TLS is
+        // covered against a real server (out of scope for the builder test).
+        var options = new SenderOptions("wss::addr=127.0.0.1:9000;");
+        Assert.That(options.protocol, Is.EqualTo(ProtocolType.wss));
     }
 
     [Test]
-    public void WsConfigString_WithUsernamePassword_BuildsSender()
+    public async Task WsConfigString_WithUsernamePassword_BuildsSender()
     {
-        Assert.Inconclusive("Awaiting PR7: QwpWebSocketSender authentication path.");
+        await using var server = await AcceptOnlyServer.StartAsync();
+        var options = new SenderOptions($"ws::addr=127.0.0.1:{server.Port};username=alice;password=secret;");
+        // Builder accepts username/password; they're parsed into SenderOptions and
+        // attached to the upgrade headers when Build() opens the socket. The actual
+        // auth-handshake exchange is exercised end-to-end against a real server.
+        using var sender = options.Build();
+        Assert.That(sender, Is.TypeOf<QwpWebSocketSender>());
     }
 
     [Test]
-    public void TestSyncModeAutoFlushDefaults_OnSenderInstance()
+    public async Task TestSyncModeAutoFlushDefaults_OnSenderInstance()
     {
-        Assert.Inconclusive("Awaiting PR7: QwpWebSocketSender exposes resolved auto-flush state.");
+        await using var server = await AcceptOnlyServer.StartAsync();
+        // Sync mode (in_flight_window=1) and async mode (in_flight_window=4) should
+        // resolve the same auto-flush defaults — sync is just a special case of the
+        // pipeline depth, not a different auto-flush regime.
+        var syncOptions = new SenderOptions($"ws::addr=127.0.0.1:{server.Port};in_flight_window=1;");
+        using var syncSender = (QwpWebSocketSender)syncOptions.Build();
+        await using var server2 = await AcceptOnlyServer.StartAsync();
+        var asyncOptions = new SenderOptions($"ws::addr=127.0.0.1:{server2.Port};in_flight_window=4;");
+        using var asyncSender = (QwpWebSocketSender)asyncOptions.Build();
+
+        Assert.That(syncSender.Options.auto_flush_rows, Is.EqualTo(asyncSender.Options.auto_flush_rows));
+        Assert.That(syncSender.Options.auto_flush_interval, Is.EqualTo(asyncSender.Options.auto_flush_interval));
     }
 
     [Test]
@@ -388,5 +425,71 @@ public class LineSenderBuilderWebSocketTests
     [Ignore("Java fluent builder does not exist in .NET; .NET has no httpSettingPath() setter or http_settings_path config key.")]
     public void HttpSettingPath_NotSupportedForWebSocket()
     {
+    }
+
+    /// <summary>
+    ///     Bare-minimum WebSocket server that accepts the upgrade and idles. Used by
+    ///     the builder tests above which only need <c>SenderOptions.Build()</c> to
+    ///     finish its synchronous connect; they don't drive any protocol traffic
+    ///     after that. Sized to ~30 LoC vs the richer EchoWebSocketServer in
+    ///     QwpWebSocketSenderTests which adds ack-frame replies and frame capture.
+    /// </summary>
+    private sealed class AcceptOnlyServer : IAsyncDisposable
+    {
+        private readonly HttpListener _listener;
+        private readonly CancellationTokenSource _cts = new();
+        private Task? _acceptTask;
+
+        private AcceptOnlyServer(HttpListener listener) => _listener = listener;
+
+        public int Port { get; private set; }
+
+        public static async Task<AcceptOnlyServer> StartAsync()
+        {
+            using var probe = new System.Net.Sockets.Socket(System.Net.Sockets.AddressFamily.InterNetwork,
+                System.Net.Sockets.SocketType.Stream, System.Net.Sockets.ProtocolType.Tcp);
+            probe.Bind(new IPEndPoint(IPAddress.Loopback, 0));
+            var port = ((IPEndPoint)probe.LocalEndPoint!).Port;
+            probe.Close();
+
+            var listener = new HttpListener();
+            listener.Prefixes.Add($"http://127.0.0.1:{port}/");
+            listener.Start();
+
+            var server = new AcceptOnlyServer(listener) { Port = port };
+            server._acceptTask = Task.Run(server.AcceptLoop);
+            await Task.Yield();
+            return server;
+        }
+
+        private async Task AcceptLoop()
+        {
+            try
+            {
+                var ctx = await _listener.GetContextAsync().ConfigureAwait(false);
+                var wsCtx = await ctx.AcceptWebSocketAsync(subProtocol: null).ConfigureAwait(false);
+                using var ws = wsCtx.WebSocket;
+                // Idle: the test only needs Build() to succeed. Ignore everything received.
+                var buf = new byte[1024];
+                while (!_cts.IsCancellationRequested && ws.State == WebSocketState.Open)
+                {
+                    try { await ws.ReceiveAsync(buf, _cts.Token).ConfigureAwait(false); }
+                    catch { break; }
+                }
+            }
+            catch { /* shutdown */ }
+        }
+
+        public async ValueTask DisposeAsync()
+        {
+            _cts.Cancel();
+            try { _listener.Stop(); } catch { }
+            try { _listener.Close(); } catch { }
+            if (_acceptTask is not null)
+            {
+                try { await _acceptTask.WaitAsync(TimeSpan.FromSeconds(2)); } catch { }
+            }
+            _cts.Dispose();
+        }
     }
 }

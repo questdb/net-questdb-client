@@ -477,6 +477,15 @@ internal sealed class QwpTableBuffer
         private int _size;
         private int _valueCount;
 
+        // §1.3 — incremental wire-byte cache for SYMBOL + ARRAY paths. Other column
+        // types' wire size is closed-form (valueCount * elementSize, etc.); SYMBOL
+        // and ARRAY had to walk the dict / per-row lists each estimate, which made
+        // EstimateEncodedDatagramSize O(rows × cols × dict_size + arrays). These
+        // running totals collapse the inner loops to O(1) per estimate.
+        private int _symbolDictRunningBytes;  // sum over dict entries: varintSize(utf8Len) + utf8Len
+        private int _symbolIdxRunningBytes;   // sum over per-row stored idx values: varintSize(idx)
+        private int _arrayBodyRunningBytes;   // sum over rows: 1 + 4*nDims + 8*element_count
+
         internal ColumnBuffer(string name, byte type, bool useNullBitmap, IQwpGlobalSymbolSink? globalSymbolSink = null)
         {
             Name = name;
@@ -801,6 +810,8 @@ internal sealed class QwpTableBuffer
             _arrayDims!.Add(1);
             _arrayShapes!.Add(values.Length);
             for (var i = 0; i < values.Length; i++) _doubleArrayData!.Add(values[i]);
+            // §1.3 — per-row wire cost: 1 byte ndims + 4*ndims shape + 8*element_count.
+            _arrayBodyRunningBytes += 1 + 4 * 1 + 8 * values.Length;
             _valueCount++;
             _size++;
         }
@@ -817,6 +828,7 @@ internal sealed class QwpTableBuffer
             {
                 for (var j = 0; j < dim1; j++) _doubleArrayData!.Add(values[i, j]);
             }
+            _arrayBodyRunningBytes += 1 + 4 * 2 + 8 * dim0 * dim1;
             _valueCount++;
             _size++;
         }
@@ -827,6 +839,7 @@ internal sealed class QwpTableBuffer
             _arrayDims!.Add(1);
             _arrayShapes!.Add(values.Length);
             for (var i = 0; i < values.Length; i++) _longArrayData!.Add(values[i]);
+            _arrayBodyRunningBytes += 1 + 4 * 1 + 8 * values.Length;
             _valueCount++;
             _size++;
         }
@@ -843,6 +856,7 @@ internal sealed class QwpTableBuffer
             {
                 for (var j = 0; j < dim1; j++) _longArrayData!.Add(values[i, j]);
             }
+            _arrayBodyRunningBytes += 1 + 4 * 2 + 8 * dim0 * dim1;
             _valueCount++;
             _size++;
         }
@@ -919,6 +933,7 @@ internal sealed class QwpTableBuffer
             }
             var idx = GetOrAddLocalSymbol(value);
             _dataBuffer!.PutInt(idx);
+            _symbolIdxRunningBytes += VarintSizeStatic(idx);
             _valueCount++;
             _size++;
         }
@@ -963,6 +978,7 @@ internal sealed class QwpTableBuffer
                     // from local IDs to global IDs.
                     var localIdx = GetOrAddLocalSymbol(value);
                     _dataBuffer!.PutInt(localIdx);
+                    _symbolIdxRunningBytes += VarintSizeStatic(localIdx);
                     _auxBuffer ??= new PinnedAppendBuffer(64);
                     _auxBuffer.PutInt(globalId);
                     if (globalId > _maxGlobalSymbolId) _maxGlobalSymbolId = globalId;
@@ -973,6 +989,9 @@ internal sealed class QwpTableBuffer
                 _storeGlobalSymbolIdsOnly = true;
             }
             _dataBuffer!.PutInt(globalId);
+            // In global-only mode the wire emits varint(globalId) per row from the
+            // aux/data buffer; track the running varint byte total accordingly.
+            _symbolIdxRunningBytes += VarintSizeStatic(globalId);
             if (globalId > _maxGlobalSymbolId) _maxGlobalSymbolId = globalId;
             _valueCount++;
             _size++;
@@ -1166,48 +1185,27 @@ internal sealed class QwpTableBuffer
 
         private int EstimateSymbolWireBytes(int nonNullCount)
         {
-            // Local-dict path: dict_size_varint + per-entry(varint_len + utf8_bytes)
-            //                + per-value varint id (one per non-null row).
-            var size = VarintSizeStatic(_symbolList?.Count ?? 0);
-            if (_symbolList is not null)
-            {
-                for (var i = 0; i < _symbolList.Count; i++)
-                {
-                    var entryBytes = Encoding.UTF8.GetByteCount(_symbolList[i]);
-                    size += VarintSizeStatic(entryBytes) + entryBytes;
-                }
-            }
-            // Per-value indices: each row stores a 4-byte int local-dict index in
-            // _dataBuffer, encoded as a varint on the wire. Walk the stored indices
-            // for an exact count rather than over-estimating at 5 bytes/row.
-            if (_dataBuffer is not null)
-            {
-                var bytes = _dataBuffer.AsReadOnlySpan(0, nonNullCount * 4);
-                for (var i = 0; i < nonNullCount; i++)
-                {
-                    var id = BinaryPrimitives.ReadInt32LittleEndian(bytes.Slice(i * 4, 4));
-                    size += VarintSizeStatic(id);
-                }
-            }
-            return size;
+            // §1.3 — uses running totals maintained on dict/Add: O(1) per call. Was
+            // previously O(dict_size + nonNullCount).
+            // Wire layout: dict_size_varint + per-entry(varint_len + utf8_bytes)
+            //            + per-value varint id (one per non-null row).
+            // _symbolDictRunningBytes covers the per-entry block; _symbolIdxRunningBytes
+            // covers the per-row varints. The dict_size_varint is computed inline since
+            // it depends only on the cached dict count.
+            //
+            // nonNullCount is the row-count parameter. The running idx total tracks
+            // per-Add bytes, which equals nonNullCount-worth of bytes when called
+            // post-NextRow (the common case). Pre-NextRow with nonNullCount > _valueCount
+            // is the non-null-bitmap edge case (rare; see CommitCurrentRow note above).
+            return VarintSizeStatic(_symbolList?.Count ?? 0)
+                   + _symbolDictRunningBytes
+                   + _symbolIdxRunningBytes;
         }
 
         private int EstimateArrayWireBytes()
         {
-            // Per-row: 1 byte nDims + 4 bytes per dim shape + 8 bytes per element.
-            // Walk the dims/shapes lists which already track per-row layout exactly.
-            if (_arrayDims is null || _arrayShapes is null) return 0;
-            var size = 0;
-            var shapeCursor = 0;
-            for (var i = 0; i < _arrayDims.Count; i++)
-            {
-                var nDims = _arrayDims[i];
-                size += 1 + 4 * nDims; // header
-                var elemCount = 1;
-                for (var d = 0; d < nDims; d++) elemCount *= _arrayShapes[shapeCursor++];
-                size += 8 * elemCount;
-            }
-            return size;
+            // §1.3 — running total maintained on each AddDoubleArray/AddLongArray.
+            return _arrayBodyRunningBytes;
         }
 
         private static int VarintSizeStatic(long value)
@@ -1640,6 +1638,49 @@ internal sealed class QwpTableBuffer
                 _maxGlobalSymbolId = -1;
                 _symbolDict?.Clear();
                 _symbolList?.Clear();
+                _symbolDictRunningBytes = 0;
+                _symbolIdxRunningBytes = 0;
+                _arrayBodyRunningBytes = 0;
+            }
+            else
+            {
+                // §1.3 — partial truncate: rebuild the running totals by walking the
+                // retained slice. TruncateTo is uncommon (only PR D's flush path uses
+                // it); the O(retained) cost is acceptable.
+                RecomputeRunningWireBytes();
+            }
+        }
+
+        // Walks the retained per-row state to refresh the §1.3 running totals after
+        // a partial truncate. Reset() and the truncate-to-zero path skip this in
+        // favour of clearing the totals to 0 directly.
+        private void RecomputeRunningWireBytes()
+        {
+            // Symbol dict bytes don't change on truncate (the dict survives), so the
+            // running total is unchanged — a partial truncate keeps the same
+            // _symbolList. Per-row idx bytes need a re-walk.
+            if (Type == QwpConstants.TYPE_SYMBOL && _dataBuffer is not null)
+            {
+                _symbolIdxRunningBytes = 0;
+                var bytes = _dataBuffer.AsReadOnlySpan(0, _valueCount * 4);
+                for (var i = 0; i < _valueCount; i++)
+                {
+                    var id = BinaryPrimitives.ReadInt32LittleEndian(bytes.Slice(i * 4, 4));
+                    _symbolIdxRunningBytes += VarintSizeStatic(id);
+                }
+            }
+            else if ((Type == QwpConstants.TYPE_DOUBLE_ARRAY || Type == QwpConstants.TYPE_LONG_ARRAY)
+                     && _arrayDims is not null && _arrayShapes is not null)
+            {
+                _arrayBodyRunningBytes = 0;
+                var shapeCursor = 0;
+                for (var i = 0; i < _arrayDims.Count; i++)
+                {
+                    var nDims = _arrayDims[i];
+                    var elemCount = 1;
+                    for (var d = 0; d < nDims; d++) elemCount *= _arrayShapes[shapeCursor++];
+                    _arrayBodyRunningBytes += 1 + 4 * nDims + 8 * elemCount;
+                }
             }
         }
 
@@ -1667,6 +1708,9 @@ internal sealed class QwpTableBuffer
             _maxGlobalSymbolId = -1;
             _symbolDict?.Clear();
             _symbolList?.Clear();
+            _symbolDictRunningBytes = 0;
+            _symbolIdxRunningBytes = 0;
+            _arrayBodyRunningBytes = 0;
         }
 
         private int GetOrAddLocalSymbol(string value)
@@ -1677,6 +1721,10 @@ internal sealed class QwpTableBuffer
             var idx = _symbolList.Count;
             _symbolDict[value] = idx;
             _symbolList.Add(value);
+            // §1.3 — track the new dict entry's wire-byte cost so the estimator can
+            // skip the per-call dict walk.
+            var entryBytes = Encoding.UTF8.GetByteCount(value);
+            _symbolDictRunningBytes += VarintSizeStatic(entryBytes) + entryBytes;
             return idx;
         }
 

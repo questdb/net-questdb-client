@@ -165,12 +165,15 @@ public class QwpResultBatchDecoderTests
     }
 
     [Test]
-    public void RejectsZstdFlagWithClearError()
+    public void RejectsZstdFlagWithClearWorkaroundMessage()
     {
+        // §3.2a — .NET client doesn't bundle zstd; advertise compression=raw in the WS
+        // handshake. A FLAG_ZSTD frame still arriving means the server ignored the
+        // negotiation, so surface a message that names compression=raw as the fix.
         var bytes = new FrameBuilder().WithRowCount(0).Build();
         bytes[QwpConstants.HEADER_OFFSET_FLAGS] |= QwpConstants.FLAG_ZSTD;
         Assert.That(() => Decode(bytes),
-            Throws.TypeOf<QwpDecodeException>().With.Message.Contains("FLAG_ZSTD"));
+            Throws.TypeOf<QwpDecodeException>().With.Message.Contains("compression=raw"));
     }
 
     // RejectsGorillaFlagWithClearError lived here as a placeholder for "decoder

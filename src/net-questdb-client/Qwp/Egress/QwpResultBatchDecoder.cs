@@ -107,7 +107,16 @@ internal sealed class QwpResultBatchDecoder
         var flags = payload[QwpConstants.HEADER_OFFSET_FLAGS];
         if ((flags & QwpConstants.FLAG_ZSTD) != 0)
         {
-            throw new QwpDecodeException("FLAG_ZSTD not yet supported by this decoder");
+            // §3.2a — the .NET client doesn't bundle a zstd decompressor; the WS
+            // upgrade handshake advertises compression=raw only, so a server
+            // sending FLAG_ZSTD has either ignored that signal or this decoder is
+            // being used outside the WS handshake path. Surface a message that
+            // names the workaround instead of letting users hit a generic decode
+            // failure.
+            throw new QwpDecodeException(
+                "received FLAG_ZSTD frame but this client doesn't ship zstd. " +
+                "Set compression=raw on the connection string or upgrade to a build " +
+                "that bundles ZstdSharp.");
         }
         _gorillaMode = (flags & QwpConstants.FLAG_GORILLA) != 0;
         _deltaMode = (flags & QwpConstants.FLAG_DELTA_SYMBOL_DICT) != 0;

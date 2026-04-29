@@ -658,8 +658,6 @@ public class QwpWebSocketSenderTests
         }
     }
 
-    // -- Helpers -----------------------------------------------------------------
-
     private static DummyQwpServer StartServerWithOkAcks()
     {
         long nextSeq = 0;

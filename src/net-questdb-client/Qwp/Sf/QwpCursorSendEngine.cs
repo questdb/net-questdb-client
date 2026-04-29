@@ -632,14 +632,14 @@ internal sealed class QwpCursorSendEngine : IDisposable
     {
         var prev = _appendSignal;
         _appendSignal = NewSignal();
-        prev.TrySetResult(true);
+        Task.Run(() => prev.TrySetResult(true));
     }
 
     private void FireAckSignalLocked()
     {
         var prev = _ackSignal;
         _ackSignal = NewSignal();
-        prev.TrySetResult(true);
+        Task.Run(() => prev.TrySetResult(true));
     }
 
     private static TaskCompletionSource<bool> NewSignal()

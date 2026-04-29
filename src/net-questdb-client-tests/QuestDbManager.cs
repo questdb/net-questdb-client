@@ -32,9 +32,10 @@ public class QuestDbManager : IAsyncDisposable
     {
         _port          = port;
         _httpPort      = httpPort;
-        _dockerImage   = dockerImage
-                         ?? Environment.GetEnvironmentVariable("QUESTDB_IMAGE")
-                         ?? DefaultImage;
+        var candidate = string.IsNullOrWhiteSpace(dockerImage)
+            ? Environment.GetEnvironmentVariable("QUESTDB_IMAGE")
+            : dockerImage;
+        _dockerImage = string.IsNullOrWhiteSpace(candidate) ? DefaultImage : candidate.Trim();
         _containerName = $"{ContainerNamePrefix}{port}-{httpPort}-{Guid.NewGuid().ToString().Substring(0, 8)}";
         _httpClient    = new HttpClient { Timeout = TimeSpan.FromSeconds(5), };
     }

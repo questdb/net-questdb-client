@@ -95,6 +95,12 @@ internal static class QwpVarint
             }
 
             var b = src[i];
+            // 10th byte may only carry bit 63 (0x01) and must terminate.
+            if (i == MaxBytes - 1 && (b & 0xFE) != 0)
+            {
+                throw new IngressError(ErrorCode.ProtocolVersionError, "varint out of range");
+            }
+
             result |= (ulong)(b & 0x7F) << shift;
 
             if ((b & 0x80) == 0)

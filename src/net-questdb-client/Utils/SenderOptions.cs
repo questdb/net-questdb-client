@@ -197,7 +197,7 @@ public record SenderOptions
             _autoFlushInterval = TimeSpan.FromMilliseconds(-1);
         }
 
-        if (IsWebSocket())
+        if (IsWebSocket() && _autoFlush != AutoFlushType.off)
         {
             if (!IsKeyExplicit(nameof(auto_flush_rows))) _autoFlushRows = 1000;
             if (!IsKeyExplicit(nameof(auto_flush_interval))) _autoFlushInterval = TimeSpan.FromMilliseconds(100);
@@ -206,6 +206,8 @@ public record SenderOptions
 
     private void ValidateAuthCombination()
     {
+        if (IsTcp()) return;
+
         var hasUsername = !string.IsNullOrEmpty(_username);
         var hasPassword = !string.IsNullOrEmpty(_password);
         var hasToken = !string.IsNullOrEmpty(_token);
@@ -252,7 +254,7 @@ public record SenderOptions
 
     private void ValidateGzipForWebSocket()
     {
-        if (IsWebSocket() && IsKeyExplicit(nameof(gzip)) && _gzip)
+        if (IsWebSocket() && _gzip)
         {
             throw new IngressError(ErrorCode.ConfigError,
                 "`gzip=on` is not supported with the ws:: or wss:: scheme");
@@ -289,6 +291,78 @@ public record SenderOptions
                 throw new IngressError(ErrorCode.ConfigError,
                     $"`{wsOnlyKey}` is only supported with the ws:: or wss:: scheme");
             }
+        }
+    }
+
+    internal void EnsureValid()
+    {
+        ValidateAuthCombination();
+        ValidateTlsCombination();
+        ValidateMultiAddressForWebSocket();
+        ValidateGzipForWebSocket();
+        // The connection-string path can be flipped via `record with { protocol = ... }` after
+        // construction, so we must re-check ws-only keys here even when builder is set.
+        if (_connectionStringBuilder is not null)
+        {
+            ValidateWebSocketKeys();
+        }
+        else
+        {
+            ValidateWebSocketKeysAgainstDefaults();
+        }
+        ApplyAutoFlushNormalisation();
+    }
+
+    private void ValidateWebSocketKeysAgainstDefaults()
+    {
+        if (IsWebSocket())
+        {
+            return;
+        }
+
+        var defaults = new SenderOptions();
+        if (_inFlightWindow != defaults._inFlightWindow) Throw(nameof(in_flight_window));
+        if (_closeTimeout != defaults._closeTimeout) Throw(nameof(close_timeout));
+        if (_maxSchemasPerConnection != defaults._maxSchemasPerConnection) Throw(nameof(max_schemas_per_connection));
+        if (_gorilla != defaults._gorilla) Throw(nameof(gorilla));
+        if (_requestDurableAck != defaults._requestDurableAck) Throw(nameof(request_durable_ack));
+        if (_sfDir != defaults._sfDir) Throw(nameof(sf_dir));
+        if (_senderId != defaults._senderId) Throw(nameof(sender_id));
+        if (_sfMaxBytes != defaults._sfMaxBytes) Throw(nameof(sf_max_bytes));
+        if (_sfMaxTotalBytes != defaults._sfMaxTotalBytes) Throw(nameof(sf_max_total_bytes));
+        if (_sfDurability != defaults._sfDurability) Throw(nameof(sf_durability));
+        if (_sfAppendDeadline != defaults._sfAppendDeadline) Throw(nameof(sf_append_deadline_millis));
+        if (_reconnectMaxDuration != defaults._reconnectMaxDuration) Throw(nameof(reconnect_max_duration_millis));
+        if (_reconnectInitialBackoff != defaults._reconnectInitialBackoff) Throw(nameof(reconnect_initial_backoff_millis));
+        if (_reconnectMaxBackoff != defaults._reconnectMaxBackoff) Throw(nameof(reconnect_max_backoff_millis));
+        if (_initialConnectRetry != defaults._initialConnectRetry) Throw(nameof(initial_connect_retry));
+        if (_closeFlushTimeout != defaults._closeFlushTimeout) Throw(nameof(close_flush_timeout_millis));
+        if (_drainOrphans != defaults._drainOrphans) Throw(nameof(drain_orphans));
+        if (_maxBackgroundDrainers != defaults._maxBackgroundDrainers) Throw(nameof(max_background_drainers));
+
+        static void Throw(string key) =>
+            throw new IngressError(ErrorCode.ConfigError,
+                $"`{key}` is only supported with the ws:: or wss:: scheme");
+    }
+
+    private void ApplyAutoFlushNormalisation()
+    {
+        if (_connectionStringBuilder is not null)
+        {
+            return;
+        }
+
+        if (_autoFlush == AutoFlushType.off)
+        {
+            _autoFlushRows = -1;
+            _autoFlushBytes = -1;
+            _autoFlushInterval = TimeSpan.FromMilliseconds(-1);
+        }
+        else if (IsWebSocket())
+        {
+            var defaults = new SenderOptions();
+            if (_autoFlushRows == defaults._autoFlushRows) _autoFlushRows = 1000;
+            if (_autoFlushInterval == defaults._autoFlushInterval) _autoFlushInterval = TimeSpan.FromMilliseconds(100);
         }
     }
 
@@ -1019,6 +1093,12 @@ public record SenderOptions
 
         foreach (var prop in GetType().GetProperties(BindingFlags.Instance | BindingFlags.Public).OrderBy(x => x.Name))
         {
+            // WS-only keys would fail re-parse on non-WS protocols; skip to keep ToString round-trip.
+            if (!IsWebSocket() && Array.IndexOf(WebSocketOnlyKeys, prop.Name) >= 0)
+            {
+                continue;
+            }
+
             // exclude properties
             if (prop.IsDefined(typeof(CompilerGeneratedAttribute), false))
             {

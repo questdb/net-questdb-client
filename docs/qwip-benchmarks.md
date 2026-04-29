@@ -76,8 +76,8 @@
 
 | Gate | Threshold | Actual | Pass? |
 |---|---|---|---|
-| WS sync p99 (single row) ≤ 1.5× HTTP single-row p99 | — | WS p100 = 194 μs vs HTTP p100 = 283 μs (**0.69×**) | ✅ |
-| WS async 1000-row p99 ≤ HTTP 1000-row p99 | — | WS p100 (10k batch) = 736 μs vs HTTP 2607 μs (**0.28×**) | ✅ |
+| WS sync single-row p100 ≤ 1.5× HTTP single-row p100 | — | WS 194 μs vs HTTP 283 μs (**0.69×**) | ✅ |
+| WS async 10000-row p100 ≤ HTTP 10000-row p100 | — | WS 736 μs vs HTTP 2607 μs (**0.28×**) | ✅ |
 
 §11 calls for "p99 over 100k batches"; this run uses 1000 iter, so p99 is statistical. The relative ordering holds; rerun at `IterationCount=100_000` for a strict gate verification.
 
@@ -124,8 +124,8 @@ The gate sits at 45% to match the measured architectural cost: a flat 1.36–1.4
 | Connect-string interop | ✅ 28 SenderOptions tests + 4 integration tests `[Explicit]` |
 | WS narrow throughput ≥ 1.5× HTTP @ IFW=128 | ✅ 4.05× — 5.42× (margin: 2.7–3.6×) |
 | WS wide throughput ≥ 1.2× HTTP @ IFW=128 | ✅ 4.10× — 4.39× (margin: 3.4–3.7×) |
-| WS sync p99 single-row ≤ 1.5× HTTP | ✅ 0.69× (WS faster than HTTP) |
-| WS async 1000-row p99 ≤ HTTP 1000-row p99 | ✅ 0.28× (WS 3.6× faster) |
+| WS sync single-row p100 ≤ 1.5× HTTP | ✅ 0.69× (WS faster than HTTP) |
+| WS async 10000-row p100 ≤ HTTP 10000-row p100 | ✅ 0.28× (WS 3.6× faster) |
 | **SF overhead ≤ 45%** | ✅ 0.83–1.43× (passes at every IFW; flat curve at IFW≥8) |
 | GC alloc / 1k rows ≤ 2× HTTP | ✅ 0.52× — 0.68× HTTP across all shapes |
 

@@ -71,6 +71,8 @@ public static class Sender
             return new HttpSender("http::addr=localhost:9000;");
         }
 
+        options.EnsureValid();
+
         switch (options.protocol)
         {
             case ProtocolType.http:

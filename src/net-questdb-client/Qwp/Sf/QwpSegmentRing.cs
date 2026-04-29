@@ -158,7 +158,8 @@ internal sealed class QwpSegmentRing : IDisposable
             for (var i = 0; i < existing.Count; i++)
             {
                 var seg = QwpMmapSegment.Open(existing[i].Path, segmentCapacity, existing[i].BaseFsn, maxFrameLength);
-                if (i < existing.Count - 1)
+                // Crash between Seal() and next active alloc leaves a sealed tail; treat as sealed.
+                if (i < existing.Count - 1 || seg.IsSealed)
                 {
                     seg.Seal();
                     ring._sealedSegments.Add(seg);
@@ -169,10 +170,11 @@ internal sealed class QwpSegmentRing : IDisposable
                 }
             }
 
-            var recoveredActive = Volatile.Read(ref ring._active);
-            ring._publishedFsn = recoveredActive is null
+            var lastRecovered = Volatile.Read(ref ring._active)
+                ?? (ring._sealedSegments.Count > 0 ? ring._sealedSegments[^1] : null);
+            ring._publishedFsn = lastRecovered is null
                 ? -1L
-                : recoveredActive.BaseFsn + recoveredActive.EnvelopeCount - 1;
+                : lastRecovered.BaseFsn + lastRecovered.EnvelopeCount - 1;
 
             return ring;
         }

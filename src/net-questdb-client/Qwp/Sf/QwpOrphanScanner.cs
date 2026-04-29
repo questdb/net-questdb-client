@@ -85,13 +85,21 @@ internal static class QwpOrphanScanner
                 continue;
             }
 
-            if (!HasSegments(slotDir))
+            var keep = false;
+            try
             {
-                slotLock.Dispose();
-                continue;
-            }
+                if (!HasSegments(slotDir))
+                {
+                    continue;
+                }
 
-            claimed.Add(slotLock);
+                claimed.Add(slotLock);
+                keep = true;
+            }
+            finally
+            {
+                if (!keep) slotLock.Dispose();
+            }
         }
 
         return claimed;

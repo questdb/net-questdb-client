@@ -168,11 +168,13 @@ internal sealed class QwpColumn
         AssertOrSetType(QwpTypeCode.Boolean);
         var bitIndex = NonNullCount;
         EnsureBoolCapacity(bitIndex + 1);
+        var byteIndex = bitIndex >> 3;
+        var mask = (byte)(1 << (bitIndex & 7));
+        BoolData![byteIndex] = (byte)(BoolData[byteIndex] & ~mask);
         if (value)
         {
-            BoolData![bitIndex >> 3] |= (byte)(1 << (bitIndex & 7));
+            BoolData[byteIndex] |= mask;
         }
-        // else leave bit at 0; EnsureBoolCapacity grows zero-filled.
 
         AdvanceNonNull();
     }
@@ -345,6 +347,50 @@ internal sealed class QwpColumn
         AdvanceNonNull();
     }
 
+    internal readonly struct Savepoint
+    {
+        public readonly int RowCount;
+        public readonly int NullCount;
+        public readonly int FixedLen;
+        public readonly int StrLen;
+        public readonly QwpTypeCode TypeCode;
+        public readonly byte DecimalScale;
+        public readonly int GeohashPrecisionBits;
+        public readonly bool IsTyped;
+        public readonly bool DecimalScaleSet;
+        public readonly bool GeohashPrecisionSet;
+
+        public Savepoint(QwpColumn col)
+        {
+            RowCount = col.RowCount;
+            NullCount = col.NullCount;
+            FixedLen = col.FixedLen;
+            StrLen = col.StrLen;
+            TypeCode = col.TypeCode;
+            DecimalScale = col.DecimalScale;
+            GeohashPrecisionBits = col.GeohashPrecisionBits;
+            IsTyped = col.IsTyped;
+            DecimalScaleSet = col.DecimalScaleSet;
+            GeohashPrecisionSet = col.GeohashPrecisionSet;
+        }
+    }
+
+    internal Savepoint Snapshot() => new Savepoint(this);
+
+    internal void Restore(Savepoint sp)
+    {
+        RowCount = sp.RowCount;
+        NullCount = sp.NullCount;
+        FixedLen = sp.FixedLen;
+        StrLen = sp.StrLen;
+        TypeCode = sp.TypeCode;
+        DecimalScale = sp.DecimalScale;
+        GeohashPrecisionBits = sp.GeohashPrecisionBits;
+        IsTyped = sp.IsTyped;
+        DecimalScaleSet = sp.DecimalScaleSet;
+        GeohashPrecisionSet = sp.GeohashPrecisionSet;
+    }
+
     /// <summary>
     ///     Drops all row data while preserving the column's name, type, and backing-buffer
     ///     allocations. Intended for reuse across batches by the sender — the schema definition
@@ -432,7 +478,7 @@ internal sealed class QwpColumn
             var b2 = ~hi;
             var b3 = ~0u;
 
-            var sum = (ulong)b0 + 1ul;
+            var sum = b0 + 1ul;
             b0 = (uint)sum;
             var carry = (uint)(sum >> 32);
             sum = (ulong)b1 + carry;

@@ -80,6 +80,7 @@ internal sealed class QwpBackgroundDrainerPool : IDisposable
         {
             EnsureNotDisposed();
             linked = CancellationTokenSource.CreateLinkedTokenSource(_shutdownCts.Token, cancellationToken);
+            // No token passed to Task.Run — a pre-cancelled one would skip the delegate and leak.
             task = Task.Run(async () =>
             {
                 try
@@ -90,7 +91,7 @@ internal sealed class QwpBackgroundDrainerPool : IDisposable
                 {
                     linked.Dispose();
                 }
-            }, linked.Token);
+            });
             _runningTasks.Add(task);
         }
 
@@ -130,11 +131,12 @@ internal sealed class QwpBackgroundDrainerPool : IDisposable
 
         // Two-phase shutdown: give in-flight drains a chance to finish naturally, then cancel
         // and join. Dispose is sync so we cap the wait — orphans land on the next sender startup.
+        var allJoined = snapshot.Length == 0;
         if (snapshot.Length > 0)
         {
             try
             {
-                Task.WhenAll(snapshot).Wait(_shutdownWait);
+                allJoined = Task.WhenAll(snapshot).Wait(_shutdownWait);
             }
             catch (Exception)
             {
@@ -145,7 +147,7 @@ internal sealed class QwpBackgroundDrainerPool : IDisposable
 
             try
             {
-                Task.WhenAll(snapshot).Wait(TimeSpan.FromSeconds(2));
+                allJoined = Task.WhenAll(snapshot).Wait(TimeSpan.FromSeconds(2));
             }
             catch (Exception)
             {
@@ -154,7 +156,11 @@ internal sealed class QwpBackgroundDrainerPool : IDisposable
         }
 
         SfCleanup.Dispose(_shutdownCts);
-        _slots.Dispose();
+        // Leak the semaphore rather than risk ODE on late WaitAsync/Release from unjoined tasks.
+        if (allJoined)
+        {
+            _slots.Dispose();
+        }
     }
 
     private async Task RunDrainAsync(QwpSlotLock slotLock, CancellationToken cancellationToken)

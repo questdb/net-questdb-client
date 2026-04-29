@@ -93,6 +93,10 @@ internal sealed class QwpSegmentManager : IDisposable
         {
             // already pending; the next tick will pick up the latest state
         }
+        catch (ObjectDisposedException)
+        {
+            // Ring callbacks aren't unregistered on Dispose; ignoring late wakes is safe.
+        }
     }
 
     public void Dispose()
@@ -109,6 +113,7 @@ internal sealed class QwpSegmentManager : IDisposable
 
         if (_workerTask is not null)
         {
+            // Late iterations / Wake callbacks tolerate disposed _cts/_wakeup via ODE catches.
             SfCleanup.Run(() => _workerTask.Wait(_shutdownWait));
         }
 
@@ -118,7 +123,7 @@ internal sealed class QwpSegmentManager : IDisposable
 
     private async Task RunAsync(CancellationToken ct)
     {
-        while (!ct.IsCancellationRequested)
+        while (!_disposed && !ct.IsCancellationRequested)
         {
             try { ServiceRing(); }
             catch (Exception)

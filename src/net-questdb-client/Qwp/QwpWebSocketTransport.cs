@@ -59,6 +59,7 @@ internal sealed class QwpWebSocketTransport : IDisposable, Sf.IQwpCursorTranspor
 
     private readonly QwpWebSocketTransportOptions _options;
     private readonly ClientWebSocket _client = new();
+    private readonly object _dumpLock = new();
 
     private bool _disposed;
     private int _negotiatedVersion;
@@ -308,11 +309,12 @@ internal sealed class QwpWebSocketTransport : IDisposable, Sf.IQwpCursorTranspor
         header[0] = direction;
         BinaryPrimitives.WriteInt32LittleEndian(header.Slice(1, 4), bytes.Length);
 
-        // The Stream APIs are not thread-safe; the sender's I/O loop owns the call site, so the
-        // single-writer assumption holds in production. Tests that share a stream across threads
-        // must wrap it themselves.
-        dump.Write(header);
-        dump.Write(bytes);
+        // SendBinaryAsync and ReceiveFrameAsync run concurrently; serialise so records don't tear.
+        lock (_dumpLock)
+        {
+            dump.Write(header);
+            dump.Write(bytes);
+        }
     }
 
     private void EnsureOpen()

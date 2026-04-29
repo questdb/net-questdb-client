@@ -80,7 +80,7 @@ public class SenderOptionsTests
     {
         Assert.That(
             new SenderOptions("http::addr=localhost:9000;").ToString()
-          , Is.EqualTo("http::addr=localhost:9000;auth_timeout=15000;auto_flush=on;auto_flush_bytes=2147483647;auto_flush_interval=1000;auto_flush_rows=75000;close_flush_timeout_millis=5000;close_timeout=5000;drain_orphans=False;gorilla=False;gzip=False;in_flight_window=128;init_buf_size=65536;initial_connect_retry=False;max_background_drainers=4;max_buf_size=104857600;max_name_len=127;max_schemas_per_connection=65535;pool_timeout=120000;protocol_version=Auto;reconnect_initial_backoff_millis=100;reconnect_max_backoff_millis=30000;reconnect_max_duration_millis=300000;request_durable_ack=False;request_min_throughput=102400;request_timeout=10000;retry_timeout=10000;sender_id=default;sf_append_deadline_millis=30000;sf_durability=memory;sf_max_bytes=67108864;sf_max_total_bytes=9223372036854775807;tls_verify=on;"));
+          , Is.EqualTo("http::addr=localhost:9000;auth_timeout=15000;auto_flush=on;auto_flush_bytes=2147483647;auto_flush_interval=1000;auto_flush_rows=75000;gzip=False;init_buf_size=65536;max_buf_size=104857600;max_name_len=127;pool_timeout=120000;protocol_version=Auto;request_min_throughput=102400;request_timeout=10000;retry_timeout=10000;tls_verify=on;"));
     }
 
     [Test]
@@ -112,7 +112,7 @@ public class SenderOptionsTests
 
         Assert.That(senderOptions.ToString(),
                     Is.EqualTo(
-                        "http::addr=localhost:9000;auth_timeout=15000;auto_flush=on;auto_flush_bytes=-1;auto_flush_interval=-1;auto_flush_rows=-1;close_flush_timeout_millis=5000;close_timeout=5000;drain_orphans=False;gorilla=False;gzip=False;in_flight_window=128;init_buf_size=65536;initial_connect_retry=False;max_background_drainers=4;max_buf_size=104857600;max_name_len=127;max_schemas_per_connection=65535;pool_timeout=120000;protocol_version=Auto;reconnect_initial_backoff_millis=100;reconnect_max_backoff_millis=30000;reconnect_max_duration_millis=300000;request_durable_ack=False;request_min_throughput=102400;request_timeout=10000;retry_timeout=10000;sender_id=default;sf_append_deadline_millis=30000;sf_durability=memory;sf_max_bytes=67108864;sf_max_total_bytes=9223372036854775807;tls_verify=on;"));
+                        "http::addr=localhost:9000;auth_timeout=15000;auto_flush=on;auto_flush_bytes=-1;auto_flush_interval=-1;auto_flush_rows=-1;gzip=False;init_buf_size=65536;max_buf_size=104857600;max_name_len=127;pool_timeout=120000;protocol_version=Auto;request_min_throughput=102400;request_timeout=10000;retry_timeout=10000;tls_verify=on;"));
     }
 
     [Test]
@@ -342,5 +342,31 @@ public class SenderOptionsTests
                 Throws.TypeOf<IngressError>(),
                 $"key `{kv.Split('=')[0]}` must be rejected on http scheme");
         }
+    }
+
+    [Test]
+    public void RecordWith_FlippingWsToHttp_StillRejectsWsOnlyKeys()
+    {
+        var ws = new SenderOptions("ws::addr=localhost:9000;in_flight_window=8;");
+        var flipped = ws with { protocol = QuestDB.Enums.ProtocolType.http };
+
+        Assert.That(
+            () => QuestDB.Sender.New(flipped),
+            Throws.TypeOf<IngressError>().With.Message.Contains("in_flight_window"));
+    }
+
+    [Test]
+    public void Programmatic_HttpSenderWithWsOnlyKey_Rejected()
+    {
+        var opts = new SenderOptions
+        {
+            protocol = QuestDB.Enums.ProtocolType.http,
+            addr     = "localhost:9000",
+            in_flight_window = 256,
+        };
+
+        Assert.That(
+            () => QuestDB.Sender.New(opts),
+            Throws.TypeOf<IngressError>().With.Message.Contains("in_flight_window"));
     }
 }

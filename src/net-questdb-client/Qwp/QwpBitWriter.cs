@@ -46,6 +46,11 @@ internal ref struct QwpBitWriter
 
     public QwpBitWriter(Span<byte> buffer, int startOffset)
     {
+        if ((uint)startOffset > (uint)buffer.Length)
+        {
+            throw new ArgumentOutOfRangeException(nameof(startOffset));
+        }
+
         _buffer = buffer;
         _startOffset = startOffset;
         _byteIndex = startOffset;
@@ -64,6 +69,18 @@ internal ref struct QwpBitWriter
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public void WriteBits(ulong value, int bitCount)
     {
+        if ((uint)bitCount > 64)
+        {
+            throw new ArgumentOutOfRangeException(nameof(bitCount));
+        }
+
+        // Upfront capacity check — without it, all-zero bitstreams silently advance past the end.
+        var endByte = _byteIndex + (_bitIndex + bitCount + 7) / 8;
+        if (endByte > _buffer.Length)
+        {
+            throw new InvalidOperationException("bit writer exhausted");
+        }
+
         for (var i = 0; i < bitCount; i++)
         {
             if (((value >> i) & 1UL) != 0)
@@ -111,6 +128,11 @@ internal ref struct QwpBitReader
 
     public QwpBitReader(ReadOnlySpan<byte> buffer, int startOffset)
     {
+        if ((uint)startOffset > (uint)buffer.Length)
+        {
+            throw new ArgumentOutOfRangeException(nameof(startOffset));
+        }
+
         _buffer = buffer;
         _byteIndex = startOffset;
         _bitIndex = 0;
@@ -120,6 +142,11 @@ internal ref struct QwpBitReader
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public ulong ReadBits(int bitCount)
     {
+        if ((uint)bitCount > 64)
+        {
+            throw new ArgumentOutOfRangeException(nameof(bitCount));
+        }
+
         ulong value = 0;
         for (var i = 0; i < bitCount; i++)
         {

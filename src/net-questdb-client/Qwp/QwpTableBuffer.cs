@@ -54,6 +54,11 @@ internal sealed class QwpTableBuffer
 
     private bool[] _touchedInCurrentRow = Array.Empty<bool>();
 
+    private int _committedColumnCount;
+    private int _committedSchemaId = -1;
+    private QwpColumn.Savepoint[] _rowSavepoints = Array.Empty<QwpColumn.Savepoint>();
+    private QwpColumn.Savepoint? _designatedSavepoint;
+
     /// <summary>
     ///     Constructs a new empty buffer.
     /// </summary>
@@ -114,134 +119,115 @@ internal sealed class QwpTableBuffer
     /// <summary>Append a boolean value to the named column.</summary>
     public void AppendBool(string columnName, bool value)
     {
-        var col = GetOrCreateColumn(columnName);
-        col.AppendBool(value);
+        try { GetOrCreateColumn(columnName).AppendBool(value); } catch { CancelCurrentRow(); throw; }
     }
 
     /// <summary>Append a signed byte.</summary>
     public void AppendByte(string columnName, sbyte value)
     {
-        var col = GetOrCreateColumn(columnName);
-        col.AppendByte(value);
+        try { GetOrCreateColumn(columnName).AppendByte(value); } catch { CancelCurrentRow(); throw; }
     }
 
     /// <summary>Append a 16-bit signed integer.</summary>
     public void AppendShort(string columnName, short value)
     {
-        var col = GetOrCreateColumn(columnName);
-        col.AppendShort(value);
+        try { GetOrCreateColumn(columnName).AppendShort(value); } catch { CancelCurrentRow(); throw; }
     }
 
     /// <summary>Append a 32-bit signed integer.</summary>
     public void AppendInt(string columnName, int value)
     {
-        var col = GetOrCreateColumn(columnName);
-        col.AppendInt(value);
+        try { GetOrCreateColumn(columnName).AppendInt(value); } catch { CancelCurrentRow(); throw; }
     }
 
     /// <summary>Append a 64-bit signed integer.</summary>
     public void AppendLong(string columnName, long value)
     {
-        var col = GetOrCreateColumn(columnName);
-        col.AppendLong(value);
+        try { GetOrCreateColumn(columnName).AppendLong(value); } catch { CancelCurrentRow(); throw; }
     }
 
     /// <summary>Append a single-precision float.</summary>
     public void AppendFloat(string columnName, float value)
     {
-        var col = GetOrCreateColumn(columnName);
-        col.AppendFloat(value);
+        try { GetOrCreateColumn(columnName).AppendFloat(value); } catch { CancelCurrentRow(); throw; }
     }
 
     /// <summary>Append a double-precision float.</summary>
     public void AppendDouble(string columnName, double value)
     {
-        var col = GetOrCreateColumn(columnName);
-        col.AppendDouble(value);
+        try { GetOrCreateColumn(columnName).AppendDouble(value); } catch { CancelCurrentRow(); throw; }
     }
 
     /// <summary>Append a TIMESTAMP value (microseconds since epoch) to a non-designated column.</summary>
     public void AppendTimestampMicros(string columnName, long micros)
     {
-        var col = GetOrCreateColumn(columnName);
-        col.AppendTimestampMicros(micros);
+        try { GetOrCreateColumn(columnName).AppendTimestampMicros(micros); } catch { CancelCurrentRow(); throw; }
     }
 
     /// <summary>Append a TIMESTAMP_NANOS value (nanoseconds since epoch) to a non-designated column.</summary>
     public void AppendTimestampNanos(string columnName, long nanos)
     {
-        var col = GetOrCreateColumn(columnName);
-        col.AppendTimestampNanos(nanos);
+        try { GetOrCreateColumn(columnName).AppendTimestampNanos(nanos); } catch { CancelCurrentRow(); throw; }
     }
 
     /// <summary>Append a DATE value (milliseconds since epoch).</summary>
     public void AppendDateMillis(string columnName, long millis)
     {
-        var col = GetOrCreateColumn(columnName);
-        col.AppendDateMillis(millis);
+        try { GetOrCreateColumn(columnName).AppendDateMillis(millis); } catch { CancelCurrentRow(); throw; }
     }
 
     /// <summary>Append a UUID.</summary>
     public void AppendUuid(string columnName, Guid value)
     {
-        var col = GetOrCreateColumn(columnName);
-        col.AppendUuid(value);
+        try { GetOrCreateColumn(columnName).AppendUuid(value); } catch { CancelCurrentRow(); throw; }
     }
 
     /// <summary>Append a single UTF-16 code unit.</summary>
     public void AppendChar(string columnName, char value)
     {
-        var col = GetOrCreateColumn(columnName);
-        col.AppendChar(value);
+        try { GetOrCreateColumn(columnName).AppendChar(value); } catch { CancelCurrentRow(); throw; }
     }
 
     /// <summary>Append a length-prefixed UTF-8 string.</summary>
     public void AppendVarchar(string columnName, ReadOnlySpan<char> value)
     {
-        var col = GetOrCreateColumn(columnName);
-        col.AppendVarchar(value);
+        try { GetOrCreateColumn(columnName).AppendVarchar(value); } catch { CancelCurrentRow(); throw; }
     }
 
     /// <summary>Append a SYMBOL value as a global dictionary id.</summary>
     public void AppendSymbol(string columnName, int globalId)
     {
-        var col = GetOrCreateColumn(columnName);
-        col.AppendSymbol(globalId);
+        try { GetOrCreateColumn(columnName).AppendSymbol(globalId); } catch { CancelCurrentRow(); throw; }
     }
 
     /// <summary>Append a DECIMAL128 value. The first call locks the column scale.</summary>
     public void AppendDecimal128(string columnName, decimal value)
     {
-        var col = GetOrCreateColumn(columnName);
-        col.AppendDecimal128(value);
+        try { GetOrCreateColumn(columnName).AppendDecimal128(value); } catch { CancelCurrentRow(); throw; }
     }
 
     /// <summary>Append a non-negative LONG256 value (≤ 256 bits).</summary>
     public void AppendLong256(string columnName, BigInteger value)
     {
-        var col = GetOrCreateColumn(columnName);
-        col.AppendLong256(value);
+        try { GetOrCreateColumn(columnName).AppendLong256(value); } catch { CancelCurrentRow(); throw; }
     }
 
     /// <summary>Append a GEOHASH value. The first call locks the column precision (in bits).</summary>
     public void AppendGeohash(string columnName, ulong hash, int precisionBits)
     {
-        var col = GetOrCreateColumn(columnName);
-        col.AppendGeohash(hash, precisionBits);
+        try { GetOrCreateColumn(columnName).AppendGeohash(hash, precisionBits); } catch { CancelCurrentRow(); throw; }
     }
 
     /// <summary>Append a DOUBLE_ARRAY row with the given shape.</summary>
     public void AppendDoubleArray(string columnName, ReadOnlySpan<double> values, ReadOnlySpan<int> shape)
     {
-        var col = GetOrCreateColumn(columnName);
-        col.AppendDoubleArray(values, shape);
+        try { GetOrCreateColumn(columnName).AppendDoubleArray(values, shape); } catch { CancelCurrentRow(); throw; }
     }
 
     /// <summary>Append a LONG_ARRAY row with the given shape.</summary>
     public void AppendLongArray(string columnName, ReadOnlySpan<long> values, ReadOnlySpan<int> shape)
     {
-        var col = GetOrCreateColumn(columnName);
-        col.AppendLongArray(values, shape);
+        try { GetOrCreateColumn(columnName).AppendLongArray(values, shape); } catch { CancelCurrentRow(); throw; }
     }
 
     // -- Reset -------------------------------------------------------------------
@@ -262,6 +248,9 @@ internal sealed class QwpTableBuffer
 
         RowCount = 0;
         HasPendingRow = false;
+        _committedColumnCount = _columns.Count;
+        _committedSchemaId = SchemaId;
+        _designatedSavepoint = null;
 
         if (_touchedInCurrentRow.Length > 0)
         {
@@ -276,9 +265,19 @@ internal sealed class QwpTableBuffer
     /// </summary>
     public void At(long timestampMicros)
     {
-        var ts = EnsureDesignatedTimestampColumn();
-        ts.AppendTimestampMicros(timestampMicros);
-        FinaliseRow();
+        try
+        {
+            EnsureCanAppendRow();
+            var ts = EnsureDesignatedTimestampColumn();
+            _designatedSavepoint ??= ts.Snapshot();
+            ts.AppendTimestampMicros(timestampMicros);
+            FinaliseRow();
+        }
+        catch
+        {
+            CancelCurrentRow();
+            throw;
+        }
     }
 
     /// <summary>
@@ -286,9 +285,28 @@ internal sealed class QwpTableBuffer
     /// </summary>
     public void AtNanos(long timestampNanos)
     {
-        var ts = EnsureDesignatedTimestampColumn();
-        ts.AppendTimestampNanos(timestampNanos);
-        FinaliseRow();
+        try
+        {
+            EnsureCanAppendRow();
+            var ts = EnsureDesignatedTimestampColumn();
+            _designatedSavepoint ??= ts.Snapshot();
+            ts.AppendTimestampNanos(timestampNanos);
+            FinaliseRow();
+        }
+        catch
+        {
+            CancelCurrentRow();
+            throw;
+        }
+    }
+
+    private void EnsureCanAppendRow()
+    {
+        if (RowCount >= QwpConstants.MaxRowsPerTable)
+        {
+            throw new IngressError(ErrorCode.InvalidApiCall,
+                $"table '{TableName}' exceeds the {QwpConstants.MaxRowsPerTable}-row limit");
+        }
     }
 
     // -- Internal helpers --------------------------------------------------------
@@ -316,6 +334,7 @@ internal sealed class QwpTableBuffer
 
         if (_columnIndex.TryGetValue(columnName, out var idx))
         {
+            SnapshotOnFirstTouch(idx, _columns[idx]);
             MarkTouched(idx);
             return _columns[idx];
         }
@@ -341,8 +360,53 @@ internal sealed class QwpTableBuffer
 
         EnsureTouchedCapacity(idx + 1);
         MarkTouched(idx);
-
         return col;
+    }
+
+    private void SnapshotOnFirstTouch(int index, QwpColumn col)
+    {
+        if (index < _touchedInCurrentRow.Length && _touchedInCurrentRow[index])
+        {
+            return;
+        }
+
+        if (_rowSavepoints.Length <= index)
+        {
+            Array.Resize(ref _rowSavepoints, Math.Max(4, index + 1));
+        }
+        _rowSavepoints[index] = col.Snapshot();
+    }
+
+    private void CancelCurrentRow()
+    {
+        for (var i = 0; i < _committedColumnCount && i < _touchedInCurrentRow.Length; i++)
+        {
+            if (_touchedInCurrentRow[i])
+            {
+                _columns[i].Restore(_rowSavepoints[i]);
+            }
+        }
+
+        while (_columns.Count > _committedColumnCount)
+        {
+            var last = _columns.Count - 1;
+            _columnIndex.Remove(_columns[last].Name);
+            _columns.RemoveAt(last);
+        }
+
+        SchemaId = _committedSchemaId;
+
+        if (_designatedSavepoint.HasValue && DesignatedTimestampColumn is not null)
+        {
+            DesignatedTimestampColumn.Restore(_designatedSavepoint.Value);
+        }
+        _designatedSavepoint = null;
+
+        if (_touchedInCurrentRow.Length > 0)
+        {
+            Array.Clear(_touchedInCurrentRow, 0, _touchedInCurrentRow.Length);
+        }
+        HasPendingRow = false;
     }
 
     /// <summary>
@@ -376,17 +440,19 @@ internal sealed class QwpTableBuffer
 
         RowCount++;
         HasPendingRow = false;
-
-        if (RowCount > QwpConstants.MaxRowsPerTable)
-        {
-            throw new IngressError(ErrorCode.InvalidApiCall,
-                $"table '{TableName}' exceeds the {QwpConstants.MaxRowsPerTable}-row limit");
-        }
+        _committedColumnCount = _columns.Count;
+        _committedSchemaId = SchemaId;
+        _designatedSavepoint = null;
     }
 
     private void MarkTouched(int columnIndex)
     {
         EnsureTouchedCapacity(columnIndex + 1);
+        if (_touchedInCurrentRow[columnIndex])
+        {
+            throw new IngressError(ErrorCode.InvalidApiCall,
+                $"column '{_columns[columnIndex].Name}' is already written in the current row");
+        }
         _touchedInCurrentRow[columnIndex] = true;
         HasPendingRow = true;
     }

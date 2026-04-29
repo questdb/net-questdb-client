@@ -65,6 +65,7 @@ internal sealed class QwpMmapSegment : IDisposable
     private readonly List<long> _offsetTable;
     private readonly unsafe byte* _basePtr;
     private readonly long _viewSize;
+    private readonly int _maxFrameLength;
     private bool _disposed;
 
     private unsafe QwpMmapSegment(
@@ -74,7 +75,8 @@ internal sealed class QwpMmapSegment : IDisposable
         long capacity,
         long baseFsn,
         long writePosition,
-        List<long> offsetTable)
+        List<long> offsetTable,
+        int maxFrameLength)
     {
         Path = path;
         _mmap = mmap;
@@ -84,6 +86,7 @@ internal sealed class QwpMmapSegment : IDisposable
         BaseFsn = baseFsn;
         WritePosition = writePosition;
         _offsetTable = offsetTable;
+        _maxFrameLength = maxFrameLength;
 
         byte* ptr = null;
         _handle.AcquirePointer(ref ptr);
@@ -138,7 +141,7 @@ internal sealed class QwpMmapSegment : IDisposable
             // Zero any garbage past the last good envelope so subsequent appends start clean.
             ZeroViewRange(view, writePos, capacity - writePos);
 
-            return new QwpMmapSegment(path, mmap, view, capacity, baseFsn, writePos, offsets);
+            return new QwpMmapSegment(path, mmap, view, capacity, baseFsn, writePos, offsets, maxFrameLength);
         }
         catch (Exception)
         {
@@ -168,6 +171,14 @@ internal sealed class QwpMmapSegment : IDisposable
         if (frame.Length == 0)
         {
             throw new ArgumentException("empty frames are not permitted on the wire", nameof(frame));
+        }
+
+        if (frame.Length > _maxFrameLength)
+        {
+            // Replay would truncate this as a torn tail on next reopen.
+            throw new ArgumentException(
+                $"frame length {frame.Length} exceeds the replay cap {_maxFrameLength}",
+                nameof(frame));
         }
 
         var envelopeStart = WritePosition;

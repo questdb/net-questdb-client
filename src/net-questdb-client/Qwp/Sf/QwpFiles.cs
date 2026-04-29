@@ -72,10 +72,7 @@ internal static class QwpFiles
         }
         catch (IOException)
         {
-            return null;
-        }
-        catch (UnauthorizedAccessException)
-        {
+            // Lock collision only; permission/path errors propagate.
             return null;
         }
     }

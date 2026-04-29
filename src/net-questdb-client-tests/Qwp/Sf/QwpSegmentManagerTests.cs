@@ -100,14 +100,14 @@ public class QwpSegmentManagerTests
         }
 
         Assert.That(ring.SealedSegmentCount, Is.GreaterThanOrEqualTo(2));
-        var sealedSegmentBytes = (long)ring.SealedSegmentCount * ring.SegmentCapacity;
-        var committedBefore = mgr.CommittedBytes;
-        var trimsBefore = mgr.TrimCycles;
 
         ring.Acknowledge(99L);
-        await WaitFor(() => mgr.TrimCycles > trimsBefore, TimeSpan.FromSeconds(2));
-
-        Assert.That(committedBefore - mgr.CommittedBytes, Is.GreaterThanOrEqualTo(sealedSegmentBytes));
+        // Drain leaves only the active segment + at most one installed hot spare on disk; the
+        // manager reconciles _committedBytes to that. Don't capture a "before" snapshot — the
+        // spare-install timing races with capture and produces flaky deltas across machines.
+        await WaitFor(
+            () => ring.SealedSegmentCount == 0 && mgr.CommittedBytes <= 2 * ring.SegmentCapacity,
+            TimeSpan.FromSeconds(2));
     }
 
     [Test]
@@ -134,15 +134,19 @@ public class QwpSegmentManagerTests
         using var mgr = new QwpSegmentManager(ring, long.MaxValue);
         mgr.Start();
 
-        var sw = System.Diagnostics.Stopwatch.StartNew();
+        // Drain the eager startup spare so the next provisioning can only come from a producer wake.
         await WaitFor(() => mgr.SparesInstalled >= 1, TimeSpan.FromSeconds(2));
+        Assert.That(ring.TryAppend(new byte[24]), Is.True);
+        Assert.That(ring.TryAppend(new byte[24]), Is.True);
+        var sparesBefore = mgr.SparesInstalled;
+
+        // Force a rotation; the ring's NeedsHotSpare → Wake path should drive a spare faster than the heartbeat.
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        await WaitFor(() => mgr.SparesInstalled > sparesBefore, TimeSpan.FromSeconds(2));
         sw.Stop();
 
-        // The first spare is needed because the ring is fresh; the producer's first append (via
-        // NeedsHotSpare check) should wake the manager immediately rather than wait the full
-        // heartbeat. We give a generous bound to avoid CI flakes.
         Assert.That(sw.Elapsed, Is.LessThan(QwpSegmentManager.HeartbeatInterval),
-            "first spare arrives via wake, not heartbeat tick");
+            "spare arrives via producer wake, not heartbeat tick");
     }
 
     [Test]

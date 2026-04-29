@@ -14,7 +14,7 @@ using QuestDB.Senders;
 //   request_durable_ack  on/off — opt in to per-table durable seqTxn watermarks
 //   username/password    Basic auth, or
 //   token                Bearer auth
-using var sender = Sender.New("ws::addr=localhost:9000;");
+using var sender = Sender.New("ws::addr=localhost:9000;request_durable_ack=on;");
 
 sender.Table("trades")
       .Symbol("symbol", "ETH-USD")

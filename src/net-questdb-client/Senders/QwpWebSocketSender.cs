@@ -153,8 +153,8 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
         if (_asyncMode)
         {
             _slot = new SemaphoreSlim(options.in_flight_window, options.in_flight_window);
-            // Bounded to the in-flight window: producer back-pressure happens at the slot
-            // semaphore, the channel just hands off the encoded frame.
+            // Channel capacity must equal _slot's initial count: EnqueueAsync uses _slot.Wait
+            // then Channel.TryWrite and relies on the slot to reserve room.
             _sendChannel = Channel.CreateBounded<AsyncBatch>(new BoundedChannelOptions(options.in_flight_window)
             {
                 SingleReader = true,
@@ -695,11 +695,13 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
 
         var frame = _encoderBuffers[0].WrittenMemory;
         var sequence = _nextSequence++;
+        var awaitingAck = false;
 
         try
         {
             _transport!.SendBinaryAsync(frame, ct).GetAwaiter().GetResult();
             _inFlightWindow.Add(sequence);
+            awaitingAck = true;
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -714,6 +716,14 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
             {
                 var read = _transport.ReceiveFrameAsync(_receiveBuffer, ct).GetAwaiter().GetResult();
                 response = QwpResponse.Parse(_receiveBuffer.AsSpan(0, read));
+            }
+            catch (OperationCanceledException) when (awaitingAck)
+            {
+                // Frame already on wire + seq registered: server may have committed, so terminal.
+                FailTerminal(new IngressError(
+                    ErrorCode.ServerFlushError,
+                    "flush canceled after the frame was sent; sender state is ambiguous"));
+                throw _terminalError!;
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
@@ -740,6 +750,7 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
         // Stale ACK absorption: tolerate ACKs from earlier batches still in flight on this connection.
         // Anything covered by a higher cumulative ACK is silently absorbed by InFlightWindow.AcknowledgeUpTo.
         _inFlightWindow.AcknowledgeUpTo(response.Sequence);
+        awaitingAck = false;
         ProcessTableEntries(response.TableEntries, isDurable: false);
         OnFlushSucceeded();
     }
@@ -826,8 +837,15 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
                     // AwaitEmpty could see an "empty" window and return prematurely.
                     _inFlightWindow.Add(seq);
                     var frame = _encoderBuffers[idx].WrittenMemory;
-                    _sendChannel!.Writer.WriteAsync(new AsyncBatch(seq, idx, frame), linkedCt)
-                        .AsTask().GetAwaiter().GetResult();
+                    // _slot already reserved channel capacity; cancellable WriteAsync would
+                    // orphan _inFlightWindow.Add(seq) and hang AwaitEmpty.
+                    if (!_sendChannel!.Writer.TryWrite(new AsyncBatch(seq, idx, frame)))
+                    {
+                        FailTerminal(new IngressError(
+                            ErrorCode.ServerFlushError,
+                            "internal: in-flight channel was full after reserving a slot"));
+                        throw _terminalError!;
+                    }
                 }
                 catch (OperationCanceledException) when (_terminalError is not null)
                 {

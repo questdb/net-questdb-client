@@ -19,7 +19,7 @@ using QuestDB.Senders;
 // pinned CA. Below uses unsafe_off for self-signed dev / test setups; never ship that to prod.
 using var sender =
     Sender.New(
-        "wss::addr=localhost:9000;username=admin;password=quest;tls_verify=unsafe_off;");
+        "wss::addr=localhost:9000;username=admin;password=quest;tls_verify=unsafe_off;request_durable_ack=on;");
 
 await sender.Table("trades")
     .Symbol("symbol", "ETH-USD")

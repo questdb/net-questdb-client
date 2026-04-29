@@ -159,8 +159,14 @@ public class QwpOrphanScannerTests
         SetupSlotWithSegment(slot);
 
         var firstSweep = QwpOrphanScanner.ClaimOrphans(_root, "self");
-        Assert.That(firstSweep, Has.Count.EqualTo(1));
-        firstSweep[0].Dispose();
+        try
+        {
+            Assert.That(firstSweep, Has.Count.EqualTo(1));
+        }
+        finally
+        {
+            foreach (var c in firstSweep) c.Dispose();
+        }
 
         // After releasing, a second scan should re-claim the same slot.
         var secondSweep = QwpOrphanScanner.ClaimOrphans(_root, "self");

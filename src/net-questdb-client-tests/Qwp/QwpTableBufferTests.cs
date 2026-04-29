@@ -197,4 +197,57 @@ public class QwpTableBufferTests
         var name = new string('y', QwpConstants.MaxNameLengthBytes + 1);
         Assert.Throws<IngressError>(() => t.AppendLong(name, 1));
     }
+
+    [Test]
+    public void AppendSameColumnTwice_InOneRow_Throws()
+    {
+        var t = new QwpTableBuffer("t");
+        t.AppendLong("x", 1);
+        var ex = Assert.Throws<IngressError>(() => t.AppendLong("x", 2));
+        Assert.That(ex!.code, Is.EqualTo(ErrorCode.InvalidApiCall));
+        Assert.That(ex.Message, Does.Contain("already written"));
+    }
+
+    [Test]
+    public void AppendSameColumnTwice_DifferentTypes_Throws()
+    {
+        var t = new QwpTableBuffer("t");
+        t.AppendBool("flag", true);
+        Assert.Throws<IngressError>(() => t.AppendBool("flag", false));
+    }
+
+    [Test]
+    public void DoubleAppend_ThenAt_RollsBackEntireRow()
+    {
+        var t = new QwpTableBuffer("t");
+        t.AppendLong("a", 10);
+        t.At(1_000);
+        Assert.That(t.RowCount, Is.EqualTo(1));
+
+        t.AppendLong("a", 20);
+        t.AppendLong("b", 30);
+        Assert.Throws<IngressError>(() => t.AppendLong("a", 999));
+
+        Assert.That(t.RowCount, Is.EqualTo(1), "double-write must cancel only the in-flight row");
+        Assert.That(t.HasPendingRow, Is.False);
+
+        t.AppendLong("a", 40);
+        t.At(2_000);
+        Assert.That(t.RowCount, Is.EqualTo(2));
+    }
+
+    [Test]
+    public void DoubleAppend_OnFreshlyAddedColumn_PopsThatColumn()
+    {
+        var t = new QwpTableBuffer("t");
+        t.AppendLong("base", 1);
+        t.At(1_000);
+
+        t.AppendLong("base", 2);
+        t.AppendLong("fresh", 5);
+        Assert.Throws<IngressError>(() => t.AppendLong("fresh", 6));
+
+        Assert.That(t.Columns.Count, Is.EqualTo(1), "the freshly-added column must be removed on cancel");
+        Assert.That(t.Columns[0].Name, Is.EqualTo("base"));
+    }
 }

@@ -108,16 +108,21 @@ internal sealed class QwpReconnectPolicy
             throw new ArgumentOutOfRangeException(nameof(attemptIndex));
         }
 
-        // Double up to a safe limit to avoid TimeSpan overflow on absurd attempt counts.
-        var multiplier = 1L;
-        for (var i = 0; i < attemptIndex && multiplier < (long)int.MaxValue; i++)
+        // Saturate on ticks to avoid long overflow when InitialBackoff is days-scale.
+        var ticks = InitialBackoff.Ticks;
+        var maxTicks = MaxBackoff.Ticks;
+        for (var i = 0; i < attemptIndex && ticks < maxTicks; i++)
         {
-            multiplier <<= 1;
+            if (ticks > maxTicks / 2)
+            {
+                ticks = maxTicks;
+                break;
+            }
+            ticks <<= 1;
         }
 
-        var raw = TimeSpan.FromTicks(InitialBackoff.Ticks * multiplier);
-        var clamped = raw > MaxBackoff ? MaxBackoff : raw;
-        return _jitter(clamped);
+        var clampedTicks = ticks > maxTicks ? maxTicks : ticks;
+        return _jitter(TimeSpan.FromTicks(clampedTicks));
     }
 
     /// <summary>

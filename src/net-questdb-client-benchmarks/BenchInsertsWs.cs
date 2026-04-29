@@ -25,6 +25,8 @@
 #if NET7_0_OR_GREATER
 
 using System.Buffers.Binary;
+using System.Net;
+using System.Net.Sockets;
 using BenchmarkDotNet.Attributes;
 using BenchmarkDotNet.Configs;
 using BenchmarkDotNet.Order;
@@ -92,7 +94,7 @@ public class BenchInsertsWs
             });
             await _qwpServer.StartAsync();
 
-            const int httpPort = 29485;
+            var httpPort = GetFreeTcpPort();
             _httpServer = new DummyHttpServer();
             await _httpServer.StartAsync(httpPort);
 
@@ -187,6 +189,15 @@ public class BenchInsertsWs
         }
 
         await sender.SendAsync();
+    }
+
+    private static int GetFreeTcpPort()
+    {
+        var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        var port = ((IPEndPoint)listener.LocalEndpoint).Port;
+        listener.Stop();
+        return port;
     }
 }
 

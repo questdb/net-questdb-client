@@ -71,11 +71,21 @@ internal static class SfCleanup
         }
     }
 
-    private static bool IsExpectedCleanupError(Exception ex) =>
-        ex is IOException
-        || ex is UnauthorizedAccessException
-        || ex is ObjectDisposedException
-        || ex is SemaphoreFullException
-        || ex is OperationCanceledException
-        || ex is AggregateException;
+    private static bool IsExpectedCleanupError(Exception ex)
+    {
+        if (ex is AggregateException agg)
+        {
+            foreach (var inner in agg.Flatten().InnerExceptions)
+            {
+                if (!IsExpectedCleanupError(inner)) return false;
+            }
+            return true;
+        }
+
+        return ex is IOException
+            || ex is UnauthorizedAccessException
+            || ex is ObjectDisposedException
+            || ex is SemaphoreFullException
+            || ex is OperationCanceledException;
+    }
 }

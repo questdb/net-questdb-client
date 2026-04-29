@@ -67,6 +67,7 @@ internal readonly record struct QwpTableEntry(string TableName, long SeqTxn);
 internal readonly struct QwpResponse
 {
     private static readonly QwpTableEntry[] EmptyEntries = Array.Empty<QwpTableEntry>();
+    private static readonly UTF8Encoding StrictUtf8 = new(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true);
 
     public QwpResponse(QwpStatusCode status, long sequence, string message, QwpTableEntry[] tableEntries)
     {
@@ -201,9 +202,18 @@ internal readonly struct QwpResponse
                 $"QWP error response size mismatch: header+message expects {expectedTotal} bytes, got {frame.Length}");
         }
 
-        var message = msgLen == 0
-            ? string.Empty
-            : Encoding.UTF8.GetString(frame.Slice(QwpConstants.ErrorAckHeaderSize, msgLen));
+        string message;
+        try
+        {
+            message = msgLen == 0
+                ? string.Empty
+                : StrictUtf8.GetString(frame.Slice(QwpConstants.ErrorAckHeaderSize, msgLen));
+        }
+        catch (DecoderFallbackException ex)
+        {
+            throw new IngressError(ErrorCode.InvalidUtf8,
+                "QWP error response contains invalid UTF-8", ex);
+        }
 
         return new QwpResponse(status, seq, message, EmptyEntries);
     }
@@ -248,7 +258,16 @@ internal readonly struct QwpResponse
                     $"QWP per-table entry {i}: declared length {nameLen} runs past frame end");
             }
 
-            var name = Encoding.UTF8.GetString(bytes.Slice(pos, nameLen));
+            string name;
+            try
+            {
+                name = StrictUtf8.GetString(bytes.Slice(pos, nameLen));
+            }
+            catch (DecoderFallbackException ex)
+            {
+                throw new IngressError(ErrorCode.InvalidUtf8,
+                    $"QWP per-table entry {i}: invalid UTF-8 table name", ex);
+            }
             pos += nameLen;
 
             var seqTxn = BinaryPrimitives.ReadInt64LittleEndian(bytes.Slice(pos, 8));

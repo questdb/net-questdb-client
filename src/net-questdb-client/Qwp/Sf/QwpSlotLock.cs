@@ -70,18 +70,15 @@ internal sealed class QwpSlotLock : IDisposable
         QwpFiles.EnsureDirectory(slotDirectory);
 
         var path = Path.Combine(slotDirectory, LockFileName);
-        try
-        {
-            var fs = QwpFiles.OpenExclusive(path);
-            return new QwpSlotLock(slotDirectory, path, fs);
-        }
-        catch (IOException ex)
+        var fs = QwpFiles.TryOpenExclusive(path);
+        if (fs is null)
         {
             throw new IngressError(
                 ErrorCode.ConfigError,
-                $"slot {slotDirectory} is already locked by another sender (lock file: {path})",
-                ex);
+                $"slot {slotDirectory} is already locked by another sender (lock file: {path})");
         }
+
+        return new QwpSlotLock(slotDirectory, path, fs);
     }
 
     /// <summary>Like <see cref="Acquire" /> but returns <c>null</c> on collision instead of throwing.</summary>

@@ -181,9 +181,9 @@ public sealed class DummyQwpServer : IAsyncDisposable
             WebSocketReceiveResult result;
             do
             {
-                if (totalRead >= receiveBuf.Length)
+                if (totalRead == receiveBuf.Length)
                 {
-                    return; // overflow; bail.
+                    Array.Resize(ref receiveBuf, receiveBuf.Length * 2);
                 }
 
                 result = await ws.ReceiveAsync(

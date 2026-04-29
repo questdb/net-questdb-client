@@ -271,7 +271,7 @@ The config string format is:
 | `max_name_len`           | `127`                      | The maximum allowed bytes, in UTF-8 format, for column and table names.                                                                                                                                                       |
 | `protocol_version`       |                            | Explicitly specifies the version of InfluxDB Line Protocol to use for sender. Valid options are:<br>• protocol_version=1<br>• protocol_version=2<br>• protocol_version=3<br>• protocol_version=auto (default, if unspecified) |
 
-##### WebSocket / QWP-only parameters
+### WebSocket / QWP-only parameters
 
 | Name                              | Default      | Description                                                                                              |
 | --------------------------------- | ------------ | -------------------------------------------------------------------------------------------------------- |

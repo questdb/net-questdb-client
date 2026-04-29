@@ -450,8 +450,11 @@ public class QwpWebSocketSenderTests
 
         await WaitFor(() => server.ReceivedFrames.Count >= 1);
 
-        sender.Table("t").Column("v", 2L).At(DateTime.UtcNow);
-        Assert.Catch<IngressError>(() => sender.Send());
+        Assert.Catch<IngressError>(() =>
+        {
+            sender.Table("t").Column("v", 2L).At(DateTime.UtcNow);
+            sender.Send();
+        });
     }
 
     private static System.Security.Cryptography.X509Certificates.X509Certificate2 NewSelfSignedCertificate(string subject)

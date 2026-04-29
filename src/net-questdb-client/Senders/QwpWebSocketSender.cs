@@ -816,9 +816,6 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
                         throw _terminalError!;
                     }
 
-                    // Only commit local state (clear rows, advance symbol delta) after the batch is
-                    // safely on the send channel. Earlier we cleared even on cancel/terminal-error
-                    // mid-handoff, losing rows that never made it to the wire.
                     OnFlushSucceeded();
                 }
                 catch (OperationCanceledException) when (_terminalError is not null)

@@ -286,7 +286,6 @@ internal sealed class QwpWebSocketTransport : IQwpCursorTransport
             }
         }
 
-        // Header is present but unparseable — fail fast rather than mask server/proxy corruption.
         throw new IngressError(
             ErrorCode.ProtocolVersionError,
             $"server returned invalid {QwpConstants.HeaderVersion} header value");

@@ -128,10 +128,10 @@ internal sealed class QwpWebSocketTransport : IQwpCursorTransport
         }
         catch (Exception ex)
         {
-            // The upgrade reject (401/403/non-101) lives on the inner exception. Surface it as
-            // AuthError so the SF cursor engine treats it as terminal and skips the reconnect loop.
-            var status = (int)(_client.HttpStatusCode);
-            if (status is 401 or 403)
+            // 401/403/404 are permanent and won't fix on retry; everything else (incl. 5xx) is left
+            // transient so the SF reconnect loop can handle LB / server hiccups.
+            var status = (int)_client.HttpStatusCode;
+            if (status is 401 or 403 or 404)
             {
                 throw new IngressError(ErrorCode.AuthError,
                     $"WebSocket upgrade rejected with HTTP {status} for {_options.Uri}", ex);

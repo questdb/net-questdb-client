@@ -964,8 +964,7 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
                 }
                 catch (Exception ex) when (ex is not OperationCanceledException)
                 {
-                    // A malformed ACK (e.g. sequence beyond highest sent) must terminalise the sender,
-                    // otherwise producers wait until close_timeout instead of seeing the violation.
+                    // Malformed ACK must terminalise; otherwise producers block until close_timeout.
                     FailTerminal(ex);
                     return;
                 }
@@ -979,11 +978,13 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
     /// <inheritdoc />
     public void Truncate()
     {
+        // QWP column buffers are sized by row count; no buffer-tail to trim like the ILP text path.
     }
 
     /// <inheritdoc />
     public void CancelRow()
     {
+        _currentTable?.CancelCurrentRow();
     }
 
     /// <inheritdoc />

@@ -170,7 +170,8 @@ public class QwpInFlightWindowTests
         Assert.That(waitTask.Wait(50), Is.False, "two outstanding sends must keep AwaitEmpty blocked");
 
         w.AcknowledgeUpTo(1);
-        waitTask.Wait(TimeSpan.FromSeconds(2));
+        Assert.That(waitTask.Wait(TimeSpan.FromSeconds(2)), Is.True,
+            "waiter should complete promptly after the cumulative ACK");
         Assert.That(w.IsEmpty);
     }
 

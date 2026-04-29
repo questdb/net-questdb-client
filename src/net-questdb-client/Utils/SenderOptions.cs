@@ -113,6 +113,7 @@ public record SenderOptions
     private TimeSpan _closeFlushTimeout = TimeSpan.FromMilliseconds(5000);
     private bool _drainOrphans;
     private int _maxBackgroundDrainers = 4;
+    private bool _sfMaxTotalBytesUserSet;
 
     /// <summary>
     ///     Construct a <see cref="SenderOptions" /> object with default values.
@@ -154,6 +155,9 @@ public record SenderOptions
         }
 
         ParseStringWithDefault(nameof(token), null, out _token);
+        // Accepted for cross-client connstring interop; runtime ignores them (TCP auth uses `token`).
+        ParseStringWithDefault(nameof(token_x), null, out _tokenX);
+        ParseStringWithDefault(nameof(token_y), null, out _tokenY);
         ParseIntWithDefault(nameof(request_min_throughput), "102400", out _requestMinThroughput);
         ParseMillisecondsWithDefault(nameof(auth_timeout), "15000", out _authTimeout);
         ParseMillisecondsWithDefault(nameof(request_timeout), "30000", out _requestTimeout);
@@ -176,6 +180,7 @@ public record SenderOptions
         ParseStringWithDefault(nameof(sender_id), "default", out var senderIdRaw);
         SetSenderId(senderIdRaw ?? "default");
         ParseLongWithDefault(nameof(sf_max_bytes), (4L * 1024 * 1024).ToString(), out _sfMaxBytes);
+        _sfMaxTotalBytesUserSet = ReadOptionFromBuilder(nameof(sf_max_total_bytes)) is not null;
         var defaultMaxTotal = string.IsNullOrEmpty(_sfDir)
             ? 128L * 1024 * 1024
             : 10L * 1024 * 1024 * 1024;
@@ -333,6 +338,14 @@ public record SenderOptions
         {
             throw new IngressError(ErrorCode.ConfigError,
                 $"`sf_durability` only accepts 'memory' in v1, got `{_sfDurability}`");
+        }
+
+        // Programmatic init's field initializer is the no-SF default (128 MiB); promote when sf_dir
+        // is set and the user didn't pick their own value. Equality-on-128MiB would falsely promote
+        // an explicit user 128 MiB.
+        if (!_sfMaxTotalBytesUserSet && !string.IsNullOrEmpty(_sfDir))
+        {
+            _sfMaxTotalBytes = 10L * 1024 * 1024 * 1024;
         }
     }
 
@@ -852,7 +865,11 @@ public record SenderOptions
     public long sf_max_total_bytes
     {
         get => _sfMaxTotalBytes;
-        set => _sfMaxTotalBytes = value;
+        set
+        {
+            _sfMaxTotalBytes = value;
+            _sfMaxTotalBytesUserSet = true;
+        }
     }
 
     /// <summary>Durability tier. v1 only accepts <c>"memory"</c>.</summary>

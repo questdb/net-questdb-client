@@ -333,7 +333,8 @@ internal sealed class QwpCursorSendEngine : IDisposable
     public async Task FlushAsync(TimeSpan timeout, CancellationToken cancellationToken = default)
     {
         EnsureNotDisposed();
-        var deadline = timeout == Timeout.InfiniteTimeSpan
+        var infiniteTimeout = timeout == Timeout.InfiniteTimeSpan;
+        var deadline = infiniteTimeout
             ? DateTime.MaxValue
             : DateTime.UtcNow + timeout;
 
@@ -360,6 +361,14 @@ internal sealed class QwpCursorSendEngine : IDisposable
                 }
 
                 waitTask = _ackSignal.Task;
+            }
+
+            if (infiniteTimeout)
+            {
+                // Task.WaitAsync(TimeSpan, ct) rejects timeouts above ~49.7 days; route infinite waits
+                // through the no-timeout overload to avoid ArgumentOutOfRangeException.
+                await waitTask.WaitAsync(cancellationToken).ConfigureAwait(false);
+                continue;
             }
 
             var remaining = deadline - DateTime.UtcNow;
@@ -463,8 +472,10 @@ internal sealed class QwpCursorSendEngine : IDisposable
                 {
                     return;
                 }
-                catch (IngressError ex) when (ex.code == ErrorCode.AuthError)
+                catch (IngressError ex) when (
+                    ex.code is ErrorCode.AuthError or ErrorCode.ProtocolVersionError)
                 {
+                    // No retry budget: bad creds and version mismatches won't fix themselves over time.
                     SetTerminal(ex);
                     return;
                 }

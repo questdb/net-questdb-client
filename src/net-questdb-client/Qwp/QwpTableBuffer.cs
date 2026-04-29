@@ -381,7 +381,7 @@ internal sealed class QwpTableBuffer
         _rowSavepoints[index] = col.Snapshot();
     }
 
-    private void CancelCurrentRow()
+    internal void CancelCurrentRow()
     {
         for (var i = 0; i < _committedColumnCount && i < _touchedInCurrentRow.Length; i++)
         {

@@ -147,11 +147,32 @@ using var sender = Sender.New("wss::addr=q.example.com:443;username=admin;passwo
 
 #### Pipelined async mode
 
-By default the WebSocket sender pipelines up to 128 batches in flight. Set `in_flight_window=1` to fall back to send-and-wait synchronous semantics:
+By default the WebSocket sender pipelines up to 128 batches in flight. Use the `*Async` API to keep the calling thread free while frames are on the wire:
 
 ```csharp
-using var sender = Sender.New("ws::addr=localhost:9000;in_flight_window=1;");
+await using var sender = Sender.New("ws::addr=localhost:9000;");
+
+for (var i = 0; i < 1_000_000; i++)
+{
+    sender.Table("trades")
+          .Symbol("symbol", "ETH-USD")
+          .Column("price", 2615.54);
+    await sender.AtAsync(DateTime.UtcNow);
+}
+
+await sender.SendAsync();
 ```
+
+`in_flight_window` controls the pipeline depth; valid range is `2..N`. The WebSocket transport is async-only — `in_flight_window=1` is rejected.
+
+#### Examples
+
+Working sample projects (drop-in copies):
+
+- [`src/example-websocket`](src/example-websocket/Program.cs) — minimal `ws::` sender.
+- [`src/example-websocket-auth-tls`](src/example-websocket-auth-tls/Program.cs) — `wss::` with Basic auth and a custom TLS root.
+
+Run with `dotnet run --project src/example-websocket`.
 
 #### Gorilla timestamp compression
 
@@ -197,7 +218,7 @@ if (sender is IQwpWebSocketSender ws)
 
 #### Store-and-forward (durable client buffer)
 
-Set `sf_dir=/path/to/dir` to opt into the on-disk store-and-forward buffer. Outgoing batches are persisted to mmap'd segments before going on the wire, and a background I/O thread silently reconnects + replays whatever's still on disk if the network drops or the process restarts. User code never sees disconnects.
+Set `sf_dir=/path/to/dir` to opt into the on-disk store-and-forward buffer. Outgoing batches are persisted to mmap'd segments before going on the wire, and a background I/O thread silently reconnects + replays whatever's still on disk if the network drops or the process restarts. User code is shielded from transient disconnects; a `Send` can still surface terminal errors when the bounded retry / drain budgets (`sf_append_deadline_millis`, `reconnect_max_duration_millis`) expire.
 
 ```csharp
 using var sender = Sender.New(

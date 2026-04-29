@@ -107,8 +107,6 @@ internal readonly struct QwpResponse
         return new QwpException(Status, Sequence, Message);
     }
 
-    // -- Parser ------------------------------------------------------------------
-
     /// <summary>Parses a single QWP response frame from <paramref name="frame" />.</summary>
     /// <exception cref="IngressError">If the frame is malformed or carries an unsupported status.</exception>
     public static QwpResponse Parse(ReadOnlySpan<byte> frame)

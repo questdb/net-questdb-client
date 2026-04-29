@@ -51,10 +51,10 @@ public record SenderOptions
     private static readonly HashSet<string> keySet = new()
     {
         "protocol", "protocol_version", "addr", "auto_flush", "auto_flush_rows", "auto_flush_bytes",
-        "auto_flush_interval", "init_buf_size", "max_buf_size", "max_name_len", "username", "password", "token",
+        "auto_flush_interval", "init_buf_size", "max_buf_size", "max_name_len",
+        "username", "user", "password", "pass", "token",
         "request_min_throughput", "auth_timeout", "request_timeout", "retry_timeout",
         "pool_timeout", "tls_verify", "tls_roots", "tls_roots_password", "own_socket", "gzip",
-        // WebSocket / QWP keys.
         "in_flight_window", "close_timeout", "max_schemas_per_connection", "gorilla", "request_durable_ack",
         "sf_dir", "sender_id", "sf_max_bytes", "sf_max_total_bytes", "sf_durability",
         "sf_append_deadline_millis", "reconnect_max_duration_millis", "reconnect_initial_backoff_millis",
@@ -81,7 +81,7 @@ public record SenderOptions
     private ProtocolType _protocol = ProtocolType.http;
     private ProtocolVersion _protocol_version = ProtocolVersion.Auto;
     private int _requestMinThroughput = 102400;
-    private TimeSpan _requestTimeout = TimeSpan.FromMilliseconds(10000);
+    private TimeSpan _requestTimeout = TimeSpan.FromMilliseconds(30000);
     private TimeSpan _retryTimeout = TimeSpan.FromMilliseconds(10000);
     private string? _tlsCa;
     private string? _tlsRoots;
@@ -102,13 +102,13 @@ public record SenderOptions
 
     private string? _sfDir;
     private string _senderId = "default";
-    private long _sfMaxBytes = 64L * 1024 * 1024;
-    private long _sfMaxTotalBytes = long.MaxValue;
+    private long _sfMaxBytes = 4L * 1024 * 1024;
+    private long _sfMaxTotalBytes = 128L * 1024 * 1024;
     private string _sfDurability = "memory";
     private TimeSpan _sfAppendDeadline = TimeSpan.FromMilliseconds(30000);
     private TimeSpan _reconnectMaxDuration = TimeSpan.FromMilliseconds(300000);
     private TimeSpan _reconnectInitialBackoff = TimeSpan.FromMilliseconds(100);
-    private TimeSpan _reconnectMaxBackoff = TimeSpan.FromMilliseconds(30000);
+    private TimeSpan _reconnectMaxBackoff = TimeSpan.FromMilliseconds(5000);
     private bool _initialConnectRetry;
     private TimeSpan _closeFlushTimeout = TimeSpan.FromMilliseconds(5000);
     private bool _drainOrphans;
@@ -142,11 +142,21 @@ public record SenderOptions
         ParseIntWithDefault(nameof(max_buf_size), "104857600", out _maxBufSize);
         ParseIntWithDefault(nameof(max_name_len), "127", out _maxNameLen);
         ParseStringWithDefault(nameof(username), null, out _username);
+        if (_username is null)
+        {
+            ParseStringWithDefault("user", null, out _username);
+        }
+
         ParseStringWithDefault(nameof(password), null, out _password);
+        if (_password is null)
+        {
+            ParseStringWithDefault("pass", null, out _password);
+        }
+
         ParseStringWithDefault(nameof(token), null, out _token);
         ParseIntWithDefault(nameof(request_min_throughput), "102400", out _requestMinThroughput);
         ParseMillisecondsWithDefault(nameof(auth_timeout), "15000", out _authTimeout);
-        ParseMillisecondsWithDefault(nameof(request_timeout), "10000", out _requestTimeout);
+        ParseMillisecondsWithDefault(nameof(request_timeout), "30000", out _requestTimeout);
         ParseMillisecondsWithDefault(nameof(retry_timeout), "10000", out _retryTimeout);
         ParseMillisecondsWithDefault(nameof(pool_timeout), "120000", out _poolTimeout);
         ParseEnumWithDefault(nameof(tls_verify), "on", out _tlsVerify);
@@ -164,9 +174,12 @@ public record SenderOptions
 
         ParseStringWithDefault(nameof(sf_dir), null, out _sfDir);
         ParseStringWithDefault(nameof(sender_id), "default", out var senderIdRaw);
-        _senderId = senderIdRaw ?? "default";
-        ParseLongWithDefault(nameof(sf_max_bytes), (64L * 1024 * 1024).ToString(), out _sfMaxBytes);
-        ParseLongWithDefault(nameof(sf_max_total_bytes), long.MaxValue.ToString(), out _sfMaxTotalBytes);
+        SetSenderId(senderIdRaw ?? "default");
+        ParseLongWithDefault(nameof(sf_max_bytes), (4L * 1024 * 1024).ToString(), out _sfMaxBytes);
+        var defaultMaxTotal = string.IsNullOrEmpty(_sfDir)
+            ? 128L * 1024 * 1024
+            : 10L * 1024 * 1024 * 1024;
+        ParseLongWithDefault(nameof(sf_max_total_bytes), defaultMaxTotal.ToString(), out _sfMaxTotalBytes);
         ParseStringWithDefault(nameof(sf_durability), "memory", out var sfDurabilityRaw);
         _sfDurability = sfDurabilityRaw ?? "memory";
         if (!_sfDurability.Equals("memory", StringComparison.OrdinalIgnoreCase))
@@ -178,7 +191,7 @@ public record SenderOptions
         ParseMillisecondsWithDefault(nameof(sf_append_deadline_millis), "30000", out _sfAppendDeadline);
         ParseMillisecondsWithDefault(nameof(reconnect_max_duration_millis), "300000", out _reconnectMaxDuration);
         ParseMillisecondsWithDefault(nameof(reconnect_initial_backoff_millis), "100", out _reconnectInitialBackoff);
-        ParseMillisecondsWithDefault(nameof(reconnect_max_backoff_millis), "30000", out _reconnectMaxBackoff);
+        ParseMillisecondsWithDefault(nameof(reconnect_max_backoff_millis), "5000", out _reconnectMaxBackoff);
         ParseBoolOnOff(nameof(initial_connect_retry), "off", out _initialConnectRetry);
         ParseMillisecondsWithDefault(nameof(close_flush_timeout_millis), "5000", out _closeFlushTimeout);
         ParseBoolOnOff(nameof(drain_orphans), "off", out _drainOrphans);
@@ -298,6 +311,7 @@ public record SenderOptions
     {
         ValidateAuthCombination();
         ValidateTlsCombination();
+        ValidateStoreAndForwardOptions();
         ValidateMultiAddressForWebSocket();
         ValidateGzipForWebSocket();
         // The connection-string path can be flipped via `record with { protocol = ... }` after
@@ -311,6 +325,15 @@ public record SenderOptions
             ValidateWebSocketKeysAgainstDefaults();
         }
         ApplyAutoFlushNormalisation();
+    }
+
+    private void ValidateStoreAndForwardOptions()
+    {
+        if (!_sfDurability.Equals("memory", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new IngressError(ErrorCode.ConfigError,
+                $"`sf_durability` only accepts 'memory' in v1, got `{_sfDurability}`");
+        }
     }
 
     private void ValidateWebSocketKeysAgainstDefaults()
@@ -636,7 +659,7 @@ public record SenderOptions
 
     /// <summary>
     ///     Specifies a base interval for timing out HTTP requests to QuestDB.
-    ///     Defaults to <c>10000 ms</c>.
+    ///     Defaults to <c>30000 ms</c>.
     /// </summary>
     /// <remarks>
     ///     This value is combined with a dynamic timeout value generated based on how large the payload is.
@@ -793,10 +816,29 @@ public record SenderOptions
     public string sender_id
     {
         get => _senderId;
-        set => _senderId = value;
+        set => SetSenderId(value);
     }
 
-    /// <summary>Per-segment rotation threshold in bytes. Defaults to 64 MB.</summary>
+    private void SetSenderId(string value)
+    {
+        if (string.IsNullOrEmpty(value))
+        {
+            throw new IngressError(ErrorCode.ConfigError, "`sender_id` must not be empty");
+        }
+
+        if (value.IndexOfAny(new[] { '/', '\\', '\0' }) >= 0
+            || value.Contains("..", StringComparison.Ordinal)
+            || (value.Length >= 2 && value[1] == ':')
+            || Path.IsPathRooted(value))
+        {
+            throw new IngressError(ErrorCode.ConfigError,
+                $"`sender_id` must be a single path segment without separators, drive letters, or `..` (got `{value}`)");
+        }
+
+        _senderId = value;
+    }
+
+    /// <summary>Per-segment rotation threshold in bytes. Defaults to 4 MiB.</summary>
     public long sf_max_bytes
     {
         get => _sfMaxBytes;
@@ -804,8 +846,8 @@ public record SenderOptions
     }
 
     /// <summary>
-    ///     Hard cap on total bytes across all live segments in the slot. Defaults to <see cref="long.MaxValue" />
-    ///     (no cap); when set, the producer hits backpressure once full.
+    ///     Hard cap on total bytes across all live segments in the slot. Defaults to 128 MiB without
+    ///     <see cref="sf_dir" /> set, 10 GiB with it. When the cap is hit the producer hits backpressure.
     /// </summary>
     public long sf_max_total_bytes
     {
@@ -844,7 +886,7 @@ public record SenderOptions
         set => _reconnectInitialBackoff = value;
     }
 
-    /// <summary>Maximum reconnect backoff after exponential growth. Defaults to 30 s.</summary>
+    /// <summary>Maximum reconnect backoff after exponential growth. Defaults to 5 s.</summary>
     public TimeSpan reconnect_max_backoff_millis
     {
         get => _reconnectMaxBackoff;
@@ -984,10 +1026,13 @@ public record SenderOptions
         if (option is "off")
         {
             field = -1;
+            return;
         }
-        else
+
+        ParseIntWithDefault(name, defaultValue!, out field);
+        if (field == 0)
         {
-            ParseIntWithDefault(name, defaultValue!, out field);
+            field = -1;
         }
     }
 
@@ -997,10 +1042,13 @@ public record SenderOptions
         if (option is "off")
         {
             field = TimeSpan.FromMilliseconds(-1);
+            return;
         }
-        else
+
+        ParseMillisecondsWithDefault(name, defaultValue!, out field);
+        if (field == TimeSpan.Zero)
         {
-            ParseMillisecondsWithDefault(name, defaultValue!, out field);
+            field = TimeSpan.FromMilliseconds(-1);
         }
     }
 

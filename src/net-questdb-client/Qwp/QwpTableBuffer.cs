@@ -50,6 +50,9 @@ namespace QuestDB.Qwp;
 internal sealed class QwpTableBuffer
 {
     private readonly Dictionary<string, int> _columnIndex = new(StringComparer.Ordinal);
+#if NET9_0_OR_GREATER
+    private readonly Dictionary<string, int>.AlternateLookup<ReadOnlySpan<char>> _columnIndexLookup;
+#endif
     private readonly List<QwpColumn> _columns = new();
 
     private bool[] _touchedInCurrentRow = Array.Empty<bool>();
@@ -79,6 +82,9 @@ internal sealed class QwpTableBuffer
         }
 
         TableName = tableName;
+#if NET9_0_OR_GREATER
+        _columnIndexLookup = _columnIndex.GetAlternateLookup<ReadOnlySpan<char>>();
+#endif
     }
 
     /// <summary>Table name as it appears on the wire.</summary>
@@ -114,123 +120,119 @@ internal sealed class QwpTableBuffer
     /// <summary>True when at least one column has been touched in the current row.</summary>
     public bool HasPendingRow { get; private set; }
 
-    // -- Append API for non-designated columns -----------------------------------
-
     /// <summary>Append a boolean value to the named column.</summary>
-    public void AppendBool(string columnName, bool value)
+    public void AppendBool(ReadOnlySpan<char> columnName, bool value)
     {
         try { GetOrCreateColumn(columnName).AppendBool(value); } catch { CancelCurrentRow(); throw; }
     }
 
     /// <summary>Append a signed byte.</summary>
-    public void AppendByte(string columnName, sbyte value)
+    public void AppendByte(ReadOnlySpan<char> columnName, sbyte value)
     {
         try { GetOrCreateColumn(columnName).AppendByte(value); } catch { CancelCurrentRow(); throw; }
     }
 
     /// <summary>Append a 16-bit signed integer.</summary>
-    public void AppendShort(string columnName, short value)
+    public void AppendShort(ReadOnlySpan<char> columnName, short value)
     {
         try { GetOrCreateColumn(columnName).AppendShort(value); } catch { CancelCurrentRow(); throw; }
     }
 
     /// <summary>Append a 32-bit signed integer.</summary>
-    public void AppendInt(string columnName, int value)
+    public void AppendInt(ReadOnlySpan<char> columnName, int value)
     {
         try { GetOrCreateColumn(columnName).AppendInt(value); } catch { CancelCurrentRow(); throw; }
     }
 
     /// <summary>Append a 64-bit signed integer.</summary>
-    public void AppendLong(string columnName, long value)
+    public void AppendLong(ReadOnlySpan<char> columnName, long value)
     {
         try { GetOrCreateColumn(columnName).AppendLong(value); } catch { CancelCurrentRow(); throw; }
     }
 
     /// <summary>Append a single-precision float.</summary>
-    public void AppendFloat(string columnName, float value)
+    public void AppendFloat(ReadOnlySpan<char> columnName, float value)
     {
         try { GetOrCreateColumn(columnName).AppendFloat(value); } catch { CancelCurrentRow(); throw; }
     }
 
     /// <summary>Append a double-precision float.</summary>
-    public void AppendDouble(string columnName, double value)
+    public void AppendDouble(ReadOnlySpan<char> columnName, double value)
     {
         try { GetOrCreateColumn(columnName).AppendDouble(value); } catch { CancelCurrentRow(); throw; }
     }
 
     /// <summary>Append a TIMESTAMP value (microseconds since epoch) to a non-designated column.</summary>
-    public void AppendTimestampMicros(string columnName, long micros)
+    public void AppendTimestampMicros(ReadOnlySpan<char> columnName, long micros)
     {
         try { GetOrCreateColumn(columnName).AppendTimestampMicros(micros); } catch { CancelCurrentRow(); throw; }
     }
 
     /// <summary>Append a TIMESTAMP_NANOS value (nanoseconds since epoch) to a non-designated column.</summary>
-    public void AppendTimestampNanos(string columnName, long nanos)
+    public void AppendTimestampNanos(ReadOnlySpan<char> columnName, long nanos)
     {
         try { GetOrCreateColumn(columnName).AppendTimestampNanos(nanos); } catch { CancelCurrentRow(); throw; }
     }
 
     /// <summary>Append a DATE value (milliseconds since epoch).</summary>
-    public void AppendDateMillis(string columnName, long millis)
+    public void AppendDateMillis(ReadOnlySpan<char> columnName, long millis)
     {
         try { GetOrCreateColumn(columnName).AppendDateMillis(millis); } catch { CancelCurrentRow(); throw; }
     }
 
     /// <summary>Append a UUID.</summary>
-    public void AppendUuid(string columnName, Guid value)
+    public void AppendUuid(ReadOnlySpan<char> columnName, Guid value)
     {
         try { GetOrCreateColumn(columnName).AppendUuid(value); } catch { CancelCurrentRow(); throw; }
     }
 
     /// <summary>Append a single UTF-16 code unit.</summary>
-    public void AppendChar(string columnName, char value)
+    public void AppendChar(ReadOnlySpan<char> columnName, char value)
     {
         try { GetOrCreateColumn(columnName).AppendChar(value); } catch { CancelCurrentRow(); throw; }
     }
 
     /// <summary>Append a length-prefixed UTF-8 string.</summary>
-    public void AppendVarchar(string columnName, ReadOnlySpan<char> value)
+    public void AppendVarchar(ReadOnlySpan<char> columnName, ReadOnlySpan<char> value)
     {
         try { GetOrCreateColumn(columnName).AppendVarchar(value); } catch { CancelCurrentRow(); throw; }
     }
 
     /// <summary>Append a SYMBOL value as a global dictionary id.</summary>
-    public void AppendSymbol(string columnName, int globalId)
+    public void AppendSymbol(ReadOnlySpan<char> columnName, int globalId)
     {
         try { GetOrCreateColumn(columnName).AppendSymbol(globalId); } catch { CancelCurrentRow(); throw; }
     }
 
     /// <summary>Append a DECIMAL128 value. The first call locks the column scale.</summary>
-    public void AppendDecimal128(string columnName, decimal value)
+    public void AppendDecimal128(ReadOnlySpan<char> columnName, decimal value)
     {
         try { GetOrCreateColumn(columnName).AppendDecimal128(value); } catch { CancelCurrentRow(); throw; }
     }
 
     /// <summary>Append a non-negative LONG256 value (≤ 256 bits).</summary>
-    public void AppendLong256(string columnName, BigInteger value)
+    public void AppendLong256(ReadOnlySpan<char> columnName, BigInteger value)
     {
         try { GetOrCreateColumn(columnName).AppendLong256(value); } catch { CancelCurrentRow(); throw; }
     }
 
     /// <summary>Append a GEOHASH value. The first call locks the column precision (in bits).</summary>
-    public void AppendGeohash(string columnName, ulong hash, int precisionBits)
+    public void AppendGeohash(ReadOnlySpan<char> columnName, ulong hash, int precisionBits)
     {
         try { GetOrCreateColumn(columnName).AppendGeohash(hash, precisionBits); } catch { CancelCurrentRow(); throw; }
     }
 
     /// <summary>Append a DOUBLE_ARRAY row with the given shape.</summary>
-    public void AppendDoubleArray(string columnName, ReadOnlySpan<double> values, ReadOnlySpan<int> shape)
+    public void AppendDoubleArray(ReadOnlySpan<char> columnName, ReadOnlySpan<double> values, ReadOnlySpan<int> shape)
     {
         try { GetOrCreateColumn(columnName).AppendDoubleArray(values, shape); } catch { CancelCurrentRow(); throw; }
     }
 
     /// <summary>Append a LONG_ARRAY row with the given shape.</summary>
-    public void AppendLongArray(string columnName, ReadOnlySpan<long> values, ReadOnlySpan<int> shape)
+    public void AppendLongArray(ReadOnlySpan<char> columnName, ReadOnlySpan<long> values, ReadOnlySpan<int> shape)
     {
         try { GetOrCreateColumn(columnName).AppendLongArray(values, shape); } catch { CancelCurrentRow(); throw; }
     }
-
-    // -- Reset -------------------------------------------------------------------
 
     /// <summary>
     ///     Drops row data while preserving the table's name, columns, and schema id. Used by the
@@ -257,8 +259,6 @@ internal sealed class QwpTableBuffer
             Array.Clear(_touchedInCurrentRow, 0, _touchedInCurrentRow.Length);
         }
     }
-
-    // -- Row finalisers ----------------------------------------------------------
 
     /// <summary>
     ///     Commit the current row with a TIMESTAMP (microseconds-since-epoch) designated value.
@@ -309,8 +309,6 @@ internal sealed class QwpTableBuffer
         }
     }
 
-    // -- Internal helpers --------------------------------------------------------
-
     /// <summary>
     ///     Look up an existing column or create a new one.
     /// </summary>
@@ -319,25 +317,30 @@ internal sealed class QwpTableBuffer
     ///     emit a fresh full-schema block. The new column is back-filled with nulls for the
     ///     <see cref="RowCount" /> rows that came before it.
     /// </remarks>
-    private QwpColumn GetOrCreateColumn(string columnName)
+    private QwpColumn GetOrCreateColumn(ReadOnlySpan<char> columnName)
     {
-        if (columnName is null)
-        {
-            throw new ArgumentNullException(nameof(columnName));
-        }
-
-        // The designated-timestamp slot uses the empty string; no user data column may share the slot.
         if (columnName.Length == 0)
         {
             throw new IngressError(ErrorCode.InvalidName, "column name must not be empty");
         }
 
-        if (_columnIndex.TryGetValue(columnName, out var idx))
+        int idx;
+#if NET9_0_OR_GREATER
+        if (_columnIndexLookup.TryGetValue(columnName, out idx))
         {
             SnapshotOnFirstTouch(idx, _columns[idx]);
             MarkTouched(idx);
             return _columns[idx];
         }
+#else
+        var probeKey = columnName.ToString();
+        if (_columnIndex.TryGetValue(probeKey, out idx))
+        {
+            SnapshotOnFirstTouch(idx, _columns[idx]);
+            MarkTouched(idx);
+            return _columns[idx];
+        }
+#endif
 
         var nameByteCount = Encoding.UTF8.GetByteCount(columnName);
         if (nameByteCount > QwpConstants.MaxNameLengthBytes)
@@ -352,11 +355,12 @@ internal sealed class QwpTableBuffer
                 $"table '{TableName}' exceeds the {QwpConstants.MaxColumnsPerTable}-column limit");
         }
 
-        var col = new QwpColumn(columnName, RowCount);
+        var name = columnName.ToString();
+        var col = new QwpColumn(name, RowCount);
         idx = _columns.Count;
         _columns.Add(col);
-        _columnIndex[columnName] = idx;
-        SchemaId = -1; // adding a column invalidates any cached schema id.
+        _columnIndex[name] = idx;
+        SchemaId = -1;
 
         EnsureTouchedCapacity(idx + 1);
         MarkTouched(idx);

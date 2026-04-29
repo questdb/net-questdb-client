@@ -24,7 +24,6 @@
 
 using System.Buffers.Binary;
 using System.IO.MemoryMappedFiles;
-using System.Runtime.InteropServices;
 using Microsoft.Win32.SafeHandles;
 
 namespace QuestDB.Qwp.Sf;
@@ -33,35 +32,35 @@ namespace QuestDB.Qwp.Sf;
 ///     A single fixed-size, memory-mapped segment file holding back-to-back QWP frame envelopes.
 /// </summary>
 /// <remarks>
-///     Wire-on-disk envelope: <c>[u32 crc32c | u32 frame_len | frame bytes]</c> stored
-///     little-endian. The CRC covers <c>frame_len</c> + <c>frame bytes</c> (everything after the
-///     CRC field itself).
-///     <para />
-///     Replay strategy: walk envelopes from offset 0; stop on a torn tail (oversized length, CRC
-///     mismatch, or envelope crossing the segment boundary). The last-good offset becomes the
-///     new write position; bytes beyond it are zeroed for clean reuse on next append.
+///     File layout (all little-endian):
+///     <code>
+///       offset  size  field
+///         0       4   magic  = 0x31304653 ('SF01')
+///         4       1   version = 1
+///         5       1   flags   = 0
+///         6       2   reserved = 0
+///         8       8   baseSeq
+///        16       8   createdAtMicros
+///        24      ..   envelope stream: [u32 crc32c | u32 frame_len | frame bytes] back-to-back
+///     </code>
+///     The CRC covers <c>frame_len</c> + <c>frame bytes</c>. Replay walks envelopes from
+///     <see cref="HeaderSize" /> and stops on a torn tail (oversized length, CRC mismatch, or
+///     envelope crossing the segment boundary).
 ///     <para />
 ///     The file is pre-extended to <see cref="Capacity" /> so writes never grow the file at
-///     append time. Trailing zeros indicate "no envelope here yet" — see
-///     <see cref="ScanForLastGoodEnvelope" />.
-///     <para />
-///     <b>Performance.</b> The view is acquired via <c>SafeMemoryMappedViewHandle.AcquirePointer</c>
-///     and held for the segment lifetime; reads and writes go through that pointer with no per-call
-///     <c>byte[]</c> allocation. An offset table indexed by <c>(fsn - BaseFsn)</c> provides O(1)
-///     envelope lookups; appends update it incrementally and replay rebuilds it.
+///     append time. Trailing zeros indicate "no envelope here yet".
 /// </remarks>
 internal sealed class QwpMmapSegment : IDisposable
 {
-    /// <summary>Per-envelope header: 4 bytes CRC32C + 4 bytes frame length.</summary>
     public const int EnvelopeHeaderSize = 8;
-
-    /// <summary>Default soft cap on a single frame's length, beyond which replay treats it as torn.</summary>
+    public const int HeaderSize = 24;
+    public const uint FileMagic = 0x31304653;
+    public const byte FileVersion = 1;
     public const int DefaultMaxFrameLength = 16 * 1024 * 1024;
 
     private readonly MemoryMappedFile _mmap;
     private readonly MemoryMappedViewAccessor _view;
     private readonly SafeMemoryMappedViewHandle _handle;
-    // Offsets of the envelopes currently in the segment, indexed by `fsn - BaseFsn`.
     private readonly List<long> _offsetTable;
     private readonly unsafe byte* _basePtr;
     private readonly long _viewSize;
@@ -90,7 +89,6 @@ internal sealed class QwpMmapSegment : IDisposable
 
         byte* ptr = null;
         _handle.AcquirePointer(ref ptr);
-        // PointerOffset accounts for the OS-level alignment of the view's actual base.
         _basePtr = ptr + view.PointerOffset;
         _viewSize = checked((long)_handle.ByteLength);
     }
@@ -118,17 +116,16 @@ internal sealed class QwpMmapSegment : IDisposable
 
     /// <summary>
     ///     Opens an existing segment file and replays it to find the last good write position. If
-    ///     the file does not exist, creates and zero-initialises one of the requested capacity.
+    ///     the file is fresh (zeroed), writes the SF01 header with the supplied <paramref name="baseFsn" />.
+    ///     If the file already has a valid SF01 header, validates magic+version and uses the on-disk
+    ///     <c>baseSeq</c> (which must match <paramref name="baseFsn" />).
     /// </summary>
-    /// <param name="path">Filesystem path. The directory must already exist.</param>
-    /// <param name="capacity">Segment size in bytes. Existing files smaller than this are extended.</param>
-    /// <param name="baseFsn">FSN of the first envelope in this segment.</param>
-    /// <param name="maxFrameLength">Frame-length cap used to detect torn / corrupt envelopes.</param>
+    /// <exception cref="InvalidDataException">If the on-disk header is corrupt or version-mismatched.</exception>
     public static QwpMmapSegment Open(string path, long capacity, long baseFsn, int maxFrameLength = DefaultMaxFrameLength)
     {
-        if (capacity <= EnvelopeHeaderSize)
+        if (capacity <= HeaderSize + EnvelopeHeaderSize)
         {
-            throw new ArgumentOutOfRangeException(nameof(capacity), "capacity must be larger than the envelope header");
+            throw new ArgumentOutOfRangeException(nameof(capacity), "capacity must be larger than the file + envelope header");
         }
 
         var mmap = QwpFiles.OpenMemoryMappedSegment(path, capacity);
@@ -136,9 +133,15 @@ internal sealed class QwpMmapSegment : IDisposable
         try
         {
             view = mmap.CreateViewAccessor(0, capacity, MemoryMappedFileAccess.ReadWrite);
-            var (writePos, offsets) = ScanForLastGoodEnvelope(view, capacity, maxFrameLength);
 
-            // Zero any garbage past the last good envelope so subsequent appends start clean.
+            var onDiskBaseFsn = ReadOrInitHeader(view, path, baseFsn);
+            if (onDiskBaseFsn != baseFsn)
+            {
+                throw new InvalidDataException(
+                    $"segment {path}: on-disk baseSeq {onDiskBaseFsn} does not match expected {baseFsn}");
+            }
+
+            var (writePos, offsets) = ScanForLastGoodEnvelope(view, capacity, maxFrameLength);
             ZeroViewRange(view, writePos, capacity - writePos);
 
             return new QwpMmapSegment(path, mmap, view, capacity, baseFsn, writePos, offsets, maxFrameLength);
@@ -150,6 +153,7 @@ internal sealed class QwpMmapSegment : IDisposable
             throw;
         }
     }
+
 
     /// <summary>
     ///     Tries to append an envelope wrapping <paramref name="frame" />. Returns false if the
@@ -287,24 +291,9 @@ internal sealed class QwpMmapSegment : IDisposable
         }
 
         _disposed = true;
-        try
-        {
-            _view.Flush();
-        }
-        catch (Exception)
-        {
-            // best-effort
-        }
-
-        try
-        {
-            _handle.ReleasePointer();
-        }
-        catch (Exception)
-        {
-            // best-effort; release pairs with AcquirePointer in the constructor.
-        }
-
+        SfCleanup.Run(() => _view.Flush());
+        // ReleasePointer pairs with AcquirePointer in the constructor; must run before view disposal.
+        SfCleanup.Run(() => _handle.ReleasePointer());
         _view.Dispose();
         _mmap.Dispose();
     }
@@ -318,10 +307,9 @@ internal sealed class QwpMmapSegment : IDisposable
         long capacity,
         int maxFrameLength)
     {
-        long offset = 0;
+        long offset = HeaderSize;
         var offsets = new List<long>();
         Span<byte> header = stackalloc byte[EnvelopeHeaderSize];
-        // Reused frame buffer for CRC validation; sized up to maxFrameLength only when we see one.
         byte[]? frameScratch = null;
 
         while (offset + EnvelopeHeaderSize <= capacity)
@@ -331,13 +319,11 @@ internal sealed class QwpMmapSegment : IDisposable
             var crc = BinaryPrimitives.ReadUInt32LittleEndian(header.Slice(0, 4));
             var len = BinaryPrimitives.ReadInt32LittleEndian(header.Slice(4, 4));
 
-            // A zero-length envelope (or all-zero header) is the natural "end of writes" sentinel.
             if (len == 0 && crc == 0)
             {
                 break;
             }
 
-            // Defensive: bit-rot or torn tail can leave plausible-looking but invalid headers.
             if (len <= 0 || len > maxFrameLength)
             {
                 break;
@@ -345,11 +331,9 @@ internal sealed class QwpMmapSegment : IDisposable
 
             if (offset + EnvelopeHeaderSize + len > capacity)
             {
-                // Envelope claims to extend past the segment boundary — torn.
                 break;
             }
 
-            // Validate CRC against the frame payload.
             if (frameScratch is null || frameScratch.Length < len)
             {
                 frameScratch = new byte[Math.Max(len, 4096)];
@@ -369,6 +353,58 @@ internal sealed class QwpMmapSegment : IDisposable
         return (offset, offsets);
     }
 
+    private static long ReadOrInitHeader(
+        MemoryMappedViewAccessor view, string path, long baseFsn)
+    {
+        Span<byte> hdr = stackalloc byte[HeaderSize];
+        ViewToSpan(view, 0, hdr);
+
+        var magic = BinaryPrimitives.ReadUInt32LittleEndian(hdr.Slice(0, 4));
+        if (magic == 0)
+        {
+            var allZero = true;
+            for (var i = 4; i < HeaderSize; i++)
+            {
+                if (hdr[i] != 0) { allZero = false; break; }
+            }
+            if (!allZero)
+            {
+                throw new InvalidDataException($"segment {path}: missing SF01 magic but header bytes are non-zero");
+            }
+            WriteHeader(view, baseFsn, NowMicros());
+            return baseFsn;
+        }
+
+        if (magic != FileMagic)
+        {
+            throw new InvalidDataException(
+                $"segment {path}: bad magic 0x{magic:x8}, expected 0x{FileMagic:x8} ('SF01')");
+        }
+
+        var version = hdr[4];
+        if (version != FileVersion)
+        {
+            throw new InvalidDataException($"segment {path}: unsupported version {version}");
+        }
+
+        return BinaryPrimitives.ReadInt64LittleEndian(hdr.Slice(8, 8));
+    }
+
+    private static void WriteHeader(MemoryMappedViewAccessor view, long baseFsn, long createdAtMicros)
+    {
+        Span<byte> hdr = stackalloc byte[HeaderSize];
+        BinaryPrimitives.WriteUInt32LittleEndian(hdr.Slice(0, 4), FileMagic);
+        hdr[4] = FileVersion;
+        hdr[5] = 0;
+        BinaryPrimitives.WriteUInt16LittleEndian(hdr.Slice(6, 2), 0);
+        BinaryPrimitives.WriteInt64LittleEndian(hdr.Slice(8, 8), baseFsn);
+        BinaryPrimitives.WriteInt64LittleEndian(hdr.Slice(16, 8), createdAtMicros);
+        WriteToView(view, 0, hdr);
+    }
+
+    private static long NowMicros() =>
+        DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() * 1000L;
+
     /// <summary>
     ///     Returns the FSN at the given offset using the offset table. O(log N) via binary search.
     ///     Used by replay paths that resolve an offset back to an FSN.
@@ -381,6 +417,11 @@ internal sealed class QwpMmapSegment : IDisposable
             // Offset doesn't sit on an envelope boundary; the bit-flip equivalent is the insertion
             // point. Treat the preceding envelope as the FSN.
             idx = ~idx - 1;
+        }
+
+        if (idx < 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(offset), "offset precedes the first envelope");
         }
 
         return BaseFsn + idx;
@@ -420,6 +461,22 @@ internal sealed class QwpMmapSegment : IDisposable
         try
         {
             var src = new ReadOnlySpan<byte>(ptr + view.PointerOffset + offset, dest.Length);
+            src.CopyTo(dest);
+        }
+        finally
+        {
+            handle.ReleasePointer();
+        }
+    }
+
+    private static unsafe void WriteToView(MemoryMappedViewAccessor view, long offset, ReadOnlySpan<byte> src)
+    {
+        var handle = view.SafeMemoryMappedViewHandle;
+        byte* ptr = null;
+        handle.AcquirePointer(ref ptr);
+        try
+        {
+            var dest = new Span<byte>(ptr + view.PointerOffset + offset, src.Length);
             src.CopyTo(dest);
         }
         finally

@@ -81,14 +81,24 @@ internal ref struct QwpBitWriter
             throw new InvalidOperationException("bit writer exhausted");
         }
 
-        for (var i = 0; i < bitCount; i++)
-        {
-            if (((value >> i) & 1UL) != 0)
-            {
-                _buffer[_byteIndex] |= (byte)(1 << _bitIndex);
-            }
+        if (bitCount == 0) return;
 
-            _bitIndex++;
+        if (bitCount < 64)
+        {
+            value &= (1UL << bitCount) - 1UL;
+        }
+
+        var remaining = bitCount;
+
+        if (_bitIndex != 0)
+        {
+            var roomInByte = 8 - _bitIndex;
+            var take = remaining < roomInByte ? remaining : roomInByte;
+            var headMask = (1UL << take) - 1UL;
+            _buffer[_byteIndex] |= (byte)((value & headMask) << _bitIndex);
+            value >>= take;
+            remaining -= take;
+            _bitIndex += take;
             if (_bitIndex == 8)
             {
                 _byteIndex++;
@@ -98,6 +108,25 @@ internal ref struct QwpBitWriter
                     _buffer[_byteIndex] = 0;
                 }
             }
+        }
+
+        while (remaining >= 8)
+        {
+            _buffer[_byteIndex] = (byte)value;
+            value >>= 8;
+            _byteIndex++;
+            remaining -= 8;
+            if (_byteIndex < _buffer.Length)
+            {
+                _buffer[_byteIndex] = 0;
+            }
+        }
+
+        if (remaining > 0)
+        {
+            var tailMask = (1UL << remaining) - 1UL;
+            _buffer[_byteIndex] |= (byte)(value & tailMask);
+            _bitIndex = remaining;
         }
     }
 
@@ -147,25 +176,48 @@ internal ref struct QwpBitReader
             throw new ArgumentOutOfRangeException(nameof(bitCount));
         }
 
-        ulong value = 0;
-        for (var i = 0; i < bitCount; i++)
+        if (bitCount == 0) return 0UL;
+
+        var endByte = _byteIndex + (_bitIndex + bitCount + 7) / 8;
+        if (endByte > _buffer.Length)
         {
-            if (_byteIndex >= _buffer.Length)
-            {
-                throw new InvalidOperationException("bit reader exhausted");
-            }
+            throw new InvalidOperationException("bit reader exhausted");
+        }
 
-            if (((_buffer[_byteIndex] >> _bitIndex) & 1) != 0)
-            {
-                value |= 1UL << i;
-            }
+        ulong value = 0;
+        var remaining = bitCount;
+        var collected = 0;
 
-            _bitIndex++;
+        if (_bitIndex != 0)
+        {
+            var availInByte = 8 - _bitIndex;
+            var take = remaining < availInByte ? remaining : availInByte;
+            var headMask = (1UL << take) - 1UL;
+            var chunk = ((ulong)_buffer[_byteIndex] >> _bitIndex) & headMask;
+            value |= chunk << collected;
+            collected += take;
+            remaining -= take;
+            _bitIndex += take;
             if (_bitIndex == 8)
             {
                 _byteIndex++;
                 _bitIndex = 0;
             }
+        }
+
+        while (remaining >= 8)
+        {
+            value |= (ulong)_buffer[_byteIndex] << collected;
+            _byteIndex++;
+            collected += 8;
+            remaining -= 8;
+        }
+
+        if (remaining > 0)
+        {
+            var tailMask = (1UL << remaining) - 1UL;
+            value |= ((ulong)_buffer[_byteIndex] & tailMask) << collected;
+            _bitIndex = remaining;
         }
 
         return value;

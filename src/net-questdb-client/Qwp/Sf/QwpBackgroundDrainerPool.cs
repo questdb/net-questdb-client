@@ -97,13 +97,14 @@ internal sealed class QwpBackgroundDrainerPool : IDisposable
 
         // Schedule a continuation that prunes the completed task from the tracking list, bounded
         // memory regardless of how many slots get drained over a sender's lifetime.
-        _ = task.ContinueWith(t =>
+        _ = task.ContinueWith(static (t, state) =>
         {
-            lock (_trackingLock)
+            var self = (QwpBackgroundDrainerPool)state!;
+            lock (self._trackingLock)
             {
-                _runningTasks.Remove(t);
+                self._runningTasks.Remove(t);
             }
-        }, TaskScheduler.Default);
+        }, this, CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
     }
 
     /// <summary>Awaits all currently-enqueued drains. Subsequent <see cref="Enqueue" /> calls are independent.</summary>
@@ -134,9 +135,10 @@ internal sealed class QwpBackgroundDrainerPool : IDisposable
         var allJoined = snapshot.Length == 0;
         if (snapshot.Length > 0)
         {
+            var joinTask = Task.WhenAll(snapshot);
             try
             {
-                allJoined = Task.WhenAll(snapshot).Wait(_shutdownWait);
+                allJoined = joinTask.Wait(_shutdownWait);
             }
             catch (Exception)
             {
@@ -147,7 +149,7 @@ internal sealed class QwpBackgroundDrainerPool : IDisposable
 
             try
             {
-                allJoined = Task.WhenAll(snapshot).Wait(TimeSpan.FromSeconds(2));
+                allJoined = joinTask.Wait(TimeSpan.FromSeconds(2));
             }
             catch (Exception)
             {

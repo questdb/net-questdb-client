@@ -22,6 +22,7 @@
  *
  ******************************************************************************/
 
+using System.Buffers;
 using QuestDB.Enums;
 using QuestDB.Utils;
 
@@ -45,6 +46,8 @@ internal sealed class QwpCursorSendEngine : IDisposable
     private readonly TimeSpan _appendDeadline;
     private readonly bool _initialConnectRetry;
     private readonly object _stateLock = new();
+    private readonly byte[] _sendBuffer;
+    private readonly byte[] _ackBuffer;
 
     private long _cursorFsn;
     private long _ackedFsn;
@@ -99,6 +102,8 @@ internal sealed class QwpCursorSendEngine : IDisposable
         _cursorFsn = ring.OldestFsn;
         _ackedFsn = ring.OldestFsn;
         _segmentManager = new QwpSegmentManager(ring, maxTotalBytes);
+        _sendBuffer = new byte[ring.SegmentCapacity];
+        _ackBuffer = new byte[AckBufferSize];
         // Spare arrival from the manager wakes any producer parked in AppendBlocking.
         ring.SetSpareInstalledCallback(() =>
         {
@@ -185,8 +190,105 @@ internal sealed class QwpCursorSendEngine : IDisposable
             throw new ArgumentException("empty frames are not permitted", nameof(frame));
         }
 
-        // Span cannot escape into the wait/loop below — copy first.
-        var copy = frame.ToArray();
+        lock (_stateLock)
+        {
+            if (_disposed) throw new ObjectDisposedException(nameof(QwpCursorSendEngine));
+            if (_terminal) throw WrapTerminalForProducer();
+
+            if (_ring.TryAppend(frame))
+            {
+                FireAppendSignalLocked();
+                return;
+            }
+        }
+
+        AppendBlockingSlow(frame, cancellationToken);
+    }
+
+    /// <summary>
+    ///     Async counterpart of <see cref="AppendBlocking" />: the returned task completes once the
+    ///     frame has been persisted to the ring or throws on terminal failure / deadline / cancellation.
+    /// </summary>
+    public ValueTask AppendAsync(ReadOnlyMemory<byte> frame, CancellationToken cancellationToken = default)
+    {
+        EnsureNotDisposed();
+        if (frame.Length == 0)
+        {
+            throw new ArgumentException("empty frames are not permitted", nameof(frame));
+        }
+
+        lock (_stateLock)
+        {
+            if (_disposed) throw new ObjectDisposedException(nameof(QwpCursorSendEngine));
+            if (_terminal) throw WrapTerminalForProducer();
+
+            if (_ring.TryAppend(frame.Span))
+            {
+                FireAppendSignalLocked();
+                return ValueTask.CompletedTask;
+            }
+        }
+
+        return AppendAsyncSlow(frame, cancellationToken);
+    }
+
+    private void AppendBlockingSlow(ReadOnlySpan<byte> frame, CancellationToken cancellationToken)
+    {
+        var rented = ArrayPool<byte>.Shared.Rent(frame.Length);
+        var len = frame.Length;
+        frame.CopyTo(rented);
+        try
+        {
+            var deadline = DateTime.UtcNow + _appendDeadline;
+
+            while (true)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+
+                Task waitTask;
+                lock (_stateLock)
+                {
+                    if (_disposed) throw new ObjectDisposedException(nameof(QwpCursorSendEngine));
+                    if (_terminal) throw WrapTerminalForProducer();
+
+                    if (_ring.TryAppend(rented.AsSpan(0, len)))
+                    {
+                        FireAppendSignalLocked();
+                        return;
+                    }
+
+                    waitTask = _ackSignal.Task;
+                }
+
+                var remaining = deadline - DateTime.UtcNow;
+                if (remaining <= TimeSpan.Zero)
+                {
+                    throw new IngressError(
+                        ErrorCode.ServerFlushError,
+                        $"sf_append_deadline ({_appendDeadline.TotalMilliseconds:F0} ms) expired with the ring full");
+                }
+
+                try
+                {
+                    // Bound the wait so a missed signal (e.g. manager's first heartbeat installing
+                    // the initial spare) cannot stall the producer for the full deadline.
+                    var slice = Math.Min((int)Math.Min(int.MaxValue, remaining.TotalMilliseconds), 200);
+                    waitTask.Wait(slice, cancellationToken);
+                }
+                catch (AggregateException ex) when (ex.InnerException is OperationCanceledException)
+                {
+                    throw ex.InnerException;
+                }
+            }
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(rented);
+        }
+    }
+
+    private async ValueTask AppendAsyncSlow(ReadOnlyMemory<byte> frame, CancellationToken cancellationToken)
+    {
         var deadline = DateTime.UtcNow + _appendDeadline;
 
         while (true)
@@ -196,17 +298,10 @@ internal sealed class QwpCursorSendEngine : IDisposable
             Task waitTask;
             lock (_stateLock)
             {
-                if (_disposed)
-                {
-                    throw new ObjectDisposedException(nameof(QwpCursorSendEngine));
-                }
+                if (_disposed) throw new ObjectDisposedException(nameof(QwpCursorSendEngine));
+                if (_terminal) throw WrapTerminalForProducer();
 
-                if (_terminal)
-                {
-                    throw WrapTerminalForProducer();
-                }
-
-                if (_ring.TryAppend(copy))
+                if (_ring.TryAppend(frame.Span))
                 {
                     FireAppendSignalLocked();
                     return;
@@ -223,16 +318,13 @@ internal sealed class QwpCursorSendEngine : IDisposable
                     $"sf_append_deadline ({_appendDeadline.TotalMilliseconds:F0} ms) expired with the ring full");
             }
 
+            var slice = TimeSpan.FromMilliseconds(Math.Min(remaining.TotalMilliseconds, 200));
             try
             {
-                // Cap per-iteration wait so missed signals (e.g. manager's first heartbeat tick to
-                // install the initial spare) don't stall us for the full deadline.
-                var slice = Math.Min((int)Math.Min(int.MaxValue, remaining.TotalMilliseconds), 200);
-                waitTask.Wait(slice, cancellationToken);
+                await waitTask.WaitAsync(slice, cancellationToken).ConfigureAwait(false);
             }
-            catch (AggregateException ex) when (ex.InnerException is OperationCanceledException)
+            catch (TimeoutException)
             {
-                throw ex.InnerException;
             }
         }
     }
@@ -350,7 +442,7 @@ internal sealed class QwpCursorSendEngine : IDisposable
 
         while (!ct.IsCancellationRequested)
         {
-            IQwpCursorTransport? transport = null;
+            IQwpCursorTransport? transport;
             try
             {
                 transport = _transportFactory();
@@ -450,8 +542,9 @@ internal sealed class QwpCursorSendEngine : IDisposable
     private async Task RunConnectionAsync(IQwpCursorTransport transport, long fsnAtZero, CancellationToken ct)
     {
         using var connCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        var sendTask = Task.Run(() => SendPumpAsync(transport, connCts.Token), connCts.Token);
-        var recvTask = Task.Run(() => ReceivePumpAsync(transport, fsnAtZero, connCts.Token), connCts.Token);
+        var connToken = connCts.Token;
+        var sendTask = Task.Run(() => SendPumpAsync(transport, connToken));
+        var recvTask = Task.Run(() => ReceivePumpAsync(transport, fsnAtZero, connToken));
 
         Task firstFinished;
         try
@@ -482,12 +575,14 @@ internal sealed class QwpCursorSendEngine : IDisposable
             throw new OperationCanceledException(connCts.Token);
         }
 
-        throw new InvalidOperationException("cursor pump returned without error or cancellation");
+        throw new IngressError(
+            ErrorCode.ServerFlushError,
+            "cursor pump returned without error or cancellation");
     }
 
     private async Task SendPumpAsync(IQwpCursorTransport transport, CancellationToken ct)
     {
-        var sendBuffer = new byte[_ring.SegmentCapacity];
+        var sendBuffer = _sendBuffer;
 
         while (!ct.IsCancellationRequested)
         {
@@ -510,6 +605,11 @@ internal sealed class QwpCursorSendEngine : IDisposable
                                 $"internal: cursor at FSN {readFsn} fell out of segment range");
                         }
 
+                        // Advance the cursor before the await so the receiver's clamp
+                        // (`_cursorFsn - fsnAtZero - 1`) reflects the in-flight frame. Failure
+                        // tears down the connection and the reconnect path rewinds via
+                        // `_cursorFsn = _ackedFsn`, so optimistic advance is safe.
+                        _cursorFsn = readFsn + 1;
                         break;
                     }
 
@@ -520,22 +620,12 @@ internal sealed class QwpCursorSendEngine : IDisposable
             }
 
             await transport.SendBinaryAsync(sendBuffer.AsMemory(0, frameLen), ct).ConfigureAwait(false);
-
-            // Cursor advances on send completion. The receiver clamps against (cursor - fsnAtZero - 1)
-            // when applying server acks so it can never trim past what's truly in flight.
-            lock (_stateLock)
-            {
-                if (_cursorFsn == readFsn)
-                {
-                    _cursorFsn = readFsn + 1;
-                }
-            }
         }
     }
 
     private async Task ReceivePumpAsync(IQwpCursorTransport transport, long fsnAtZero, CancellationToken ct)
     {
-        var ackBuffer = new byte[AckBufferSize];
+        var ackBuffer = _ackBuffer;
 
         while (!ct.IsCancellationRequested)
         {
@@ -632,16 +722,22 @@ internal sealed class QwpCursorSendEngine : IDisposable
     {
         var prev = _appendSignal;
         _appendSignal = NewSignal();
-        Task.Run(() => prev.TrySetResult(true));
+        prev.TrySetResult(true);
     }
 
     private void FireAckSignalLocked()
     {
         var prev = _ackSignal;
         _ackSignal = NewSignal();
-        Task.Run(() => prev.TrySetResult(true));
+        prev.TrySetResult(true);
     }
 
+    /// <remarks>
+    ///     <see cref="TaskCreationOptions.RunContinuationsAsynchronously" /> means async
+    ///     continuations are queued to <see cref="TaskScheduler.Default" /> rather than running
+    ///     inline on the completing thread, so callers can safely fire the signal under
+    ///     <c>_stateLock</c> without deadlocking awaiters that re-enter the same lock.
+    /// </remarks>
     private static TaskCompletionSource<bool> NewSignal()
     {
         return new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -657,9 +753,12 @@ internal sealed class QwpCursorSendEngine : IDisposable
 
     private IngressError WrapTerminalForProducer()
     {
-        var inner = _terminalError ?? new InvalidOperationException("engine terminated");
+        var inner = _terminalError;
         var code = inner is IngressError ie ? ie.code : ErrorCode.ServerFlushError;
-        return new IngressError(code, "QWP cursor engine has terminally failed; see inner exception", inner);
+        var message = inner?.Message ?? "QWP cursor engine has terminally failed";
+        return inner is null
+            ? new IngressError(code, message)
+            : new IngressError(code, "QWP cursor engine has terminally failed; see inner exception", inner);
     }
 
     // QwpException carries a server status code; per spec these are application-layer rejects

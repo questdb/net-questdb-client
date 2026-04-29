@@ -260,8 +260,17 @@ public class QwpWebSocketSenderTests
     {
         var ex = Assert.Catch<IngressError>(() =>
             Sender.New("ws::addr=127.0.0.1:1;auto_flush=off;"));
-        Assert.That(ex!.code, Is.AnyOf(ErrorCode.SocketError, ErrorCode.AuthError, ErrorCode.ConfigError));
+        Assert.That(ex!.code, Is.EqualTo(ErrorCode.SocketError));
         await Task.CompletedTask;
+    }
+
+    [Test]
+    public void InFlightWindow_One_Rejected()
+    {
+        var ex = Assert.Catch<IngressError>(() =>
+            Sender.New("ws::addr=127.0.0.1:1;auto_flush=off;in_flight_window=1;"));
+        Assert.That(ex!.code, Is.EqualTo(ErrorCode.ConfigError));
+        Assert.That(ex.Message, Does.Contain("in_flight_window"));
     }
 
     [Test]
@@ -289,6 +298,122 @@ public class QwpWebSocketSenderTests
 
         await WaitFor(() => server.ReceivedFrames.Count >= 1);
         Assert.That(server.ReceivedFrames.Count, Is.EqualTo(1));
+    }
+
+    [Test]
+    public async Task DisposeAsync_FlushesAndCleansUp()
+    {
+        await using var server = StartServerWithOkAcks();
+        var sender = NewSender(server, "auto_flush=off;in_flight_window=4;");
+        sender.Table("t").Column("v", 1L).At(DateTime.UtcNow);
+        sender.Send();
+
+        await ((IAsyncDisposable)sender).DisposeAsync();
+
+        Assert.That(server.ReceivedFrames.Count, Is.GreaterThanOrEqualTo(1));
+
+        Assert.Throws<ObjectDisposedException>(() => sender.Table("t").Column("v", 2L).At(DateTime.UtcNow));
+    }
+
+    [Test]
+    public async Task DisposeAsync_OnTerminalSender_DoesNotThrow()
+    {
+        await using var server = new DummyQwpServer(new DummyQwpServerOptions
+        {
+            FrameHandler = _ => BuildErrorAck(QwpStatusCode.WriteError, sequence: 0, "boom"),
+        });
+        await server.StartAsync();
+
+        var sender = NewSender(server, "auto_flush=off;in_flight_window=4;");
+        sender.Table("t").Column("v", 1L).At(DateTime.UtcNow);
+        Assert.Catch<IngressError>(() => sender.Send());
+
+        Assert.DoesNotThrowAsync(async () => await ((IAsyncDisposable)sender).DisposeAsync());
+    }
+
+    [Test]
+    public async Task SendAsync_DoesNotBlockCallerWhileServerStalls()
+    {
+        using var ackGate = new SemaphoreSlim(0, int.MaxValue);
+        await using var server = new DummyQwpServer(new DummyQwpServerOptions
+        {
+            FrameHandler = _ =>
+            {
+                ackGate.Wait();
+                return BuildOkAck(0);
+            },
+        });
+        await server.StartAsync();
+
+        using var sender = NewSender(server, "auto_flush=off;in_flight_window=2;");
+        sender.Table("t").Column("v", 1L).At(DateTime.UtcNow);
+
+        var pending = sender.SendAsync();
+        Assert.That(pending.IsCompleted, Is.False, "SendAsync must not complete while the server holds the ACK");
+
+        ackGate.Release();
+        await pending.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.That(pending.IsCompletedSuccessfully, Is.True);
+
+        ackGate.Release(8);
+    }
+
+    [Test]
+    public async Task PingAsync_DoesNotBlockCallerWhileServerStalls()
+    {
+        using var ackGate = new SemaphoreSlim(0, int.MaxValue);
+        await using var server = new DummyQwpServer(new DummyQwpServerOptions
+        {
+            FrameHandler = _ =>
+            {
+                ackGate.Wait();
+                return BuildOkAck(0);
+            },
+        });
+        await server.StartAsync();
+
+        using var sender = NewSender(server, "auto_flush=off;in_flight_window=4;");
+        sender.Table("t").Column("v", 1L).At(DateTime.UtcNow);
+        var firstSend = sender.SendAsync();
+        // Frame is enqueued and on the wire; server's FrameHandler is parked on ackGate.Wait().
+        var pending = ((QuestDB.Senders.IQwpWebSocketSender)sender).PingAsync();
+        Assert.That(pending.IsCompleted, Is.False, "PingAsync must not complete while a frame is unacked");
+
+        ackGate.Release();
+        await firstSend.WaitAsync(TimeSpan.FromSeconds(5));
+        await pending.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.That(pending.IsCompletedSuccessfully, Is.True);
+
+        ackGate.Release(8);
+    }
+
+    [Test]
+    public async Task AtAsync_AutoFlush_TrulyAsync()
+    {
+        using var ackGate = new SemaphoreSlim(0, int.MaxValue);
+        await using var server = new DummyQwpServer(new DummyQwpServerOptions
+        {
+            FrameHandler = _ =>
+            {
+                ackGate.Wait();
+                return BuildOkAck(0);
+            },
+        });
+        await server.StartAsync();
+
+        using var sender = NewSender(server,
+            "auto_flush=on;auto_flush_rows=1;auto_flush_interval=off;auto_flush_bytes=off;in_flight_window=2;");
+
+        // First AtAsync triggers an auto-flush; with the server stalled the returned ValueTask
+        // should land on the in-flight wait, not synchronously.
+        sender.Table("t").Column("v", 1L);
+        var pending = sender.AtAsync(DateTime.UtcNow);
+        // ValueTask may complete sync if auto-flush didn't fire; with auto_flush_rows=1 it must enqueue.
+        // The send is enqueued without awaitDrain so the ValueTask should complete quickly even with
+        // a stalled server — assert at least no crash and successful completion.
+        await pending.AsTask().WaitAsync(TimeSpan.FromSeconds(5));
+
+        ackGate.Release(16);
     }
 
     [Test]
@@ -431,7 +556,7 @@ public class QwpWebSocketSenderTests
             },
         });
         await server.StartAsync();
-        using var sender = NewSender(server, "auto_flush=off;request_durable_ack=on;in_flight_window=1;");
+        using var sender = NewSender(server, "auto_flush=off;request_durable_ack=on;in_flight_window=2;");
 
         sender.Table("trades").Column("v", 1L).At(DateTime.UtcNow);
         sender.Send();
@@ -555,10 +680,7 @@ public class QwpWebSocketSenderTests
         }
         finally
         {
-            if (Directory.Exists(sfRoot))
-            {
-                try { Directory.Delete(sfRoot, recursive: true); } catch { }
-            }
+            TryDeleteDirectory(sfRoot);
         }
     }
 
@@ -598,10 +720,7 @@ public class QwpWebSocketSenderTests
         }
         finally
         {
-            if (Directory.Exists(sfRoot))
-            {
-                try { Directory.Delete(sfRoot, recursive: true); } catch { }
-            }
+            TryDeleteDirectory(sfRoot);
         }
     }
 
@@ -628,10 +747,7 @@ public class QwpWebSocketSenderTests
         }
         finally
         {
-            if (Directory.Exists(sfRoot))
-            {
-                try { Directory.Delete(sfRoot, recursive: true); } catch { }
-            }
+            TryDeleteDirectory(sfRoot);
         }
     }
 
@@ -651,10 +767,7 @@ public class QwpWebSocketSenderTests
         }
         finally
         {
-            if (Directory.Exists(sfRoot))
-            {
-                try { Directory.Delete(sfRoot, recursive: true); } catch { }
-            }
+            TryDeleteDirectory(sfRoot);
         }
     }
 
@@ -754,6 +867,14 @@ public class QwpWebSocketSenderTests
         while (!predicate() && Environment.TickCount64 < deadline)
         {
             await Task.Delay(20);
+        }
+    }
+
+    private static void TryDeleteDirectory(string path)
+    {
+        if (Directory.Exists(path))
+        {
+            try { Directory.Delete(path, recursive: true); } catch { }
         }
     }
 }

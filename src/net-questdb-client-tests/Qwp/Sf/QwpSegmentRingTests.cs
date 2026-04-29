@@ -59,14 +59,14 @@ public class QwpSegmentRingTests
     [Test]
     public void Append_LargerThanSegment_Throws()
     {
-        using var ring = QwpSegmentRing.Open(_root, segmentCapacity: 64);
+        using var ring = QwpSegmentRing.Open(_root, segmentCapacity: QwpMmapSegment.HeaderSize + 64);
         Assert.Throws<ArgumentException>(() => ring.TryAppend(new byte[1024]));
     }
 
     [Test]
     public void Append_FillsSegmentThenRotates()
     {
-        using var ring = QwpSegmentRing.Open(_root, segmentCapacity: 64);
+        using var ring = QwpSegmentRing.Open(_root, segmentCapacity: QwpMmapSegment.HeaderSize + 64);
 
         // 64-byte segment fits two ~24-byte envelopes (8 header + 24 body) before rotating.
         Assert.That(ring.TryAppend(new byte[24]), Is.True);
@@ -81,7 +81,7 @@ public class QwpSegmentRingTests
     [Test]
     public void TryReadFrame_AcrossSegments_RoundTrips()
     {
-        using var ring = QwpSegmentRing.Open(_root, segmentCapacity: 64);
+        using var ring = QwpSegmentRing.Open(_root, segmentCapacity: QwpMmapSegment.HeaderSize + 64);
 
         var bodies = new[]
         {
@@ -109,7 +109,7 @@ public class QwpSegmentRingTests
     [Test]
     public void TryReadFrame_OutOfRange_ReturnsMinusOne()
     {
-        using var ring = QwpSegmentRing.Open(_root, segmentCapacity: 64);
+        using var ring = QwpSegmentRing.Open(_root, segmentCapacity: QwpMmapSegment.HeaderSize + 64);
         ring.TryAppend(new byte[8]);
 
         var dest = new byte[64];
@@ -120,7 +120,7 @@ public class QwpSegmentRingTests
     [Test]
     public void Acknowledge_FollowedByDrainTrimmable_PrecisePerSegment()
     {
-        using var ring = QwpSegmentRing.Open(_root, segmentCapacity: 64);
+        using var ring = QwpSegmentRing.Open(_root, segmentCapacity: QwpMmapSegment.HeaderSize + 64);
 
         // Each envelope is 8 (header) + 24 (body) = 32 bytes. Two fit per 64-byte segment.
         for (var i = 0; i < 6; i++)
@@ -158,7 +158,7 @@ public class QwpSegmentRingTests
     [Test]
     public void Acknowledge_IsMonotonic()
     {
-        using var ring = QwpSegmentRing.Open(_root, segmentCapacity: 64);
+        using var ring = QwpSegmentRing.Open(_root, segmentCapacity: QwpMmapSegment.HeaderSize + 64);
         ring.TryAppend(new byte[24]);
         ring.TryAppend(new byte[24]);
 
@@ -173,7 +173,7 @@ public class QwpSegmentRingTests
     [Test]
     public void NeedsHotSpare_FreshThenInstall()
     {
-        using var ring = QwpSegmentRing.Open(_root, segmentCapacity: 64);
+        using var ring = QwpSegmentRing.Open(_root, segmentCapacity: QwpMmapSegment.HeaderSize + 64);
         Assert.That(ring.NeedsHotSpare(), Is.True, "fresh ring needs initial active");
 
         // Initial append creates the active segment; spare not yet needed (under high-water).
@@ -194,7 +194,7 @@ public class QwpSegmentRingTests
     [Test]
     public void InstallHotSpare_TwiceWithoutConsumption_RejectsSecond()
     {
-        using var ring = QwpSegmentRing.Open(_root, segmentCapacity: 64);
+        using var ring = QwpSegmentRing.Open(_root, segmentCapacity: QwpMmapSegment.HeaderSize + 64);
         var spare1 = Path.Combine(_root, "spare1.tmp");
         File.WriteAllBytes(spare1, new byte[64]);
         Assert.That(ring.InstallHotSpare(spare1), Is.True);
@@ -209,7 +209,7 @@ public class QwpSegmentRingTests
     {
         for (var iter = 0; iter < 2; iter++)
         {
-            using var ring = QwpSegmentRing.Open(_root, segmentCapacity: 64);
+            using var ring = QwpSegmentRing.Open(_root, segmentCapacity: QwpMmapSegment.HeaderSize + 64);
 
             if (iter == 0)
             {

@@ -303,8 +303,6 @@ public class QwpEncoderTests
         Assert.That(BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(0, 4)), Is.EqualTo(QwpConstants.Magic));
     }
 
-    // -- Encoder coverage for extended types ------------------------------------
-
     [Test]
     public void Encode_Decimal128Column_WritesScalePrefixAndUnscaledBytes()
     {
@@ -470,8 +468,6 @@ public class QwpEncoderTests
         Assert.That(BinaryPrimitives.ReadInt64LittleEndian(bytes.AsSpan(pos + 13, 8)), Is.EqualTo(7L));
     }
 
-    // -- Self-sufficient mode (used by store-and-forward) ----------------------
-
     [Test]
     public void Encode_SelfSufficient_AlwaysEmitsFullSchema()
     {
@@ -590,8 +586,6 @@ public class QwpEncoderTests
         // + 2 (schema mode + id) + userColDefSize + 2 (designated TS def: empty name varint=0 + TIMESTAMP)
         return 12 + 2 + 1 + tableNameLen + 1 + 1 + 2 + userColDefSize + 2;
     }
-
-    // -- Helpers ----------------------------------------------------------------
 
     private static byte[] ConcatBytes(params byte[][] parts)
     {

@@ -278,8 +278,6 @@ public class QwpResponseTests
         }
     }
 
-    // -- Helpers ----------------------------------------------------------------
-
     private static byte[] BuildOk(long sequence)
     {
         var bytes = new byte[QwpConstants.OkAckMinSize];

@@ -459,8 +459,8 @@ internal sealed class QwpSegmentRing : IDisposable
             {
                 _sealedSegments.Add(active);
             }
+            Volatile.Write(ref _active, null);
         }
-        Volatile.Write(ref _active, null);
     }
 
     private bool TryAdoptSpare(string sparePath, string realPath, long baseFsn)
@@ -474,11 +474,7 @@ internal sealed class QwpSegmentRing : IDisposable
         }
         catch (Exception)
         {
-            try
-            {
-                if (File.Exists(sparePath)) File.Delete(sparePath);
-            }
-            catch (Exception) { /* best-effort */ }
+            SfCleanup.DeleteFile(sparePath);
             return false;
         }
     }

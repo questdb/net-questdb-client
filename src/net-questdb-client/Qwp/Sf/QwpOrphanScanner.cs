@@ -88,6 +88,11 @@ internal static class QwpOrphanScanner
             var keep = false;
             try
             {
+                if (File.Exists(Path.Combine(slotDir, FailedSentinel)))
+                {
+                    continue;
+                }
+
                 if (!HasSegments(slotDir))
                 {
                     continue;

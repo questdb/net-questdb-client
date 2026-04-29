@@ -56,6 +56,9 @@ internal sealed class QwpInFlightWindow
     private long _highestSentSequence = -1L;
     private Exception? _failure;
 
+    private TaskCompletionSource<bool> _changeSignal =
+        new(TaskCreationOptions.RunContinuationsAsynchronously);
+
     /// <summary>Highest sequence the server has acknowledged. Starts at <c>-1</c>.</summary>
     public long AckedSequence
     {
@@ -122,6 +125,7 @@ internal sealed class QwpInFlightWindow
     /// </summary>
     public void Add(long sequence)
     {
+        TaskCompletionSource<bool> wakeup;
         lock (_lock)
         {
             if (_failure is not null)
@@ -137,7 +141,9 @@ internal sealed class QwpInFlightWindow
 
             _highestSentSequence = sequence;
             Monitor.PulseAll(_lock);
+            wakeup = ReplaceChangeSignalLocked();
         }
+        wakeup.TrySetResult(true);
     }
 
     /// <summary>
@@ -149,6 +155,7 @@ internal sealed class QwpInFlightWindow
     /// </remarks>
     public void AcknowledgeUpTo(long sequence)
     {
+        TaskCompletionSource<bool>? wakeup;
         lock (_lock)
         {
             if (_failure is not null)
@@ -164,12 +171,14 @@ internal sealed class QwpInFlightWindow
 
             if (sequence <= _ackedSequence)
             {
-                return; // duplicate / out-of-order older ack; silent.
+                return;
             }
 
             _ackedSequence = sequence;
             Monitor.PulseAll(_lock);
+            wakeup = ReplaceChangeSignalLocked();
         }
+        wakeup.TrySetResult(true);
     }
 
     /// <summary>
@@ -179,11 +188,14 @@ internal sealed class QwpInFlightWindow
     public void FailAll(Exception failure)
     {
         ArgumentNullException.ThrowIfNull(failure);
+        TaskCompletionSource<bool> wakeup;
         lock (_lock)
         {
             _failure ??= failure;
             Monitor.PulseAll(_lock);
+            wakeup = ReplaceChangeSignalLocked();
         }
+        wakeup.TrySetResult(true);
     }
 
     /// <summary>
@@ -237,5 +249,66 @@ internal sealed class QwpInFlightWindow
                 Monitor.Wait(_lock, waitMs);
             }
         }
+    }
+
+    /// <summary>
+    ///     Async counterpart of <see cref="AwaitEmpty" />: returns a Task that completes when the
+    ///     window drains, throws on recorded failure, cancellation, or timeout.
+    /// </summary>
+    public async Task AwaitEmptyAsync(TimeSpan timeout, CancellationToken ct = default)
+    {
+        var hasDeadline = timeout >= TimeSpan.Zero;
+        var deadline = hasDeadline ? DateTime.UtcNow + timeout : DateTime.MaxValue;
+
+        while (true)
+        {
+            Task waitTask;
+            lock (_lock)
+            {
+                if (_failure is not null)
+                {
+                    throw _failure;
+                }
+
+                if (_ackedSequence >= _highestSentSequence)
+                {
+                    return;
+                }
+
+                ct.ThrowIfCancellationRequested();
+                waitTask = _changeSignal.Task;
+            }
+
+            if (hasDeadline)
+            {
+                var remaining = deadline - DateTime.UtcNow;
+                if (remaining <= TimeSpan.Zero)
+                {
+                    throw new TimeoutException(
+                        $"in-flight window did not drain within {timeout.TotalMilliseconds:F0} ms");
+                }
+
+                try
+                {
+                    await waitTask.WaitAsync(remaining, ct).ConfigureAwait(false);
+                }
+                catch (TimeoutException)
+                {
+                    // Loop: re-check the predicate (the change signal can fire close to the deadline
+                    // and the window may already be empty by the time we recheck).
+                }
+            }
+            else
+            {
+                await waitTask.WaitAsync(ct).ConfigureAwait(false);
+            }
+        }
+    }
+
+    private TaskCompletionSource<bool> ReplaceChangeSignalLocked()
+    {
+        var prev = _changeSignal;
+        _changeSignal = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        return prev;
     }
 }

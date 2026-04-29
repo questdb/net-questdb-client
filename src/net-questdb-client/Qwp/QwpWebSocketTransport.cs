@@ -25,11 +25,11 @@
 #if NET7_0_OR_GREATER
 
 using System.Buffers.Binary;
-using System.Net;
 using System.Net.Security;
 using System.Net.WebSockets;
 using System.Reflection;
 using QuestDB.Enums;
+using QuestDB.Qwp.Sf;
 using QuestDB.Utils;
 
 namespace QuestDB.Qwp;
@@ -52,7 +52,7 @@ namespace QuestDB.Qwp;
 ///     <c>[direction byte 'S'/'R'][uint32 LE length][payload]</c> records. The format is internal
 ///     and may change between client versions; useful for tests and bug reports.
 /// </remarks>
-internal sealed class QwpWebSocketTransport : IDisposable, Sf.IQwpCursorTransport
+internal sealed class QwpWebSocketTransport : IQwpCursorTransport
 {
     private const int DumpHeaderSize = 5;
     private static readonly string DefaultClientId = BuildDefaultClientId();
@@ -78,10 +78,9 @@ internal sealed class QwpWebSocketTransport : IDisposable, Sf.IQwpCursorTranspor
         var ws = _client.Options;
         ws.KeepAliveInterval = TimeSpan.Zero;
         ws.CollectHttpResponseDetails = true; // expose response headers for X-QWP-Version negotiation
-        // Disable system proxy by default. WebSocket ingest is a streaming long-lived connection
-        // and typical HTTP proxies break it (often returning 502/503). Users that need a proxy
-        // override via Options.Proxy.
-        ws.Proxy = options.Proxy;
+        // Disable system proxy: WebSocket ingest is a streaming long-lived connection and most
+        // HTTP proxies break it (502/503 or idle-timeout buffering).
+        ws.Proxy = null;
         ws.SetRequestHeader(QwpConstants.HeaderMaxVersion, options.ClientMaxVersion.ToString());
         ws.SetRequestHeader(QwpConstants.HeaderClientId, options.ClientId ?? DefaultClientId);
 
@@ -234,7 +233,7 @@ internal sealed class QwpWebSocketTransport : IDisposable, Sf.IQwpCursorTranspor
         await TryCloseAsync(status, description, ct).ConfigureAwait(false);
     }
 
-    Task Sf.IQwpCursorTransport.CloseAsync(CancellationToken cancellationToken) =>
+    Task IQwpCursorTransport.CloseAsync(CancellationToken cancellationToken) =>
         CloseAsync(ct: cancellationToken);
 
     /// <inheritdoc />
@@ -246,15 +245,7 @@ internal sealed class QwpWebSocketTransport : IDisposable, Sf.IQwpCursorTranspor
         }
 
         _disposed = true;
-
-        try
-        {
-            _client.Dispose();
-        }
-        catch
-        {
-            // Disposal must not throw.
-        }
+        SfCleanup.Dispose(_client);
     }
 
     private async Task TryCloseAsync(WebSocketCloseStatus status, string? description, CancellationToken ct)
@@ -281,7 +272,7 @@ internal sealed class QwpWebSocketTransport : IDisposable, Sf.IQwpCursorTranspor
         // CollectHttpResponseDetails was enabled in the constructor; HttpResponseHeaders carries the
         // upgrade response headers if the server included any.
         var headers = _client.HttpResponseHeaders;
-        if (headers is null || !headers.TryGetValue(QwpConstants.HeaderVersion, out var values) || values is null)
+        if (headers is null || !headers.TryGetValue(QwpConstants.HeaderVersion, out var values))
         {
             return QwpConstants.SupportedIngestVersion; // server didn't surface the header — assume v1.
         }
@@ -369,17 +360,6 @@ internal sealed class QwpWebSocketTransportOptions
 
     /// <summary>Optional callback for TLS certificate validation; bypassed when null.</summary>
     public RemoteCertificateValidationCallback? RemoteCertificateValidationCallback { get; init; }
-
-    /// <summary>
-    ///     Optional outbound HTTP proxy. <c>null</c> (the default) disables proxying.
-    /// </summary>
-    /// <remarks>
-    ///     We default to <c>null</c> rather than the system proxy: WebSocket ingest is a streaming
-    ///     long-lived connection, which most HTTP proxies break (often by returning 502/503 or by
-    ///     buffering until idle timeout). Users with a proxy that handles HTTP/1.1 upgrade traffic
-    ///     correctly can pass an <see cref="IWebProxy" /> here (e.g. <c>WebRequest.DefaultWebProxy</c>).
-    /// </remarks>
-    public IWebProxy? Proxy { get; init; }
 }
 
 #endif

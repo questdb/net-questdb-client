@@ -22,6 +22,7 @@
  *
  ******************************************************************************/
 
+using System.Buffers.Binary;
 using NUnit.Framework;
 using QuestDB.Qwp;
 using QuestDB.Utils;
@@ -79,10 +80,9 @@ public class QwpVarintTests
     [Test]
     public void RoundTrip_PowerOfTwoBoundaries_PreservesValue()
     {
-        // Boundary values around the 7-bit byte breaks (1<<0, 1<<7, 1<<14, ..., 1<<63).
         for (var bit = 0; bit < 64; bit++)
         {
-            var value = bit == 63 ? 1ul << 63 : 1ul << bit;
+            var value = 1ul << bit;
             AssertRoundTrip(value);
             if (value > 0) AssertRoundTrip(value - 1);
         }
@@ -142,12 +142,12 @@ public class QwpVarintTests
     {
         var rnd = new Random(0xCAFE);
         Span<byte> buffer = stackalloc byte[QwpVarint.MaxBytes];
+        Span<byte> randBytes = stackalloc byte[8];
 
         for (var i = 0; i < 10_000; i++)
         {
-            var hi = (ulong)rnd.NextInt64();
-            var lo = (uint)rnd.Next();
-            var value = (hi << 32) | lo;
+            rnd.NextBytes(randBytes);
+            var value = BinaryPrimitives.ReadUInt64LittleEndian(randBytes);
 
             var written = QwpVarint.Write(buffer, value);
             var decoded = QwpVarint.Read(buffer[..written], out var read);

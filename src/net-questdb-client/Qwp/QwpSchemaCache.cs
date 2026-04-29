@@ -87,7 +87,7 @@ internal sealed class QwpSchemaCache
     {
         ArgumentNullException.ThrowIfNull(table);
 
-        if (table.SchemaId == UnassignedSchemaId)
+        if (table.SchemaId == UnassignedSchemaId || table.SchemaId > _maxSentSchemaId)
         {
             if (_nextSchemaId >= _maxSchemasPerConnection)
             {
@@ -96,18 +96,6 @@ internal sealed class QwpSchemaCache
             }
 
             table.SchemaId = _nextSchemaId++;
-            if (table.SchemaId > _maxSentSchemaId)
-            {
-                _maxSentSchemaId = table.SchemaId;
-            }
-
-            return (QwpConstants.SchemaModeFull, table.SchemaId);
-        }
-
-        if (table.SchemaId > _maxSentSchemaId)
-        {
-            // The table has an id but we haven't sent the full schema yet (allocation outpaced
-            // transmission). Send full now and bump the watermark.
             _maxSentSchemaId = table.SchemaId;
             return (QwpConstants.SchemaModeFull, table.SchemaId);
         }

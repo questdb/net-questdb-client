@@ -34,8 +34,6 @@ namespace net_questdb_client_tests.Qwp;
 [TestFixture]
 public class QwpColumnExtendedTypesTests
 {
-    // -- DECIMAL128 --------------------------------------------------------------
-
     [Test]
     public void AppendDecimal128_PositiveValue_WritesUnscaledLittleEndian()
     {
@@ -105,8 +103,6 @@ public class QwpColumnExtendedTypesTests
         Assert.That(unscaled, Is.EqualTo(-((BigInteger.One << 96) - 1)));
     }
 
-    // -- LONG256 -----------------------------------------------------------------
-
     [Test]
     public void AppendLong256_SmallValue_PadsTo32Bytes()
     {
@@ -169,8 +165,6 @@ public class QwpColumnExtendedTypesTests
         Assert.That(col.FixedData![0], Is.EqualTo((byte)0x42));
     }
 
-    // -- GEOHASH -----------------------------------------------------------------
-
     [Test]
     public void AppendGeohash_LocksPrecision()
     {
@@ -227,8 +221,6 @@ public class QwpColumnExtendedTypesTests
         var hash = BinaryPrimitives.ReadUInt64LittleEndian(col.FixedData!.AsSpan(0, 8));
         Assert.That(hash, Is.EqualTo(0x0FEDCBA987654321UL));
     }
-
-    // -- DOUBLE_ARRAY ------------------------------------------------------------
 
     [Test]
     public void AppendDoubleArray_1D_WritesNDimsShapeAndValues()
@@ -336,8 +328,6 @@ public class QwpColumnExtendedTypesTests
         col.AppendDecimal128(2.55m);
         Assert.That(col.DecimalScale, Is.EqualTo((byte)2));
     }
-
-    // -- Helpers ----------------------------------------------------------------
 
     /// <summary>Reads a 16-byte little-endian two's-complement integer.</summary>
     private static BigInteger ReadInt128(ReadOnlySpan<byte> bytes)

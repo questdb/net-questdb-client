@@ -91,7 +91,6 @@ internal sealed class QwpSegmentManager : IDisposable
         }
         catch (SemaphoreFullException)
         {
-            // already pending; the next tick will pick up the latest state
         }
         catch (ObjectDisposedException)
         {
@@ -125,11 +124,7 @@ internal sealed class QwpSegmentManager : IDisposable
     {
         while (!_disposed && !ct.IsCancellationRequested)
         {
-            try { ServiceRing(); }
-            catch (Exception)
-            {
-                // a broken manager is a backpressure source, not a crash — never propagate
-            }
+            SfCleanup.Run(ServiceRing);
 
             try
             {
@@ -146,7 +141,6 @@ internal sealed class QwpSegmentManager : IDisposable
             }
         }
 
-        // post-shutdown drain so the slot directory ends up clean
         SfCleanup.Run(ServiceRing);
     }
 
@@ -184,11 +178,7 @@ internal sealed class QwpSegmentManager : IDisposable
         }
         catch (Exception)
         {
-            try
-            {
-                if (File.Exists(sparePath)) File.Delete(sparePath);
-            }
-            catch (Exception) { /* best-effort */ }
+            SfCleanup.DeleteFile(sparePath);
             return;
         }
 
@@ -218,14 +208,8 @@ internal sealed class QwpSegmentManager : IDisposable
             var path = seg.Path;
             var size = seg.Capacity;
             SfCleanup.Dispose(seg);
-            try
-            {
-                if (File.Exists(path)) File.Delete(path);
-            }
-            catch (Exception)
-            {
-                // file persists; next sender startup will pick it up via recovery
-            }
+            // If the unlink fails the file persists; next sender startup picks it up via recovery.
+            SfCleanup.DeleteFile(path);
             freed += size;
         }
 

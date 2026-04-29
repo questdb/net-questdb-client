@@ -46,6 +46,14 @@ internal sealed class QwpSymbolDictionary
 {
     private readonly Dictionary<string, int> _ids = new(StringComparer.Ordinal);
     private readonly List<string> _values = new();
+#if NET9_0_OR_GREATER
+    private readonly Dictionary<string, int>.AlternateLookup<ReadOnlySpan<char>> _idsLookup;
+
+    public QwpSymbolDictionary()
+    {
+        _idsLookup = _ids.GetAlternateLookup<ReadOnlySpan<char>>();
+    }
+#endif
 
     private int _committedCount;
 
@@ -64,18 +72,26 @@ internal sealed class QwpSymbolDictionary
     /// <summary>
     ///     Returns the global id for <paramref name="value" />, allocating one on first sight.
     /// </summary>
-    public int Add(string value)
+    public int Add(ReadOnlySpan<char> value)
     {
-        ArgumentNullException.ThrowIfNull(value);
-
-        if (_ids.TryGetValue(value, out var id))
+        int id;
+#if NET9_0_OR_GREATER
+        if (_idsLookup.TryGetValue(value, out id))
         {
             return id;
         }
+#else
+        var probeKey = value.ToString();
+        if (_ids.TryGetValue(probeKey, out id))
+        {
+            return id;
+        }
+#endif
 
+        var stored = value.ToString();
         id = _values.Count;
-        _values.Add(value);
-        _ids[value] = id;
+        _values.Add(stored);
+        _ids[stored] = id;
         return id;
     }
 

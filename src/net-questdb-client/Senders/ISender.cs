@@ -30,8 +30,18 @@ namespace QuestDB.Senders;
 /// <summary>
 ///     Interface representing <see cref="Sender" /> implementations.
 /// </summary>
-public interface ISender : IDisposable
+public interface ISender : IDisposable, IAsyncDisposable
 {
+    /// <summary>
+    ///     Default async dispose: defers to synchronous <see cref="IDisposable.Dispose" />. The
+    ///     WebSocket sender overrides with a truly async teardown that awaits in-flight ACKs.
+    /// </summary>
+    ValueTask IAsyncDisposable.DisposeAsync()
+    {
+        Dispose();
+        return ValueTask.CompletedTask;
+    }
+
     /// <summary>
     ///     Represents the current length of the buffer in UTF-8 bytes.
     /// </summary>

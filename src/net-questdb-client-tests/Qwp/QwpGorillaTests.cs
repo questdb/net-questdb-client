@@ -116,6 +116,31 @@ public class QwpGorillaTests
     }
 
     [Test]
+    public void Encode_DoDExactlyInt32Max_StaysCompressed()
+    {
+        var ts = new long[] { 0L, 0L, int.MaxValue };
+        var dest = new byte[QwpGorilla.MaxEncodedSize(ts.Length)];
+        var written = QwpGorilla.Encode(dest, ts);
+
+        Assert.That(dest[0], Is.EqualTo(QwpGorilla.EncodingGorilla));
+        Assert.That(written, Is.LessThan(QwpGorilla.UncompressedSize(ts.Length)));
+
+        AssertRoundTrip(ts);
+    }
+
+    [Test]
+    public void Encode_DoDExactlyInt32Min_StaysCompressed()
+    {
+        // delta=0, then delta=int.MinValue → DoD=int.MinValue (just inside the 32-bit signed range).
+        var ts = new long[] { 0L, 0L, (long)int.MinValue };
+        var dest = new byte[QwpGorilla.MaxEncodedSize(ts.Length)];
+        var written = QwpGorilla.Encode(dest, ts);
+
+        Assert.That(dest[0], Is.EqualTo(QwpGorilla.EncodingGorilla));
+        AssertRoundTrip(ts);
+    }
+
+    [Test]
     public void Encode_NegativeDoDs_RoundTrip()
     {
         var ts = new long[] { 100L, 200L, 250L /* delta 50, dod -50 */, 280L /* delta 30, dod -20 */, 290L };

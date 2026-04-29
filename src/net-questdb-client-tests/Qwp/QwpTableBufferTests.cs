@@ -180,6 +180,7 @@ public class QwpTableBufferTests
     {
         var t = new QwpTableBuffer("t");
         t.AppendLong("x", 1);
+        t.At(0);
         Assert.Throws<IngressError>(() => t.AppendDouble("x", 1.0));
     }
 
@@ -213,7 +214,8 @@ public class QwpTableBufferTests
     {
         var t = new QwpTableBuffer("t");
         t.AppendBool("flag", true);
-        Assert.Throws<IngressError>(() => t.AppendBool("flag", false));
+        t.At(0);
+        Assert.Throws<IngressError>(() => t.AppendLong("flag", 1));
     }
 
     [Test]
@@ -249,5 +251,35 @@ public class QwpTableBufferTests
 
         Assert.That(t.Columns.Count, Is.EqualTo(1), "the freshly-added column must be removed on cancel");
         Assert.That(t.Columns[0].Name, Is.EqualTo("base"));
+    }
+
+    [Test]
+    public void WideRow_512Columns_RoundTrips()
+    {
+        const int columnCount = 512;
+        var t = new QwpTableBuffer("wide");
+        for (var i = 0; i < columnCount; i++)
+        {
+            t.AppendLong($"c{i}", i);
+        }
+        t.At(1_700_000_000_000_000L);
+
+        Assert.That(t.RowCount, Is.EqualTo(1));
+        Assert.That(t.Columns.Count, Is.EqualTo(columnCount));
+        for (var i = 0; i < columnCount; i++)
+        {
+            Assert.That(t.Columns[i].Name, Is.EqualTo($"c{i}"));
+        }
+    }
+
+    [Test]
+    public void EmptyVarchar_AcceptedAndPreservesLength()
+    {
+        var t = new QwpTableBuffer("t");
+        t.AppendVarchar("v", ReadOnlySpan<char>.Empty);
+        t.At(1_000);
+
+        Assert.That(t.RowCount, Is.EqualTo(1));
+        Assert.That(t.Columns[0].TypeCode, Is.EqualTo(QwpTypeCode.Varchar));
     }
 }

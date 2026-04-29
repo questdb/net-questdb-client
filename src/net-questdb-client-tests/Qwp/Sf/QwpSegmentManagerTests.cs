@@ -50,21 +50,21 @@ public class QwpSegmentManagerTests
     [Test]
     public async Task Provisions_HotSpare_OnFreshRing()
     {
-        using var ring = QwpSegmentRing.Open(_root, segmentCapacity: 64);
+        using var ring = QwpSegmentRing.Open(_root, segmentCapacity: QwpMmapSegment.HeaderSize + 64);
         using var mgr = new QwpSegmentManager(ring, long.MaxValue);
         mgr.Start();
 
         // Producer asks for spare via NeedsHotSpare → Wake → manager installs.
         await WaitFor(() => mgr.SparesInstalled >= 1, TimeSpan.FromSeconds(2));
         Assert.That(ring.NeedsHotSpare(), Is.False);
-        Assert.That(mgr.CommittedBytes, Is.EqualTo(64L));
+        Assert.That(mgr.CommittedBytes, Is.EqualTo((long)QwpMmapSegment.HeaderSize + 64));
     }
 
     [Test]
     public async Task DisksCap_RefusesNewSpareUntilTrim()
     {
-        using var ring = QwpSegmentRing.Open(_root, segmentCapacity: 64);
-        using var mgr = new QwpSegmentManager(ring, maxTotalBytes: 64);
+        using var ring = QwpSegmentRing.Open(_root, segmentCapacity: QwpMmapSegment.HeaderSize + 64);
+        using var mgr = new QwpSegmentManager(ring, maxTotalBytes: QwpMmapSegment.HeaderSize + 64);
         mgr.Start();
 
         await WaitFor(() => mgr.SparesInstalled >= 1, TimeSpan.FromSeconds(2));
@@ -83,13 +83,14 @@ public class QwpSegmentManagerTests
         // Acknowledge fully covers segment 0 → manager trims → cap frees → spare installable.
         ring.Acknowledge(1L);
         await WaitFor(() => mgr.SparesInstalled > sparesBefore, TimeSpan.FromSeconds(2));
-        Assert.That(mgr.CommittedBytes, Is.EqualTo(64L), "after trim+spare-install, committed back at one segment");
+        Assert.That(mgr.CommittedBytes, Is.EqualTo((long)QwpMmapSegment.HeaderSize + 64),
+            "after trim+spare-install, committed back at one segment");
     }
 
     [Test]
     public async Task Trim_RemovesAckedSegments_AndDecrementsCommittedBytes()
     {
-        using var ring = QwpSegmentRing.Open(_root, segmentCapacity: 64);
+        using var ring = QwpSegmentRing.Open(_root, segmentCapacity: QwpMmapSegment.HeaderSize + 64);
         using var mgr = new QwpSegmentManager(ring, maxTotalBytes: 1024);
         mgr.Start();
 
@@ -113,7 +114,7 @@ public class QwpSegmentManagerTests
     [Test]
     public async Task Dispose_ShutsDownCleanly_EvenWhenIdle()
     {
-        var ring = QwpSegmentRing.Open(_root, segmentCapacity: 64);
+        var ring = QwpSegmentRing.Open(_root, segmentCapacity: QwpMmapSegment.HeaderSize + 64);
         var mgr = new QwpSegmentManager(ring, long.MaxValue);
         mgr.Start();
 
@@ -130,17 +131,17 @@ public class QwpSegmentManagerTests
     [Test]
     public async Task Wake_DrivesProvisioning_Promptly()
     {
-        using var ring = QwpSegmentRing.Open(_root, segmentCapacity: 64);
+        using var ring = QwpSegmentRing.Open(_root, segmentCapacity: QwpMmapSegment.HeaderSize + 64);
         using var mgr = new QwpSegmentManager(ring, long.MaxValue);
         mgr.Start();
 
-        // Drain the eager startup spare so the next provisioning can only come from a producer wake.
+        // Sample BEFORE consuming the startup spare — TryAllocateNewActive can wake the manager
+        // mid-append and bump SparesInstalled, racing with a post-append sample.
         await WaitFor(() => mgr.SparesInstalled >= 1, TimeSpan.FromSeconds(2));
-        Assert.That(ring.TryAppend(new byte[24]), Is.True);
-        Assert.That(ring.TryAppend(new byte[24]), Is.True);
         var sparesBefore = mgr.SparesInstalled;
+        Assert.That(ring.TryAppend(new byte[24]), Is.True);
+        Assert.That(ring.TryAppend(new byte[24]), Is.True);
 
-        // Force a rotation; the ring's NeedsHotSpare → Wake path should drive a spare faster than the heartbeat.
         var sw = System.Diagnostics.Stopwatch.StartNew();
         await WaitFor(() => mgr.SparesInstalled > sparesBefore, TimeSpan.FromSeconds(2));
         sw.Stop();
@@ -154,7 +155,7 @@ public class QwpSegmentManagerTests
     {
         // Producer hammers TryAppend (lots of rotations); receiver acks aggressively. Manager must
         // service spare provisioning + trim concurrently without corrupting the ring.
-        using var ring = QwpSegmentRing.Open(_root, segmentCapacity: 256);
+        using var ring = QwpSegmentRing.Open(_root, segmentCapacity: QwpMmapSegment.HeaderSize + 256);
         using var mgr = new QwpSegmentManager(ring, maxTotalBytes: 4 * 1024);
         mgr.Start();
 

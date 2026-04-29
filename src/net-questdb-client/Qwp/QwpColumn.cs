@@ -106,52 +106,41 @@ internal sealed class QwpColumn
     /// <remarks>Public field so <see cref="Array.Resize" /> can take it by <c>ref</c>.</remarks>
     public byte[]? NullBitmap;
 
-    // -- Fixed-width storage (BYTE/SHORT/INT/LONG/FLOAT/DOUBLE/DATE/TIMESTAMP/TIMESTAMP_NANOS/UUID/CHAR) --
-
-    /// <summary>Raw bytes for fixed-width types. Length is bounded by <see cref="FixedLen" />.</summary>
+    /// <summary>
+    ///     Raw bytes for fixed-width types (BYTE / SHORT / INT / LONG / FLOAT / DOUBLE / DATE /
+    ///     TIMESTAMP / TIMESTAMP_NANOS / UUID / CHAR). Length is bounded by <see cref="FixedLen" />.
+    /// </summary>
     public byte[]? FixedData;
 
     /// <summary>Number of valid bytes in <see cref="FixedData" />.</summary>
     public int FixedLen;
 
-    // -- Boolean (bit-packed) -----------------------------------------------------
-
     /// <summary>Bit-packed booleans, LSB-first within each byte. Length = <c>ceil(NonNullCount/8)</c>.</summary>
     public byte[]? BoolData;
 
-    // -- VARCHAR storage ---------------------------------------------------------
-
-    /// <summary>Offset array; length = <c>NonNullCount + 1</c> once at least one value present.</summary>
+    /// <summary>VARCHAR offset array; length = <c>NonNullCount + 1</c> once at least one value present.</summary>
     public uint[]? StrOffsets;
 
-    /// <summary>Concatenated UTF-8 string data, length = last offset.</summary>
+    /// <summary>Concatenated VARCHAR UTF-8 string data, length = last offset.</summary>
     public byte[]? StrData;
 
     /// <summary>Number of bytes used in <see cref="StrData" />.</summary>
     public int StrLen;
 
-    // -- SYMBOL storage (global ids) ---------------------------------------------
-
-    /// <summary>Global symbol ids in append order; varint-encoded at frame time.</summary>
+    /// <summary>SYMBOL global ids in append order; varint-encoded at frame time.</summary>
     public int[]? SymbolIds;
 
-    // -- DECIMAL scale (locked on first non-null append) ------------------------
-
-    /// <summary>Per-column decimal scale; emitted as a 1-byte prefix before the values on the wire.</summary>
+    /// <summary>DECIMAL scale; emitted as a 1-byte prefix before the values on the wire. Locked on first non-null.</summary>
     public byte DecimalScale;
 
     /// <summary>Whether <see cref="DecimalScale" /> has been set by the first non-null append.</summary>
     public bool DecimalScaleSet;
 
-    // -- GEOHASH precision (locked on first non-null append) --------------------
-
-    /// <summary>Geohash precision in bits; emitted as a varint prefix before the values on the wire.</summary>
+    /// <summary>GEOHASH precision in bits; varint prefix before values. Locked on first non-null.</summary>
     public int GeohashPrecisionBits;
 
     /// <summary>Whether <see cref="GeohashPrecisionBits" /> has been set by the first non-null append.</summary>
     public bool GeohashPrecisionSet;
-
-    // -- Append API --------------------------------------------------------------
 
     /// <summary>Appends a null marker for a single row.</summary>
     public void AppendNull()
@@ -334,9 +323,10 @@ internal sealed class QwpColumn
             StrOffsets[0] = 0;
         }
 
-        var byteCount = Encoding.UTF8.GetByteCount(value);
-        EnsureStringCapacity(StrLen + byteCount);
-        var written = Encoding.UTF8.GetBytes(value, StrData.AsSpan(StrLen, byteCount));
+        // Reserve worst-case UTF-8 footprint so we encode in one pass; trim by actual length below.
+        var maxBytes = Encoding.UTF8.GetMaxByteCount(value.Length);
+        EnsureStringCapacity(StrLen + maxBytes);
+        var written = Encoding.UTF8.GetBytes(value, StrData.AsSpan(StrLen, maxBytes));
         StrLen += written;
 
         // Offsets array carries one trailing offset per non-null value, so length = NonNullCount + 1.
@@ -645,8 +635,6 @@ internal sealed class QwpColumn
         AdvanceNonNull();
     }
 
-    // -- Internal helpers --------------------------------------------------------
-
     private void AssertOrSetType(QwpTypeCode code)
     {
         if (!IsTyped)
@@ -736,7 +724,14 @@ internal sealed class QwpColumn
 
     private void EnsureOffsetCapacity(int requiredCount)
     {
-        if (StrOffsets!.Length < requiredCount)
+        if (StrOffsets is null)
+        {
+            StrOffsets = new uint[Math.Max(InitialSymbolCapacity, requiredCount)];
+            StrOffsets[0] = 0;
+            return;
+        }
+
+        if (StrOffsets.Length < requiredCount)
         {
             var newSize = StrOffsets.Length;
             while (newSize < requiredCount)

@@ -116,4 +116,17 @@ public class QwpSchemaCacheTests
         Assert.That(cache.AllocatedCount, Is.Zero);
         Assert.That(cache.MaxSentSchemaId, Is.EqualTo(QwpSchemaCache.UnassignedSchemaId));
     }
+
+    [Test]
+    public void Reset_ThenReuseTable_EmitsFullSchema()
+    {
+        var cache = new QwpSchemaCache();
+        var t = new QwpTableBuffer("t");
+        cache.PrepareSchema(t);
+
+        cache.Reset();
+
+        var (mode, _) = cache.PrepareSchema(t);
+        Assert.That(mode, Is.EqualTo(QwpConstants.SchemaModeFull));
+    }
 }

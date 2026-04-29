@@ -73,7 +73,8 @@ internal static class QwpEncoder
     ///     Defaults to <c>false</c>.
     /// </param>
     /// <returns>The complete QWP frame, including the 12-byte header.</returns>
-    public static byte[] Encode(
+    /// <remarks>Allocates per call. Production paths use <see cref="EncodeInto" /> directly.</remarks>
+    internal static byte[] Encode(
         IReadOnlyList<QwpTableBuffer> tables,
         QwpSchemaCache schemaCache,
         QwpSymbolDictionary symbolDictionary,

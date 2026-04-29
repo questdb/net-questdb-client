@@ -80,7 +80,7 @@ public class SenderOptionsTests
     {
         Assert.That(
             new SenderOptions("http::addr=localhost:9000;").ToString()
-          , Is.EqualTo("http::addr=localhost:9000;auth_timeout=15000;auto_flush=on;auto_flush_bytes=2147483647;auto_flush_interval=1000;auto_flush_rows=75000;gzip=False;init_buf_size=65536;max_buf_size=104857600;max_name_len=127;pool_timeout=120000;protocol_version=Auto;request_min_throughput=102400;request_timeout=10000;retry_timeout=10000;tls_verify=on;"));
+          , Is.EqualTo("http::addr=localhost:9000;auth_timeout=15000;auto_flush=on;auto_flush_bytes=2147483647;auto_flush_interval=1000;auto_flush_rows=75000;gzip=False;init_buf_size=65536;max_buf_size=104857600;max_name_len=127;pool_timeout=120000;protocol_version=Auto;request_min_throughput=102400;request_timeout=30000;retry_timeout=10000;tls_verify=on;"));
     }
 
     [Test]
@@ -112,7 +112,7 @@ public class SenderOptionsTests
 
         Assert.That(senderOptions.ToString(),
                     Is.EqualTo(
-                        "http::addr=localhost:9000;auth_timeout=15000;auto_flush=on;auto_flush_bytes=-1;auto_flush_interval=-1;auto_flush_rows=-1;gzip=False;init_buf_size=65536;max_buf_size=104857600;max_name_len=127;pool_timeout=120000;protocol_version=Auto;request_min_throughput=102400;request_timeout=10000;retry_timeout=10000;tls_verify=on;"));
+                        "http::addr=localhost:9000;auth_timeout=15000;auto_flush=on;auto_flush_bytes=-1;auto_flush_interval=-1;auto_flush_rows=-1;gzip=False;init_buf_size=65536;max_buf_size=104857600;max_name_len=127;pool_timeout=120000;protocol_version=Auto;request_min_throughput=102400;request_timeout=30000;retry_timeout=10000;tls_verify=on;"));
     }
 
     [Test]
@@ -149,17 +149,24 @@ public class SenderOptionsTests
         var opts = new SenderOptions("ws::addr=localhost:9000;");
         Assert.That(opts.sf_dir, Is.Null);
         Assert.That(opts.sender_id, Is.EqualTo("default"));
-        Assert.That(opts.sf_max_bytes, Is.EqualTo(64L * 1024 * 1024));
-        Assert.That(opts.sf_max_total_bytes, Is.EqualTo(long.MaxValue));
+        Assert.That(opts.sf_max_bytes, Is.EqualTo(4L * 1024 * 1024));
+        Assert.That(opts.sf_max_total_bytes, Is.EqualTo(128L * 1024 * 1024));
         Assert.That(opts.sf_durability, Is.EqualTo("memory"));
         Assert.That(opts.sf_append_deadline_millis, Is.EqualTo(TimeSpan.FromSeconds(30)));
         Assert.That(opts.reconnect_max_duration_millis, Is.EqualTo(TimeSpan.FromMinutes(5)));
         Assert.That(opts.reconnect_initial_backoff_millis, Is.EqualTo(TimeSpan.FromMilliseconds(100)));
-        Assert.That(opts.reconnect_max_backoff_millis, Is.EqualTo(TimeSpan.FromSeconds(30)));
+        Assert.That(opts.reconnect_max_backoff_millis, Is.EqualTo(TimeSpan.FromSeconds(5)));
         Assert.That(opts.initial_connect_retry, Is.False);
         Assert.That(opts.close_flush_timeout_millis, Is.EqualTo(TimeSpan.FromSeconds(5)));
         Assert.That(opts.drain_orphans, Is.False);
         Assert.That(opts.max_background_drainers, Is.EqualTo(4));
+    }
+
+    [Test]
+    public void Sf_DefaultMaxTotal_GrowsWhenSfDirSet()
+    {
+        var opts = new SenderOptions("ws::addr=localhost:9000;sf_dir=/tmp/qdb;");
+        Assert.That(opts.sf_max_total_bytes, Is.EqualTo(10L * 1024 * 1024 * 1024));
     }
 
     [Test]
@@ -235,6 +242,66 @@ public class SenderOptionsTests
         Assert.That(opts.auto_flush_rows, Is.EqualTo(-1));
         Assert.That(opts.auto_flush_bytes, Is.EqualTo(-1));
         Assert.That(opts.auto_flush_interval, Is.EqualTo(TimeSpan.FromMilliseconds(-1)));
+    }
+
+    [Test]
+    public void AutoFlushZero_SameAsOff()
+    {
+        var opts = new SenderOptions(
+            "http::addr=localhost:9000;auto_flush=on;auto_flush_rows=0;auto_flush_bytes=0;auto_flush_interval=0;");
+        Assert.That(opts.auto_flush_rows, Is.EqualTo(-1));
+        Assert.That(opts.auto_flush_bytes, Is.EqualTo(-1));
+        Assert.That(opts.auto_flush_interval, Is.EqualTo(TimeSpan.FromMilliseconds(-1)));
+    }
+
+    [Test]
+    public void Ws_DefaultPort_NotProvided()
+    {
+        var opts = new SenderOptions("ws::addr=localhost;");
+        Assert.That(opts.Port, Is.EqualTo(9000));
+    }
+
+    [Test]
+    public void Wss_DefaultPort_NotProvided()
+    {
+        var opts = new SenderOptions("wss::addr=localhost;");
+        Assert.That(opts.Port, Is.EqualTo(9000));
+    }
+
+    [Test]
+    public void UserPassAliases_AcceptedAsUsernamePassword()
+    {
+        var opts = new SenderOptions("http::addr=localhost:9000;user=alice;pass=secret;");
+        Assert.That(opts.username, Is.EqualTo("alice"));
+        Assert.That(opts.password, Is.EqualTo("secret"));
+    }
+
+    [Test]
+    public void UsernameWinsOverUserAlias()
+    {
+        var opts = new SenderOptions("http::addr=localhost:9000;username=primary;user=alias;password=p;");
+        Assert.That(opts.username, Is.EqualTo("primary"));
+    }
+
+    [Test]
+    public void SenderId_PathTraversal_Rejected()
+    {
+        Assert.That(
+            () => new SenderOptions("ws::addr=localhost:9000;sf_dir=/tmp/qdb;sender_id=../etc;"),
+            Throws.TypeOf<IngressError>().With.Message.Contains("sender_id"));
+        Assert.That(
+            () => new SenderOptions("ws::addr=localhost:9000;sf_dir=/tmp/qdb;sender_id=a/b;"),
+            Throws.TypeOf<IngressError>().With.Message.Contains("sender_id"));
+        Assert.That(
+            () => new SenderOptions("ws::addr=localhost:9000;sf_dir=/tmp/qdb;sender_id=/abs;"),
+            Throws.TypeOf<IngressError>().With.Message.Contains("sender_id"));
+    }
+
+    [Test]
+    public void SenderId_NormalSegment_Accepted()
+    {
+        Assert.DoesNotThrow(
+            () => new SenderOptions("ws::addr=localhost:9000;sf_dir=/tmp/qdb;sender_id=service-7;"));
     }
 
     [Test]

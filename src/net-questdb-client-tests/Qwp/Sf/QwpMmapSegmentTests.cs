@@ -53,7 +53,7 @@ public class QwpMmapSegmentTests
     {
         using var seg = QwpMmapSegment.Open(SegmentPath(), capacity: 4096, baseFsn: 0);
 
-        Assert.That(seg.WritePosition, Is.Zero);
+        Assert.That(seg.WritePosition, Is.EqualTo(QwpMmapSegment.HeaderSize));
         Assert.That(seg.EnvelopeCount, Is.Zero);
         Assert.That(seg.NextFsn, Is.Zero);
         Assert.That(seg.IsSealed, Is.False);
@@ -67,11 +67,11 @@ public class QwpMmapSegmentTests
 
         Assert.That(seg.TryAppend(frame), Is.True);
         Assert.That(seg.EnvelopeCount, Is.EqualTo(1));
-        Assert.That(seg.WritePosition, Is.EqualTo(8 + 5));
+        Assert.That(seg.WritePosition, Is.EqualTo(QwpMmapSegment.HeaderSize + 8 + 5));
         Assert.That(seg.NextFsn, Is.EqualTo(101));
 
         var dest = new byte[64];
-        var read = seg.TryReadFrame(0, dest, out var fsn);
+        var read = seg.TryReadFrame(QwpMmapSegment.HeaderSize, dest, out var fsn);
         Assert.That(read, Is.EqualTo(5));
         Assert.That(fsn, Is.EqualTo(100L));
         Assert.That(dest.AsSpan(0, read).ToArray(), Is.EqualTo(frame));
@@ -93,8 +93,7 @@ public class QwpMmapSegmentTests
 
         Assert.That(seg.EnvelopeCount, Is.EqualTo(frames.Count));
 
-        // Walk and read each frame back.
-        long offset = 0;
+        long offset = QwpMmapSegment.HeaderSize;
         var dest = new byte[64];
         for (var i = 0; i < frames.Count; i++)
         {
@@ -108,12 +107,12 @@ public class QwpMmapSegmentTests
     [Test]
     public void Append_BeyondCapacity_ReturnsFalse()
     {
-        // Capacity 32 → space for one envelope of header(8) + body up to 24 bytes.
-        using var seg = QwpMmapSegment.Open(SegmentPath(), 32, 0);
+        // Capacity = HeaderSize + space for one envelope of header(8) + body up to 24 bytes.
+        const int bodyRoom = 32;
+        using var seg = QwpMmapSegment.Open(SegmentPath(), QwpMmapSegment.HeaderSize + bodyRoom, 0);
 
         Assert.That(seg.TryAppend(new byte[20]), Is.True);
-        // Second 20-byte frame would need 28 more bytes; only 4 bytes left.
-        Assert.That(seg.TryAppend(new byte[20]), Is.False);
+        Assert.That(seg.TryAppend(new byte[20]), Is.False, "second 20-byte frame needs 28 bytes; only 4 left");
         Assert.That(seg.EnvelopeCount, Is.EqualTo(1), "the failed append must not increase the envelope count");
     }
 
@@ -138,8 +137,8 @@ public class QwpMmapSegmentTests
 
         using var reopened = QwpMmapSegment.Open(path, 4096, 100);
         Assert.That(reopened.EnvelopeCount, Is.EqualTo(3));
-        // Bytes used: 3 envelopes × 8-byte header + (1 + 2 + 3) bytes payload = 30.
-        Assert.That(reopened.WritePosition, Is.EqualTo(30));
+        // 3 envelopes × 8-byte header + (1 + 2 + 3) bytes payload = 30 envelope bytes after the file header.
+        Assert.That(reopened.WritePosition, Is.EqualTo(QwpMmapSegment.HeaderSize + 30));
         Assert.That(reopened.NextFsn, Is.EqualTo(103));
     }
 
@@ -155,15 +154,14 @@ public class QwpMmapSegmentTests
             seg.TryAppend(new byte[] { 7, 8, 9 });
         }
 
-        // Corrupt the middle envelope's CRC.
         var bytes = File.ReadAllBytes(path);
         var firstEnvSize = 8 + 3;
-        bytes[firstEnvSize] ^= 0xFF; // flip a bit in the second envelope's CRC
+        bytes[QwpMmapSegment.HeaderSize + firstEnvSize] ^= 0xFF;
         File.WriteAllBytes(path, bytes);
 
         using var reopened = QwpMmapSegment.Open(path, 4096, 0);
         Assert.That(reopened.EnvelopeCount, Is.EqualTo(1), "replay must stop at the corruption");
-        Assert.That(reopened.WritePosition, Is.EqualTo(firstEnvSize));
+        Assert.That(reopened.WritePosition, Is.EqualTo(QwpMmapSegment.HeaderSize + firstEnvSize));
     }
 
     [Test]
@@ -176,17 +174,15 @@ public class QwpMmapSegmentTests
             seg.TryAppend(new byte[] { 1, 2, 3 });
         }
 
-        // Append a torn-tail header: claims a length that runs past EOF.
         var bytes = File.ReadAllBytes(path);
         var firstEnvSize = 8 + 3;
-        // Write a "torn" envelope at firstEnvSize: CRC=0, len=999999 (oversized).
-        BitConverter.TryWriteBytes(bytes.AsSpan(firstEnvSize, 4), 0u);
-        BitConverter.TryWriteBytes(bytes.AsSpan(firstEnvSize + 4, 4), 999_999);
+        BitConverter.TryWriteBytes(bytes.AsSpan(QwpMmapSegment.HeaderSize + firstEnvSize, 4), 0u);
+        BitConverter.TryWriteBytes(bytes.AsSpan(QwpMmapSegment.HeaderSize + firstEnvSize + 4, 4), 999_999);
         File.WriteAllBytes(path, bytes);
 
         using var reopened = QwpMmapSegment.Open(path, 4096, 0);
         Assert.That(reopened.EnvelopeCount, Is.EqualTo(1));
-        Assert.That(reopened.WritePosition, Is.EqualTo(firstEnvSize));
+        Assert.That(reopened.WritePosition, Is.EqualTo(QwpMmapSegment.HeaderSize + firstEnvSize));
     }
 
     [Test]
@@ -200,20 +196,17 @@ public class QwpMmapSegmentTests
             seg.TryAppend(new byte[] { 4, 5, 6 });
         }
 
-        // Corrupt the second envelope.
         var bytes = File.ReadAllBytes(path);
-        bytes[8 + 3] ^= 0xFF; // flip second envelope's CRC
+        bytes[QwpMmapSegment.HeaderSize + 8 + 3] ^= 0xFF;
         File.WriteAllBytes(path, bytes);
 
         using (var reopened = QwpMmapSegment.Open(path, 4096, 0))
         {
-            // Replay drops the corrupt envelope, exposing the same write slot for new data.
             Assert.That(reopened.EnvelopeCount, Is.EqualTo(1));
             Assert.That(reopened.TryAppend(new byte[] { 99, 99, 99 }), Is.True);
             Assert.That(reopened.EnvelopeCount, Is.EqualTo(2));
         }
 
-        // Reopen one more time to make sure the new envelope is durable.
         using var third = QwpMmapSegment.Open(path, 4096, 0);
         Assert.That(third.EnvelopeCount, Is.EqualTo(2));
     }

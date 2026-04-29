@@ -143,8 +143,8 @@ public class QuestDbWebSocketIntegrationTests
         var ws = (QuestDB.Senders.IQwpWebSocketSender)sender;
         ws.Ping();
 
-        var seqTxn = ws.GetHighestAckedSeqTxn("test_ws_durable");
-        Assert.That(seqTxn, Is.GreaterThanOrEqualTo(0L));
+        var durableSeqTxn = ws.GetHighestDurableSeqTxn("test_ws_durable");
+        Assert.That(durableSeqTxn, Is.GreaterThanOrEqualTo(0L));
     }
 
     private async Task VerifyTableHasDataAsync(string tableName)

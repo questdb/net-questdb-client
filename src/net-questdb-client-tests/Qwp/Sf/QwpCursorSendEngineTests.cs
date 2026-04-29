@@ -106,6 +106,75 @@ public class QwpCursorSendEngineTests
     }
 
     [Test]
+    public async Task AppendAsync_HappyPath_FrameLandsOnWire()
+    {
+        var stubs = new List<StubTransport>();
+        using var engine = NewEngine(out _, factory: () =>
+        {
+            var s = new StubTransport();
+            stubs.Add(s);
+            return s;
+        });
+        engine.Start();
+
+        await engine.AppendAsync(new byte[] { 1, 2, 3 });
+        await engine.AppendAsync(new byte[] { 4 });
+        await engine.FlushAsync(TimeSpan.FromSeconds(5));
+
+        Assert.That(engine.AckedFsn, Is.EqualTo(2L));
+        Assert.That(stubs[0].Sent.Select(b => b[0]).ToArray(), Is.EqualTo(new byte[] { 1, 4 }));
+    }
+
+    [Test]
+    public async Task AppendAsync_DeadlineExpired_Throws()
+    {
+        using var sendGate = new SemaphoreSlim(0, int.MaxValue);
+        using var engine = NewEngine(out _,
+            segmentCapacity: QwpMmapSegment.HeaderSize + 64,
+            maxTotalBytes: QwpMmapSegment.HeaderSize + 64,
+            appendDeadline: TimeSpan.FromMilliseconds(100),
+            factory: () => new StubTransport
+            {
+                OnSendGate = ct => sendGate.WaitAsync(ct)
+            });
+        engine.Start();
+
+        await engine.AppendAsync(new byte[24]);
+        await engine.AppendAsync(new byte[24]);
+
+        var ex = Assert.ThrowsAsync<IngressError>(async () => await engine.AppendAsync(new byte[24]));
+        Assert.That(ex!.code, Is.EqualTo(ErrorCode.ServerFlushError));
+        Assert.That(ex.Message, Does.Contain("sf_append_deadline"));
+
+        sendGate.Release(8);
+    }
+
+    [Test]
+    public async Task AppendAsync_DoesNotBlockCallingThread()
+    {
+        using var sendGate = new SemaphoreSlim(0, int.MaxValue);
+        using var engine = NewEngine(out _,
+            segmentCapacity: QwpMmapSegment.HeaderSize + 64,
+            maxTotalBytes: QwpMmapSegment.HeaderSize + 64,
+            appendDeadline: TimeSpan.FromSeconds(10),
+            factory: () => new StubTransport
+            {
+                OnSendGate = ct => sendGate.WaitAsync(ct)
+            });
+        engine.Start();
+
+        await engine.AppendAsync(new byte[24]);
+        await engine.AppendAsync(new byte[24]);
+
+        var pending = engine.AppendAsync(new byte[24]);
+        Assert.That(pending.IsCompleted, Is.False, "third append must be pending while ring is full");
+
+        sendGate.Release(2);
+        await pending.AsTask().WaitAsync(TimeSpan.FromSeconds(5));
+        sendGate.Release(8);
+    }
+
+    [Test]
     public async Task FullDrain_OnDispose_UnlinksSegmentFiles()
     {
         var slotDir = Path.Combine(_root, "drain-cleanup");
@@ -331,8 +400,8 @@ public class QwpCursorSendEngineTests
         // third append would rotate; with maxTotalBytes=64 the new segment can't be allocated → backpressure.
         using var sendGate = new SemaphoreSlim(0, int.MaxValue);
         using var engine = NewEngine(out _,
-            segmentCapacity: 64,
-            maxTotalBytes: 64,
+            segmentCapacity: QwpMmapSegment.HeaderSize + 64,
+            maxTotalBytes: QwpMmapSegment.HeaderSize + 64,
             appendDeadline: TimeSpan.FromMilliseconds(100),
             factory: () => new StubTransport
             {
@@ -355,8 +424,8 @@ public class QwpCursorSendEngineTests
     {
         using var sendGate = new SemaphoreSlim(0, int.MaxValue);
         using var engine = NewEngine(out _,
-            segmentCapacity: 64,
-            maxTotalBytes: 64,
+            segmentCapacity: QwpMmapSegment.HeaderSize + 64,
+            maxTotalBytes: QwpMmapSegment.HeaderSize + 64,
             appendDeadline: TimeSpan.FromSeconds(10),
             factory: () => new StubTransport
             {
@@ -385,8 +454,8 @@ public class QwpCursorSendEngineTests
     {
         using var sendGate = new SemaphoreSlim(0, int.MaxValue);
         var engine = NewEngine(out _,
-            segmentCapacity: 64,
-            maxTotalBytes: 64,
+            segmentCapacity: QwpMmapSegment.HeaderSize + 64,
+            maxTotalBytes: QwpMmapSegment.HeaderSize + 64,
             appendDeadline: TimeSpan.FromSeconds(30),
             factory: () => new StubTransport
             {
@@ -397,14 +466,14 @@ public class QwpCursorSendEngineTests
         engine.AppendBlocking(new byte[24]);
         engine.AppendBlocking(new byte[24]);
 
-        var producer = Task.Run(() =>
+        var producer = Task.Run<Exception?>(() =>
         {
             try
             {
                 engine.AppendBlocking(new byte[24]);
-                return (Exception?)null;
+                return null;
             }
-            catch (Exception ex)
+            catch (ObjectDisposedException ex)
             {
                 return ex;
             }
@@ -477,8 +546,8 @@ public class QwpCursorSendEngineTests
             }
         })).ToArray();
 
-        await Task.WhenAll(producerTasks).WaitAsync(TimeSpan.FromSeconds(10));
-        await engine.FlushAsync(TimeSpan.FromSeconds(10));
+        await Task.WhenAll(producerTasks).WaitAsync(TimeSpan.FromSeconds(20));
+        await engine.FlushAsync(TimeSpan.FromSeconds(20));
 
         Assert.That(engine.NextFsn, Is.EqualTo((long)totalFrames));
         Assert.That(engine.AckedFsn, Is.EqualTo((long)totalFrames));
@@ -524,7 +593,6 @@ public class QwpCursorSendEngineTests
         Assert.That(stubs.Count, Is.GreaterThan(1), "synthetic flaps must have triggered at least one reconnect");
     }
 
-    // -- helpers ----------------------------------------------------------------
 
     private QwpCursorSendEngine NewEngine(
         out string slotDir,

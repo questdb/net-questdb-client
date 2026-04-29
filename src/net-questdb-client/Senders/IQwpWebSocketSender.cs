@@ -29,9 +29,10 @@ namespace QuestDB.Senders;
 /// </summary>
 /// <remarks>
 ///     <see cref="Sender.New(string)" /> returns an <see cref="ISender" /> for every transport. Users that
-///     opted into <c>ws::</c> or <c>wss::</c> can cast to this interface to access ping/durable-ack
-///     features. Methods that require server-side support not yet shipped (durable acks, ping)
-///     return <c>-1</c> or no-op until that path lands.
+///     opted into <c>ws::</c> or <c>wss::</c> can cast to this interface to access ping and per-table
+///     <c>seqTxn</c> watermarks. Durable watermarks require <c>request_durable_ack=on</c> on the
+///     connect string; the committed watermark is always populated once the server has ACKed any
+///     batch on a connection.
 /// </remarks>
 public interface IQwpWebSocketSender : ISender
 {

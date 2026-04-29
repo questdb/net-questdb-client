@@ -122,7 +122,8 @@ internal sealed class QwpReconnectPolicy
         }
 
         var clampedTicks = ticks > maxTicks ? maxTicks : ticks;
-        return _jitter(TimeSpan.FromTicks(clampedTicks));
+        var jittered = _jitter(TimeSpan.FromTicks(clampedTicks));
+        return jittered > MaxBackoff ? MaxBackoff : jittered;
     }
 
     /// <summary>

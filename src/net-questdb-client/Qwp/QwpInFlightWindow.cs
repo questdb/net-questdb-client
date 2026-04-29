@@ -217,14 +217,16 @@ internal sealed class QwpInFlightWindow
         {
             while (true)
             {
-                if (_failure is not null)
-                {
-                    throw _failure;
-                }
-
+                // Check drained before failure: if every sent batch is acked, this AwaitEmpty call
+                // is satisfied even if a subsequent failure (for a future batch) was just recorded.
                 if (_ackedSequence >= _highestSentSequence)
                 {
                     return;
+                }
+
+                if (_failure is not null)
+                {
+                    throw _failure;
                 }
 
                 ct.ThrowIfCancellationRequested();
@@ -265,14 +267,14 @@ internal sealed class QwpInFlightWindow
             Task waitTask;
             lock (_lock)
             {
-                if (_failure is not null)
-                {
-                    throw _failure;
-                }
-
                 if (_ackedSequence >= _highestSentSequence)
                 {
                     return;
+                }
+
+                if (_failure is not null)
+                {
+                    throw _failure;
                 }
 
                 ct.ThrowIfCancellationRequested();
@@ -297,10 +299,22 @@ internal sealed class QwpInFlightWindow
                     // Loop: re-check the predicate (the change signal can fire close to the deadline
                     // and the window may already be empty by the time we recheck).
                 }
+                catch (OperationCanceledException) when (IsEmpty)
+                {
+                    // Cancellation raced past the final ACK; the window is empty so the wait succeeded.
+                    return;
+                }
             }
             else
             {
-                await waitTask.WaitAsync(ct).ConfigureAwait(false);
+                try
+                {
+                    await waitTask.WaitAsync(ct).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException) when (IsEmpty)
+                {
+                    return;
+                }
             }
         }
     }

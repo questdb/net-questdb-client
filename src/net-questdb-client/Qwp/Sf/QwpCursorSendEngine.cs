@@ -722,14 +722,16 @@ internal sealed class QwpCursorSendEngine : IDisposable
     {
         var prev = _appendSignal;
         _appendSignal = NewSignal();
-        prev.TrySetResult(true);
+        // Bounce off the lock holder's stack: a direct TrySetResult triggered an intermittent
+        // Linux + .NET 9 deadlock under Task.WaitAsync continuation chains.
+        _ = Task.Run(() => prev.TrySetResult(true));
     }
 
     private void FireAckSignalLocked()
     {
         var prev = _ackSignal;
         _ackSignal = NewSignal();
-        prev.TrySetResult(true);
+        _ = Task.Run(() => prev.TrySetResult(true));
     }
 
     /// <remarks>

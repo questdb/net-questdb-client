@@ -296,19 +296,19 @@ The config string format is:
 
 | Name                              | Default      | Description                                                                                              |
 | --------------------------------- | ------------ | -------------------------------------------------------------------------------------------------------- |
-| `in_flight_window`                | `128`        | Max pipelined batches awaiting ACK. Set to `1` for synchronous send-and-wait semantics.                  |
+| `in_flight_window`                | `128`        | Max pipelined batches awaiting ACK. Minimum is `2` — `in_flight_window=1` is rejected.                   |
 | `close_timeout`                   | `5000` ms    | Per-flush ACK-drain timeout, applied to `Send` and `Dispose`.                                            |
 | `max_schemas_per_connection`      | `65535`      | Per-connection cap on distinct schema IDs. Hitting it requires recreating the sender.                    |
 | `gorilla`                         | `off`        | `on` / `off` — enables Gorilla DoD compression on timestamp columns.                                     |
 | `request_durable_ack`             | `off`        | `on` / `off` — opts into per-table object-store ACK watermarks (cast to `IQwpWebSocketSender`).         |
 | `sf_dir`                          |              | Path to a local directory enabling store-and-forward. Sets the SF stack on this sender.                  |
 | `sender_id`                       | `default`    | Slot identifier under `<sf_dir>/<sender_id>/`. Must be unique per process sharing the same `sf_dir`.     |
-| `sf_max_bytes`                    | `67108864`   | Per-segment rotation threshold in bytes (default 64 MiB).                                                |
-| `sf_max_total_bytes`              | `long.MaxValue` | Hard cap on total disk usage; back-pressures the producer when exceeded.                              |
+| `sf_max_bytes`                    | `4194304`    | Per-segment rotation threshold in bytes (default 4 MiB).                                                 |
+| `sf_max_total_bytes`              | `10 GiB` with `sf_dir`, `128 MiB` otherwise | Hard cap on total disk usage; back-pressures the producer when exceeded.            |
 | `sf_durability`                   | `memory`     | Durability mode. Only `memory` is supported in v1.                                                       |
 | `sf_append_deadline_millis`       | `30000`      | Max wait when the disk cap is hit before `Send` throws.                                                  |
 | `reconnect_initial_backoff_millis`| `100`        | Starting backoff for reconnect attempts.                                                                 |
-| `reconnect_max_backoff_millis`    | `30000`      | Cap on per-attempt backoff.                                                                              |
+| `reconnect_max_backoff_millis`    | `5000`       | Cap on per-attempt backoff.                                                                              |
 | `reconnect_max_duration_millis`   | `300000`     | Total per-outage budget; sender becomes terminal if exceeded.                                            |
 | `initial_connect_retry`           | `off`        | `on` makes the first connect honour the same backoff loop. Default is "fail fast on first connect".      |
 | `close_flush_timeout_millis`      | `5000`       | Max wait at `Dispose` for the SF engine to drain. `0` or `-1` for fast close.                            |

@@ -789,8 +789,6 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
             }
             else
             {
-                OnFlushSucceeded();
-
                 try
                 {
                     await _slot!.WaitAsync(linkedCt).ConfigureAwait(false);
@@ -817,6 +815,11 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
                             "internal: in-flight channel was full after reserving a slot"));
                         throw _terminalError!;
                     }
+
+                    // Only commit local state (clear rows, advance symbol delta) after the batch is
+                    // safely on the send channel. Earlier we cleared even on cancel/terminal-error
+                    // mid-handoff, losing rows that never made it to the wire.
+                    OnFlushSucceeded();
                 }
                 catch (OperationCanceledException) when (_terminalError is not null)
                 {
@@ -936,29 +939,39 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
                     return;
                 }
 
-                if (response.IsDurableAck)
+                try
                 {
-                    // Informational watermark; doesn't advance the in-flight window.
-                    ProcessTableEntries(response.TableEntries, isDurable: true);
-                    continue;
-                }
+                    if (response.IsDurableAck)
+                    {
+                        // Informational watermark; doesn't advance the in-flight window.
+                        ProcessTableEntries(response.TableEntries, isDurable: true);
+                        continue;
+                    }
 
-                if (!response.IsOk)
+                    if (!response.IsOk)
+                    {
+                        FailTerminal(response.ToException());
+                        return;
+                    }
+
+                    var prevAcked = _inFlightWindow.AckedSequence;
+                    _inFlightWindow.AcknowledgeUpTo(response.Sequence);
+                    var newAcked = _inFlightWindow.AckedSequence;
+                    var freed = (int)(newAcked - prevAcked);
+                    if (freed > 0)
+                    {
+                        _slot!.Release(freed);
+                    }
+
+                    ProcessTableEntries(response.TableEntries, isDurable: false);
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
                 {
-                    FailTerminal(response.ToException());
+                    // A malformed ACK (e.g. sequence beyond highest sent) must terminalise the sender,
+                    // otherwise producers wait until close_timeout instead of seeing the violation.
+                    FailTerminal(ex);
                     return;
                 }
-
-                var prevAcked = _inFlightWindow.AckedSequence;
-                _inFlightWindow.AcknowledgeUpTo(response.Sequence);
-                var newAcked = _inFlightWindow.AckedSequence;
-                var freed = (int)(newAcked - prevAcked);
-                if (freed > 0)
-                {
-                    _slot!.Release(freed);
-                }
-
-                ProcessTableEntries(response.TableEntries, isDurable: false);
             }
         }
         catch (OperationCanceledException)

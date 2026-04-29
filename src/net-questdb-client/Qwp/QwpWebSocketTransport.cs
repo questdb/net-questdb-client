@@ -25,6 +25,7 @@
 #if NET7_0_OR_GREATER
 
 using System.Buffers.Binary;
+using System.Globalization;
 using System.Net.Security;
 using System.Net.WebSockets;
 using System.Reflection;
@@ -279,13 +280,16 @@ internal sealed class QwpWebSocketTransport : IQwpCursorTransport
 
         foreach (var value in values)
         {
-            if (int.TryParse(value, out var v))
+            if (int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var v))
             {
                 return v;
             }
         }
 
-        return QwpConstants.SupportedIngestVersion;
+        // Header is present but unparseable — fail fast rather than mask server/proxy corruption.
+        throw new IngressError(
+            ErrorCode.ProtocolVersionError,
+            $"server returned invalid {QwpConstants.HeaderVersion} header value");
     }
 
     private void DumpFrame(byte direction, ReadOnlySpan<byte> bytes)

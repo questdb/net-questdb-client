@@ -55,7 +55,7 @@ internal sealed class QwpSegmentRing : IDisposable
     private Action? _spareInstalledCallback;
     private Action? _spareAdoptionFailed;
     private bool _wakeRequestedForActive;
-    private bool _closed;
+    private volatile bool _closed;
 
     private QwpSegmentRing(string directory, long segmentCapacity, int maxFrameLength)
     {
@@ -498,9 +498,8 @@ internal sealed class QwpSegmentRing : IDisposable
 
     private void EnsureNotClosed()
     {
-        bool closed;
-        lock (_lock) closed = _closed;
-        if (closed) throw new ObjectDisposedException(nameof(QwpSegmentRing));
+        // Volatile read keeps the producer hot path lock-free; the write in Dispose runs under _lock.
+        if (_closed) throw new ObjectDisposedException(nameof(QwpSegmentRing));
     }
 
     internal static string BuildFileName(long baseFsn)

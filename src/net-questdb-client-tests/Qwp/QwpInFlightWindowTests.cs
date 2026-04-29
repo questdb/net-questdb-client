@@ -120,7 +120,7 @@ public class QwpInFlightWindowTests
         var w = new QwpInFlightWindow();
         w.Add(0);
 
-        Assert.Throws<TimeoutException>(() => w.AwaitEmpty(TimeSpan.FromMilliseconds(50)));
+        Assert.Throws<TimeoutException>(() => w.AwaitEmpty(TimeSpan.FromMilliseconds(500)));
     }
 
     [Test]
@@ -149,6 +149,7 @@ public class QwpInFlightWindowTests
     public void FailAll_OnlyFirstWins()
     {
         var w = new QwpInFlightWindow();
+        w.Add(0);
         var first = new InvalidOperationException("first");
         var second = new InvalidOperationException("second");
         w.FailAll(first);
@@ -165,16 +166,11 @@ public class QwpInFlightWindowTests
         w.Add(0);
         w.Add(1);
 
-        using var producerEnteredAwait = new ManualResetEventSlim(false);
-        var t = Task.Run(() =>
-        {
-            producerEnteredAwait.Wait(TimeSpan.FromSeconds(2));
-            w.AcknowledgeUpTo(1);
-        });
+        var waitTask = Task.Run(() => w.AwaitEmpty(TimeSpan.FromSeconds(2)));
+        Assert.That(waitTask.Wait(50), Is.False, "two outstanding sends must keep AwaitEmpty blocked");
 
-        producerEnteredAwait.Set();
-        w.AwaitEmpty(TimeSpan.FromSeconds(2));
-        t.Wait();
+        w.AcknowledgeUpTo(1);
+        waitTask.Wait(TimeSpan.FromSeconds(2));
         Assert.That(w.IsEmpty);
     }
 
@@ -184,7 +180,7 @@ public class QwpInFlightWindowTests
         var w = new QwpInFlightWindow();
         w.Add(0);
         using var cts = new CancellationTokenSource();
-        cts.CancelAfter(50);
+        cts.CancelAfter(500);
 
         Assert.Throws<OperationCanceledException>(() => w.AwaitEmpty(TimeSpan.FromSeconds(10), cts.Token));
     }
@@ -230,7 +226,7 @@ public class QwpInFlightWindowTests
         var w = new QwpInFlightWindow();
         w.Add(0);
         using var cts = new CancellationTokenSource();
-        cts.CancelAfter(50);
+        cts.CancelAfter(500);
 
         Assert.CatchAsync<OperationCanceledException>(
             async () => await w.AwaitEmptyAsync(TimeSpan.FromSeconds(10), cts.Token));
@@ -243,6 +239,44 @@ public class QwpInFlightWindowTests
         w.Add(0);
 
         Assert.ThrowsAsync<TimeoutException>(
-            async () => await w.AwaitEmptyAsync(TimeSpan.FromMilliseconds(50)));
+            async () => await w.AwaitEmptyAsync(TimeSpan.FromMilliseconds(500)));
+    }
+
+    [Test]
+    public void AwaitEmptyAsync_AckThenFail_AckWins()
+    {
+        var w = new QwpInFlightWindow();
+        w.Add(0);
+        w.AcknowledgeUpTo(0);
+        w.FailAll(new InvalidOperationException("post-ack failure for next batch"));
+
+        Assert.DoesNotThrowAsync(async () => await w.AwaitEmptyAsync(TimeSpan.FromSeconds(1)));
+    }
+
+    [Test]
+    public void AwaitEmpty_AckThenFail_AckWins()
+    {
+        var w = new QwpInFlightWindow();
+        w.Add(0);
+        w.AcknowledgeUpTo(0);
+        w.FailAll(new InvalidOperationException("post-ack failure for next batch"));
+
+        Assert.DoesNotThrow(() => w.AwaitEmpty(TimeSpan.FromSeconds(1)));
+    }
+
+    [Test]
+    public void AwaitEmptyAsync_DrainConcurrentWithCancellation_ReturnsCleanly()
+    {
+        var w = new QwpInFlightWindow();
+        w.Add(0);
+        using var cts = new CancellationTokenSource();
+
+        var awaiter = w.AwaitEmptyAsync(TimeSpan.FromSeconds(2), cts.Token);
+        Assert.That(awaiter.IsCompleted, Is.False);
+
+        w.AcknowledgeUpTo(0);
+        cts.Cancel();
+
+        Assert.DoesNotThrowAsync(async () => await awaiter);
     }
 }

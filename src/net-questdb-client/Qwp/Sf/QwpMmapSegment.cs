@@ -49,6 +49,13 @@ namespace QuestDB.Qwp.Sf;
 ///     <para />
 ///     The file is pre-extended to <see cref="Capacity" /> so writes never grow the file at
 ///     append time. Trailing zeros indicate "no envelope here yet".
+///     <para />
+///     <b>Thread safety.</b> The segment is not internally synchronised. The owning
+///     <see cref="QwpSegmentRing" /> and <see cref="Sf.QwpCursorSendEngine" /> serialise all access
+///     to a given segment under <c>_stateLock</c> — producer's <see cref="TryAppend" /> never overlaps
+///     with reader's <see cref="OffsetOfEnvelope" /> / <see cref="TryReadFrame" /> on the same
+///     instance. Don't use this class directly without that external serialisation; <c>List&lt;long&gt;</c>
+///     for the offset table is not safe for concurrent mutation.
 /// </remarks>
 internal sealed class QwpMmapSegment : IDisposable
 {

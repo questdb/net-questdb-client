@@ -67,27 +67,51 @@ internal sealed class QwpResultBatchDecoder
         p += 8;
         var batchSeq = ReadVarint(payload, ref p);
 
-        if ((headerFlags & QwpConstants.FlagDeltaSymbolDict) != 0)
+        var preDictSize = _state.SymbolDict.Size;
+        var stagedSchemaId = (ulong?)null;
+        EgressSchema? stagedSchema = null;
+        var commit = false;
+        try
         {
-            DecodeDeltaSymbolDict(payload, ref p);
+            var stagedSymbols = new List<byte[]>();
+            if ((headerFlags & QwpConstants.FlagDeltaSymbolDict) != 0)
+            {
+                DecodeDeltaSymbolDict(payload, ref p, stagedSymbols);
+            }
+            foreach (var entry in stagedSymbols) _state.SymbolDict.AppendEntry(entry);
+
+            batch.Reset();
+            batch.RequestId = requestId;
+            batch.BatchSeq = (long)batchSeq;
+
+            DecodeTableBlock(payload, ref p, headerFlags, batch, out stagedSchemaId, out stagedSchema);
+
+            if (p != payload.Length)
+            {
+                throw new QwpDecodeException($"trailing bytes after RESULT_BATCH: consumed {p}, payload {payload.Length}");
+            }
+            commit = true;
         }
-
-        batch.Reset();
-        batch.RequestId = requestId;
-        batch.BatchSeq = (long)batchSeq;
-
-        DecodeTableBlock(payload, ref p, headerFlags, batch);
-
-        if (p != payload.Length)
+        finally
         {
-            throw new QwpDecodeException($"trailing bytes after RESULT_BATCH: consumed {p}, payload {payload.Length}");
+            if (commit)
+            {
+                if (stagedSchemaId is { } id && stagedSchema is { } sc)
+                {
+                    _state.RegisterSchema(id, sc);
+                }
+            }
+            else
+            {
+                _state.SymbolDict.TruncateTo(preDictSize);
+            }
         }
     }
 
-    private void DecodeDeltaSymbolDict(ReadOnlySpan<byte> payload, ref int p)
+    private void DecodeDeltaSymbolDict(ReadOnlySpan<byte> payload, ref int p, List<byte[]> stagedEntries)
     {
-        var deltaStart = (int)ReadVarint(payload, ref p);
-        var deltaCount = (int)ReadVarint(payload, ref p);
+        var deltaStart = ReadBoundedVarintAsInt(payload, ref p, "symbol dict deltaStart");
+        var deltaCount = ReadBoundedVarintAsInt(payload, ref p, "symbol dict deltaCount");
 
         if (deltaStart != _state.SymbolDict.Size)
         {
@@ -97,41 +121,56 @@ internal sealed class QwpResultBatchDecoder
 
         for (var i = 0; i < deltaCount; i++)
         {
-            var len = (int)ReadVarint(payload, ref p);
-            if (len < 0 || len > QwpConstants.MaxResultBatchWireBytes)
+            var len = ReadBoundedVarintAsInt(payload, ref p, "symbol dict entry length");
+            if (len > QwpConstants.MaxResultBatchWireBytes)
             {
                 throw new QwpDecodeException($"symbol dict entry length out of range: {len}");
             }
-            if (p + len > payload.Length)
+            if (len > payload.Length - p)
             {
                 throw new QwpDecodeException("truncated symbol dict entry");
             }
-            _state.SymbolDict.AppendEntry(payload.Slice(p, len));
+            stagedEntries.Add(payload.Slice(p, len).ToArray());
             p += len;
         }
     }
 
-    private void DecodeTableBlock(ReadOnlySpan<byte> payload, ref int p, byte headerFlags, QwpColumnBatch batch)
+    private static int ReadBoundedVarintAsInt(ReadOnlySpan<byte> payload, ref int p, string field)
     {
-        var nameLen = (int)ReadVarint(payload, ref p);
-        if (nameLen < 0 || nameLen > QwpConstants.MaxNameLengthBytes)
+        var v = ReadVarint(payload, ref p);
+        if (v > int.MaxValue)
+        {
+            throw new QwpDecodeException($"{field} varint exceeds int.MaxValue: {v}");
+        }
+        return (int)v;
+    }
+
+    private void DecodeTableBlock(
+        ReadOnlySpan<byte> payload, ref int p, byte headerFlags, QwpColumnBatch batch,
+        out ulong? stagedSchemaId, out EgressSchema? stagedSchema)
+    {
+        stagedSchemaId = null;
+        stagedSchema = null;
+
+        var nameLen = ReadBoundedVarintAsInt(payload, ref p, "table name length");
+        if (nameLen > QwpConstants.MaxNameLengthBytes)
         {
             throw new QwpDecodeException($"table name length out of range: {nameLen}");
         }
-        if (p + nameLen > payload.Length)
+        if (nameLen > payload.Length - p)
         {
             throw new QwpDecodeException("truncated table name");
         }
         p += nameLen;
 
-        var rowCount = (int)ReadVarint(payload, ref p);
-        var colCount = (int)ReadVarint(payload, ref p);
-        if (rowCount < 0 || rowCount > QwpConstants.MaxRowsPerTable)
+        var rowCount = ReadBoundedVarintAsInt(payload, ref p, "row_count");
+        var colCount = ReadBoundedVarintAsInt(payload, ref p, "col_count");
+        if (rowCount > QwpConstants.MaxRowsPerTable)
         {
             throw new QwpDecodeException($"row_count out of range: {rowCount}");
         }
 
-        if (colCount < 0 || colCount > QwpConstants.MaxColumnsPerTable)
+        if (colCount > QwpConstants.MaxColumnsPerTable)
         {
             throw new QwpDecodeException($"col_count out of range: {colCount}");
         }
@@ -149,12 +188,12 @@ internal sealed class QwpResultBatchDecoder
             var defs = new EgressColumnDef[colCount];
             for (var i = 0; i < colCount; i++)
             {
-                var cnLen = (int)ReadVarint(payload, ref p);
-                if (cnLen < 0 || cnLen > QwpConstants.MaxNameLengthBytes)
+                var cnLen = ReadBoundedVarintAsInt(payload, ref p, "column name length");
+                if (cnLen > QwpConstants.MaxNameLengthBytes)
                 {
                     throw new QwpDecodeException($"column name length out of range: {cnLen}");
                 }
-                if (p + cnLen > payload.Length)
+                if (cnLen > payload.Length - p)
                 {
                     throw new QwpDecodeException("truncated column name");
                 }
@@ -168,7 +207,8 @@ internal sealed class QwpResultBatchDecoder
                 defs[i] = new EgressColumnDef(name, typeCode);
             }
             schema = new EgressSchema(defs);
-            _state.RegisterSchema(schemaId, schema);
+            stagedSchemaId = schemaId;
+            stagedSchema = schema;
         }
         else if (schemaMode == QwpConstants.SchemaModeReference)
         {
@@ -219,8 +259,13 @@ internal sealed class QwpResultBatchDecoder
         }
         else
         {
+            if (TypeHasNoNullSentinel(col.TypeCode))
+            {
+                throw new QwpDecodeException(
+                    $"column type 0x{(byte)col.TypeCode:X2} cannot carry NULL but null_flag={nullFlag}");
+            }
             var bitmapBytes = (rowCount + 7) >> 3;
-            if (p + bitmapBytes > payload.Length)
+            if (bitmapBytes > payload.Length - p)
             {
                 throw new QwpDecodeException("truncated null bitmap");
             }
@@ -344,7 +389,7 @@ internal sealed class QwpResultBatchDecoder
     private void DecodeStringColumn(ReadOnlySpan<byte> payload, ref int p, ColumnView col, int nonNull)
     {
         var offsetBytes = (nonNull + 1) * 4;
-        if (p + offsetBytes > payload.Length)
+        if (offsetBytes > payload.Length - p)
         {
             throw new QwpDecodeException("truncated varchar offsets");
         }
@@ -366,7 +411,7 @@ internal sealed class QwpResultBatchDecoder
         }
 
         var heapLen = nonNull > 0 ? offsets[nonNull] : 0;
-        if (heapLen < 0 || p + heapLen > payload.Length)
+        if (heapLen < 0 || heapLen > payload.Length - p)
         {
             throw new QwpDecodeException("truncated varchar heap");
         }
@@ -434,7 +479,7 @@ internal sealed class QwpResultBatchDecoder
 
     private void CopyFixed(ReadOnlySpan<byte> payload, ref int p, ColumnView col, int byteCount)
     {
-        if (p + byteCount > payload.Length)
+        if (byteCount < 0 || byteCount > payload.Length - p)
         {
             throw new QwpDecodeException(
                 $"truncated column data: need {byteCount} bytes, payload has {payload.Length - p}");
@@ -446,6 +491,15 @@ internal sealed class QwpResultBatchDecoder
             p += byteCount;
         }
     }
+
+    private static bool TypeHasNoNullSentinel(QwpTypeCode t) => t switch
+    {
+        QwpTypeCode.Boolean => true,
+        QwpTypeCode.Byte => true,
+        QwpTypeCode.Short => true,
+        QwpTypeCode.Char => true,
+        _ => false,
+    };
 
     private byte[] RentScratch(byte[] existing, int needed)
     {
@@ -510,12 +564,13 @@ internal sealed class QwpResultBatchDecoder
             }
 
             var dimsBytes = nDims * 4;
-            if (p + dimsBytes > payload.Length)
+            if (dimsBytes > payload.Length - p)
             {
                 throw new QwpDecodeException("truncated array row: dim header overflow");
             }
 
             long elementCount = 1;
+            var maxElements = (long)((payload.Length - p - dimsBytes) / elementBytes);
             for (var d = 0; d < nDims; d++)
             {
                 var dim = BinaryPrimitives.ReadInt32LittleEndian(payload.Slice(p + d * 4, 4));
@@ -523,12 +578,17 @@ internal sealed class QwpResultBatchDecoder
                 {
                     throw new QwpDecodeException($"array dim {d} negative ({dim})");
                 }
+                if (dim != 0 && elementCount > maxElements / dim)
+                {
+                    throw new QwpDecodeException(
+                        $"array shape exceeds remaining payload: dim {d} = {dim}");
+                }
                 elementCount *= dim;
             }
             p += dimsBytes;
 
             var valueBytes = elementCount * elementBytes;
-            if (valueBytes < 0 || p + valueBytes > payload.Length)
+            if (valueBytes < 0 || valueBytes > payload.Length - p)
             {
                 throw new QwpDecodeException("truncated array row: values overflow");
             }

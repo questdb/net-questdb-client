@@ -153,6 +153,7 @@ public sealed class QueryOptions
         ValidateTls();
         ValidateCompressionLevel();
         ValidateNumericRanges();
+        ValidateInitialCredit();
         RejectControlChars(nameof(username), username);
         RejectControlChars(nameof(password), password);
         RejectControlChars(nameof(token), token);
@@ -312,6 +313,15 @@ public sealed class QueryOptions
         {
             throw new IngressError(ErrorCode.ConfigError,
                 $"`compression_level` must be in [{QwpConstants.ZstdLevelMin}, {QwpConstants.ZstdLevelMax}], got {compression_level}");
+        }
+    }
+
+    private void ValidateInitialCredit()
+    {
+        if (initial_credit < 0)
+        {
+            throw new IngressError(ErrorCode.ConfigError,
+                $"`initial_credit` must be >= 0 (0 = unbounded), got {initial_credit}");
         }
     }
 

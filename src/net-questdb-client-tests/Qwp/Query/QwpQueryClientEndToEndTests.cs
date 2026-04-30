@@ -262,7 +262,7 @@ public class QwpQueryClientEndToEndTests
 
         Assert.That(server.LastUpgradeHeaders, Is.Not.Null);
         Assert.That(server.LastUpgradeHeaders![QwpConstants.HeaderClientId], Is.EqualTo("tester/9.9"));
-        Assert.That(server.LastUpgradeHeaders[QwpConstants.HeaderAcceptEncoding], Is.EqualTo("zstd;level=5"));
+        Assert.That(server.LastUpgradeHeaders[QwpConstants.HeaderAcceptEncoding], Is.EqualTo("zstd;level=5,raw"));
         Assert.That(server.LastUpgradeHeaders[QwpConstants.HeaderMaxVersion],
             Is.EqualTo(QwpConstants.SupportedEgressVersion.ToString()));
     }
@@ -655,6 +655,158 @@ public class QwpQueryClientEndToEndTests
     }
 
     [Test]
+    public async Task ZstdCompressedBatch_DecodesCorrectly()
+    {
+        var schema = new ResultSchema
+        {
+            SchemaId = 1,
+            Columns = { new SchemaColumn("v", QwpTypeCode.Long) },
+        };
+        var data = new ResultBatchData
+        {
+            RowCount = 4,
+            Columns = { new FixedColumnData { DenseBytes = LongsLe(11L, 22L, 33L, 44L) } },
+        };
+        var rawBatch = QwpEgressFrameBuilder.BuildResultBatch(1L, 0L, schema, data);
+        var compressed = QwpEgressFrameBuilder.CompressResultBatch(rawBatch);
+        var end = QwpEgressFrameBuilder.BuildResultEnd(1L, 0L, 4L);
+
+        await using var server = new DummyQwpServer(new DummyQwpServerOptions
+        {
+            Path = QwpConstants.ReadPath,
+            NegotiatedVersion = "1",
+            FrameHandlerMulti = _ => new[] { compressed, end },
+        });
+        await server.StartAsync();
+
+        using var client = QueryClient.New(BuildConnString(server, "compression=zstd;"));
+        var handler = new RecordingHandler();
+        client.Execute("SELECT v FROM t", handler);
+
+        Assert.That(handler.Batches.Count, Is.EqualTo(1));
+        Assert.That(handler.Batches[0].LongValues, Is.EqualTo(new[] { 11L, 22L, 33L, 44L }));
+        Assert.That(handler.Ended, Is.True);
+    }
+
+    [Test]
+    public async Task Failover_TransportFailsOnFirstEndpoint_RetriesNextAndFiresOnFailoverReset()
+    {
+        var schema = new ResultSchema { SchemaId = 1, Columns = { new SchemaColumn("c", QwpTypeCode.Long) } };
+        var data = new ResultBatchData { RowCount = 1, Columns = { new FixedColumnData { DenseBytes = LongLe(7L) } } };
+
+        var serverAInfo = QwpEgressFrameBuilder.BuildServerInfo(
+            QwpConstants.RolePrimary, epoch: 1, capabilities: 0, serverWallNs: 0, "c", "node-a");
+        var serverBInfo = QwpEgressFrameBuilder.BuildServerInfo(
+            QwpConstants.RolePrimary, epoch: 2, capabilities: 0, serverWallNs: 0, "c", "node-b");
+
+        await using var serverA = new DummyQwpServer(new DummyQwpServerOptions
+        {
+            Path = QwpConstants.ReadPath,
+            NegotiatedVersion = "2",
+            InitialServerFrame = serverAInfo,
+            CloseAfterFrameCount = 1,
+            CloseStatus = System.Net.WebSockets.WebSocketCloseStatus.InternalServerError,
+            FrameHandler = _ => null,
+        });
+        await serverA.StartAsync();
+
+        var batchB = QwpEgressFrameBuilder.BuildResultBatch(2L, 0L, schema, data);
+        var endB = QwpEgressFrameBuilder.BuildResultEnd(2L, 0L, 1L);
+        await using var serverB = new DummyQwpServer(new DummyQwpServerOptions
+        {
+            Path = QwpConstants.ReadPath,
+            NegotiatedVersion = "2",
+            InitialServerFrame = serverBInfo,
+            FrameHandlerMulti = _ => new[] { batchB, endB },
+        });
+        await serverB.StartAsync();
+
+        var conn = $"ws::addr={serverA.Uri.Authority},{serverB.Uri.Authority};path={QwpConstants.ReadPath};" +
+                   "target=primary;failover=on;failover_max_attempts=4;failover_backoff_initial_ms=10;failover_backoff_max_ms=20;";
+        using var client = QueryClient.New(conn);
+        var handler = new RecordingHandler();
+        client.Execute("SELECT 7", handler);
+
+        Assert.That(handler.FailoverResets.Count, Is.GreaterThanOrEqualTo(1));
+        Assert.That(handler.FailoverResets[^1]?.NodeId, Is.EqualTo("node-b"));
+        Assert.That(handler.Batches.Count, Is.EqualTo(1));
+        Assert.That(handler.Batches[0].LongValues, Is.EqualTo(new[] { 7L }));
+        Assert.That(handler.Ended, Is.True);
+    }
+
+    [Test]
+    public async Task MidQueryCancel_ReturnsQueryErrorCancelled()
+    {
+        var schema = new ResultSchema { SchemaId = 1, Columns = { new SchemaColumn("c", QwpTypeCode.Long) } };
+        var batch1 = QwpEgressFrameBuilder.BuildResultBatch(
+            1L, 0L, schema,
+            new ResultBatchData { RowCount = 1, Columns = { new FixedColumnData { DenseBytes = LongLe(1L) } } });
+        var cancelledErr = QwpEgressFrameBuilder.BuildQueryError(
+            1L, QwpConstants.StatusCancelled, "cancelled by client");
+
+        await using var server = new DummyQwpServer(new DummyQwpServerOptions
+        {
+            Path = QwpConstants.ReadPath,
+            NegotiatedVersion = "1",
+            FrameHandler = frame =>
+            {
+                var msgKind = frame[0];
+                if (msgKind == QwpConstants.MsgKindQueryRequest) return batch1;
+                if (msgKind == QwpConstants.MsgKindCancel) return cancelledErr;
+                return null;
+            },
+        });
+        await server.StartAsync();
+
+        using var client = QueryClient.New(BuildConnString(server));
+        var handler = new RecordingHandler();
+        handler.OnBatchHook = _ => client.Cancel();
+        client.Execute("SELECT 1", handler);
+
+        Assert.That(handler.Batches.Count, Is.EqualTo(1));
+        Assert.That(handler.LastErrorStatus, Is.EqualTo(QwpConstants.StatusCancelled));
+        Assert.That(handler.LastErrorMessage, Is.EqualTo("cancelled by client"));
+    }
+
+    [Test]
+    public async Task CacheReset_SchemaBitClearsRegistry_NextReferenceModeBatchFails()
+    {
+        var schema = new ResultSchema { SchemaId = 9, Columns = { new SchemaColumn("c", QwpTypeCode.Long) } };
+        var data1 = new ResultBatchData { RowCount = 1, Columns = { new FixedColumnData { DenseBytes = LongLe(1L) } } };
+        var batchFull = QwpEgressFrameBuilder.BuildResultBatch(1L, 0L, schema, data1);
+        var end1 = QwpEgressFrameBuilder.BuildResultEnd(1L, 0L, 1L);
+
+        var refSchema = new ResultSchema { Mode = QwpConstants.SchemaModeReference, SchemaId = 9, Columns = schema.Columns };
+        var batchRef = QwpEgressFrameBuilder.BuildResultBatch(2L, 0L, refSchema,
+            new ResultBatchData { RowCount = 1, Columns = { new FixedColumnData { DenseBytes = LongLe(2L) } } });
+        var resetSchemas = QwpEgressFrameBuilder.BuildCacheReset(QwpConstants.ResetMaskSchemas);
+
+        var queryCount = 0;
+        await using var server = new DummyQwpServer(new DummyQwpServerOptions
+        {
+            Path = QwpConstants.ReadPath,
+            NegotiatedVersion = "1",
+            FrameHandlerMulti = frame =>
+            {
+                if (frame[0] != QwpConstants.MsgKindQueryRequest) return null;
+                queryCount++;
+                return queryCount == 1
+                    ? new[] { batchFull, end1 }
+                    : new[] { resetSchemas, batchRef };
+            },
+        });
+        await server.StartAsync();
+
+        using var client = QueryClient.New(BuildConnString(server));
+        var handler1 = new RecordingHandler();
+        client.Execute("SELECT 1", handler1);
+        Assert.That(handler1.Ended, Is.True);
+
+        var ex = Assert.Throws<IngressError>(() => client.Execute("SELECT 1", new RecordingHandler()));
+        Assert.That(ex!.code, Is.EqualTo(ErrorCode.SocketError));
+    }
+
+    [Test]
     public async Task ExecuteReentrancy_ThrowsInvalidApiCall()
     {
         var schema = new ResultSchema { SchemaId = 1, Columns = { new SchemaColumn("c", QwpTypeCode.Long) } };
@@ -699,6 +851,16 @@ public class QwpQueryClientEndToEndTests
         return bytes;
     }
 
+    private static byte[] LongsLe(params long[] values)
+    {
+        var bytes = new byte[values.Length * 8];
+        for (var i = 0; i < values.Length; i++)
+        {
+            BinaryPrimitives.WriteInt64LittleEndian(bytes.AsSpan(i * 8, 8), values[i]);
+        }
+        return bytes;
+    }
+
     private sealed class RecordingHandler : QwpColumnBatchHandler
     {
         public sealed record CapturedBatch(long RequestId, long BatchSeq, int RowCount, long[] LongValues);
@@ -710,6 +872,8 @@ public class QwpQueryClientEndToEndTests
         public string LastErrorMessage { get; private set; } = string.Empty;
         public byte LastExecOpType { get; private set; }
         public long LastExecRowsAffected { get; private set; }
+        public List<QwpServerInfo?> FailoverResets { get; } = new();
+        public Action<QwpColumnBatch>? OnBatchHook { get; set; }
 
         public override void OnBatch(QwpColumnBatch batch)
         {
@@ -719,6 +883,7 @@ public class QwpQueryClientEndToEndTests
                 for (var r = 0; r < batch.RowCount; r++) rows[r] = batch.GetLongValue(0, r);
             }
             Batches.Add(new CapturedBatch(batch.RequestId, batch.BatchSeq, batch.RowCount, rows));
+            OnBatchHook?.Invoke(batch);
         }
 
         public override void OnEnd(long totalRows)
@@ -737,6 +902,11 @@ public class QwpQueryClientEndToEndTests
         {
             LastExecOpType = opType;
             LastExecRowsAffected = rowsAffected;
+        }
+
+        public override void OnFailoverReset(QwpServerInfo? newNode)
+        {
+            FailoverResets.Add(newNode);
         }
     }
 }

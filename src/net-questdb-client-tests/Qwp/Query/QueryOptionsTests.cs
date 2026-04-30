@@ -69,6 +69,14 @@ public class QueryOptionsTests
     }
 
     [Test]
+    public void InitialCredit_Negative_Rejected()
+    {
+        var o = new QueryOptions { addr = "h:9000", initial_credit = -1 };
+        var ex = Assert.Throws<IngressError>(() => o.EnsureValid());
+        StringAssert.Contains("initial_credit", ex!.Message);
+    }
+
+    [Test]
     public void Parse_MinimalWs_AssignsAddr()
     {
         var o = new QueryOptions("ws::addr=db.internal:9000;");

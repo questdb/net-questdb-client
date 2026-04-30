@@ -505,6 +505,40 @@ public class QwpResultBatchDecoderTests
     }
 
     [Test]
+    public void Decode_UuidColumn_RoundTripsWithGetUuid()
+    {
+        var lo = 0x0123_4567_89AB_CDEFL;
+        var hi = unchecked((long)0xFEDC_BA98_7654_3210UL);
+        var bytes = new byte[16];
+        BinaryPrimitives.WriteInt64LittleEndian(bytes.AsSpan(0, 8), lo);
+        BinaryPrimitives.WriteInt64LittleEndian(bytes.AsSpan(8, 8), hi);
+
+        var schema = new ResultSchema
+        {
+            SchemaId = 21,
+            Columns = { new SchemaColumn("u", QwpTypeCode.Uuid) },
+        };
+        var data = new ResultBatchData
+        {
+            RowCount = 1,
+            Columns = { new FixedColumnData { DenseBytes = bytes } },
+        };
+
+        var (_, batch, _, _) = DecodeOneBatch(schema, data);
+
+        Assert.That(batch.GetColumnWireType(0), Is.EqualTo(QwpTypeCode.Uuid));
+        Assert.That(batch.GetUuidLo(0, 0), Is.EqualTo(lo));
+        Assert.That(batch.GetUuidHi(0, 0), Is.EqualTo(hi));
+
+        var binds = new QwpBindValues();
+        binds.SetUuid(0, batch.GetUuid(0, 0));
+        Assert.That(binds.AsMemory().Span[0], Is.EqualTo((byte)QwpTypeCode.Uuid));
+        var roundTripped = new byte[16];
+        binds.AsMemory().Span.Slice(2, 16).CopyTo(roundTripped);
+        Assert.That(roundTripped, Is.EqualTo(bytes));
+    }
+
+    [Test]
     public void GetBinarySpan_OnNonBinaryColumn_Throws()
     {
         var schema = new ResultSchema
@@ -624,6 +658,116 @@ public class QwpResultBatchDecoderTests
         var decoder = new QwpResultBatchDecoder(new QwpEgressConnState());
         var ex = Assert.Throws<QwpDecodeException>(() => decoder.Decode(p.ToArray(), 0, new QwpColumnBatch()));
         StringAssert.Contains("non-monotonic", ex!.Message);
+    }
+
+    [Test]
+    public void Decode_RejectsArrayShapeOverflowingPayload()
+    {
+        var p = new List<byte> { QwpConstants.MsgKindResultBatch };
+        p.AddRange(new byte[8]);
+        p.Add(0x00); // batch_seq
+        p.Add(0x00); // empty table name
+        p.Add(0x01); // row_count
+        p.Add(0x01); // col_count
+        p.Add(QwpConstants.SchemaModeFull);
+        p.Add(0x00);
+        p.Add(0x01); p.Add((byte)'a');
+        p.Add((byte)QwpTypeCode.DoubleArray);
+        p.Add(0x00); // null_flag = 0
+        p.Add(0x02); // nDims = 2
+        WriteI32(p, int.MaxValue);
+        WriteI32(p, int.MaxValue);
+
+        var decoder = new QwpResultBatchDecoder(new QwpEgressConnState());
+        var ex = Assert.Throws<QwpDecodeException>(() => decoder.Decode(p.ToArray(), 0, new QwpColumnBatch()));
+        StringAssert.Contains("array shape exceeds remaining payload", ex!.Message);
+    }
+
+    [Test]
+    public void Decode_RejectsVarcharHeapLenOverflow()
+    {
+        var p = new List<byte> { QwpConstants.MsgKindResultBatch };
+        p.AddRange(new byte[8]);
+        p.Add(0x00);
+        p.Add(0x00);
+        p.Add(0x01);
+        p.Add(0x01);
+        p.Add(QwpConstants.SchemaModeFull);
+        p.Add(0x00);
+        p.Add(0x01); p.Add((byte)'v');
+        p.Add((byte)QwpTypeCode.Varchar);
+        p.Add(0x00);
+        WriteI32(p, 0);
+        WriteI32(p, int.MaxValue);
+
+        var decoder = new QwpResultBatchDecoder(new QwpEgressConnState());
+        var ex = Assert.Throws<QwpDecodeException>(() => decoder.Decode(p.ToArray(), 0, new QwpColumnBatch()));
+        StringAssert.Contains("truncated varchar heap", ex!.Message);
+    }
+
+    [Test]
+    public void Decode_RejectsSymbolDictVarintExceedingInt()
+    {
+        var p = new List<byte> { QwpConstants.MsgKindResultBatch };
+        p.AddRange(new byte[8]);
+        p.Add(0x00);
+        WriteVarintTo(p, ulong.MaxValue);
+
+        var decoder = new QwpResultBatchDecoder(new QwpEgressConnState());
+        var ex = Assert.Throws<QwpDecodeException>(() =>
+            decoder.Decode(p.ToArray(), QwpConstants.FlagDeltaSymbolDict, new QwpColumnBatch()));
+        StringAssert.Contains("varint exceeds int.MaxValue", ex!.Message);
+    }
+
+    [Test]
+    public void Decode_RejectsBooleanWithNullFlagSet()
+    {
+        var p = new List<byte> { QwpConstants.MsgKindResultBatch };
+        p.AddRange(new byte[8]);
+        p.Add(0x00);
+        p.Add(0x00);
+        p.Add(0x01);
+        p.Add(0x01);
+        p.Add(QwpConstants.SchemaModeFull);
+        p.Add(0x00);
+        p.Add(0x01); p.Add((byte)'b');
+        p.Add((byte)QwpTypeCode.Boolean);
+        p.Add(0x01); // null_flag = 1 — illegal for BOOLEAN
+        p.Add(0x00); // bitmap (unused, decoder must reject before reading)
+
+        var decoder = new QwpResultBatchDecoder(new QwpEgressConnState());
+        var ex = Assert.Throws<QwpDecodeException>(() => decoder.Decode(p.ToArray(), 0, new QwpColumnBatch()));
+        StringAssert.Contains("cannot carry NULL", ex!.Message);
+    }
+
+    [Test]
+    public void Decode_FailedBatch_DoesNotPersistSymbolDictAdditions()
+    {
+        var schema = new ResultSchema { SchemaId = 1, Columns = { new SchemaColumn("s", QwpTypeCode.Symbol) } };
+
+        var p = new List<byte> { QwpConstants.MsgKindResultBatch };
+        p.AddRange(new byte[8]);
+        p.Add(0x00);
+        WriteVarintTo(p, 0);
+        WriteVarintTo(p, 1);
+        WriteVarintTo(p, 5);
+        for (var i = 0; i < 5; i++) p.Add((byte)('a' + i));
+
+        p.Add(0x00);
+        p.Add(0x01);
+        p.Add(0x01);
+        p.Add(QwpConstants.SchemaModeFull);
+        p.Add(0x01);
+        p.Add(0x01); p.Add((byte)'s');
+        p.Add((byte)QwpTypeCode.Symbol);
+        p.Add(0x00);
+
+        var state = new QwpEgressConnState();
+        var decoder = new QwpResultBatchDecoder(state);
+        Assert.Throws<QwpDecodeException>(() =>
+            decoder.Decode(p.ToArray(), QwpConstants.FlagDeltaSymbolDict, new QwpColumnBatch()));
+        Assert.That(state.SymbolDict.Size, Is.EqualTo(0));
+        Assert.That(state.TryGetSchema(1, out _), Is.False);
     }
 
     [Test]

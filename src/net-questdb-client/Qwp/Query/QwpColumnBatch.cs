@@ -141,6 +141,50 @@ public sealed class QwpColumnBatch
             BinaryPrimitives.ReadInt64LittleEndian(c.ValueBytes.AsSpan(i * 8, 8)));
     }
 
+    /// <summary>Returns the lower 64 bits of a UUID; <c>0</c> for NULL.</summary>
+    public long GetUuidLo(int col, int row)
+    {
+        var c = Col(col);
+        if (c.TypeCode != QwpTypeCode.Uuid)
+        {
+            throw new InvalidOperationException($"GetUuidLo requires a UUID column, got {c.TypeCode}");
+        }
+        var i = DenseIndex(c, row);
+        if (i < 0) return 0L;
+        return BinaryPrimitives.ReadInt64LittleEndian(c.ValueBytes.AsSpan(i * 16, 8));
+    }
+
+    /// <summary>Returns the upper 64 bits of a UUID; <c>0</c> for NULL.</summary>
+    public long GetUuidHi(int col, int row)
+    {
+        var c = Col(col);
+        if (c.TypeCode != QwpTypeCode.Uuid)
+        {
+            throw new InvalidOperationException($"GetUuidHi requires a UUID column, got {c.TypeCode}");
+        }
+        var i = DenseIndex(c, row);
+        if (i < 0) return 0L;
+        return BinaryPrimitives.ReadInt64LittleEndian(c.ValueBytes.AsSpan(i * 16 + 8, 8));
+    }
+
+    /// <summary>Returns a UUID as <see cref="Guid" />; <see cref="Guid.Empty" /> for NULL. Inverse of <c>QwpBindValues.SetUuid(int, Guid)</c>.</summary>
+    public Guid GetUuid(int col, int row)
+    {
+        if (IsNull(col, row)) return Guid.Empty;
+        var lo = GetUuidLo(col, row);
+        var hi = GetUuidHi(col, row);
+        Span<byte> wire = stackalloc byte[16];
+        BinaryPrimitives.WriteInt64LittleEndian(wire.Slice(0, 8), lo);
+        BinaryPrimitives.WriteInt64LittleEndian(wire.Slice(8, 8), hi);
+        Span<byte> ms = stackalloc byte[16];
+        ms[0] = wire[12]; ms[1] = wire[13]; ms[2] = wire[14]; ms[3] = wire[15];
+        ms[4] = wire[10]; ms[5] = wire[11];
+        ms[6] = wire[8];  ms[7] = wire[9];
+        ms[8] = wire[7];  ms[9] = wire[6];
+        ms[10] = wire[5]; ms[11] = wire[4]; ms[12] = wire[3]; ms[13] = wire[2]; ms[14] = wire[1]; ms[15] = wire[0];
+        return new Guid(ms);
+    }
+
     /// <summary>Returns a TIMESTAMP / TIMESTAMP_NANOS as int64; caller must consult <see cref="GetColumnWireType" /> to know the unit.</summary>
     public long GetTimestampValue(int col, int row) => GetLongValue(col, row);
 
@@ -213,6 +257,7 @@ public sealed class QwpColumnBatch
             QwpTypeCode.Float => GetFloatValue(col, row).ToString("R"),
             QwpTypeCode.Double => GetDoubleValue(col, row).ToString("R"),
             QwpTypeCode.Binary => Convert.ToHexString(GetBinarySpan(col, row)),
+            QwpTypeCode.Uuid => GetUuid(col, row).ToString(),
             _ => $"<{c.TypeCode}>",
         };
     }
@@ -433,6 +478,17 @@ internal sealed class QwpEgressSymbolDict
         _offsets.Clear();
         _offsets.Add(0);
         _heapLen = 0;
+    }
+
+    public void TruncateTo(int size)
+    {
+        if (size < 0 || size > Size)
+        {
+            throw new ArgumentOutOfRangeException(nameof(size));
+        }
+        if (size == Size) return;
+        _offsets.RemoveRange(size + 1, _offsets.Count - (size + 1));
+        _heapLen = _offsets[^1];
     }
 
     public void AppendEntry(ReadOnlySpan<byte> utf8)

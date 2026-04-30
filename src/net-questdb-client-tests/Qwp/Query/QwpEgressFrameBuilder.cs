@@ -110,6 +110,33 @@ internal static class QwpEgressFrameBuilder
         return WrapFrame(flags: 0, tableCount: 0, payload);
     }
 
+#if NET7_0_OR_GREATER
+    public static byte[] CompressResultBatch(byte[] uncompressedFrame)
+    {
+        var existingPayloadLen = (int)BinaryPrimitives.ReadUInt32LittleEndian(
+            uncompressedFrame.AsSpan(QwpConstants.OffsetPayloadLength, 4));
+        var existingFlags = uncompressedFrame[QwpConstants.OffsetFlags];
+        var payload = uncompressedFrame.AsSpan(QwpConstants.HeaderSize, existingPayloadLen);
+
+        QwpVarint.Read(payload.Slice(9), out var seqVarintLen);
+        var preludeLen = 1 + 8 + seqVarintLen;
+
+        using var compressor = new ZstdSharp.Compressor(level: 3);
+        var rawBody = payload.Slice(preludeLen).ToArray();
+        var compressedBody = new byte[ZstdSharp.Compressor.GetCompressBound(rawBody.Length)];
+        var written = compressor.Wrap(rawBody, compressedBody);
+
+        var newPayloadLen = preludeLen + written;
+        var newPayload = new byte[newPayloadLen];
+        payload.Slice(0, preludeLen).CopyTo(newPayload);
+        compressedBody.AsSpan(0, written).CopyTo(newPayload.AsSpan(preludeLen));
+
+        var tableCount = BinaryPrimitives.ReadUInt16LittleEndian(
+            uncompressedFrame.AsSpan(QwpConstants.OffsetTableCount, 2));
+        return WrapFrame((byte)(existingFlags | QwpConstants.FlagZstd), tableCount, newPayload);
+    }
+#endif
+
     public static byte[] BuildServerInfo(byte role, ulong epoch, uint capabilities, long serverWallNs,
         string clusterId, string nodeId)
     {

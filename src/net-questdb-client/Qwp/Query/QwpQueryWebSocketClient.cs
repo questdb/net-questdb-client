@@ -174,6 +174,7 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient
             IngressError ie => ie.code is ErrorCode.SocketError or ErrorCode.ProtocolVersionError,
             System.Net.WebSockets.WebSocketException => true,
             IOException => true,
+            ObjectDisposedException => true,
             ZstdSharp.ZstdException => true,
             _ => false,
         };
@@ -219,7 +220,7 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient
                 candidate.Dispose();
                 candidate = null;
             }
-            catch (IngressError ex) when (ex.code is ErrorCode.AuthError)
+            catch (IngressError ex) when (ex.code is ErrorCode.ConfigError or ErrorCode.AuthError)
             {
                 candidate?.Dispose();
                 throw;
@@ -263,24 +264,29 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient
     public void Dispose()
     {
         if (Interlocked.CompareExchange(ref _disposed, 1, 0) != 0) return;
-        DisposeCore();
-    }
-
-    public ValueTask DisposeAsync()
-    {
-        if (Interlocked.CompareExchange(ref _disposed, 1, 0) != 0) return default;
-        DisposeCore();
-        return default;
-    }
-
-    private void DisposeCore()
-    {
         _transport?.Dispose();
         if (_executeLock.Wait(TimeSpan.FromSeconds(5)))
         {
             try { _decompressor?.Dispose(); }
             finally { _executeLock.Release(); }
         }
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        if (Interlocked.CompareExchange(ref _disposed, 1, 0) != 0) return;
+        _transport?.Dispose();
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        try
+        {
+            await _executeLock.WaitAsync(cts.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            return;
+        }
+        try { _decompressor?.Dispose(); }
+        finally { _executeLock.Release(); }
     }
 
     private static Uri BuildUri(QueryOptions options, string addr)
@@ -320,9 +326,9 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient
     {
         return options.compression switch
         {
-            CompressionType.raw => "raw",
-            CompressionType.zstd => $"zstd;level={options.compression_level}",
-            CompressionType.auto => $"zstd;level={options.compression_level}, raw",
+            CompressionType.raw => null,
+            CompressionType.zstd => $"zstd;level={options.compression_level},raw",
+            CompressionType.auto => $"zstd;level={options.compression_level},raw",
             _ => null,
         };
     }
@@ -429,7 +435,14 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient
                 case QwpEgressMsgKind.ResultBatch:
                     var batchBytes = payload.Length;
                     var decoded = MaybeDecompressResultBatch(payload, headerFlags);
-                    _decoder.Decode(decoded.Span, headerFlags, _batch);
+                    try
+                    {
+                        _decoder.Decode(decoded.Span, headerFlags, _batch);
+                    }
+                    catch (QwpDecodeException ex)
+                    {
+                        throw new IngressError(ErrorCode.SocketError, ex.Message, ex);
+                    }
                     var requestIdAtBatch = _batch.RequestId;
                     try
                     {
@@ -572,15 +585,23 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient
         if ((headerFlags & QwpConstants.FlagZstd) == 0) return payload;
 
         var span = payload.Span;
-        if (span.Length < 1 + 8)
+        if (span.Length < 1 + 8 + 1)
         {
             throw new IngressError(ErrorCode.ProtocolVersionError, "compressed RESULT_BATCH missing prelude");
         }
 
         QwpVarint.Read(span.Slice(9), out var seqBytes);
-        var preludeLen = 1 + 8 + seqBytes; // msg_kind + requestId + batch_seq varint
+        var preludeLen = 1 + 8 + seqBytes;
+        if (preludeLen > span.Length)
+        {
+            throw new IngressError(ErrorCode.ProtocolVersionError, "compressed RESULT_BATCH prelude truncated");
+        }
 
         var compressed = span.Slice(preludeLen);
+        if (compressed.IsEmpty)
+        {
+            throw new IngressError(ErrorCode.ProtocolVersionError, "zstd RESULT_BATCH has empty compressed body");
+        }
         var decompressedSize = (int)ZstdSharp.Decompressor.GetDecompressedSize(compressed);
         if (decompressedSize < 0 || decompressedSize > QwpConstants.MaxResultBatchWireBytes)
         {

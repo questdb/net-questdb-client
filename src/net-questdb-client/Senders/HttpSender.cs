@@ -149,13 +149,6 @@ internal class HttpSender : AbstractSender
                     };
             }
 
-            if (!string.IsNullOrEmpty(Options.tls_roots))
-            {
-                handler.SslOptions.ClientCertificates ??= new X509Certificate2Collection();
-                handler.SslOptions.ClientCertificates.Add(
-                    X509Certificate2.CreateFromPemFile(Options.tls_roots!, Options.tls_roots_password));
-            }
-
             if (Options.client_cert is not null)
             {
                 handler.SslOptions.ClientCertificates ??= new X509Certificate2Collection();

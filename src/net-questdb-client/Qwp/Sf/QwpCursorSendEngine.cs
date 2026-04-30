@@ -413,7 +413,7 @@ internal sealed class QwpCursorSendEngine : IDisposable
                 return;
             }
 
-            _disposed = true;
+            Volatile.Write(ref _disposed, true);
             cts = _loopCts;
             loop = _loopTask;
             // Capture drain state BEFORE disposing the ring — once disposed, NextFsn isn't safe to read.
@@ -641,9 +641,7 @@ internal sealed class QwpCursorSendEngine : IDisposable
             throw new OperationCanceledException(connCts.Token);
         }
 
-        throw new IngressError(
-            ErrorCode.ServerFlushError,
-            "cursor pump returned without error or cancellation");
+        // Both pumps returned without throwing OCE: graceful shutdown via outer ct or terminal.
     }
 
     private async Task SendPumpAsync(IQwpCursorTransport transport, CancellationToken ct)
@@ -828,7 +826,7 @@ internal sealed class QwpCursorSendEngine : IDisposable
 
     private void EnsureNotDisposed()
     {
-        if (_disposed)
+        if (Volatile.Read(ref _disposed))
         {
             throw new ObjectDisposedException(nameof(QwpCursorSendEngine));
         }

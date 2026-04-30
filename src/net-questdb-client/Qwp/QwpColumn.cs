@@ -626,7 +626,13 @@ internal sealed class QwpColumn
                 $"array shape product ({expected}) does not match value count ({valueCount})");
         }
 
-        var byteCount = 1 + shape.Length * 4 + valueCount * elementSize;
+        var byteCountLong = 1L + (long)shape.Length * 4L + (long)valueCount * elementSize;
+        if (byteCountLong > QwpConstants.MaxBatchBytes)
+        {
+            throw new IngressError(ErrorCode.InvalidApiCall,
+                $"array payload ({byteCountLong} bytes) exceeds the {QwpConstants.MaxBatchBytes}-byte batch limit");
+        }
+        var byteCount = (int)byteCountLong;
         EnsureFixedCapacity(FixedLen + byteCount);
         var dest = FixedData.AsSpan(FixedLen, byteCount);
 

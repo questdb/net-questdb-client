@@ -122,14 +122,18 @@ internal static class QwpEncoder
 
         WriteDeltaSymbolDict(builder, symbolDictionary, selfSufficient);
 
+        var emittedTableCount = 0;
         for (var i = 0; i < tables.Count; i++)
         {
-            // In self-sufficient mode the receiver has no prior connection state, so every frame
-            // re-registers schemas using frame-local indices (0..tables.Count-1). The shared
-            // QwpSchemaCache stays untouched; frame-local ids never collide because every frame
-            // emits FULL.
-            var localSchemaId = selfSufficient ? i : -1;
-            WriteTableBlock(builder, tables[i], schemaCache, selfSufficient, gorillaEnabled, localSchemaId);
+            var t = tables[i];
+            if (t.RowCount == 0 || t.TotalColumnCount == 0)
+            {
+                continue;
+            }
+
+            var localSchemaId = selfSufficient ? emittedTableCount : -1;
+            WriteTableBlock(builder, t, schemaCache, selfSufficient, gorillaEnabled, localSchemaId);
+            emittedTableCount++;
         }
 
         var payloadLength = builder.Length - QwpConstants.HeaderSize;
@@ -150,7 +154,7 @@ internal static class QwpEncoder
         }
 
         header[QwpConstants.OffsetFlags] = flags;
-        BinaryPrimitives.WriteUInt16LittleEndian(header.Slice(QwpConstants.OffsetTableCount, 2), (ushort)tables.Count);
+        BinaryPrimitives.WriteUInt16LittleEndian(header.Slice(QwpConstants.OffsetTableCount, 2), (ushort)emittedTableCount);
         BinaryPrimitives.WriteUInt32LittleEndian(header.Slice(QwpConstants.OffsetPayloadLength, 4), (uint)payloadLength);
 
         return builder.Length;

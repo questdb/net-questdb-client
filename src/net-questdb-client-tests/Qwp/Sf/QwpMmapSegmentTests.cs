@@ -297,26 +297,18 @@ public class QwpMmapSegmentTests
     [Test]
     public void TryReadFrame_VerifiesCrc_OnPostOpenCorruption()
     {
-        // Open the segment, append a frame, mutate the in-memory mmap directly via a second mmap on
-        // the same file, then assert that the original sender's TryReadFrame surfaces the corruption.
         var path = SegmentPath();
-        using var seg = QwpMmapSegment.Open(path, 4096, 0);
-        seg.TryAppend(new byte[] { 1, 2, 3, 4 });
+        using (var seg = QwpMmapSegment.Open(path, 4096, 0))
+        {
+            seg.TryAppend(new byte[] { 1, 2, 3, 4 });
+        }
 
-        // Flip a byte in the frame body via raw file IO; the live mmap will see the change after
-        // page eviction, but for the test we just call TryReadFrame against the corrupted on-disk
-        // bytes via a fresh segment instance to keep the test deterministic.
+        // mmap on Windows holds the file with exclusive sharing; release the segment before raw IO.
         var bytes = File.ReadAllBytes(path);
         bytes[QwpMmapSegment.HeaderSize + QwpMmapSegment.EnvelopeHeaderSize + 0] ^= 0x55;
-
-        // Restore via the live segment's WritePosition so EnvelopeCount stays consistent for the read.
-        // We then write the corrupted bytes back, dispose the live mmap, and reopen + test.
-        seg.Dispose();
         File.WriteAllBytes(path, bytes);
 
         using var reopened = QwpMmapSegment.Open(path, 4096, 0);
-        // After the corruption, Open's scan truncates the bad envelope. So this asserts the scanner
-        // path. The CRC-on-read path is exercised on a freshly-mapped segment whose offsets we know.
         Assert.That(reopened.EnvelopeCount, Is.EqualTo(0));
     }
 

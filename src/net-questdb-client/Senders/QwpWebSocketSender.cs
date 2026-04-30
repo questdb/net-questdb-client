@@ -54,7 +54,7 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
     private readonly Dictionary<string, QwpTableBuffer>.AlternateLookup<ReadOnlySpan<char>> _tablesLookup;
 #endif
     private readonly QwpSchemaCache _schemaCache;
-    private readonly QwpSymbolDictionary _symbolDictionary = new();
+    private readonly QwpSymbolDictionary _symbolDictionary;
     private readonly QwpInFlightWindow _inFlightWindow = new();
     private readonly QwpWebSocketTransport? _transport;
     private byte[] _receiveBuffer;
@@ -88,7 +88,7 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
     private QwpTableBuffer? _currentTable;
     private long _nextSequence;
     private IngressError? _terminalError;
-    private bool _disposed;
+    private int _disposed;
     private int _runningRowCount;
 
     private readonly record struct AsyncBatch(int BufferIndex, ReadOnlyMemory<byte> Frame);
@@ -109,6 +109,7 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
         }
 
         _schemaCache = new QwpSchemaCache(options.max_schemas_per_connection);
+        _symbolDictionary = new QwpSymbolDictionary(options.max_symbols_per_connection);
         _receiveBuffer = new byte[QwpConstants.ErrorAckHeaderSize + QwpConstants.MaxErrorMessageBytes];
         _sfMode = !string.IsNullOrEmpty(options.sf_dir);
 #if NET9_0_OR_GREATER
@@ -150,7 +151,18 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
         try
         {
             transport = new QwpWebSocketTransport(transportOpts);
-            transport.ConnectAsync(CancellationToken.None).GetAwaiter().GetResult();
+            using (var connectCts = new CancellationTokenSource(options.auth_timeout))
+            {
+                try
+                {
+                    transport.ConnectAsync(connectCts.Token).GetAwaiter().GetResult();
+                }
+                catch (OperationCanceledException) when (connectCts.IsCancellationRequested)
+                {
+                    throw new IngressError(ErrorCode.SocketError,
+                        $"WebSocket upgrade exceeded auth_timeout={options.auth_timeout.TotalMilliseconds}ms");
+                }
+            }
 
             slot = new SemaphoreSlim(options.in_flight_window, options.in_flight_window);
             sendChannel = Channel.CreateBounded<AsyncBatch>(new BoundedChannelOptions(options.in_flight_window)
@@ -808,10 +820,9 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
                 }
 
                 var seq = _nextSequence++;
-                // Mark the sequence as in-flight before handoff: doing this in the send loop would race
-                // AwaitEmpty into returning early.
-                _inFlightWindow.Add(seq);
                 var frame = _encoderBuffers[idx].WrittenMemory;
+                // Add before TryWrite so AwaitEmpty cannot return early between handoff and the loop's Add.
+                _inFlightWindow.Add(seq);
                 if (!_sendChannel!.Writer.TryWrite(new AsyncBatch(idx, frame)))
                 {
                     FailTerminal(new IngressError(
@@ -1019,7 +1030,7 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
     public long GetHighestAckedSeqTxn(string tableName)
     {
         ArgumentNullException.ThrowIfNull(tableName);
-        if (_disposed) throw new ObjectDisposedException(nameof(QwpWebSocketSender));
+        ThrowIfTerminal();
         lock (_seqTxnLock)
         {
             return _committedSeqTxn.TryGetValue(tableName, out var v) ? v : -1L;
@@ -1030,7 +1041,7 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
     public long GetHighestDurableSeqTxn(string tableName)
     {
         ArgumentNullException.ThrowIfNull(tableName);
-        if (_disposed) throw new ObjectDisposedException(nameof(QwpWebSocketSender));
+        ThrowIfTerminal();
         lock (_seqTxnLock)
         {
             return _durableSeqTxn.TryGetValue(tableName, out var v) ? v : -1L;
@@ -1096,8 +1107,7 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
     /// <inheritdoc />
     public void Dispose()
     {
-        if (_disposed) return;
-        _disposed = true;
+        if (Interlocked.CompareExchange(ref _disposed, 1, 0) != 0) return;
         if (_sfMode) DisposeSfStackSync();
         else DisposeWsStackSync();
     }
@@ -1105,8 +1115,7 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
     /// <inheritdoc />
     public async ValueTask DisposeAsync()
     {
-        if (_disposed) return;
-        _disposed = true;
+        if (Interlocked.CompareExchange(ref _disposed, 1, 0) != 0) return;
         if (_sfMode) await DisposeSfStackAsync().ConfigureAwait(false);
         else await DisposeWsStackAsync().ConfigureAwait(false);
     }
@@ -1268,7 +1277,7 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
 
     private void ThrowIfTerminal()
     {
-        if (_disposed)
+        if (Volatile.Read(ref _disposed) != 0)
         {
             throw new ObjectDisposedException(nameof(QwpWebSocketSender));
         }
@@ -1303,11 +1312,6 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
 
         _inFlightWindow.FailAll(failure);
         _ioCts?.Cancel();
-
-        // Wipe schema/symbol-dict caches so any future code path (or a refactor that lifts the
-        // terminal-only contract) cannot replay reference frames the server never received.
-        _schemaCache.Reset();
-        _symbolDictionary.Reset();
     }
 
     private void GuardLastFlushNotSet()
@@ -1416,7 +1420,25 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
             return (_, _, _, _) => true;
         }
 
-        return null;
+        if (string.IsNullOrEmpty(options.tls_roots))
+        {
+            return null;
+        }
+
+        var rootsPath = options.tls_roots!;
+        var rootsPassword = options.tls_roots_password;
+        return (_, certificate, chain, errors) =>
+        {
+            if ((errors & ~System.Net.Security.SslPolicyErrors.RemoteCertificateChainErrors) != 0)
+            {
+                return false;
+            }
+
+            chain!.ChainPolicy.TrustMode = System.Security.Cryptography.X509Certificates.X509ChainTrustMode.CustomRootTrust;
+            chain.ChainPolicy.CustomTrustStore.Add(
+                System.Security.Cryptography.X509Certificates.X509Certificate2.CreateFromPemFile(rootsPath, rootsPassword));
+            return chain.Build(new System.Security.Cryptography.X509Certificates.X509Certificate2(certificate!));
+        };
     }
 }
 

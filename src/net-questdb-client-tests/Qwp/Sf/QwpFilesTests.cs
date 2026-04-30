@@ -115,20 +115,28 @@ public class QwpFilesTests
         var path = Path.Combine(_tempDir, "segment");
         const int capacity = 8192;
 
-        using (var mmap = QwpFiles.OpenMemoryMappedSegment(path, capacity))
-        using (var view = mmap.CreateViewAccessor(0, capacity, System.IO.MemoryMappedFiles.MemoryMappedFileAccess.ReadWrite))
         {
-            view.Write(0, 0xDEADBEEFu);
-            view.Write(4, 0x12345678u);
-            view.Flush();
+            var (mmap, fs) = QwpFiles.OpenMemoryMappedSegment(path, capacity);
+            using (mmap)
+            using (fs)
+            using (var view = mmap.CreateViewAccessor(0, capacity, System.IO.MemoryMappedFiles.MemoryMappedFileAccess.ReadWrite))
+            {
+                view.Write(0, 0xDEADBEEFu);
+                view.Write(4, 0x12345678u);
+                view.Flush();
+            }
         }
 
         // Reopen and verify the writes survived.
-        using (var mmap = QwpFiles.OpenMemoryMappedSegment(path, capacity))
-        using (var view = mmap.CreateViewAccessor(0, capacity, System.IO.MemoryMappedFiles.MemoryMappedFileAccess.Read))
         {
-            Assert.That(view.ReadUInt32(0), Is.EqualTo(0xDEADBEEFu));
-            Assert.That(view.ReadUInt32(4), Is.EqualTo(0x12345678u));
+            var (mmap, fs) = QwpFiles.OpenMemoryMappedSegment(path, capacity);
+            using (mmap)
+            using (fs)
+            using (var view = mmap.CreateViewAccessor(0, capacity, System.IO.MemoryMappedFiles.MemoryMappedFileAccess.Read))
+            {
+                Assert.That(view.ReadUInt32(0), Is.EqualTo(0xDEADBEEFu));
+                Assert.That(view.ReadUInt32(4), Is.EqualTo(0x12345678u));
+            }
         }
     }
 

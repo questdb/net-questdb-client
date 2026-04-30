@@ -29,6 +29,7 @@ using System.Data.Common;
 using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Security.Cryptography.X509Certificates;
+using System.Text;
 using System.Text.Json.Serialization;
 using QuestDB.Enums;
 using QuestDB.Senders;
@@ -50,12 +51,13 @@ public record SenderOptions
 
     private static readonly HashSet<string> keySet = new()
     {
-        "protocol", "protocol_version", "addr", "auto_flush", "auto_flush_rows", "auto_flush_bytes",
+        "protocol_version", "addr", "auto_flush", "auto_flush_rows", "auto_flush_bytes",
         "auto_flush_interval", "init_buf_size", "max_buf_size", "max_name_len",
         "username", "user", "password", "pass", "token",
         "request_min_throughput", "auth_timeout", "request_timeout", "retry_timeout",
         "pool_timeout", "tls_verify", "tls_roots", "tls_roots_password", "own_socket", "gzip",
-        "in_flight_window", "close_timeout", "max_schemas_per_connection", "gorilla", "request_durable_ack",
+        "in_flight_window", "close_timeout", "max_schemas_per_connection", "max_symbols_per_connection",
+        "gorilla", "request_durable_ack",
         "sf_dir", "sender_id", "sf_max_bytes", "sf_max_total_bytes", "sf_durability", "sf_fsync",
         "sf_append_deadline_millis", "reconnect_max_duration_millis", "reconnect_initial_backoff_millis",
         "reconnect_max_backoff_millis", "initial_connect_retry", "close_flush_timeout_millis",
@@ -97,6 +99,7 @@ public record SenderOptions
     private int _inFlightWindow = 128;
     private TimeSpan _closeTimeout = TimeSpan.FromMilliseconds(5000);
     private int _maxSchemasPerConnection = 65535;
+    private int _maxSymbolsPerConnection = 1_000_000;
     private bool _requestDurableAck;
     private bool _gorilla;
 
@@ -119,6 +122,7 @@ public record SenderOptions
     private bool _inFlightWindowUserSet;
     private bool _closeTimeoutUserSet;
     private bool _maxSchemasPerConnectionUserSet;
+    private bool _maxSymbolsPerConnectionUserSet;
     private bool _requestDurableAckUserSet;
     private bool _gorillaUserSet;
     private bool _sfDirUserSet;
@@ -194,6 +198,7 @@ public record SenderOptions
         ParseIntWithDefault(nameof(in_flight_window), "128", out _inFlightWindow);
         ParseMillisecondsWithDefault(nameof(close_timeout), "5000", out _closeTimeout);
         ParseIntWithDefault(nameof(max_schemas_per_connection), "65535", out _maxSchemasPerConnection);
+        ParseIntWithDefault(nameof(max_symbols_per_connection), "1000000", out _maxSymbolsPerConnection);
         ParseBoolOnOff(nameof(request_durable_ack), "off", out _requestDurableAck);
         ParseBoolOnOff(nameof(gorilla), "off", out _gorilla);
 
@@ -247,11 +252,30 @@ public record SenderOptions
 
     private void ValidateAuthCombination()
     {
-        if (IsTcp()) return;
+        RejectControlChars(nameof(username), _username);
+        RejectControlChars(nameof(password), _password);
+        RejectControlChars(nameof(token), _token);
 
         var hasUsername = !string.IsNullOrEmpty(_username);
         var hasPassword = !string.IsNullOrEmpty(_password);
         var hasToken = !string.IsNullOrEmpty(_token);
+
+        if (IsTcp())
+        {
+            if (hasPassword)
+            {
+                throw new IngressError(ErrorCode.ConfigError,
+                    "`password` is not used by the TCP transport; use `username`+`token` for ECDSA auth");
+            }
+
+            if (hasUsername != hasToken)
+            {
+                throw new IngressError(ErrorCode.ConfigError,
+                    "TCP ECDSA auth requires both `username` (kid) and `token` (secret)");
+            }
+
+            return;
+        }
 
         if (hasUsername && hasToken)
         {
@@ -373,6 +397,7 @@ public record SenderOptions
         if (_inFlightWindowUserSet) Throw(nameof(in_flight_window));
         if (_closeTimeoutUserSet) Throw(nameof(close_timeout));
         if (_maxSchemasPerConnectionUserSet) Throw(nameof(max_schemas_per_connection));
+        if (_maxSymbolsPerConnectionUserSet) Throw(nameof(max_symbols_per_connection));
         if (_gorillaUserSet) Throw(nameof(gorilla));
         if (_requestDurableAckUserSet) Throw(nameof(request_durable_ack));
         if (_sfDirUserSet) Throw(nameof(sf_dir));
@@ -419,7 +444,8 @@ public record SenderOptions
 
     private static readonly string[] WebSocketOnlyKeys =
     {
-        "in_flight_window", "close_timeout", "max_schemas_per_connection", "gorilla", "request_durable_ack",
+        "in_flight_window", "close_timeout", "max_schemas_per_connection", "max_symbols_per_connection",
+        "gorilla", "request_durable_ack",
         "sf_dir", "sender_id", "sf_max_bytes", "sf_max_total_bytes", "sf_durability", "sf_fsync",
         "sf_append_deadline_millis", "reconnect_max_duration_millis", "reconnect_initial_backoff_millis",
         "reconnect_max_backoff_millis", "initial_connect_retry", "close_flush_timeout_millis",
@@ -740,7 +766,8 @@ public record SenderOptions
     }
 
     /// <summary>
-    ///     Specifies the path to a custom certificate.
+    ///     Path to a PEM-encoded custom CA bundle used to verify the server certificate.
+    ///     Cross-language interop: Java and Go clients also accept PEM here, not PFX.
     /// </summary>
     public string? tls_roots
     {
@@ -749,7 +776,7 @@ public record SenderOptions
     }
 
     /// <summary>
-    ///     Specifies the path to a custom certificate password.
+    ///     Optional password protecting the PEM private key in <see cref="tls_roots" />.
     /// </summary>
     [JsonIgnore]
     public string? tls_roots_password
@@ -806,6 +833,16 @@ public record SenderOptions
     {
         get => _maxSchemasPerConnection;
         set { _maxSchemasPerConnection = value; _maxSchemasPerConnectionUserSet = true; }
+    }
+
+    /// <summary>
+    ///     Hard cap on the number of distinct symbol values registered on a single WebSocket
+    ///     connection. Default is <c>1_000_000</c>; raise for high-cardinality symbol columns.
+    /// </summary>
+    public int max_symbols_per_connection
+    {
+        get => _maxSymbolsPerConnection;
+        set { _maxSymbolsPerConnection = value; _maxSymbolsPerConnectionUserSet = true; }
     }
 
     /// <summary>
@@ -990,7 +1027,14 @@ public record SenderOptions
     ///     Wrapper to extract the Host from <see cref="addr" />.
     /// </summary>
     [JsonIgnore]
-    public string Host => addr.Contains(':') ? addr.Split(':')[0] : addr;
+    public string Host
+    {
+        get
+        {
+            SplitHostPort(addr, out var host, out _);
+            return host;
+        }
+    }
 
     /// <summary>
     ///     Wrapper to extract the Port from <see cref="addr" />.
@@ -1000,9 +1044,10 @@ public record SenderOptions
     {
         get
         {
-            if (addr.Contains(':'))
+            SplitHostPort(addr, out _, out var port);
+            if (port >= 0)
             {
-                return int.Parse(addr.Split(':')[1]);
+                return port;
             }
 
             switch (protocol)
@@ -1018,6 +1063,78 @@ public record SenderOptions
                 default:
                     throw new NotImplementedException();
             }
+        }
+    }
+
+    private static void RejectControlChars(string name, string? value)
+    {
+        if (string.IsNullOrEmpty(value)) return;
+        foreach (var c in value!)
+        {
+            if (c < 0x20 || c == 0x7F)
+            {
+                throw new IngressError(ErrorCode.ConfigError,
+                    $"`{name}` contains a control character (0x{(int)c:X2})");
+            }
+        }
+    }
+
+    private static void SplitHostPort(string addr, out string host, out int port)
+    {
+        // Bracketed IPv6: [host] or [host]:port
+        if (addr.StartsWith('['))
+        {
+            var close = addr.IndexOf(']');
+            if (close < 0)
+            {
+                throw new IngressError(ErrorCode.ConfigError,
+                    $"malformed bracketed address `{addr}`: missing closing bracket");
+            }
+
+            host = addr.Substring(1, close - 1);
+            var rest = addr.Substring(close + 1);
+            if (rest.Length == 0)
+            {
+                port = -1;
+                return;
+            }
+
+            if (rest[0] != ':')
+            {
+                throw new IngressError(ErrorCode.ConfigError,
+                    $"malformed bracketed address `{addr}`: expected `:port` after closing bracket");
+            }
+
+            if (!int.TryParse(rest.AsSpan(1), out port) || port < 0 || port > 65535)
+            {
+                throw new IngressError(ErrorCode.ConfigError,
+                    $"malformed address `{addr}`: invalid port `{rest.Substring(1)}`");
+            }
+
+            return;
+        }
+
+        // Bare hostname or IPv4 with optional :port. Disallow ambiguous unbracketed IPv6.
+        var firstColon = addr.IndexOf(':');
+        if (firstColon < 0)
+        {
+            host = addr;
+            port = -1;
+            return;
+        }
+
+        if (addr.IndexOf(':', firstColon + 1) >= 0)
+        {
+            throw new IngressError(ErrorCode.ConfigError,
+                $"ambiguous address `{addr}`: wrap IPv6 in brackets, e.g. `[::1]:9000`");
+        }
+
+        host = addr.Substring(0, firstColon);
+        var portStr = addr.Substring(firstColon + 1);
+        if (!int.TryParse(portStr, out port) || port < 0 || port > 65535)
+        {
+            throw new IngressError(ErrorCode.ConfigError,
+                $"malformed address `{addr}`: invalid port `{portStr}`");
         }
     }
 
@@ -1271,7 +1388,18 @@ public record SenderOptions
             }
         }
 
-        return $"{protocol.ToString()}::{builder.ConnectionString};";
+        var connectionString = builder.ConnectionString;
+        if (_addresses.Count > 1)
+        {
+            var extra = new StringBuilder();
+            for (var i = 1; i < _addresses.Count; i++)
+            {
+                extra.Append("addr=").Append(_addresses[i]).Append(';');
+            }
+            connectionString = extra.ToString() + connectionString;
+        }
+
+        return $"{protocol.ToString()}::{connectionString};";
     }
 
     private void VerifyCorrectKeysInConfigString()

@@ -418,8 +418,8 @@ internal sealed class QwpSegmentRing : IDisposable
 
     private void BumpPublishedFsn()
     {
-        // Volatile write doubles as a release barrier: mmap bytes are visible before the FSN.
-        Volatile.Write(ref _publishedFsn, _publishedFsn + 1);
+        // Atomic increment doubles as a release barrier: mmap bytes are visible before the FSN.
+        Interlocked.Increment(ref _publishedFsn);
     }
 
     private void CheckHighWaterAndWakeManager(QwpMmapSegment active)
@@ -458,14 +458,20 @@ internal sealed class QwpSegmentRing : IDisposable
         }
 
         // Standalone mode (no manager) — ring-only unit tests.
+        QwpMmapSegment? seg = null;
         try
         {
-            Volatile.Write(ref _active, QwpMmapSegment.Open(realPath, _segmentCapacity, baseFsn, _maxFrameLength, _flushOnAppend));
+            seg = QwpMmapSegment.Open(realPath, _segmentCapacity, baseFsn, _maxFrameLength, _flushOnAppend);
+            if (!PublishActive(seg, ref seg))
+            {
+                return false;
+            }
             _wakeRequestedForActive = false;
             return true;
         }
         catch (Exception)
         {
+            if (seg is not null) SfCleanup.Dispose(seg);
             return false;
         }
     }
@@ -487,17 +493,34 @@ internal sealed class QwpSegmentRing : IDisposable
 
     private bool TryAdoptSpare(string sparePath, string realPath, long baseFsn)
     {
+        QwpMmapSegment? seg = null;
         try
         {
             if (!File.Exists(sparePath)) return false;
             File.Move(sparePath, realPath);
-            Volatile.Write(ref _active, QwpMmapSegment.Open(realPath, _segmentCapacity, baseFsn, _maxFrameLength, _flushOnAppend));
-            return true;
+            seg = QwpMmapSegment.Open(realPath, _segmentCapacity, baseFsn, _maxFrameLength, _flushOnAppend);
+            return PublishActive(seg, ref seg);
         }
         catch (Exception)
         {
+            if (seg is not null) SfCleanup.Dispose(seg);
             SfCleanup.DeleteFile(sparePath);
             return false;
+        }
+    }
+
+    private bool PublishActive(QwpMmapSegment seg, ref QwpMmapSegment? handoff)
+    {
+        lock (_lock)
+        {
+            if (_closed)
+            {
+                return false;
+            }
+
+            Volatile.Write(ref _active, seg);
+            handoff = null;
+            return true;
         }
     }
 

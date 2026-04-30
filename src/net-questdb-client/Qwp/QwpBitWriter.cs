@@ -74,14 +74,14 @@ internal ref struct QwpBitWriter
             throw new ArgumentOutOfRangeException(nameof(bitCount));
         }
 
+        if (bitCount == 0) return;
+
         // Upfront capacity check — without it, all-zero bitstreams silently advance past the end.
         var endByte = _byteIndex + (_bitIndex + bitCount + 7) / 8;
         if (endByte > _buffer.Length)
         {
             throw new InvalidOperationException("bit writer exhausted");
         }
-
-        if (bitCount == 0) return;
 
         if (bitCount < 64)
         {

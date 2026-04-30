@@ -93,7 +93,7 @@ internal static class QwpOrphanScanner
 
     private static void TryClaim(string slotDir, string ourSenderId, List<QwpSlotLock> claimed)
     {
-        var senderId = Path.GetFileName(slotDir);
+        var senderId = new DirectoryInfo(slotDir).Name;
         if (string.Equals(senderId, ourSenderId, StringComparison.Ordinal))
         {
             return;

@@ -196,10 +196,14 @@ internal sealed class QwpSegmentManager : IDisposable
         {
             using var fs = QwpFiles.OpenExclusive(sparePath);
             fs.SetLength(capacity);
-            fs.Flush();
+            // Force block allocation so a producer mmap-write can't trigger SIGBUS / EFAULT later
+            // when the disk turns out to be full.
+            ReserveDiskBlocks(fs, capacity);
+            fs.Flush(flushToDisk: true);
         }
-        catch (Exception)
+        catch (Exception ex)
         {
+            Volatile.Write(ref _lastServiceError, ex);
             SfCleanup.DeleteFile(sparePath);
             return;
         }
@@ -212,6 +216,24 @@ internal sealed class QwpSegmentManager : IDisposable
         else
         {
             SfCleanup.DeleteFile(sparePath);
+        }
+    }
+
+    private static void ReserveDiskBlocks(FileStream fs, long length)
+    {
+        var pageSize = QwpFiles.PageSize > 0 ? QwpFiles.PageSize : 4096;
+        Span<byte> zero = stackalloc byte[1];
+        zero[0] = 0;
+        for (long offset = 0; offset < length; offset += pageSize)
+        {
+            fs.Position = offset;
+            fs.Write(zero);
+        }
+
+        if (length > 0)
+        {
+            fs.Position = length - 1;
+            fs.Write(zero);
         }
     }
 

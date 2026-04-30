@@ -107,24 +107,34 @@ internal static class QwpFiles
     ///     Caller is responsible for disposing the returned <see cref="MemoryMappedFile" />, which
     ///     also releases the underlying file handle.
     /// </remarks>
-    public static MemoryMappedFile OpenMemoryMappedSegment(string path, long capacityBytes)
+    public static (MemoryMappedFile Mmap, FileStream FileStream) OpenMemoryMappedSegment(string path, long capacityBytes)
     {
         if (capacityBytes <= 0)
         {
             throw new ArgumentOutOfRangeException(nameof(capacityBytes));
         }
 
-        // Pre-extend the file to the target size. CreateFromFile with a capacity will grow the
-        // file if needed but is finicky about open-sharing semantics across platforms; doing it
-        // ourselves up-front gives consistent behaviour on macOS / Linux / Windows.
         EnsureFileLength(path, capacityBytes);
 
-        return MemoryMappedFile.CreateFromFile(
-            path,
-            FileMode.Open,
-            mapName: null,
-            capacityBytes,
-            MemoryMappedFileAccess.ReadWrite);
+        // FileStream.Flush(true) → FlushFileBuffers on Windows; mmap view's Flush alone is not durable there.
+        FileStream? fs = null;
+        try
+        {
+            fs = new FileStream(path, FileMode.Open, FileAccess.ReadWrite, FileShare.Read);
+            var mmap = MemoryMappedFile.CreateFromFile(
+                fs,
+                mapName: null,
+                capacityBytes,
+                MemoryMappedFileAccess.ReadWrite,
+                HandleInheritability.None,
+                leaveOpen: true);
+            return (mmap, fs);
+        }
+        catch
+        {
+            fs?.Dispose();
+            throw;
+        }
     }
 
     /// <summary>

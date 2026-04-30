@@ -70,8 +70,11 @@ internal sealed class QwpMmapSegment : IDisposable
 
     private readonly MemoryMappedFile _mmap;
     private readonly MemoryMappedViewAccessor _view;
+    private readonly FileStream _fileStream;
     private readonly SafeMemoryMappedViewHandle _handle;
-    private readonly List<long> _offsetTable;
+    // Volatile-published immutable snapshot. Producer copy-on-grow; readers Volatile.Read.
+    private long[] _offsetTable;
+    private int _offsetTableCount;
     private readonly unsafe byte* _basePtr;
     private readonly long _viewSize;
     private readonly int _maxFrameLength;
@@ -82,6 +85,7 @@ internal sealed class QwpMmapSegment : IDisposable
         string path,
         MemoryMappedFile mmap,
         MemoryMappedViewAccessor view,
+        FileStream fileStream,
         long capacity,
         long baseFsn,
         long writePosition,
@@ -92,11 +96,15 @@ internal sealed class QwpMmapSegment : IDisposable
         Path = path;
         _mmap = mmap;
         _view = view;
+        _fileStream = fileStream;
         _handle = view.SafeMemoryMappedViewHandle;
         Capacity = capacity;
         BaseFsn = baseFsn;
         WritePosition = writePosition;
-        _offsetTable = offsetTable;
+        var initialCapacity = Math.Max(16, offsetTable.Count);
+        _offsetTable = new long[initialCapacity];
+        for (var i = 0; i < offsetTable.Count; i++) _offsetTable[i] = offsetTable[i];
+        _offsetTableCount = offsetTable.Count;
         _maxFrameLength = maxFrameLength;
         _flushOnAppend = flushOnAppend;
 
@@ -122,7 +130,7 @@ internal sealed class QwpMmapSegment : IDisposable
     public long NextFsn => BaseFsn + EnvelopeCount;
 
     /// <summary>Number of valid envelopes in the segment.</summary>
-    public long EnvelopeCount => _offsetTable.Count;
+    public long EnvelopeCount => Volatile.Read(ref _offsetTableCount);
 
     /// <summary>True when the segment cannot accept further appends (sealed by the manager).</summary>
     public bool IsSealed { get; private set; }
@@ -146,7 +154,7 @@ internal sealed class QwpMmapSegment : IDisposable
             throw new ArgumentOutOfRangeException(nameof(capacity), "capacity must be larger than the file + envelope header");
         }
 
-        var mmap = QwpFiles.OpenMemoryMappedSegment(path, capacity);
+        var (mmap, fs) = QwpFiles.OpenMemoryMappedSegment(path, capacity);
         MemoryMappedViewAccessor? view = null;
         try
         {
@@ -162,7 +170,7 @@ internal sealed class QwpMmapSegment : IDisposable
             var (writePos, offsets) = ScanForLastGoodEnvelope(view, capacity, maxFrameLength);
             ZeroViewRange(view, writePos, capacity - writePos);
 
-            var seg = new QwpMmapSegment(path, mmap, view, capacity, baseFsn, writePos, offsets, maxFrameLength, flushOnAppend);
+            var seg = new QwpMmapSegment(path, mmap, view, fs, capacity, baseFsn, writePos, offsets, maxFrameLength, flushOnAppend);
             if (sealed_)
             {
                 seg.IsSealed = true;
@@ -173,6 +181,7 @@ internal sealed class QwpMmapSegment : IDisposable
         {
             view?.Dispose();
             mmap.Dispose();
+            fs.Dispose();
             throw;
         }
     }
@@ -231,8 +240,26 @@ internal sealed class QwpMmapSegment : IDisposable
         }
 
         WritePosition += totalSize;
-        _offsetTable.Add(envelopeStart);
+        AppendOffset(envelopeStart);
         return true;
+    }
+
+    private void AppendOffset(long offset)
+    {
+        var table = _offsetTable;
+        var count = _offsetTableCount;
+        if (count >= table.Length)
+        {
+            var grown = new long[table.Length * 2];
+            Array.Copy(table, grown, count);
+            grown[count] = offset;
+            Volatile.Write(ref _offsetTable, grown);
+            Volatile.Write(ref _offsetTableCount, count + 1);
+            return;
+        }
+
+        table[count] = offset;
+        Volatile.Write(ref _offsetTableCount, count + 1);
     }
 
     /// <summary>
@@ -295,12 +322,14 @@ internal sealed class QwpMmapSegment : IDisposable
     /// </summary>
     public long? OffsetOfEnvelope(long envelopeIndex)
     {
-        if (envelopeIndex < 0 || envelopeIndex >= _offsetTable.Count)
+        var count = Volatile.Read(ref _offsetTableCount);
+        if (envelopeIndex < 0 || envelopeIndex >= count)
         {
             return null;
         }
 
-        return _offsetTable[(int)envelopeIndex];
+        var table = Volatile.Read(ref _offsetTable);
+        return table[(int)envelopeIndex];
     }
 
     /// <summary>Marks the segment as no longer accepting appends and persists the flag to disk.</summary>
@@ -315,6 +344,7 @@ internal sealed class QwpMmapSegment : IDisposable
         Span<byte> oneByte = stackalloc byte[1];
         oneByte[0] = FlagSealed;
         WriteToView(_view, OffsetFlags, oneByte);
+        Flush();
     }
 
     /// <summary>Forces dirty pages to be written to disk.</summary>
@@ -326,6 +356,7 @@ internal sealed class QwpMmapSegment : IDisposable
         }
 
         _view.Flush();
+        _fileStream.Flush(flushToDisk: true);
     }
 
     /// <summary>
@@ -345,6 +376,7 @@ internal sealed class QwpMmapSegment : IDisposable
         try
         {
             _view.Flush();
+            _fileStream.Flush(flushToDisk: true);
         }
         catch (Exception ex)
         {
@@ -354,6 +386,7 @@ internal sealed class QwpMmapSegment : IDisposable
         SfCleanup.Run(() => _handle.ReleasePointer());
         _view.Dispose();
         _mmap.Dispose();
+        SfCleanup.Dispose(_fileStream);
 
         if (flushError is not null)
         {
@@ -467,8 +500,11 @@ internal sealed class QwpMmapSegment : IDisposable
         WriteToView(view, 0, hdr);
     }
 
-    private static long NowMicros() =>
-        DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() * 1000L;
+    private static long NowMicros()
+    {
+        const long unixEpochTicks = 621355968000000000L;
+        return (DateTime.UtcNow.Ticks - unixEpochTicks) / 10L;
+    }
 
     /// <summary>
     ///     Returns the FSN at the given offset using the offset table. O(log N) via binary search.
@@ -476,7 +512,9 @@ internal sealed class QwpMmapSegment : IDisposable
     /// </summary>
     private long OffsetToFsn(long offset)
     {
-        var idx = _offsetTable.BinarySearch(offset);
+        var count = Volatile.Read(ref _offsetTableCount);
+        var table = Volatile.Read(ref _offsetTable);
+        var idx = Array.BinarySearch(table, 0, count, offset);
         if (idx < 0)
         {
             // Offset doesn't sit on an envelope boundary; the bit-flip equivalent is the insertion

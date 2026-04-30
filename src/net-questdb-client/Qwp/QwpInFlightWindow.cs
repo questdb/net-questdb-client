@@ -290,19 +290,22 @@ internal sealed class QwpInFlightWindow
                         $"in-flight window did not drain within {timeout.TotalMilliseconds:F0} ms");
                 }
 
+                // WaitAsync rejects timeouts > int.MaxValue ms. Slice into a polling quantum.
+                var sliceMs = (long)remaining.TotalMilliseconds;
+                var slice = sliceMs > int.MaxValue
+                    ? TimeSpan.FromMilliseconds(int.MaxValue)
+                    : remaining;
+
                 try
                 {
-                    await waitTask.WaitAsync(remaining, ct).ConfigureAwait(false);
+                    await waitTask.WaitAsync(slice, ct).ConfigureAwait(false);
                 }
                 catch (TimeoutException)
                 {
-                    // Loop: re-check the predicate (the change signal can fire close to the deadline
-                    // and the window may already be empty by the time we recheck).
                 }
-                catch (OperationCanceledException) when (IsEmpty)
+                catch (OperationCanceledException)
                 {
-                    // Cancellation raced past the final ACK; the window is empty so the wait succeeded.
-                    return;
+                    // Drain may have raced cancellation; re-loop so drain takes priority.
                 }
             }
             else
@@ -311,9 +314,8 @@ internal sealed class QwpInFlightWindow
                 {
                     await waitTask.WaitAsync(ct).ConfigureAwait(false);
                 }
-                catch (OperationCanceledException) when (IsEmpty)
+                catch (OperationCanceledException)
                 {
-                    return;
                 }
             }
         }

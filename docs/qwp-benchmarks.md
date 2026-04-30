@@ -99,7 +99,6 @@ SF's flat 1.36–1.43× tax at IFW≥8 is the per-frame architectural cost (disk
 
 | Pillar | Status |
 |---|---|
-| Connect-string interop | ✅ 28 SenderOptions tests + 4 integration tests `[Explicit]` |
 | WS narrow throughput ≥ 1.5× HTTP @ IFW=128 | ✅ 4.05× — 5.42× (margin: 2.7–3.6×) |
 | WS wide throughput ≥ 1.2× HTTP @ IFW=128 | ✅ 4.10× — 4.39× (margin: 3.4–3.7×) |
 | WS sync single-row p100 ≤ 1.5× HTTP | ✅ 0.69× (WS faster than HTTP) |

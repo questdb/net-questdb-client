@@ -33,11 +33,12 @@ namespace net_questdb_client_tests;
 
 /// <summary>
 ///     Integration tests against a QuestDB build that ships the <c>/read/v1</c> egress endpoint
-///     (currently master, not yet released). Run with
-///     <c>QUESTDB_IMAGE=questdb/questdb:master dotnet test --filter QuestDbQueryIntegrationTests</c>.
+///     (not in any released image yet). Point <c>QUESTDB_IMAGE</c> at any branch image that has it,
+///     e.g. <c>QUESTDB_IMAGE=questdb/questdb:&lt;branch&gt; dotnet test --filter QuestDbQueryIntegrationTests</c>.
 /// </summary>
 [TestFixture]
 [Category("integration")]
+[Explicit("Requires a QuestDB image with the /read/v1 egress endpoint — set QUESTDB_IMAGE to such a build")]
 public class QuestDbQueryIntegrationTests
 {
     private const int IlpPort = 19209;

@@ -308,7 +308,7 @@ The config string format is:
 | `sf_durability`                   | `memory`     | Durability mode. Only `memory` is supported in v1.                                                       |
 | `sf_append_deadline_millis`       | `30000`      | Max wait when the disk cap is hit before `Send` throws.                                                  |
 | `reconnect_initial_backoff_millis`| `100`        | Starting backoff for reconnect attempts.                                                                 |
-| `reconnect_max_backoff_millis`    | `5000`       | Cap on per-attempt backoff.                                                                              |
+| `reconnect_max_backoff_millis`    | `30000`      | Cap on per-attempt backoff.                                                                              |
 | `reconnect_max_duration_millis`   | `300000`     | Total per-outage budget; sender becomes terminal if exceeded.                                            |
 | `initial_connect_retry`           | `off`        | `on` makes the first connect honour the same backoff loop. Default is "fail fast on first connect".      |
 | `close_flush_timeout_millis`      | `5000`       | Max wait at `Dispose` for the SF engine to drain. `0` or `-1` for fast close.                            |

@@ -415,9 +415,38 @@ internal sealed class QwpCursorSendEngine : IDisposable
         }
 
         SfCleanup.Run(() => cts?.Cancel());
-        // Bounded wait — never hang Dispose on a wedged loop. Loop errors surface via TerminalError.
-        if (loop is not null) SfCleanup.Run(() => loop.Wait(TimeSpan.FromSeconds(5)));
+        _segmentManager.RequestShutdown();
+
+        // Defer ring/lock release if either pump is still alive: tearing down shared state would
+        // crash on disposed mmaps or let another sender poach the slot mid-send.
+        var pending = new[] { loop, _segmentManager.WorkerTask }
+            .Where(t => t is not null)
+            .Cast<Task>()
+            .ToArray();
+        var allJoined = pending.Length == 0 || SafeWaitAll(pending, TimeSpan.FromSeconds(5));
         SfCleanup.Dispose(cts);
+
+        if (!allJoined)
+        {
+            Task.WhenAll(pending).ContinueWith(
+                _ => ReleaseSharedResources(fullyDrained, slotDir),
+                CancellationToken.None,
+                TaskContinuationOptions.ExecuteSynchronously,
+                TaskScheduler.Default);
+            return;
+        }
+
+        ReleaseSharedResources(fullyDrained, slotDir);
+    }
+
+    private static bool SafeWaitAll(Task[] tasks, TimeSpan timeout)
+    {
+        try { return Task.WaitAll(tasks, timeout); }
+        catch { return true; }
+    }
+
+    private void ReleaseSharedResources(bool fullyDrained, string slotDir)
+    {
         SfCleanup.Dispose(_segmentManager);
         SfCleanup.Dispose(_ring);
 

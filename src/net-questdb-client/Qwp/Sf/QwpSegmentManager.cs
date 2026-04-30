@@ -99,6 +99,14 @@ internal sealed class QwpSegmentManager : IDisposable
         }
     }
 
+    internal Task? WorkerTask => _workerTask;
+
+    internal void RequestShutdown()
+    {
+        SfCleanup.Run(() => _cts.Cancel());
+        SfCleanup.Run(() => _wakeup.Release());
+    }
+
     public void Dispose()
     {
         if (_disposed)
@@ -107,13 +115,10 @@ internal sealed class QwpSegmentManager : IDisposable
         }
 
         _disposed = true;
-
-        SfCleanup.Run(() => _cts.Cancel());
-        SfCleanup.Run(() => _wakeup.Release());
+        RequestShutdown();
 
         if (_workerTask is not null)
         {
-            // Late iterations / Wake callbacks tolerate disposed _cts/_wakeup via ODE catches.
             SfCleanup.Run(() => _workerTask.Wait(_shutdownWait));
         }
 

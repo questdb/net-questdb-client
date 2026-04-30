@@ -313,7 +313,7 @@ public record SenderOptions
 
     private void ValidateWebSocketKeys()
     {
-        if (IsWebSocket())
+        if (IsWebSocket() || _connectionStringBuilder is null)
         {
             return;
         }
@@ -910,7 +910,7 @@ public record SenderOptions
         set { _reconnectInitialBackoff = value; _reconnectInitialBackoffUserSet = true; }
     }
 
-    /// <summary>Maximum reconnect backoff after exponential growth. Defaults to 5 s.</summary>
+    /// <summary>Maximum reconnect backoff after exponential growth. Defaults to 30 s.</summary>
     public TimeSpan reconnect_max_backoff_millis
     {
         get => _reconnectMaxBackoff;
@@ -1115,14 +1115,24 @@ public record SenderOptions
         {
             if (string.IsNullOrWhiteSpace(param)) continue;
 
-            var kvp = param.Split('=');
-            if (kvp.Length == 2 && kvp[0].Trim() == "addr")
+            var idx = param.IndexOf('=');
+            if (idx < 0)
             {
-                var addrValue = kvp[1].Trim();
-                if (!string.IsNullOrEmpty(addrValue))
-                {
-                    _addresses.Add(addrValue);
-                }
+                throw new IngressError(ErrorCode.ConfigError,
+                    $"Malformed config entry `{param.Trim()}`; expected `key=value`");
+            }
+
+            var key = param.Substring(0, idx).Trim();
+            var value = param.Substring(idx + 1).Trim();
+            if (key.Length == 0 || value.Length == 0)
+            {
+                throw new IngressError(ErrorCode.ConfigError,
+                    $"Malformed config entry `{param.Trim()}`; key and value must both be non-empty");
+            }
+
+            if (key == "addr")
+            {
+                _addresses.Add(value);
             }
         }
 

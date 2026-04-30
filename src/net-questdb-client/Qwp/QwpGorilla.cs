@@ -119,11 +119,12 @@ internal static class QwpGorilla
     ///     Decodes a Gorilla / uncompressed timestamp column. The caller supplies the expected
     ///     <paramref name="valueCount" /> from the row count − null count.
     /// </summary>
-    public static void Decode(ReadOnlySpan<byte> source, Span<long> dest, int valueCount)
+    /// <returns>Number of source bytes consumed.</returns>
+    public static int Decode(ReadOnlySpan<byte> source, Span<long> dest, int valueCount)
     {
         if (valueCount <= 0)
         {
-            return;
+            return 0;
         }
 
         if (source.Length < 1)
@@ -134,8 +135,7 @@ internal static class QwpGorilla
         var flag = source[0];
         if (flag == EncodingUncompressed)
         {
-            DecodeUncompressed(source, dest, valueCount);
-            return;
+            return DecodeUncompressed(source, dest, valueCount);
         }
 
         if (flag != EncodingGorilla)
@@ -144,7 +144,7 @@ internal static class QwpGorilla
                 $"Gorilla source: unknown encoding flag 0x{flag:X2}");
         }
 
-        DecodeGorilla(source, dest, valueCount);
+        return DecodeGorilla(source, dest, valueCount);
     }
 
     private static int EncodeUncompressed(Span<byte> dest, ReadOnlySpan<long> timestamps)
@@ -223,7 +223,7 @@ internal static class QwpGorilla
         writer.WriteBits((uint)dod, 32);
     }
 
-    private static void DecodeUncompressed(ReadOnlySpan<byte> source, Span<long> dest, int valueCount)
+    private static int DecodeUncompressed(ReadOnlySpan<byte> source, Span<long> dest, int valueCount)
     {
         var expected = 1 + valueCount * 8;
         if (source.Length < expected)
@@ -236,9 +236,11 @@ internal static class QwpGorilla
         {
             dest[i] = BinaryPrimitives.ReadInt64LittleEndian(source.Slice(1 + i * 8, 8));
         }
+
+        return expected;
     }
 
-    private static void DecodeGorilla(ReadOnlySpan<byte> source, Span<long> dest, int valueCount)
+    private static int DecodeGorilla(ReadOnlySpan<byte> source, Span<long> dest, int valueCount)
     {
         if (valueCount < 2)
         {
@@ -265,6 +267,8 @@ internal static class QwpGorilla
             dest[i] = dest[i - 1] + delta;
             prevDelta = delta;
         }
+
+        return reader.BytePosition;
     }
 
     private static long DecodeDoD(ref QwpBitReader reader)

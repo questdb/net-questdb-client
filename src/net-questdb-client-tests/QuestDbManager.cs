@@ -16,6 +16,8 @@ public class QuestDbManager : IAsyncDisposable
     private readonly int _httpPort;
 
     private readonly int _port;
+    private readonly string? _liveHttp;
+    private readonly string? _liveIlp;
     private string? _containerId;
     private string? _volumeName;
 
@@ -32,12 +34,22 @@ public class QuestDbManager : IAsyncDisposable
     {
         _port          = port;
         _httpPort      = httpPort;
+        _liveHttp      = NormalizeEndpoint(Environment.GetEnvironmentVariable("QDB_LIVE_HTTP"));
+        _liveIlp       = NormalizeEndpoint(Environment.GetEnvironmentVariable("QDB_LIVE_ILP"));
         var candidate = string.IsNullOrWhiteSpace(dockerImage)
             ? Environment.GetEnvironmentVariable("QUESTDB_IMAGE")
             : dockerImage;
         _dockerImage = string.IsNullOrWhiteSpace(candidate) ? DefaultImage : candidate.Trim();
         _containerName = $"{ContainerNamePrefix}{port}-{httpPort}-{Guid.NewGuid().ToString().Substring(0, 8)}";
         _httpClient    = new HttpClient { Timeout = TimeSpan.FromSeconds(5), };
+    }
+
+    private bool UseLiveServer => !string.IsNullOrEmpty(_liveHttp);
+
+    private static string? NormalizeEndpoint(string? raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw)) return null;
+        return raw.Trim();
     }
 
     public bool IsRunning { get; private set; }
@@ -137,6 +149,14 @@ public class QuestDbManager : IAsyncDisposable
             return;
         }
 
+        if (UseLiveServer)
+        {
+            Console.WriteLine($"Using live QuestDB at {_liveHttp} (skipping Docker)");
+            await WaitForQuestDbAsync();
+            IsRunning = true;
+            return;
+        }
+
         await EnsureDockerAvailableAsync();
 
         // Clean up any existing containers using these ports
@@ -183,6 +203,12 @@ public class QuestDbManager : IAsyncDisposable
     /// </summary>
     public async Task StopAsync()
     {
+        if (UseLiveServer)
+        {
+            IsRunning = false;
+            return;
+        }
+
         if (!IsRunning || string.IsNullOrEmpty(_containerId))
         {
             return;
@@ -209,7 +235,7 @@ public class QuestDbManager : IAsyncDisposable
     /// </summary>
     public string GetHttpEndpoint()
     {
-        return $"localhost:{_httpPort}";
+        return _liveHttp ?? $"localhost:{_httpPort}";
     }
 
     /// <summary>
@@ -217,13 +243,13 @@ public class QuestDbManager : IAsyncDisposable
     /// </summary>
     public string GetIlpEndpoint()
     {
-        return $"localhost:{_port}";
+        return _liveIlp ?? $"localhost:{_port}";
     }
 
     /// <summary>Gets the WebSocket (QWP) endpoint for QuestDB. Shares the HTTP port.</summary>
     public string GetWebSocketEndpoint()
     {
-        return $"localhost:{_httpPort}";
+        return _liveHttp ?? $"localhost:{_httpPort}";
     }
 
     /// <summary>

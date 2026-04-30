@@ -167,6 +167,8 @@ internal ref struct QwpBitReader
         _bitIndex = 0;
     }
 
+    public int BytePosition => _bitIndex == 0 ? _byteIndex : _byteIndex + 1;
+
     /// <summary>Reads <paramref name="bitCount" /> bits as an unsigned integer, LSB-first.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public ulong ReadBits(int bitCount)

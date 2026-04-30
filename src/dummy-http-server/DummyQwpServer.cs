@@ -173,6 +173,12 @@ public sealed class DummyQwpServer : IAsyncDisposable
 
         using var ws = await ctx.WebSockets.AcceptWebSocketAsync().ConfigureAwait(false);
 
+        if (_options.InitialServerFrame is { Length: > 0 } initial)
+        {
+            await ws.SendAsync(initial, WebSocketMessageType.Binary, endOfMessage: true, ctx.RequestAborted)
+                .ConfigureAwait(false);
+        }
+
         var receiveBuf = new byte[_options.ReceiveBufferSize];
         var framesHandled = 0;
         while (ws.State == WebSocketState.Open)
@@ -262,6 +268,12 @@ public sealed class DummyQwpServerOptions
 
     /// <summary>Optional close reason text accompanying <see cref="CloseStatus" />.</summary>
     public string? CloseReason { get; init; } = "test injected close";
+
+    /// <summary>
+    ///     Frame the server sends to the client immediately after accepting the WebSocket and before
+    ///     reading the first client frame. Use this to emit a v2 <c>SERVER_INFO</c>.
+    /// </summary>
+    public byte[]? InitialServerFrame { get; init; }
 
     /// <summary>Per-frame response generator. Return null/empty to suppress a response.</summary>
     public Func<byte[], byte[]?>? FrameHandler { get; init; }

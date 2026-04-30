@@ -113,6 +113,66 @@ internal static class QwpConstants
     /// <summary>Hard-coded WebSocket endpoint path for QWP ingest.</summary>
     public const string WritePath = "/write/v4";
 
+    /// <summary>Hard-coded WebSocket endpoint path for QWP egress (query).</summary>
+    public const string ReadPath = "/read/v1";
+
+    /// <summary>RESULT_BATCH payload is zstd-compressed after the prelude.</summary>
+    public const byte FlagZstd = 0x10;
+
+    /// <summary>QWP egress message kinds (the first byte of every egress payload).</summary>
+    public const byte MsgKindQueryRequest = 0x10;
+    public const byte MsgKindResultBatch = 0x11;
+    public const byte MsgKindResultEnd = 0x12;
+    public const byte MsgKindQueryError = 0x13;
+    public const byte MsgKindCancel = 0x14;
+    public const byte MsgKindCredit = 0x15;
+    public const byte MsgKindExecDone = 0x16;
+    public const byte MsgKindCacheReset = 0x17;
+    public const byte MsgKindServerInfo = 0x18;
+
+    /// <summary>CACHE_RESET reset_mask bits.</summary>
+    public const byte ResetMaskDict = 0x01;
+    public const byte ResetMaskSchemas = 0x02;
+
+    /// <summary>SERVER_INFO role bytes.</summary>
+    public const byte RoleStandalone = 0x00;
+    public const byte RolePrimary = 0x01;
+    public const byte RoleReplica = 0x02;
+    public const byte RolePrimaryCatchup = 0x03;
+
+    /// <summary>QWP egress status codes (in QUERY_ERROR frames). No STATUS_OK — egress success is RESULT_END.</summary>
+    public const byte StatusSchemaMismatch = 0x03;
+    public const byte StatusParseError = 0x05;
+    public const byte StatusInternalError = 0x06;
+    public const byte StatusSecurityError = 0x08;
+    public const byte StatusCancelled = 0x0A;
+    public const byte StatusLimitExceeded = 0x0B;
+
+    /// <summary>Connection-level errors (parse failure on the message frame, auth failure) carry this id.</summary>
+    public const long RequestIdWildcard = -1L;
+
+    /// <summary>Egress wire limits.</summary>
+    public const int MaxSqlLengthBytes = 1024 * 1024;
+    public const int MaxBindParameters = 2048;
+    public const int MaxResultBatchWireBytes = 16 * 1024 * 1024;
+
+    /// <summary>Server soft caps; clients must accept any policy and tolerate <c>CACHE_RESET</c> at any query boundary.</summary>
+    public const int SymbolDictEntriesSoftCap = 100_000;
+    public const int SymbolDictHeapBytesSoftCap = 8 * 1024 * 1024;
+    public const int SchemaRegistrySoftCap = 4096;
+
+    /// <summary>Server-side zstd level clamp. Client may send any level; server rounds.</summary>
+    public const int ZstdLevelMin = 1;
+    public const int ZstdLevelMax = 9;
+
+    /// <summary>Egress upgrade headers.</summary>
+    public const string HeaderAcceptEncoding = "X-QWP-Accept-Encoding";
+    public const string HeaderContentEncoding = "X-QWP-Content-Encoding";
+    public const string HeaderMaxBatchRows = "X-QWP-Max-Batch-Rows";
+
+    /// <summary>QWP egress version handed out by Phase-1 servers.</summary>
+    public const byte SupportedEgressVersion = 0x02;
+
     /// <summary>Default auto-flush threshold by row count.</summary>
     public const int DefaultAutoFlushRows = 1000;
 

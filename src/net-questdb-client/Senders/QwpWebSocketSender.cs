@@ -1397,49 +1397,11 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
         return new Uri($"{scheme}://{host}:{port}{QwpConstants.WritePath}");
     }
 
-    private static string? BuildAuthHeader(SenderOptions options)
-    {
-        if (!string.IsNullOrEmpty(options.username) && !string.IsNullOrEmpty(options.password))
-        {
-            var pair = $"{options.username}:{options.password}";
-            return "Basic " + Convert.ToBase64String(Encoding.UTF8.GetBytes(pair));
-        }
+    private static string? BuildAuthHeader(SenderOptions options) =>
+        QwpTlsAuth.BuildAuthHeader(options.username, options.password, options.token, rawAuth: null);
 
-        if (!string.IsNullOrEmpty(options.token))
-        {
-            return "Bearer " + options.token;
-        }
-
-        return null;
-    }
-
-    private static System.Net.Security.RemoteCertificateValidationCallback? BuildCertificateValidator(SenderOptions options)
-    {
-        if (options.tls_verify == TlsVerifyType.unsafe_off)
-        {
-            return (_, _, _, _) => true;
-        }
-
-        if (string.IsNullOrEmpty(options.tls_roots))
-        {
-            return null;
-        }
-
-        var rootsPath = options.tls_roots!;
-        var rootsPassword = options.tls_roots_password;
-        return (_, certificate, chain, errors) =>
-        {
-            if ((errors & ~System.Net.Security.SslPolicyErrors.RemoteCertificateChainErrors) != 0)
-            {
-                return false;
-            }
-
-            chain!.ChainPolicy.TrustMode = System.Security.Cryptography.X509Certificates.X509ChainTrustMode.CustomRootTrust;
-            chain.ChainPolicy.CustomTrustStore.Add(
-                System.Security.Cryptography.X509Certificates.X509Certificate2.CreateFromPemFile(rootsPath, rootsPassword));
-            return chain.Build(new System.Security.Cryptography.X509Certificates.X509Certificate2(certificate!));
-        };
-    }
+    private static System.Net.Security.RemoteCertificateValidationCallback? BuildCertificateValidator(SenderOptions options) =>
+        QwpTlsAuth.BuildCertificateValidator(options.tls_verify, options.tls_roots, options.tls_roots_password);
 }
 
 #endif

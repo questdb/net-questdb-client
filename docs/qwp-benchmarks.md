@@ -9,8 +9,9 @@
 
 ## TL;DR
 
-- ✅ **Throughput** (`BenchInsertsWs`): WS beats HTTP by **3–6×** across narrow / wide / multi-table at `in_flight_window=128`. All throughput / alloc targets pass with margin.
-- ✅ **Latency** (`BenchLatencyWs`, sync mode): WS is faster than HTTP at every batch size. Single-row WS p95 = **170 μs** vs HTTP **237 μs**; 10k-row batch shows **3.85× advantage**.
+- ✅ **Ingest throughput** (`BenchInsertsWs`): WS beats HTTP by **3–6×** across narrow / wide / multi-table at `in_flight_window=128`. All throughput / alloc targets pass with margin.
+- ✅ **Ingest latency** (`BenchLatencyWs`, sync mode): WS is faster than HTTP at every batch size. Single-row WS p95 = **170 μs** vs HTTP **237 μs**; 10k-row batch shows **3.85× advantage**.
+- ✅ **Egress reads** (`BenchQueryWs`): WS reads **3.5–6.1×** faster than HTTP `/exec` from 10k–1M rows; peak **37 M rows/sec** on a 2-column 1M-row query. Per-batch decoder allocation cut **1170×** by column-scratch pooling.
 - ✅ **SF overhead** (`BenchSfThroughput`): SF is **0.83–1.43×** non-SF at the same IFW. SF is faster than non-SF at IFW=1 (single-frame ACK wait masks the disk-append cost); flat at 1.36–1.43× for IFW≥8. Within the ≤ 1.45× target.
 
 ## Methodology
@@ -65,7 +66,24 @@
 
 Run at `IterationCount=100_000` if you need a strict p99.
 
-## 3. `BenchSfThroughput` — Store-and-forward overhead
+## 3. `BenchQueryWs` — Egress (read) throughput
+
+**Workload**: persistent `QwpQueryClient`, `SELECT * FROM table LIMIT N` against pre-seeded tables (1 M rows each). HTTP `/exec` baseline parses the JSON `dataset[][]` and counts rows so both methods do equivalent extraction work. 20 iterations × 5 warmup; error margin < 2 % at the 1 M-row regime.
+
+| Category | RowCount | Mean WS | Mean HTTP | WS rows/sec | WS Ratio |
+|---|---|---|---|---|---|
+| **Narrow** (2 cols) | 10 k  |   815 μs |   2.89 ms | 12.27 M | **0.28 (3.5×)** |
+| **Narrow** | 100 k |  3.77 ms |   17.7 ms | 26.54 M | **0.21 (4.7×)** |
+| **Narrow** | 1 M   |  27.0 ms |    164 ms | **37.08 M** | **0.16 (6.1×)** |
+| **Wide** (15 cols) | 10 k  |  2.48 ms |   6.56 ms |  4.03 M | **0.38 (2.6×)** |
+| **Wide** | 100 k |  16.9 ms |   59.3 ms |  5.91 M | **0.29 (3.5×)** |
+| **Wide** | 1 M   |   159 ms |    576 ms |  6.30 M | **0.28 (3.6×)** |
+
+- **3.5–6.1× faster than HTTP `/exec`**; peak **37 M rows/sec** at Narrow 1 M.
+- **Decoder allocations dropped 1170×** after column-scratch pooling (Wide 100 k: 10 MB → 8.6 KB / batch). `ValueBytes` / `StringHeap` / `NonNullIndex` / `StringOffsets` survive `Reset` and grow-and-reuse across batches; only varchar/symbol heap deltas allocate.
+- Wide rows cap at **~6 M rows/sec** — payload-bound, like the ingest side.
+
+## 4. `BenchSfThroughput` — Store-and-forward overhead
 
 **Workload**: long-lived senders (one with `sf_dir`, one without). Each iteration sends N rows, `SendAsync()`, then `Ping()` to wait for cumulative ACK — symmetric across both branches.
 
@@ -99,20 +117,26 @@ SF's flat 1.36–1.43× tax at IFW≥8 is the per-frame architectural cost (disk
 
 | Pillar | Status |
 |---|---|
-| WS narrow throughput ≥ 1.5× HTTP @ IFW=128 | ✅ 4.05× — 5.42× (margin: 2.7–3.6×) |
-| WS wide throughput ≥ 1.2× HTTP @ IFW=128 | ✅ 4.10× — 4.39× (margin: 3.4–3.7×) |
+| WS narrow ingest throughput ≥ 1.5× HTTP @ IFW=128 | ✅ 4.05× — 5.42× (margin: 2.7–3.6×) |
+| WS wide ingest throughput ≥ 1.2× HTTP @ IFW=128 | ✅ 4.10× — 4.39× (margin: 3.4–3.7×) |
 | WS sync single-row p100 ≤ 1.5× HTTP | ✅ 0.69× (WS faster than HTTP) |
 | WS async 10000-row p100 ≤ HTTP 10000-row p100 | ✅ 0.28× (WS 3.6× faster) |
+| **WS egress reads ≥ HTTP `/exec` baseline** | ✅ 2.6× — 6.1× across narrow / wide × 10k / 100k / 1M |
 | **SF overhead ≤ 45%** | ✅ 0.83–1.43× (passes at every IFW; flat curve at IFW≥8) |
 | GC alloc / 1k rows ≤ 2× HTTP | ✅ 0.52× — 0.68× HTTP across all shapes |
 
 ## Reproduction
 
 ```fish
-# Throughput / SF
+# Ingest throughput / SF
 QDB_BENCH_ENDPOINT=127.0.0.1:9000 \
   dotnet run -c Release --project src/net-questdb-client-benchmarks --framework net10.0 -- \
   --filter '*BenchInsertsWs*' '*BenchSfThroughput*'
+
+# Egress reads (live QuestDB master)
+QDB_BENCH_ENDPOINT=127.0.0.1:9000 \
+  dotnet run -c Release --project src/net-questdb-client-benchmarks --framework net10.0 -- \
+  --filter '*BenchQueryWs*'
 
 # Latency, strict (100k samples for RowsPerBatch=1)
 QDB_BENCH_ENDPOINT=127.0.0.1:9000 \

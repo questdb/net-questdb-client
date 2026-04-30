@@ -1,0 +1,387 @@
+/*******************************************************************************
+ *     ___                  _   ____  ____
+ *    / _ \ _   _  ___  ___| |_|  _ \| __ )
+ *   | | | | | | |/ _ \/ __| __| | | |  _ \
+ *   | |_| | |_| |  __/\__ \ |_| |_| | |_) |
+ *    \__\_\\__,_|\___||___/\__|____/|____/
+ *
+ *  Copyright (c) 2014-2019 Appsicle
+ *  Copyright (c) 2019-2026 QuestDB
+ *
+ *  Licensed under the Apache License, Version 2.0 (the "License");
+ *  you may not use this file except in compliance with the License.
+ *  You may obtain a copy of the License at
+ *
+ *  http://www.apache.org/licenses/LICENSE-2.0
+ *
+ *  Unless required by applicable law or agreed to in writing, software
+ *  distributed under the License is distributed on an "AS IS" BASIS,
+ *  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ *  See the License for the specific language governing permissions and
+ *  limitations under the License.
+ *
+ ******************************************************************************/
+
+using NUnit.Framework;
+using QuestDB.Enums;
+using QuestDB.Qwp;
+using QuestDB.Qwp.Query;
+using QuestDB.Utils;
+
+namespace net_questdb_client_tests.Qwp.Query;
+
+[TestFixture]
+public class QueryOptionsTests
+{
+    [Test]
+    public void Defaults_MatchesSpec()
+    {
+        var o = new QueryOptions();
+        Assert.That(o.protocol, Is.EqualTo(ProtocolType.ws));
+        Assert.That(o.addr, Is.EqualTo("localhost:9000"));
+        Assert.That(o.path, Is.EqualTo(QwpConstants.ReadPath));
+        Assert.That(o.tls_verify, Is.EqualTo(TlsVerifyType.on));
+        Assert.That(o.compression, Is.EqualTo(CompressionType.auto));
+        Assert.That(o.compression_level, Is.EqualTo(3));
+        Assert.That(o.target, Is.EqualTo(TargetType.any));
+        Assert.That(o.failover, Is.True);
+        Assert.That(o.failover_max_attempts, Is.EqualTo(8));
+        Assert.That(o.failover_backoff_initial_ms.TotalMilliseconds, Is.EqualTo(50));
+        Assert.That(o.failover_backoff_max_ms.TotalMilliseconds, Is.EqualTo(1000));
+        Assert.That(o.buffer_pool_size, Is.EqualTo(4));
+        Assert.That(o.max_batch_rows, Is.EqualTo(0));
+        Assert.That(o.initial_credit, Is.EqualTo(0));
+    }
+
+    [Test]
+    public void InitialCredit_SetViaObjectInitializer()
+    {
+        var o = new QueryOptions { addr = "h:9000", initial_credit = 1024 };
+        Assert.That(o.initial_credit, Is.EqualTo(1024));
+        Assert.DoesNotThrow(() => o.EnsureValid());
+    }
+
+    [Test]
+    public void Parse_InitialCredit_NotAcceptedAsConnectStringKey()
+    {
+        Assert.Throws<IngressError>(
+            () => new QueryOptions("ws::addr=h:9000;initial_credit=1024;"));
+    }
+
+    [Test]
+    public void Parse_MinimalWs_AssignsAddr()
+    {
+        var o = new QueryOptions("ws::addr=db.internal:9000;");
+        Assert.That(o.protocol, Is.EqualTo(ProtocolType.ws));
+        Assert.That(o.addr, Is.EqualTo("db.internal:9000"));
+        Assert.That(o.AddressCount, Is.EqualTo(1));
+    }
+
+    [Test]
+    public void Parse_Wss_SwitchesProtocol()
+    {
+        var o = new QueryOptions("wss::addr=secure.host:443;");
+        Assert.That(o.protocol, Is.EqualTo(ProtocolType.wss));
+    }
+
+    [Test]
+    public void Parse_AllEgressKnobs_RoundTrip()
+    {
+        var o = new QueryOptions(
+            "wss::addr=a:9000;path=/read/v1;client_id=dashboard/2;" +
+            "tls_verify=on;tls_roots=/etc/ca.pem;tls_roots_password=secret;" +
+            "compression=zstd;compression_level=5;" +
+            "target=primary;failover=on;failover_max_attempts=4;" +
+            "failover_backoff_initial_ms=100;failover_backoff_max_ms=2000;" +
+            "buffer_pool_size=8;max_batch_rows=5000;token=abc;");
+
+        Assert.That(o.protocol, Is.EqualTo(ProtocolType.wss));
+        Assert.That(o.addr, Is.EqualTo("a:9000"));
+        Assert.That(o.path, Is.EqualTo("/read/v1"));
+        Assert.That(o.client_id, Is.EqualTo("dashboard/2"));
+        Assert.That(o.tls_verify, Is.EqualTo(TlsVerifyType.on));
+        Assert.That(o.tls_roots, Is.EqualTo("/etc/ca.pem"));
+        Assert.That(o.tls_roots_password, Is.EqualTo("secret"));
+        Assert.That(o.compression, Is.EqualTo(CompressionType.zstd));
+        Assert.That(o.compression_level, Is.EqualTo(5));
+        Assert.That(o.target, Is.EqualTo(TargetType.primary));
+        Assert.That(o.failover, Is.True);
+        Assert.That(o.failover_max_attempts, Is.EqualTo(4));
+        Assert.That(o.failover_backoff_initial_ms.TotalMilliseconds, Is.EqualTo(100));
+        Assert.That(o.failover_backoff_max_ms.TotalMilliseconds, Is.EqualTo(2000));
+        Assert.That(o.buffer_pool_size, Is.EqualTo(8));
+        Assert.That(o.max_batch_rows, Is.EqualTo(5000));
+        Assert.That(o.token, Is.EqualTo("abc"));
+    }
+
+    [TestCase("http::addr=h:9000;")]
+    [TestCase("tcp::addr=h:9000;")]
+    [TestCase("https::addr=h:9000;")]
+    public void Parse_NonWebSocketScheme_Rejected(string conn)
+    {
+        Assert.Throws<IngressError>(() => new QueryOptions(conn));
+    }
+
+    [Test]
+    public void Parse_NoSchemeSeparator_Rejected()
+    {
+        Assert.Throws<IngressError>(() => new QueryOptions("addr=h:9000"));
+    }
+
+    [Test]
+    public void Parse_UnknownKey_Rejected()
+    {
+        var ex = Assert.Throws<IngressError>(() =>
+            new QueryOptions("ws::addr=h:9000;not_a_real_key=42;"));
+        Assert.That(ex!.Message, Does.Contain("not_a_real_key"));
+    }
+
+    [Test]
+    public void Parse_MalformedEntry_Rejected()
+    {
+        Assert.Throws<IngressError>(() => new QueryOptions("ws::addr=h:9000;orphan;"));
+    }
+
+    [Test]
+    public void Parse_EmptyKeyOrValue_Rejected()
+    {
+        Assert.Throws<IngressError>(() => new QueryOptions("ws::addr=h:9000;=v;"));
+        Assert.Throws<IngressError>(() => new QueryOptions("ws::addr=h:9000;k=;"));
+    }
+
+    [Test]
+    public void Parse_MultipleAddr_AccumulatesAndPicksFirst()
+    {
+        var o = new QueryOptions("ws::addr=a:9000;addr=b:9000;addr=c:9000;");
+        Assert.That(o.addr, Is.EqualTo("a:9000"));
+        Assert.That(o.AddressCount, Is.EqualTo(3));
+        Assert.That(o.addresses, Is.EqualTo(new[] { "a:9000", "b:9000", "c:9000" }));
+    }
+
+    [Test]
+    public void Parse_CommaSeparatedAddr_SplitsIntoMultipleEndpoints()
+    {
+        var o = new QueryOptions("ws::addr=a:9000,b:9000,c:9000;");
+        Assert.That(o.AddressCount, Is.EqualTo(3));
+        Assert.That(o.addresses, Is.EqualTo(new[] { "a:9000", "b:9000", "c:9000" }));
+    }
+
+    [Test]
+    public void Parse_MixedCommaAndRepeatedAddr_AccumulatesAll()
+    {
+        var o = new QueryOptions("ws::addr=a:9000,b:9000;addr=c:9000;");
+        Assert.That(o.AddressCount, Is.EqualTo(3));
+        Assert.That(o.addresses, Is.EqualTo(new[] { "a:9000", "b:9000", "c:9000" }));
+    }
+
+    [Test]
+    public void Parse_EmptyCommaPieceInAddr_Rejected()
+    {
+        Assert.Throws<IngressError>(() => new QueryOptions("ws::addr=a:9000,,b:9000;"));
+        Assert.Throws<IngressError>(() => new QueryOptions("ws::addr=,b:9000;"));
+        Assert.Throws<IngressError>(() => new QueryOptions("ws::addr=a:9000,;"));
+    }
+
+    [TestCase("auth=Bearer abc;username=u;password=p;")]
+    [TestCase("auth=X;token=t;")]
+    [TestCase("username=u;password=p;token=t;")]
+    public void Parse_AuthMutex_Rejected(string params_)
+    {
+        Assert.Throws<IngressError>(() => new QueryOptions("ws::addr=h:9000;" + params_));
+    }
+
+    [Test]
+    public void Parse_UsernameWithoutPassword_Rejected()
+    {
+        Assert.Throws<IngressError>(() => new QueryOptions("ws::addr=h:9000;username=u;"));
+    }
+
+    [Test]
+    public void Parse_PasswordWithoutUsername_Rejected()
+    {
+        Assert.Throws<IngressError>(() => new QueryOptions("ws::addr=h:9000;password=p;"));
+    }
+
+    [Test]
+    public void Parse_RawAuthAlone_Accepted()
+    {
+        var o = new QueryOptions("ws::addr=h:9000;auth=Bearer xyz;");
+        Assert.That(o.auth, Is.EqualTo("Bearer xyz"));
+    }
+
+    [Test]
+    public void Parse_BasicAuth_Accepted()
+    {
+        var o = new QueryOptions("ws::addr=h:9000;username=u;password=p;");
+        Assert.That(o.username, Is.EqualTo("u"));
+        Assert.That(o.password, Is.EqualTo("p"));
+    }
+
+    [Test]
+    public void Parse_BearerToken_Accepted()
+    {
+        var o = new QueryOptions("ws::addr=h:9000;token=tok;");
+        Assert.That(o.token, Is.EqualTo("tok"));
+    }
+
+    [Test]
+    public void Parse_WssWithCustomRoots_Accepted()
+    {
+        var o = new QueryOptions("wss::addr=h:443;tls_roots=/p.pem;tls_roots_password=s;");
+        Assert.That(o.tls_roots, Is.EqualTo("/p.pem"));
+        Assert.That(o.tls_roots_password, Is.EqualTo("s"));
+    }
+
+    [Test]
+    public void Parse_WsWithTlsVerifyOff_Rejected()
+    {
+        Assert.Throws<IngressError>(() => new QueryOptions("ws::addr=h:9000;tls_verify=unsafe_off;"));
+    }
+
+    [Test]
+    public void Parse_WsWithTlsRoots_Rejected()
+    {
+        Assert.Throws<IngressError>(() => new QueryOptions("ws::addr=h:9000;tls_roots=/p.pem;"));
+    }
+
+    [Test]
+    public void Parse_TlsRootsPasswordWithoutRoots_Rejected()
+    {
+        Assert.Throws<IngressError>(() =>
+            new QueryOptions("wss::addr=h:443;tls_roots_password=secret;"));
+    }
+
+    [TestCase("compression=raw;", CompressionType.raw)]
+    [TestCase("compression=zstd;", CompressionType.zstd)]
+    [TestCase("compression=auto;", CompressionType.auto)]
+    public void Parse_CompressionValues_Accepted(string params_, CompressionType expected)
+    {
+        var o = new QueryOptions("ws::addr=h:9000;" + params_);
+        Assert.That(o.compression, Is.EqualTo(expected));
+    }
+
+    [Test]
+    public void Parse_BadCompression_Rejected()
+    {
+        Assert.Throws<IngressError>(() => new QueryOptions("ws::addr=h:9000;compression=lz4;"));
+    }
+
+    [TestCase(0)]
+    [TestCase(-1)]
+    [TestCase(10)]
+    [TestCase(23)]
+    [TestCase(100)]
+    public void Parse_BadCompressionLevel_Rejected(int level)
+    {
+        Assert.Throws<IngressError>(() => new QueryOptions(
+            $"ws::addr=h:9000;compression_level={level};"));
+    }
+
+    [TestCase(1)]
+    [TestCase(5)]
+    [TestCase(9)]
+    public void Parse_CompressionLevelInRange_Accepted(int level)
+    {
+        Assert.DoesNotThrow(() => new QueryOptions(
+            $"ws::addr=h:9000;compression_level={level};"));
+    }
+
+    [TestCase("target=any;", TargetType.any)]
+    [TestCase("target=primary;", TargetType.primary)]
+    [TestCase("target=replica;", TargetType.replica)]
+    public void Parse_TargetValues_Accepted(string params_, TargetType expected)
+    {
+        var o = new QueryOptions("ws::addr=h:9000;" + params_);
+        Assert.That(o.target, Is.EqualTo(expected));
+    }
+
+    [Test]
+    public void Parse_BadTarget_Rejected()
+    {
+        Assert.Throws<IngressError>(() => new QueryOptions("ws::addr=h:9000;target=arbiter;"));
+    }
+
+    [Test]
+    public void Parse_FailoverOff()
+    {
+        var o = new QueryOptions("ws::addr=h:9000;failover=off;");
+        Assert.That(o.failover, Is.False);
+    }
+
+    [Test]
+    public void Parse_FailoverInitialGtMax_Rejected()
+    {
+        Assert.Throws<IngressError>(() => new QueryOptions(
+            "ws::addr=h:9000;failover_backoff_initial_ms=2000;failover_backoff_max_ms=500;"));
+    }
+
+    [Test]
+    public void Parse_FailoverMaxAttemptsZero_Rejected()
+    {
+        Assert.Throws<IngressError>(() => new QueryOptions(
+            "ws::addr=h:9000;failover_max_attempts=0;"));
+    }
+
+    [Test]
+    public void Parse_BufferPoolSizeZero_Rejected()
+    {
+        Assert.Throws<IngressError>(() => new QueryOptions(
+            "ws::addr=h:9000;buffer_pool_size=0;"));
+    }
+
+    [Test]
+    public void Parse_MaxBatchRowsZero_AcceptedAsServerDefault()
+    {
+        var o = new QueryOptions("ws::addr=h:9000;max_batch_rows=0;");
+        Assert.That(o.max_batch_rows, Is.EqualTo(0));
+    }
+
+    [Test]
+    public void Parse_MaxBatchRowsNegative_Rejected()
+    {
+        Assert.Throws<IngressError>(() => new QueryOptions(
+            "ws::addr=h:9000;max_batch_rows=-5;"));
+    }
+
+    [Test]
+    public void Parse_PathOverride_TakesEffect()
+    {
+        var o = new QueryOptions("ws::addr=h:9000;path=/read/v2;");
+        Assert.That(o.path, Is.EqualTo("/read/v2"));
+    }
+
+    [Test]
+    public void Parse_ClientId_TakesEffect()
+    {
+        var o = new QueryOptions("ws::addr=h:9000;client_id=net-client/1.0;");
+        Assert.That(o.client_id, Is.EqualTo("net-client/1.0"));
+    }
+
+    [Test]
+    public void Parse_AuthWithControlChar_Rejected()
+    {
+        Assert.Throws<IngressError>(() => new QueryOptions(
+            "ws::addr=h:9000;auth=Bearer abc\rdef;"));
+    }
+
+    [Test]
+    public void EnsureValid_Programmatic_DefaultsPass()
+    {
+        var o = new QueryOptions();
+        Assert.DoesNotThrow(() => o.EnsureValid());
+    }
+
+    [Test]
+    public void EnsureValid_Programmatic_BadCompressionLevelCaught()
+    {
+        var o = new QueryOptions { compression_level = 0 };
+        Assert.Throws<IngressError>(() => o.EnsureValid());
+    }
+
+    [Test]
+    public void EnsureValid_Programmatic_AuthMutexCaught()
+    {
+        var o = new QueryOptions { auth = "Bearer x", token = "t" };
+        Assert.Throws<IngressError>(() => o.EnsureValid());
+    }
+}

@@ -169,10 +169,11 @@ await sender.SendAsync();
 
 Working sample projects (drop-in copies):
 
-- [`src/example-websocket`](src/example-websocket/Program.cs) — minimal `ws::` sender.
-- [`src/example-websocket-auth-tls`](src/example-websocket-auth-tls/Program.cs) — `wss::` with Basic auth and a custom TLS root.
+- [`src/example-qwp-ingest`](src/example-qwp-ingest/Program.cs) — minimal `ws::` sender.
+- [`src/example-qwp-ingest-auth-tls`](src/example-qwp-ingest-auth-tls/Program.cs) — `wss::` with Basic auth and a custom TLS root.
+- [`src/example-qwp-query`](src/example-qwp-query/Program.cs) — `ws::` query client demo (basic / binds / errors).
 
-Run with `dotnet run --project src/example-websocket`.
+Run with `dotnet run --project src/example-qwp-ingest`.
 
 #### Gorilla timestamp compression
 

@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+    <PropertyGroup>
+        <RootNamespace>QuestDBDemo</RootNamespace>
+        <Nullable>enable</Nullable>
+        <ImplicitUsings>enable</ImplicitUsings>
+        <LangVersion>latest</LangVersion>
+        <Title>QuestDB client - QWP Egress (Query) Example</Title>
+        <Description>Read-side WebSocket (QWP) example using the QuestDB query client</Description>
+        <TargetFrameworks>net7.0;net8.0;net9.0;net10.0</TargetFrameworks>
+        <OutputType>Exe</OutputType>
+        <CheckEolTargetFramework>false</CheckEolTargetFramework>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <ProjectReference Include="..\net-questdb-client\net-questdb-client.csproj"/>
+    </ItemGroup>
+
+</Project>

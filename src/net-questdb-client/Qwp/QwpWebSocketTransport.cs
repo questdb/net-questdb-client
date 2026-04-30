@@ -99,6 +99,14 @@ internal sealed class QwpWebSocketTransport : IQwpCursorTransport
         {
             ws.RemoteCertificateValidationCallback = options.RemoteCertificateValidationCallback;
         }
+
+        if (options.ExtraRequestHeaders is { } extra)
+        {
+            foreach (var kv in extra)
+            {
+                ws.SetRequestHeader(kv.Key, kv.Value);
+            }
+        }
     }
 
     /// <summary>True once the upgrade has succeeded and the WebSocket is open.</summary>
@@ -141,13 +149,13 @@ internal sealed class QwpWebSocketTransport : IQwpCursorTransport
         }
 
         _negotiatedVersion = ReadNegotiatedVersion();
-        if (_negotiatedVersion != QwpConstants.SupportedIngestVersion)
+        if (_negotiatedVersion < 1 || _negotiatedVersion > _options.ClientMaxVersion)
         {
             await TryCloseAsync(WebSocketCloseStatus.ProtocolError, "unsupported QWP version", ct)
                 .ConfigureAwait(false);
             throw new IngressError(
                 ErrorCode.ProtocolVersionError,
-                $"server negotiated QWP version {_negotiatedVersion}; this client supports v{QwpConstants.SupportedIngestVersion} only");
+                $"server negotiated QWP version {_negotiatedVersion}; this client supports v1..v{_options.ClientMaxVersion}");
         }
     }
 
@@ -421,6 +429,9 @@ internal sealed class QwpWebSocketTransportOptions
 
     /// <summary>Optional callback for TLS certificate validation; bypassed when null.</summary>
     public RemoteCertificateValidationCallback? RemoteCertificateValidationCallback { get; init; }
+
+    /// <summary>Extra HTTP request headers to set on the WebSocket upgrade.</summary>
+    public IReadOnlyDictionary<string, string>? ExtraRequestHeaders { get; init; }
 }
 
 #endif

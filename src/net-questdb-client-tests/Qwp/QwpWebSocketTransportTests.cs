@@ -28,6 +28,7 @@ using System.Buffers.Binary;
 using System.Net;
 using NUnit.Framework;
 using QuestDB.Qwp;
+using QuestDB.Enums;
 using QuestDB.Utils;
 using dummy_http_server;
 
@@ -85,11 +86,13 @@ public class QwpWebSocketTransportTests
     }
 
     [Test]
-    public async Task Handshake_ServerOmitsVersionHeader_AssumesV1()
+    public async Task Handshake_ServerOmitsVersionHeader_Rejected()
     {
+        // A WebSocket service that doesn't surface X-QWP-Version isn't proven to be a QWP server;
+        // accepting the upgrade silently would deadlock on the first frame send.
         await using var server = new DummyQwpServer(new DummyQwpServerOptions
         {
-            NegotiatedVersion = null, // server doesn't surface the header.
+            NegotiatedVersion = null,
         });
         await server.StartAsync();
 
@@ -98,9 +101,8 @@ public class QwpWebSocketTransportTests
             Uri = server.Uri,
         });
 
-        await transport.ConnectAsync();
-        Assert.That(transport.NegotiatedVersion, Is.EqualTo(1));
-        await transport.CloseAsync();
+        var ex = Assert.ThrowsAsync<IngressError>(async () => await transport.ConnectAsync());
+        Assert.That(ex!.code, Is.EqualTo(ErrorCode.ProtocolVersionError));
     }
 
     [Test]

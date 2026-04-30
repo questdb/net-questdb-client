@@ -241,6 +241,11 @@ internal sealed class QwpTableBuffer
     /// </summary>
     public void Clear()
     {
+        if (HasPendingRow)
+        {
+            CancelCurrentRow();
+        }
+
         for (var i = 0; i < _columns.Count; i++)
         {
             _columns[i].Clear();

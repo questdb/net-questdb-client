@@ -56,10 +56,10 @@ public record SenderOptions
         "request_min_throughput", "auth_timeout", "request_timeout", "retry_timeout",
         "pool_timeout", "tls_verify", "tls_roots", "tls_roots_password", "own_socket", "gzip",
         "in_flight_window", "close_timeout", "max_schemas_per_connection", "gorilla", "request_durable_ack",
-        "sf_dir", "sender_id", "sf_max_bytes", "sf_max_total_bytes", "sf_durability",
+        "sf_dir", "sender_id", "sf_max_bytes", "sf_max_total_bytes", "sf_durability", "sf_fsync",
         "sf_append_deadline_millis", "reconnect_max_duration_millis", "reconnect_initial_backoff_millis",
         "reconnect_max_backoff_millis", "initial_connect_retry", "close_flush_timeout_millis",
-        "drain_orphans", "max_background_drainers",
+        "drain_orphans", "max_background_drainers", "ping_timeout",
         "token_x", "token_y",
     };
 
@@ -113,6 +113,8 @@ public record SenderOptions
     private TimeSpan _closeFlushTimeout = TimeSpan.FromMilliseconds(5000);
     private bool _drainOrphans;
     private int _maxBackgroundDrainers = 4;
+    private TimeSpan _pingTimeout = TimeSpan.FromMilliseconds(5000);
+    private bool _sfFsync;
 
     private bool _inFlightWindowUserSet;
     private bool _closeTimeoutUserSet;
@@ -132,6 +134,8 @@ public record SenderOptions
     private bool _closeFlushTimeoutUserSet;
     private bool _drainOrphansUserSet;
     private bool _maxBackgroundDrainersUserSet;
+    private bool _pingTimeoutUserSet;
+    private bool _sfFsyncUserSet;
 
     /// <summary>
     ///     Construct a <see cref="SenderOptions" /> object with default values.
@@ -218,6 +222,8 @@ public record SenderOptions
         ParseMillisecondsWithDefault(nameof(close_flush_timeout_millis), "5000", out _closeFlushTimeout);
         ParseBoolOnOff(nameof(drain_orphans), "off", out _drainOrphans);
         ParseIntWithDefault(nameof(max_background_drainers), "4", out _maxBackgroundDrainers);
+        ParseMillisecondsWithDefault(nameof(ping_timeout), "5000", out _pingTimeout);
+        ParseBoolOnOff(nameof(sf_fsync), "off", out _sfFsync);
 
         ValidateWebSocketKeys();
         ValidateAuthCombination();
@@ -382,6 +388,8 @@ public record SenderOptions
         if (_closeFlushTimeoutUserSet) Throw(nameof(close_flush_timeout_millis));
         if (_drainOrphansUserSet) Throw(nameof(drain_orphans));
         if (_maxBackgroundDrainersUserSet) Throw(nameof(max_background_drainers));
+        if (_pingTimeoutUserSet) Throw(nameof(ping_timeout));
+        if (_sfFsyncUserSet) Throw(nameof(sf_fsync));
 
         static void Throw(string key) =>
             throw new IngressError(ErrorCode.ConfigError,
@@ -412,10 +420,10 @@ public record SenderOptions
     private static readonly string[] WebSocketOnlyKeys =
     {
         "in_flight_window", "close_timeout", "max_schemas_per_connection", "gorilla", "request_durable_ack",
-        "sf_dir", "sender_id", "sf_max_bytes", "sf_max_total_bytes", "sf_durability",
+        "sf_dir", "sender_id", "sf_max_bytes", "sf_max_total_bytes", "sf_durability", "sf_fsync",
         "sf_append_deadline_millis", "reconnect_max_duration_millis", "reconnect_initial_backoff_millis",
         "reconnect_max_backoff_millis", "initial_connect_retry", "close_flush_timeout_millis",
-        "drain_orphans", "max_background_drainers",
+        "drain_orphans", "max_background_drainers", "ping_timeout",
     };
 
     /// <summary>
@@ -954,6 +962,28 @@ public record SenderOptions
     {
         get => _maxBackgroundDrainers;
         set { _maxBackgroundDrainers = value; _maxBackgroundDrainersUserSet = true; }
+    }
+
+    /// <summary>
+    ///     Maximum time a single <c>Ping</c> / <c>PingAsync</c> call will wait for in-flight ACKs to
+    ///     drain. Independent from <see cref="close_timeout" /> so users can tune dispose drains
+    ///     without coupling to liveness probe latency. Defaults to 5 s.
+    /// </summary>
+    public TimeSpan ping_timeout
+    {
+        get => _pingTimeout;
+        set { _pingTimeout = value; _pingTimeoutUserSet = true; }
+    }
+
+    /// <summary>
+    ///     If <c>true</c>, every successful SF append <c>msync</c>s the dirty pages before reporting
+    ///     success. Off by default: process-crash safe (mmap pages survive); kernel/host crashes can
+    ///     lose recent appends. Turn on for kernel-crash safety at the cost of one msync per append.
+    /// </summary>
+    public bool sf_fsync
+    {
+        get => _sfFsync;
+        set { _sfFsync = value; _sfFsyncUserSet = true; }
     }
 
     /// <summary>

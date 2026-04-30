@@ -88,6 +88,8 @@ internal static class QwpFiles
             return true;
         }
 
+        // POSIX surfaces FileShare.None without a recognisable HResult; the type check above
+        // already excludes specific subclasses, so plain IOException is the residual signal.
         return ex.GetType() == typeof(IOException);
     }
 

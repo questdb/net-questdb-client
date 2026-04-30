@@ -17,7 +17,7 @@ using QuestDB.Senders;
 //
 // In production: use tls_verify=on with the system trust store, or tls_roots pointing at a
 // pinned CA. Below uses unsafe_off for self-signed dev / test setups; never ship that to prod.
-using var sender =
+await using var sender =
     Sender.New(
         "wss::addr=localhost:9000;username=admin;password=quest;tls_verify=unsafe_off;request_durable_ack=on;");
 

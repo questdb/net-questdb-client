@@ -282,4 +282,66 @@ public class QwpTableBufferTests
         Assert.That(t.RowCount, Is.EqualTo(1));
         Assert.That(t.Columns[0].TypeCode, Is.EqualTo(QwpTypeCode.Varchar));
     }
+
+    [Test]
+    public void Clear_WithPendingRow_RollsBackBeforeWiping()
+    {
+        var t = new QwpTableBuffer("t");
+        t.AppendLong("base", 1);
+        t.At(1_000);
+
+        t.AppendLong("base", 2);
+        t.AppendLong("fresh", 5);
+        Assert.That(t.HasPendingRow, Is.True);
+        Assert.That(t.Columns.Count, Is.EqualTo(2));
+
+        t.Clear();
+
+        Assert.That(t.HasPendingRow, Is.False);
+        Assert.That(t.RowCount, Is.EqualTo(0));
+        Assert.That(t.Columns.Count, Is.EqualTo(1), "freshly added column from the cancelled row must not survive Clear");
+        Assert.That(t.Columns[0].Name, Is.EqualTo("base"));
+    }
+
+    [TestCase("varchar")]
+    [TestCase("symbol")]
+    [TestCase("bool")]
+    [TestCase("decimal")]
+    [TestCase("geohash")]
+    [TestCase("doublearray")]
+    [TestCase("longarray")]
+    public void DoubleAppend_PerType_RollsBackEntireRow(string kind)
+    {
+        var t = new QwpTableBuffer("t");
+        // Commit one row to anchor _committedColumnCount, then double-append the same column.
+        Append(t, "c", kind);
+        t.At(1_000);
+        Assert.That(t.RowCount, Is.EqualTo(1));
+
+        Append(t, "c", kind);
+        Assert.Throws<IngressError>(() => Append(t, "c", kind));
+
+        Assert.That(t.RowCount, Is.EqualTo(1));
+        Assert.That(t.HasPendingRow, Is.False);
+
+        // Subsequent row commits cleanly with the same value.
+        Append(t, "c", kind);
+        t.At(2_000);
+        Assert.That(t.RowCount, Is.EqualTo(2));
+    }
+
+    private static void Append(QwpTableBuffer t, string col, string kind)
+    {
+        switch (kind)
+        {
+            case "varchar":      t.AppendVarchar(col, "x"); break;
+            case "symbol":       t.AppendSymbol(col, 0); break;
+            case "bool":         t.AppendBool(col, true); break;
+            case "decimal":      t.AppendDecimal128(col, 1.5m); break;
+            case "geohash":      t.AppendGeohash(col, 0xAB, 8); break;
+            case "doublearray":  t.AppendDoubleArray(col, new double[] { 1, 2 }, new[] { 2 }); break;
+            case "longarray":    t.AppendLongArray(col, new long[] { 1, 2 }, new[] { 2 }); break;
+            default: throw new ArgumentException(kind);
+        }
+    }
 }

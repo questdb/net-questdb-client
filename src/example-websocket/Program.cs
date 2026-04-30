@@ -14,23 +14,23 @@ using QuestDB.Senders;
 //   request_durable_ack  on/off — opt in to per-table durable seqTxn watermarks
 //   username/password    Basic auth, or
 //   token                Bearer auth
-using var sender = Sender.New("ws::addr=localhost:9000;request_durable_ack=on;");
+await using var sender = Sender.New("ws::addr=localhost:9000;request_durable_ack=on;");
 
-sender.Table("trades")
-      .Symbol("symbol", "ETH-USD")
-      .Symbol("side", "sell")
-      .Column("price", 2615.54)
-      .Column("amount", 0.00044)
-      .At(DateTime.UtcNow);
+await sender.Table("trades")
+    .Symbol("symbol", "ETH-USD")
+    .Symbol("side", "sell")
+    .Column("price", 2615.54)
+    .Column("amount", 0.00044)
+    .AtAsync(DateTime.UtcNow);
 
-sender.Table("trades")
-      .Symbol("symbol", "BTC-USD")
-      .Symbol("side", "buy")
-      .Column("price", 39269.98)
-      .Column("amount", 0.001)
-      .At(DateTime.UtcNow);
+await sender.Table("trades")
+    .Symbol("symbol", "BTC-USD")
+    .Symbol("side", "buy")
+    .Column("price", 39269.98)
+    .Column("amount", 0.001)
+    .AtAsync(DateTime.UtcNow);
 
-sender.Send();
+await sender.SendAsync();
 
 // When `request_durable_ack=on` is set, the WebSocket sender exposes per-table seqTxn watermarks
 // via the IQwpWebSocketSender interface.

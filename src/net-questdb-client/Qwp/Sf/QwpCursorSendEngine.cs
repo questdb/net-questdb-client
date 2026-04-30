@@ -61,6 +61,7 @@ internal sealed class QwpCursorSendEngine : IDisposable
 
     private CancellationTokenSource? _loopCts;
     private Task? _loopTask;
+    private Action<QwpTableEntry, bool>? _tableEntryHandler;
 
     /// <param name="slotLock">
     ///     The slot lock to dispose alongside the engine. Pass <c>null</c> when the caller (e.g.
@@ -159,6 +160,15 @@ internal sealed class QwpCursorSendEngine : IDisposable
         }
     }
 
+    /// <summary>
+    ///     Optional callback invoked for every per-table entry the server returns in OK / DurableAck
+    ///     frames. The boolean argument is <c>true</c> when the source was a DurableAck.
+    /// </summary>
+    public void SetTableEntryHandler(Action<QwpTableEntry, bool>? handler)
+    {
+        Volatile.Write(ref _tableEntryHandler, handler);
+    }
+
     /// <summary>Launches the I/O loop. Idempotent; subsequent calls are no-ops.</summary>
     public void Start()
     {
@@ -239,7 +249,7 @@ internal sealed class QwpCursorSendEngine : IDisposable
         frame.CopyTo(rented);
         try
         {
-            var deadline = DateTime.UtcNow + _appendDeadline;
+            var deadlineMs = Environment.TickCount64 + (long)_appendDeadline.TotalMilliseconds;
 
             while (true)
             {
@@ -260,8 +270,8 @@ internal sealed class QwpCursorSendEngine : IDisposable
                     waitTask = _ackSignal.Task;
                 }
 
-                var remaining = deadline - DateTime.UtcNow;
-                if (remaining <= TimeSpan.Zero)
+                var remainingMs = deadlineMs - Environment.TickCount64;
+                if (remainingMs <= 0)
                 {
                     throw new IngressError(
                         ErrorCode.ServerFlushError,
@@ -272,7 +282,7 @@ internal sealed class QwpCursorSendEngine : IDisposable
                 {
                     // Bound the wait so a missed signal (e.g. manager's first heartbeat installing
                     // the initial spare) cannot stall the producer for the full deadline.
-                    var slice = Math.Min((int)Math.Min(int.MaxValue, remaining.TotalMilliseconds), 200);
+                    var slice = (int)Math.Min(remainingMs, 200);
                     waitTask.Wait(slice, cancellationToken);
                 }
                 catch (AggregateException ex) when (ex.InnerException is OperationCanceledException)
@@ -289,7 +299,7 @@ internal sealed class QwpCursorSendEngine : IDisposable
 
     private async ValueTask AppendAsyncSlow(ReadOnlyMemory<byte> frame, CancellationToken cancellationToken)
     {
-        var deadline = DateTime.UtcNow + _appendDeadline;
+        var deadlineMs = Environment.TickCount64 + (long)_appendDeadline.TotalMilliseconds;
 
         while (true)
         {
@@ -310,15 +320,15 @@ internal sealed class QwpCursorSendEngine : IDisposable
                 waitTask = _ackSignal.Task;
             }
 
-            var remaining = deadline - DateTime.UtcNow;
-            if (remaining <= TimeSpan.Zero)
+            var remainingMs = deadlineMs - Environment.TickCount64;
+            if (remainingMs <= 0)
             {
                 throw new IngressError(
                     ErrorCode.ServerFlushError,
                     $"sf_append_deadline ({_appendDeadline.TotalMilliseconds:F0} ms) expired with the ring full");
             }
 
-            var slice = TimeSpan.FromMilliseconds(Math.Min(remaining.TotalMilliseconds, 200));
+            var slice = TimeSpan.FromMilliseconds(Math.Min(remainingMs, 200));
             try
             {
                 await waitTask.WaitAsync(slice, cancellationToken).ConfigureAwait(false);
@@ -334,9 +344,9 @@ internal sealed class QwpCursorSendEngine : IDisposable
     {
         EnsureNotDisposed();
         var infiniteTimeout = timeout == Timeout.InfiniteTimeSpan;
-        var deadline = infiniteTimeout
-            ? DateTime.MaxValue
-            : DateTime.UtcNow + timeout;
+        var deadlineMs = infiniteTimeout
+            ? long.MaxValue
+            : Environment.TickCount64 + (long)timeout.TotalMilliseconds;
 
         while (true)
         {
@@ -371,8 +381,8 @@ internal sealed class QwpCursorSendEngine : IDisposable
                 continue;
             }
 
-            var remaining = deadline - DateTime.UtcNow;
-            if (remaining <= TimeSpan.Zero)
+            var remainingMs = deadlineMs - Environment.TickCount64;
+            if (remainingMs <= 0)
             {
                 throw new IngressError(
                     ErrorCode.ServerFlushError,
@@ -381,7 +391,7 @@ internal sealed class QwpCursorSendEngine : IDisposable
 
             try
             {
-                await waitTask.WaitAsync(remaining, cancellationToken).ConfigureAwait(false);
+                await waitTask.WaitAsync(TimeSpan.FromMilliseconds(remainingMs), cancellationToken).ConfigureAwait(false);
             }
             catch (TimeoutException)
             {
@@ -583,12 +593,12 @@ internal sealed class QwpCursorSendEngine : IDisposable
     private sealed class BackoffState
     {
         public int Attempt;
-        public DateTime? OutageStart;
+        public long? OutageStartTickMs;
 
         public void Reset()
         {
             Attempt = 0;
-            OutageStart = null;
+            OutageStartTickMs = null;
         }
     }
 
@@ -601,10 +611,9 @@ internal sealed class QwpCursorSendEngine : IDisposable
         var sendTask = Task.Run(() => SendPumpAsync(transport, connToken));
         var recvTask = Task.Run(() => ReceivePumpAsync(transport, fsnAtZero, connToken));
 
-        Task firstFinished;
         try
         {
-            firstFinished = await Task.WhenAny(sendTask, recvTask).ConfigureAwait(false);
+            await Task.WhenAny(sendTask, recvTask).ConfigureAwait(false);
         }
         finally
         {
@@ -617,15 +626,17 @@ internal sealed class QwpCursorSendEngine : IDisposable
         }
         catch (Exception)
         {
-            // The first-finished branch below surfaces the meaningful exception.
         }
 
-        if (firstFinished.IsFaulted)
+        // Prefer a faulted task over WhenAny's winner: if recv faulted with QwpException and send
+        // completed via cancellation, IsTerminalServerError must see the recv exception.
+        var fault = sendTask.Exception?.GetBaseException() ?? recvTask.Exception?.GetBaseException();
+        if (fault is not null)
         {
-            throw firstFinished.Exception!.GetBaseException();
+            throw fault;
         }
 
-        if (firstFinished.IsCanceled)
+        if (sendTask.IsCanceled || recvTask.IsCanceled)
         {
             throw new OperationCanceledException(connCts.Token);
         }
@@ -692,6 +703,8 @@ internal sealed class QwpCursorSendEngine : IDisposable
                 throw response.ToException();
             }
 
+            DispatchTableEntries(response);
+
             if (!response.IsOk)
             {
                 continue;
@@ -733,10 +746,25 @@ internal sealed class QwpCursorSendEngine : IDisposable
         }
     }
 
+    private void DispatchTableEntries(in QwpResponse response)
+    {
+        var handler = Volatile.Read(ref _tableEntryHandler);
+        if (handler is null || response.TableEntries.Count == 0)
+        {
+            return;
+        }
+
+        var isDurable = response.IsDurableAck;
+        for (var i = 0; i < response.TableEntries.Count; i++)
+        {
+            handler(response.TableEntries[i], isDurable);
+        }
+    }
+
     private async Task<bool> BackoffOrGiveUpAsync(Exception lastError, BackoffState state, CancellationToken ct)
     {
-        state.OutageStart ??= DateTime.UtcNow;
-        var elapsed = DateTime.UtcNow - state.OutageStart.Value;
+        state.OutageStartTickMs ??= Environment.TickCount64;
+        var elapsed = TimeSpan.FromMilliseconds(Environment.TickCount64 - state.OutageStartTickMs.Value);
         var next = _reconnectPolicy.NextBackoffOrGiveUp(state.Attempt, elapsed);
         if (next is null)
         {

@@ -154,19 +154,23 @@ internal sealed class QwpBackgroundDrainerPool : IDisposable
             }
         }
 
+        // Release slot locks even on join timeout, otherwise a wedged drainer keeps the .lock file
+        // held and blocks future senders from claiming the same sender_id. QwpSlotLock.Dispose is
+        // idempotent so the drainer's own finally can still run safely.
+        QwpSlotLock[] stragglers;
+        lock (_trackingLock)
+        {
+            stragglers = _liveLocks.ToArray();
+            _liveLocks.Clear();
+        }
+        foreach (var l in stragglers)
+        {
+            SfCleanup.Dispose(l);
+        }
+
+        // On wedge, leak _shutdownCts and _slots so a still-running drainer can't NRE on them.
         if (allJoined)
         {
-            QwpSlotLock[] stragglers;
-            lock (_trackingLock)
-            {
-                stragglers = _liveLocks.ToArray();
-                _liveLocks.Clear();
-            }
-            foreach (var l in stragglers)
-            {
-                SfCleanup.Dispose(l);
-            }
-
             SfCleanup.Dispose(_shutdownCts);
             _slots.Dispose();
         }

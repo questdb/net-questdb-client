@@ -168,10 +168,10 @@ internal sealed class QwpSegmentManager : IDisposable
 
     private void ServiceRing()
     {
-        // Reconcile committed-bytes against the ring's actual on-disk footprint. Producer's
-        // adoption failures (rare File.Move errors) and any other accounting drift get corrected
-        // here; the manager is the single writer of _committedBytes outside the constructor.
-        var actual = _ring.TotalCapacityBytes + (_ring.HasHotSpare ? _ring.SegmentCapacity : 0);
+        // Atomic snapshot: reading capacity and HasHotSpare separately races producer adoption
+        // and can briefly let us breach _maxTotalBytes by one segment.
+        var (capacity, hasSpare) = _ring.SnapshotCapacity();
+        var actual = capacity + (hasSpare ? _ring.SegmentCapacity : 0);
         Volatile.Write(ref _committedBytes, actual);
 
         if (_ring.NeedsHotSpare())

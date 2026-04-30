@@ -556,6 +556,11 @@ internal sealed class QwpColumn
                 $"column '{Name}' geohash precision mismatch: previously {GeohashPrecisionBits}, now {precisionBits}");
         }
 
+        if (precisionBits < 64)
+        {
+            hash &= (1UL << precisionBits) - 1UL;
+        }
+
         var byteCount = (precisionBits + 7) >> 3;
         EnsureFixedCapacity(FixedLen + byteCount);
         var dest = FixedData.AsSpan(FixedLen, byteCount);

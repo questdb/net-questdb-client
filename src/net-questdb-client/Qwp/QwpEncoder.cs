@@ -44,8 +44,10 @@ namespace QuestDB.Qwp;
 ///     contains no symbol columns, the delta is empty (<c>0x00 0x00</c>) but the prelude is still
 ///     written.
 ///     <para />
-///     <b>FLAG_GORILLA</b> is never set in v1; timestamp columns are written as plain little-endian
-///     int64 arrays.
+///     <b>FLAG_GORILLA</b> is set when <c>gorillaEnabled</c> is requested. Each TIMESTAMP /
+///     TIMESTAMP_NANOS column body is then prefixed with an <c>encoding_flag</c> byte
+///     (<c>0x00</c> uncompressed, <c>0x01</c> Gorilla DoD); the encoder transparently falls back to
+///     uncompressed when DoDs overflow int32, and always emits the flag (even for all-null columns).
 ///     <para />
 ///     The encoder reads the symbol dictionary and schema cache but does not advance their
 ///     committed watermarks. The caller (<c>QwpWebSocketSender</c>) must call
@@ -243,6 +245,14 @@ internal static class QwpEncoder
         }
 
         var n = col.NonNullCount;
+
+        // FLAG_GORILLA promises a per-column encoding-flag byte; emit it even when all values are null.
+        if (gorillaEnabled && col.TypeCode is QwpTypeCode.Timestamp or QwpTypeCode.TimestampNanos && n == 0)
+        {
+            buf.WriteByte(QwpGorilla.EncodingUncompressed);
+            return;
+        }
+
         if (n == 0)
         {
             return;
@@ -444,18 +454,35 @@ internal static class QwpEncoder
 
         private void EnsureCapacity(int required)
         {
+            if (required < 0)
+            {
+                throw new IngressError(ErrorCode.InvalidApiCall,
+                    "encoder buffer requirement overflowed int.MaxValue");
+            }
+
             if (_buf.Length >= required)
             {
                 return;
             }
 
-            var newSize = _buf.Length;
+            var newSize = (long)_buf.Length;
             while (newSize < required)
             {
                 newSize *= 2;
+                if (newSize > int.MaxValue)
+                {
+                    newSize = int.MaxValue;
+                    break;
+                }
             }
 
-            Array.Resize(ref _buf, newSize);
+            if (newSize < required)
+            {
+                throw new IngressError(ErrorCode.InvalidApiCall,
+                    $"encoder buffer required size {required} exceeds the {int.MaxValue}-byte cap");
+            }
+
+            Array.Resize(ref _buf, (int) newSize);
         }
     }
 }

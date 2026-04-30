@@ -43,6 +43,7 @@ internal sealed class QwpSegmentRing : IDisposable
     private readonly string _directory;
     private readonly long _segmentCapacity;
     private readonly int _maxFrameLength;
+    private readonly bool _flushOnAppend;
     private readonly long _highWaterTrigger;
     private readonly object _lock = new();
     private readonly List<QwpMmapSegment> _sealedSegments = new();
@@ -57,11 +58,12 @@ internal sealed class QwpSegmentRing : IDisposable
     private bool _wakeRequestedForActive;
     private volatile bool _closed;
 
-    private QwpSegmentRing(string directory, long segmentCapacity, int maxFrameLength)
+    private QwpSegmentRing(string directory, long segmentCapacity, int maxFrameLength, bool flushOnAppend)
     {
         _directory = directory;
         _segmentCapacity = segmentCapacity;
         _maxFrameLength = maxFrameLength;
+        _flushOnAppend = flushOnAppend;
         // 75%: leaves a quarter-segment of producer runway for the manager to provision a spare.
         _highWaterTrigger = (segmentCapacity >> 2) * 3;
         _publishedFsn = -1L;
@@ -136,13 +138,33 @@ internal sealed class QwpSegmentRing : IDisposable
     /// <summary>True iff a hot-spare path is currently installed and not yet adopted.</summary>
     public bool HasHotSpare => Volatile.Read(ref _hotSparePath) is not null;
 
+    /// <summary>Atomic read of (TotalCapacityBytes, HasHotSpare) — both under the same lock.</summary>
+    public (long TotalCapacityBytes, bool HasHotSpare) SnapshotCapacity()
+    {
+        lock (_lock)
+        {
+            long total = 0;
+            for (var i = 0; i < _sealedSegments.Count; i++)
+            {
+                total += _sealedSegments[i].Capacity;
+            }
+            var active = Volatile.Read(ref _active);
+            if (active is not null)
+            {
+                total += active.Capacity;
+            }
+            return (total, _hotSparePath is not null);
+        }
+    }
+
     public static QwpSegmentRing Open(
         string directory,
         long segmentCapacity = 64L * 1024 * 1024,
-        int maxFrameLength = QwpMmapSegment.DefaultMaxFrameLength)
+        int maxFrameLength = QwpMmapSegment.DefaultMaxFrameLength,
+        bool flushOnAppend = false)
     {
         QwpFiles.EnsureDirectory(directory);
-        var ring = new QwpSegmentRing(directory, segmentCapacity, maxFrameLength);
+        var ring = new QwpSegmentRing(directory, segmentCapacity, maxFrameLength, flushOnAppend);
 
         try
         {
@@ -157,7 +179,7 @@ internal sealed class QwpSegmentRing : IDisposable
 
             for (var i = 0; i < existing.Count; i++)
             {
-                var seg = QwpMmapSegment.Open(existing[i].Path, segmentCapacity, existing[i].BaseFsn, maxFrameLength);
+                var seg = QwpMmapSegment.Open(existing[i].Path, segmentCapacity, existing[i].BaseFsn, maxFrameLength, flushOnAppend);
                 // Crash between Seal() and next active alloc leaves a sealed tail; treat as sealed.
                 if (i < existing.Count - 1 || seg.IsSealed)
                 {
@@ -438,7 +460,7 @@ internal sealed class QwpSegmentRing : IDisposable
         // Standalone mode (no manager) — ring-only unit tests.
         try
         {
-            Volatile.Write(ref _active, QwpMmapSegment.Open(realPath, _segmentCapacity, baseFsn, _maxFrameLength));
+            Volatile.Write(ref _active, QwpMmapSegment.Open(realPath, _segmentCapacity, baseFsn, _maxFrameLength, _flushOnAppend));
             _wakeRequestedForActive = false;
             return true;
         }
@@ -469,7 +491,7 @@ internal sealed class QwpSegmentRing : IDisposable
         {
             if (!File.Exists(sparePath)) return false;
             File.Move(sparePath, realPath);
-            Volatile.Write(ref _active, QwpMmapSegment.Open(realPath, _segmentCapacity, baseFsn, _maxFrameLength));
+            Volatile.Write(ref _active, QwpMmapSegment.Open(realPath, _segmentCapacity, baseFsn, _maxFrameLength, _flushOnAppend));
             return true;
         }
         catch (Exception)

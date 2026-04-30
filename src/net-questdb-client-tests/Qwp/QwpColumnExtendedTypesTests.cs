@@ -223,6 +223,29 @@ public class QwpColumnExtendedTypesTests
     }
 
     [Test]
+    public void AppendGeohash_HighBitsAbovePrecision_AreMasked()
+    {
+        // precision=5 means only the low 5 bits matter; the top 3 bits of the byte must be zero.
+        var col = new QwpColumn("loc", 0);
+        col.AppendGeohash(0xFFFF_FFFF_FFFF_FFFFUL, 5);
+
+        Assert.That(col.FixedLen, Is.EqualTo(1));
+        Assert.That(col.FixedData![0], Is.EqualTo(0b0001_1111));
+    }
+
+    [Test]
+    public void AppendGeohash_PartialByte_IgnoresHighBits()
+    {
+        // precision=12 → 2 bytes; bits 12..15 of the second byte must be zero.
+        var col = new QwpColumn("loc", 0);
+        col.AppendGeohash(0xFFFFUL, 12);
+
+        Assert.That(col.FixedLen, Is.EqualTo(2));
+        Assert.That(col.FixedData![0], Is.EqualTo(0xFF));
+        Assert.That(col.FixedData![1], Is.EqualTo(0x0F));
+    }
+
+    [Test]
     public void AppendDoubleArray_1D_WritesNDimsShapeAndValues()
     {
         var col = new QwpColumn("vec", 0);

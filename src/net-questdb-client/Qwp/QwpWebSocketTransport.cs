@@ -326,12 +326,14 @@ internal sealed class QwpWebSocketTransport : IQwpCursorTransport
 
     private int ReadNegotiatedVersion()
     {
-        // CollectHttpResponseDetails was enabled in the constructor; HttpResponseHeaders carries the
-        // upgrade response headers if the server included any.
+        // The version header proves we're talking to a QWP server, not an arbitrary WS service.
         var headers = _client.HttpResponseHeaders;
         if (headers is null || !headers.TryGetValue(QwpConstants.HeaderVersion, out var values))
         {
-            return QwpConstants.SupportedIngestVersion; // server didn't surface the header — assume v1.
+            throw new IngressError(
+                ErrorCode.ProtocolVersionError,
+                $"server did not return a {QwpConstants.HeaderVersion} header on the upgrade response; " +
+                "endpoint is not a QWP server");
         }
 
         foreach (var value in values)

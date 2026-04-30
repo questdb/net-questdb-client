@@ -903,6 +903,35 @@ public class QwpWebSocketSenderTests
         return frame;
     }
 
+    [Test]
+    public async Task At_DateTimeUnspecifiedKind_Rejected()
+    {
+        await using var server = StartServerWithOkAcks();
+        await using var sender = NewSender(server, "auto_flush=off;");
+
+        sender.Table("t").Column("v", 1L);
+        var unspecified = new DateTime(2026, 4, 28, 12, 0, 0, DateTimeKind.Unspecified);
+        Assert.Throws<IngressError>(() => sender.At(unspecified));
+    }
+
+    [Test]
+    public async Task PostTerminal_MutatorsThrow()
+    {
+        await using var server = new DummyQwpServer(new DummyQwpServerOptions
+        {
+            FrameHandler = _ => BuildErrorAck(QwpStatusCode.WriteError, 0, "boom"),
+        });
+        await server.StartAsync();
+        using var sender = NewSender(server, "auto_flush=off;");
+
+        sender.Table("t").Column("v", 1L).At(DateTime.UtcNow);
+        try { sender.Send(); } catch { /* expected terminal */ }
+
+        Assert.Throws<IngressError>(() => sender.Truncate());
+        Assert.Throws<IngressError>(() => sender.CancelRow());
+        Assert.Throws<IngressError>(() => sender.Clear());
+    }
+
     private static async Task WaitFor(Func<bool> predicate, int timeoutMs = 2000)
     {
         var deadline = Environment.TickCount64 + timeoutMs;

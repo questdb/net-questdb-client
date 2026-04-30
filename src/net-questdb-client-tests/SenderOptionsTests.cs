@@ -578,4 +578,38 @@ public class SenderOptionsTests
         Assert.That(opts.auto_flush_bytes, Is.EqualTo(-1));
         Assert.That(opts.auto_flush_interval, Is.EqualTo(TimeSpan.FromMilliseconds(-1)));
     }
+
+    [Test]
+    public void Ws_ToString_RoundTripsWithWsOnlyKeys()
+    {
+        var opts = new SenderOptions(
+            "ws::addr=h:9000;in_flight_window=8;ping_timeout=2500;close_timeout=4000;");
+        var rt = new SenderOptions(opts.ToString());
+        Assert.That(rt.in_flight_window, Is.EqualTo(8));
+        Assert.That(rt.ping_timeout, Is.EqualTo(TimeSpan.FromMilliseconds(2500)));
+        Assert.That(rt.close_timeout, Is.EqualTo(TimeSpan.FromMilliseconds(4000)));
+    }
+
+    [Test]
+    public void PingTimeout_OnHttpScheme_Rejected()
+    {
+        Assert.That(
+            () => new SenderOptions("http::addr=localhost:9000;ping_timeout=1000;"),
+            Throws.TypeOf<IngressError>().With.Message.Contains("ping_timeout"));
+    }
+
+    [Test]
+    public void SfFsync_OnHttpScheme_Rejected()
+    {
+        Assert.That(
+            () => new SenderOptions("http::addr=localhost:9000;sf_fsync=on;"),
+            Throws.TypeOf<IngressError>().With.Message.Contains("sf_fsync"));
+    }
+
+    [Test]
+    public void SfFsync_OnWsScheme_Accepted()
+    {
+        var opts = new SenderOptions("ws::addr=localhost:9000;sf_dir=/tmp/x;sender_id=t;sf_fsync=on;");
+        Assert.That(opts.sf_fsync, Is.True);
+    }
 }

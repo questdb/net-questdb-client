@@ -53,7 +53,10 @@ public interface IQwpWebSocketSender : ISender
     long GetHighestDurableSeqTxn(string tableName);
 
     /// <summary>
-    ///     Sends a WebSocket PING and drains pending response frames until the matching PONG arrives.
+    ///     Drains the in-flight ACK window. After it returns successfully every batch sent so far has
+    ///     been acknowledged by the server and per-table seqTxn watermarks reflect that. Bounded by
+    ///     <c>ping_timeout</c>; on an idle connection with nothing in flight it returns immediately
+    ///     and is NOT a wire-level liveness probe (ClientWebSocket exposes no PING API).
     /// </summary>
     void Ping(CancellationToken ct = default);
 

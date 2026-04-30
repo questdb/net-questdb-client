@@ -75,6 +75,7 @@ internal sealed class QwpMmapSegment : IDisposable
     private readonly unsafe byte* _basePtr;
     private readonly long _viewSize;
     private readonly int _maxFrameLength;
+    private readonly bool _flushOnAppend;
     private bool _disposed;
 
     private unsafe QwpMmapSegment(
@@ -85,7 +86,8 @@ internal sealed class QwpMmapSegment : IDisposable
         long baseFsn,
         long writePosition,
         List<long> offsetTable,
-        int maxFrameLength)
+        int maxFrameLength,
+        bool flushOnAppend)
     {
         Path = path;
         _mmap = mmap;
@@ -96,6 +98,7 @@ internal sealed class QwpMmapSegment : IDisposable
         WritePosition = writePosition;
         _offsetTable = offsetTable;
         _maxFrameLength = maxFrameLength;
+        _flushOnAppend = flushOnAppend;
 
         byte* ptr = null;
         _handle.AcquirePointer(ref ptr);
@@ -131,7 +134,12 @@ internal sealed class QwpMmapSegment : IDisposable
     ///     <c>baseSeq</c> (which must match <paramref name="baseFsn" />).
     /// </summary>
     /// <exception cref="InvalidDataException">If the on-disk header is corrupt or version-mismatched.</exception>
-    public static QwpMmapSegment Open(string path, long capacity, long baseFsn, int maxFrameLength = DefaultMaxFrameLength)
+    public static QwpMmapSegment Open(
+        string path,
+        long capacity,
+        long baseFsn,
+        int maxFrameLength = DefaultMaxFrameLength,
+        bool flushOnAppend = false)
     {
         if (capacity <= HeaderSize + EnvelopeHeaderSize)
         {
@@ -154,7 +162,7 @@ internal sealed class QwpMmapSegment : IDisposable
             var (writePos, offsets) = ScanForLastGoodEnvelope(view, capacity, maxFrameLength);
             ZeroViewRange(view, writePos, capacity - writePos);
 
-            var seg = new QwpMmapSegment(path, mmap, view, capacity, baseFsn, writePos, offsets, maxFrameLength);
+            var seg = new QwpMmapSegment(path, mmap, view, capacity, baseFsn, writePos, offsets, maxFrameLength, flushOnAppend);
             if (sealed_)
             {
                 seg.IsSealed = true;
@@ -217,6 +225,11 @@ internal sealed class QwpMmapSegment : IDisposable
         WriteSpan(envelopeStart, header);
         WriteSpan(envelopeStart + EnvelopeHeaderSize, frame);
 
+        if (_flushOnAppend)
+        {
+            _view.Flush();
+        }
+
         WritePosition += totalSize;
         _offsetTable.Add(envelopeStart);
         return true;
@@ -230,6 +243,7 @@ internal sealed class QwpMmapSegment : IDisposable
     ///     offset is past the last valid envelope.
     /// </returns>
     /// <exception cref="ArgumentException">If <paramref name="destination" /> is too small.</exception>
+    /// <exception cref="InvalidDataException">If the envelope CRC fails to verify on-disk content.</exception>
     public int TryReadFrame(long offset, Span<byte> destination, out long envelopeFsn)
     {
         envelopeFsn = -1;
@@ -246,6 +260,7 @@ internal sealed class QwpMmapSegment : IDisposable
         Span<byte> header = stackalloc byte[EnvelopeHeaderSize];
         ReadSpan(offset, header);
 
+        var crc = BinaryPrimitives.ReadUInt32LittleEndian(header.Slice(0, 4));
         var len = BinaryPrimitives.ReadInt32LittleEndian(header.Slice(4, 4));
         if (len <= 0)
         {
@@ -260,8 +275,16 @@ internal sealed class QwpMmapSegment : IDisposable
 
         ReadSpan(offset + EnvelopeHeaderSize, destination.Slice(0, len));
 
-        // Don't verify CRC here — the segment was already replayed at Open. We trust the in-memory state.
-        // Tests deliberately corrupting bytes will call ScanForLastGoodEnvelope explicitly.
+        // Verify per read: mmap pages can corrupt out-of-band after the Open() replay.
+        var crcOverLen = QwpCrc32C.Compute(header.Slice(4, 4));
+        var actual = QwpCrc32C.Compute(destination.Slice(0, len), crcOverLen);
+        if (actual != crc)
+        {
+            throw new InvalidDataException(
+                $"segment {Path}: envelope at offset {offset} failed CRC verification " +
+                $"(expected 0x{crc:x8}, got 0x{actual:x8})");
+        }
+
         envelopeFsn = OffsetToFsn(offset);
         return len;
     }

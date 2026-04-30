@@ -343,6 +343,38 @@ public class QwpResponseTests
         return frame;
     }
 
+    [Test]
+    public void Parse_ErrorResponse_InvalidUtf8Message_Throws()
+    {
+        // 0xC3 0x28 is a malformed two-byte sequence; strict UTF-8 must reject.
+        var msgBytes = new byte[] { 0xC3, 0x28 };
+        var frame = new byte[QwpConstants.ErrorAckHeaderSize + msgBytes.Length];
+        frame[0] = (byte)QwpStatusCode.WriteError;
+        BinaryPrimitives.WriteInt64LittleEndian(frame.AsSpan(1, 8), 5L);
+        BinaryPrimitives.WriteUInt16LittleEndian(frame.AsSpan(9, 2), (ushort)msgBytes.Length);
+        msgBytes.CopyTo(frame, QwpConstants.ErrorAckHeaderSize);
+
+        Assert.Throws<IngressError>(() => QwpResponse.Parse(frame));
+    }
+
+    [Test]
+    public void Parse_DurableAck_InvalidUtf8TableName_Throws()
+    {
+        // status (1) + tableCount (2) + entry: nameLen (2) + name (2 bytes invalid UTF-8) + seqTxn (8)
+        var nameBytes = new byte[] { 0xC3, 0x28 };
+        var frame = new byte[3 + 2 + nameBytes.Length + 8];
+        frame[0] = (byte)QwpStatusCode.DurableAck;
+        BinaryPrimitives.WriteUInt16LittleEndian(frame.AsSpan(1, 2), 1);
+        var pos = 3;
+        BinaryPrimitives.WriteUInt16LittleEndian(frame.AsSpan(pos, 2), (ushort)nameBytes.Length);
+        pos += 2;
+        nameBytes.CopyTo(frame, pos);
+        pos += nameBytes.Length;
+        BinaryPrimitives.WriteInt64LittleEndian(frame.AsSpan(pos, 8), 7L);
+
+        Assert.Throws<IngressError>(() => QwpResponse.Parse(frame));
+    }
+
     private static byte[] BuildError(QwpStatusCode status, long sequence, string message)
     {
         var msgBytes = Encoding.UTF8.GetBytes(message);

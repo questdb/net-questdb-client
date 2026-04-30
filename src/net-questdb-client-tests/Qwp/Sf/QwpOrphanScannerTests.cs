@@ -187,7 +187,6 @@ public class QwpOrphanScannerTests
     private static void SetupSlotWithSegment(string slotDir)
     {
         Directory.CreateDirectory(slotDir);
-        // Create a fake segment file. The scanner only checks for the glob match — content is irrelevant.
         File.WriteAllBytes(Path.Combine(slotDir, "sf-0000000000000000.sfa"), new byte[16]);
     }
 }

@@ -30,12 +30,24 @@ namespace QuestDB.Senders;
 /// <summary>
 ///     Interface representing <see cref="Sender" /> implementations.
 /// </summary>
+/// <remarks>
+///     <para>
+///         <c>HttpSender</c> and <c>TcpSender</c> inherit the default
+///         <see cref="IAsyncDisposable.DisposeAsync" /> which simply forwards to
+///         <see cref="IDisposable.Dispose" />; <c>using</c> and <c>await using</c> behave
+///         identically for them.
+///     </para>
+///     <para>
+///         <c>QwpWebSocketSender</c> overrides <see cref="IAsyncDisposable.DisposeAsync" /> with a
+///         truly async teardown that awaits in-flight ACKs. Prefer <c>await using var sender = …</c>
+///         for ws:: and wss:: senders so the close drain runs without blocking; <c>using var</c>
+///         still works but goes through sync-over-async (<c>.GetAwaiter().GetResult()</c>) and may
+///         deadlock when called from a thread that has a non-default synchronization context
+///         (legacy ASP.NET, WPF UI thread).
+///     </para>
+/// </remarks>
 public interface ISender : IDisposable, IAsyncDisposable
 {
-    /// <summary>
-    ///     Default async dispose: defers to synchronous <see cref="IDisposable.Dispose" />. The
-    ///     WebSocket sender overrides with a truly async teardown that awaits in-flight ACKs.
-    /// </summary>
     ValueTask IAsyncDisposable.DisposeAsync()
     {
         Dispose();

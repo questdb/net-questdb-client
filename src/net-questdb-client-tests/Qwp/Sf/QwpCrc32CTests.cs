@@ -22,6 +22,7 @@
  *
  ******************************************************************************/
 
+using System.Buffers.Binary;
 using System.Text;
 using NUnit.Framework;
 using QuestDB.Qwp.Sf;
@@ -107,6 +108,37 @@ public class QwpCrc32CTests
                 Assert.That(QwpCrc32C.Compute(data), Is.Not.EqualTo(baseline),
                     $"flipping bit {bit} of byte {bytePos} did not change the checksum");
                 data[bytePos] ^= (byte)(1 << bit); // restore
+            }
+        }
+    }
+
+    [Test]
+    public void Compute_FrameEnvelopeShape_ChainEqualsOneShot()
+    {
+        var frame = Encoding.ASCII.GetBytes("hello qwp");
+        Span<byte> envelope = stackalloc byte[4 + frame.Length];
+        BinaryPrimitives.WriteInt32LittleEndian(envelope[..4], frame.Length);
+        frame.CopyTo(envelope[4..]);
+
+        var crc = QwpCrc32C.Compute(envelope);
+        var crcChained = QwpCrc32C.Compute(frame, QwpCrc32C.Compute(envelope[..4]));
+        Assert.That(crc, Is.EqualTo(crcChained));
+        Assert.That(crc, Is.Not.EqualTo(0u));
+    }
+
+    [Test]
+    public void Compute_OffsetIntoBuffer_MatchesSliceCompute()
+    {
+        var data = new byte[64];
+        for (var i = 0; i < data.Length; i++) data[i] = (byte)(i * 7);
+
+        for (var off = 0; off < 32; off++)
+        {
+            for (var len = 0; len < 32 && off + len <= data.Length; len++)
+            {
+                var sliced = QwpCrc32C.Compute(data.AsSpan(off, len));
+                var copied = QwpCrc32C.Compute(data.AsSpan(off, len).ToArray());
+                Assert.That(sliced, Is.EqualTo(copied), $"off={off} len={len}");
             }
         }
     }

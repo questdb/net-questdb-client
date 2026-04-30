@@ -100,7 +100,7 @@ internal sealed class QwpTableBuffer
     ///     a fresh id on the next flush when this is <c>-1</c>, and emits the schema in full mode
     ///     (otherwise reference mode is used).
     /// </summary>
-    public int SchemaId { get; set; } = -1;
+    public int SchemaId { get; internal set; } = -1;
 
     /// <summary>
     ///     User-declared data columns in declaration order. The designated-timestamp column is

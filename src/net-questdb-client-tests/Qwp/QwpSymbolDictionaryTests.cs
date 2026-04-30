@@ -110,6 +110,34 @@ public class QwpSymbolDictionaryTests
     }
 
     [Test]
+    public void RollbackTo_DropsOnlyEntriesAboveTarget()
+    {
+        var d = new QwpSymbolDictionary();
+        d.Add("us"); d.Add("eu");
+        d.Commit();
+        var checkpoint = d.Count;
+        d.Add("jp"); d.Add("br"); d.Add("au");
+        Assert.That(d.Count, Is.EqualTo(5));
+
+        d.RollbackTo(checkpoint);
+
+        Assert.That(d.Count, Is.EqualTo(checkpoint));
+        Assert.That(d.DeltaCount, Is.Zero);
+        Assert.That(d.Add("jp"), Is.EqualTo(checkpoint),
+            "rolled-back ids are reissued from the same slot");
+    }
+
+    [Test]
+    public void RollbackTo_BelowCommittedWatermark_Throws()
+    {
+        var d = new QwpSymbolDictionary();
+        d.Add("us"); d.Add("eu");
+        d.Commit();
+
+        Assert.Throws<ArgumentOutOfRangeException>(() => d.RollbackTo(0));
+    }
+
+    [Test]
     public void Reset_ClearsEverything()
     {
         var d = new QwpSymbolDictionary();

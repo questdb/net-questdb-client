@@ -247,6 +247,58 @@ public class QwpWebSocketTransportTests
     }
 
     [Test]
+    public async Task ReceiveFrame_GrowableBuffer_ResizesUpToCap()
+    {
+        var oversized = new byte[10_000];
+        for (var i = 0; i < oversized.Length; i++) oversized[i] = (byte)(i & 0xFF);
+
+        await using var server = new DummyQwpServer(new DummyQwpServerOptions
+        {
+            FrameHandler = _ => oversized,
+        });
+        await server.StartAsync();
+
+        using var transport = new QwpWebSocketTransport(new QwpWebSocketTransportOptions
+        {
+            Uri = server.Uri,
+        });
+
+        await transport.ConnectAsync();
+        await transport.SendBinaryAsync(new byte[] { 0x01 });
+
+        var buf = new byte[1024];
+        var (read, grown) = await transport.ReceiveFrameAsync(buf, maxBytes: 64 * 1024);
+
+        Assert.That(read, Is.EqualTo(oversized.Length));
+        Assert.That(grown.Length, Is.GreaterThanOrEqualTo(oversized.Length));
+        Assert.That(grown.AsSpan(0, read).ToArray(), Is.EqualTo(oversized));
+    }
+
+    [Test]
+    public async Task ReceiveFrame_GrowableBuffer_RejectsBeyondCap()
+    {
+        var oversized = new byte[10_000];
+
+        await using var server = new DummyQwpServer(new DummyQwpServerOptions
+        {
+            FrameHandler = _ => oversized,
+        });
+        await server.StartAsync();
+
+        using var transport = new QwpWebSocketTransport(new QwpWebSocketTransportOptions
+        {
+            Uri = server.Uri,
+        });
+
+        await transport.ConnectAsync();
+        await transport.SendBinaryAsync(new byte[] { 0x01 });
+
+        var buf = new byte[256];
+        Assert.ThrowsAsync<IngressError>(async () =>
+            await transport.ReceiveFrameAsync(buf, maxBytes: 1024));
+    }
+
+    [Test]
     public async Task ReceiveFrame_BufferTooSmall_Throws()
     {
         var oversized = new byte[256];

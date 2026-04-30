@@ -67,6 +67,13 @@ public class QwpFilesTests
     }
 
     [Test]
+    public void TryOpenExclusive_MissingDirectory_PropagatesNotNullReturn()
+    {
+        var nestedMissing = Path.Combine(_tempDir, "no-such-dir", "lock");
+        Assert.Throws<DirectoryNotFoundException>(() => QwpFiles.TryOpenExclusive(nestedMissing));
+    }
+
+    [Test]
     public void TryOpenExclusive_SucceedsAfterFirstReleases()
     {
         var path = Path.Combine(_tempDir, "lock");

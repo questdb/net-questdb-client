@@ -222,6 +222,36 @@ public class QwpMmapSegmentTests
     }
 
     [Test]
+    public void Seal_PersistsToDisk_RecoversAfterReopen()
+    {
+        var path = SegmentPath();
+        using (var seg = QwpMmapSegment.Open(path, 4096, 0))
+        {
+            seg.TryAppend(new byte[] { 1, 2, 3 });
+            seg.Seal();
+            Assert.That(seg.IsSealed, Is.True);
+        }
+
+        using var reopened = QwpMmapSegment.Open(path, 4096, 0);
+        Assert.That(reopened.IsSealed, Is.True,
+            "the sealed flag must survive reopen so crash-after-Seal recovery treats the tail as sealed");
+        Assert.Throws<InvalidOperationException>(() => reopened.TryAppend(new byte[] { 4 }));
+    }
+
+    [Test]
+    public void Reopen_FreshSegment_IsNotSealed()
+    {
+        var path = SegmentPath();
+        using (var seg = QwpMmapSegment.Open(path, 4096, 0))
+        {
+            seg.TryAppend(new byte[] { 1 });
+        }
+
+        using var reopened = QwpMmapSegment.Open(path, 4096, 0);
+        Assert.That(reopened.IsSealed, Is.False);
+    }
+
+    [Test]
     public void TryReadFrame_OffsetPastEnd_ReturnsMinusOne()
     {
         using var seg = QwpMmapSegment.Open(SegmentPath(), 4096, 0);

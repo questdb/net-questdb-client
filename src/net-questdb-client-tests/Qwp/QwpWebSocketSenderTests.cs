@@ -688,6 +688,45 @@ public class QwpWebSocketSenderTests
     }
 
     [Test]
+    public async Task EndToEnd_Sf_EveryFrame_IsSelfSufficient_AcrossMultipleFlushes()
+    {
+        await using var server = StartServerWithOkAcks();
+        var sfRoot = Path.Combine(Path.GetTempPath(), "qwp-sf-multi-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            using (var sender = NewSender(server,
+                       $"auto_flush=off;sf_dir={sfRoot};sender_id=svc-multi;sf_max_bytes=4096;"))
+            {
+                for (var i = 0; i < 3; i++)
+                {
+                    sender.Table("trades")
+                        .Symbol("ticker", "ETH-USD")
+                        .Column("price", 1000.0 + i)
+                        .At(new DateTime(2026, 4, 28, 12, 0, i, DateTimeKind.Utc));
+                    sender.Send();
+                }
+
+                await WaitFor(() => server.ReceivedFrames.Count >= 3);
+                sender.Ping();
+            }
+
+            Assert.That(server.ReceivedFrames.Count, Is.EqualTo(3));
+            const int schemaModeOffset = 12 + 2 + 8 + 1 + 6 + 1 + 1;
+            foreach (var frame in server.ReceivedFrames)
+            {
+                Assert.That(frame[schemaModeOffset], Is.EqualTo(QwpConstants.SchemaModeFull),
+                    "every SF frame must carry full schema");
+                Assert.That(frame[12], Is.EqualTo(0x00), "delta_start = 0 in self-sufficient mode");
+                Assert.That(frame[13], Is.EqualTo(0x01), "delta_count = 1 (single symbol re-emitted each flush)");
+            }
+        }
+        finally
+        {
+            TryDeleteDirectory(sfRoot);
+        }
+    }
+
+    [Test]
     public async Task EndToEnd_Sf_SingleRow_FrameReachesServerAndIsSelfSufficient()
     {
         await using var server = StartServerWithOkAcks();

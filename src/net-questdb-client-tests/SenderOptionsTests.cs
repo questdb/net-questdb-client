@@ -155,7 +155,7 @@ public class SenderOptionsTests
         Assert.That(opts.sf_append_deadline_millis, Is.EqualTo(TimeSpan.FromSeconds(30)));
         Assert.That(opts.reconnect_max_duration_millis, Is.EqualTo(TimeSpan.FromMinutes(5)));
         Assert.That(opts.reconnect_initial_backoff_millis, Is.EqualTo(TimeSpan.FromMilliseconds(100)));
-        Assert.That(opts.reconnect_max_backoff_millis, Is.EqualTo(TimeSpan.FromSeconds(5)));
+        Assert.That(opts.reconnect_max_backoff_millis, Is.EqualTo(TimeSpan.FromSeconds(30)));
         Assert.That(opts.initial_connect_retry, Is.False);
         Assert.That(opts.close_flush_timeout_millis, Is.EqualTo(TimeSpan.FromSeconds(5)));
         Assert.That(opts.drain_orphans, Is.False);
@@ -435,5 +435,147 @@ public class SenderOptionsTests
         Assert.That(
             () => QuestDB.Sender.New(opts),
             Throws.TypeOf<IngressError>().With.Message.Contains("in_flight_window"));
+    }
+
+    [TestCase("on", true)]
+    [TestCase("ON", true)]
+    [TestCase("On", true)]
+    [TestCase("off", false)]
+    [TestCase("OFF", false)]
+    [TestCase("Off", false)]
+    [TestCase("true", true)]
+    [TestCase("TRUE", true)]
+    [TestCase("True", true)]
+    [TestCase("false", false)]
+    [TestCase("FALSE", false)]
+    public void Gzip_AcceptsBothBooleanForms(string raw, bool expected)
+    {
+        var opts = new SenderOptions($"http::addr=localhost:9000;gzip={raw};");
+        Assert.That(opts.gzip, Is.EqualTo(expected));
+    }
+
+    [TestCase("on", true)]
+    [TestCase("ON", true)]
+    [TestCase("off", false)]
+    [TestCase("OFF", false)]
+    [TestCase("true", true)]
+    [TestCase("TRUE", true)]
+    [TestCase("false", false)]
+    public void Gorilla_AcceptsBothBooleanForms(string raw, bool expected)
+    {
+        var opts = new SenderOptions($"ws::addr=localhost:9000;gorilla={raw};");
+        Assert.That(opts.gorilla, Is.EqualTo(expected));
+    }
+
+    [TestCase("on", true)]
+    [TestCase("OFF", false)]
+    [TestCase("True", true)]
+    public void RequestDurableAck_AcceptsBothBooleanForms(string raw, bool expected)
+    {
+        var opts = new SenderOptions($"ws::addr=localhost:9000;request_durable_ack={raw};");
+        Assert.That(opts.request_durable_ack, Is.EqualTo(expected));
+    }
+
+    [TestCase("yes")]
+    [TestCase("1")]
+    [TestCase("0")]
+    [TestCase("")]
+    [TestCase("nope")]
+    public void BoolKey_RejectsNonBooleanLiterals(string raw)
+    {
+        Assert.That(
+            () => new SenderOptions($"http::addr=localhost:9000;gzip={raw};"),
+            Throws.TypeOf<IngressError>());
+    }
+
+    [Test]
+    public void GzipOn_ViaWebSocketScheme_GivesGzipRejectionNotParseError()
+    {
+        Assert.That(
+            () => new SenderOptions("ws::addr=localhost:9000;gzip=on;"),
+            Throws.TypeOf<IngressError>().With.Message.Contains("ws"));
+    }
+
+    [Test]
+    public void RecordWith_MutatingWsKeyAfterFlip_StillRejected()
+    {
+        var ws = new SenderOptions("ws::addr=localhost:9000;");
+        var flipped = ws with { protocol = QuestDB.Enums.ProtocolType.http, in_flight_window = 256 };
+
+        Assert.That(
+            () => QuestDB.Sender.New(flipped),
+            Throws.TypeOf<IngressError>().With.Message.Contains("in_flight_window"));
+    }
+
+    [Test]
+    public void TcpUsernameAndToken_ParseTogether()
+    {
+        var opts = new SenderOptions("tcp::addr=localhost:9009;username=admin;token=secret;");
+        Assert.That(opts.username, Is.EqualTo("admin"));
+        Assert.That(opts.token, Is.EqualTo("secret"));
+    }
+
+    [Test]
+    public void Programmatic_HttpUsernameWithoutPassword_RejectedByEnsureValid()
+    {
+        var opts = new SenderOptions
+        {
+            protocol = QuestDB.Enums.ProtocolType.http,
+            addr     = "localhost:9000",
+            username = "alice",
+        };
+
+        Assert.That(
+            () => QuestDB.Sender.New(opts),
+            Throws.TypeOf<IngressError>());
+    }
+
+    [Test]
+    public void Programmatic_TcpUsernameAndTokenAccepted()
+    {
+        var opts = new SenderOptions
+        {
+            protocol = QuestDB.Enums.ProtocolType.tcp,
+            addr     = "localhost:9009",
+            username = "admin",
+            token    = "secret",
+        };
+        Assert.DoesNotThrow(() => opts.EnsureValid());
+    }
+
+    [Test]
+    public void Programmatic_WsKeySetToDefaultValue_OnHttp_StillRejected()
+    {
+        var opts = new SenderOptions
+        {
+            protocol = QuestDB.Enums.ProtocolType.http,
+            addr     = "localhost:9000",
+            in_flight_window = 128,
+        };
+
+        Assert.That(
+            () => QuestDB.Sender.New(opts),
+            Throws.TypeOf<IngressError>().With.Message.Contains("in_flight_window"));
+    }
+
+    [Test]
+    public void Programmatic_NoWsKeysTouched_OnHttp_Allowed()
+    {
+        var opts = new SenderOptions
+        {
+            protocol = QuestDB.Enums.ProtocolType.http,
+            addr     = "localhost:9000",
+        };
+
+        Assert.DoesNotThrow(() => opts.EnsureValid());
+    }
+
+    [Test]
+    public void AutoFlushOff_OnWebSocketScheme_AlsoZerosTriggers()
+    {
+        var opts = new SenderOptions("ws::addr=localhost:9000;auto_flush=off;");
+        Assert.That(opts.auto_flush_rows, Is.EqualTo(-1));
+        Assert.That(opts.auto_flush_bytes, Is.EqualTo(-1));
+        Assert.That(opts.auto_flush_interval, Is.EqualTo(TimeSpan.FromMilliseconds(-1)));
     }
 }

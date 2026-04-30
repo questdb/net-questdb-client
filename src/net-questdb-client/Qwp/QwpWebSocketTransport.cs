@@ -193,8 +193,6 @@ internal sealed class QwpWebSocketTransport : IQwpCursorTransport
 
             if (result.MessageType == WebSocketMessageType.Close)
             {
-                // Close status fields live on the ClientWebSocket itself; the value-result type
-                // doesn't carry them.
                 throw new IngressError(
                     ErrorCode.SocketError,
                     $"server closed the WebSocket: {_client.CloseStatus} {_client.CloseStatusDescription}");
@@ -213,6 +211,64 @@ internal sealed class QwpWebSocketTransport : IQwpCursorTransport
             {
                 DumpFrame((byte)'R', destination.Span.Slice(0, totalRead));
                 return totalRead;
+            }
+        }
+    }
+
+    /// <summary>
+    ///     Like <see cref="ReceiveFrameAsync(Memory{byte}, CancellationToken)" /> but doubles
+    ///     <paramref name="initial" /> when the incoming frame would otherwise overflow, up to
+    ///     <paramref name="maxBytes" />. Returns the (possibly grown) buffer along with the byte
+    ///     count. Frames exceeding the cap raise a SocketError.
+    /// </summary>
+    public async Task<(int Read, byte[] Buffer)> ReceiveFrameAsync(
+        byte[] initial,
+        int maxBytes,
+        CancellationToken ct = default)
+    {
+        ThrowIfDisposed();
+        EnsureOpen();
+
+        var buffer = initial;
+        var totalRead = 0;
+        while (true)
+        {
+            if (totalRead == buffer.Length)
+            {
+                if (buffer.Length >= maxBytes)
+                {
+                    throw new IngressError(
+                        ErrorCode.SocketError,
+                        $"incoming WebSocket frame exceeds the {maxBytes}-byte receive cap");
+                }
+
+                var newSize = Math.Min(maxBytes, Math.Max(buffer.Length * 2, totalRead + 1));
+                Array.Resize(ref buffer, newSize);
+            }
+
+            var slice = buffer.AsMemory(totalRead);
+            var result = await _client.ReceiveAsync(slice, ct).ConfigureAwait(false);
+
+            if (result.MessageType == WebSocketMessageType.Close)
+            {
+                throw new IngressError(
+                    ErrorCode.SocketError,
+                    $"server closed the WebSocket: {_client.CloseStatus} {_client.CloseStatusDescription}");
+            }
+
+            if (result.MessageType != WebSocketMessageType.Binary)
+            {
+                throw new IngressError(
+                    ErrorCode.ProtocolVersionError,
+                    $"unexpected WebSocket message type {result.MessageType}; QWP uses binary frames");
+            }
+
+            totalRead += result.Count;
+
+            if (result.EndOfMessage)
+            {
+                DumpFrame((byte)'R', buffer.AsSpan(0, totalRead));
+                return (totalRead, buffer);
             }
         }
     }

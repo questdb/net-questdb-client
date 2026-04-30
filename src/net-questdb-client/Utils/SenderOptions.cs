@@ -70,8 +70,8 @@ public record SenderOptions
     private int _autoFlushBytes = int.MaxValue;
     private TimeSpan _autoFlushInterval = TimeSpan.FromMilliseconds(1000);
     private int _autoFlushRows = 75000;
-    private DbConnectionStringBuilder _connectionStringBuilder = null!;
-    private bool _gzip = false;
+    private DbConnectionStringBuilder? _connectionStringBuilder;
+    private bool _gzip;
     private int _initBufSize = 65536;
     private int _maxBufSize = 104857600;
     private int _maxNameLen = 127;
@@ -108,12 +108,30 @@ public record SenderOptions
     private TimeSpan _sfAppendDeadline = TimeSpan.FromMilliseconds(30000);
     private TimeSpan _reconnectMaxDuration = TimeSpan.FromMilliseconds(300000);
     private TimeSpan _reconnectInitialBackoff = TimeSpan.FromMilliseconds(100);
-    private TimeSpan _reconnectMaxBackoff = TimeSpan.FromMilliseconds(5000);
+    private TimeSpan _reconnectMaxBackoff = TimeSpan.FromMilliseconds(30000);
     private bool _initialConnectRetry;
     private TimeSpan _closeFlushTimeout = TimeSpan.FromMilliseconds(5000);
     private bool _drainOrphans;
     private int _maxBackgroundDrainers = 4;
+
+    private bool _inFlightWindowUserSet;
+    private bool _closeTimeoutUserSet;
+    private bool _maxSchemasPerConnectionUserSet;
+    private bool _requestDurableAckUserSet;
+    private bool _gorillaUserSet;
+    private bool _sfDirUserSet;
+    private bool _senderIdUserSet;
+    private bool _sfMaxBytesUserSet;
     private bool _sfMaxTotalBytesUserSet;
+    private bool _sfDurabilityUserSet;
+    private bool _sfAppendDeadlineUserSet;
+    private bool _reconnectMaxDurationUserSet;
+    private bool _reconnectInitialBackoffUserSet;
+    private bool _reconnectMaxBackoffUserSet;
+    private bool _initialConnectRetryUserSet;
+    private bool _closeFlushTimeoutUserSet;
+    private bool _drainOrphansUserSet;
+    private bool _maxBackgroundDrainersUserSet;
 
     /// <summary>
     ///     Construct a <see cref="SenderOptions" /> object with default values.
@@ -155,9 +173,8 @@ public record SenderOptions
         }
 
         ParseStringWithDefault(nameof(token), null, out _token);
-        // Accepted for cross-client connstring interop; runtime ignores them (TCP auth uses `token`).
-        ParseStringWithDefault(nameof(token_x), null, out _tokenX);
-        ParseStringWithDefault(nameof(token_y), null, out _tokenY);
+        ParseStringWithDefault("token_x", null, out _tokenX);
+        ParseStringWithDefault("token_y", null, out _tokenY);
         ParseIntWithDefault(nameof(request_min_throughput), "102400", out _requestMinThroughput);
         ParseMillisecondsWithDefault(nameof(auth_timeout), "15000", out _authTimeout);
         ParseMillisecondsWithDefault(nameof(request_timeout), "30000", out _requestTimeout);
@@ -196,7 +213,7 @@ public record SenderOptions
         ParseMillisecondsWithDefault(nameof(sf_append_deadline_millis), "30000", out _sfAppendDeadline);
         ParseMillisecondsWithDefault(nameof(reconnect_max_duration_millis), "300000", out _reconnectMaxDuration);
         ParseMillisecondsWithDefault(nameof(reconnect_initial_backoff_millis), "100", out _reconnectInitialBackoff);
-        ParseMillisecondsWithDefault(nameof(reconnect_max_backoff_millis), "5000", out _reconnectMaxBackoff);
+        ParseMillisecondsWithDefault(nameof(reconnect_max_backoff_millis), "30000", out _reconnectMaxBackoff);
         ParseBoolOnOff(nameof(initial_connect_retry), "off", out _initialConnectRetry);
         ParseMillisecondsWithDefault(nameof(close_flush_timeout_millis), "5000", out _closeFlushTimeout);
         ParseBoolOnOff(nameof(drain_orphans), "off", out _drainOrphans);
@@ -282,17 +299,16 @@ public record SenderOptions
     private void ParseBoolOnOff(string name, string defaultValue, out bool field)
     {
         var raw = ReadOptionFromBuilder(name) ?? defaultValue;
-        field = raw switch
+        if (!TryParseInteropBool(raw, out field))
         {
-            "on" => true,
-            "off" => false,
-            _ => throw new IngressError(ErrorCode.ConfigError, $"`{name}` must be 'on' or 'off', got `{raw}`"),
-        };
+            throw new IngressError(ErrorCode.ConfigError,
+                $"`{name}` must be 'on' or 'off' (or 'true'/'false'), got `{raw}`");
+        }
     }
 
     private bool IsKeyExplicit(string name)
     {
-        return _connectionStringBuilder.ContainsKey(name);
+        return _connectionStringBuilder!.ContainsKey(name);
     }
 
     private void ValidateWebSocketKeys()
@@ -319,16 +335,8 @@ public record SenderOptions
         ValidateStoreAndForwardOptions();
         ValidateMultiAddressForWebSocket();
         ValidateGzipForWebSocket();
-        // The connection-string path can be flipped via `record with { protocol = ... }` after
-        // construction, so we must re-check ws-only keys here even when builder is set.
-        if (_connectionStringBuilder is not null)
-        {
-            ValidateWebSocketKeys();
-        }
-        else
-        {
-            ValidateWebSocketKeysAgainstDefaults();
-        }
+        ValidateWebSocketKeys();
+        ValidateWebSocketKeysAgainstDefaults();
         ApplyAutoFlushNormalisation();
     }
 
@@ -356,25 +364,24 @@ public record SenderOptions
             return;
         }
 
-        var defaults = new SenderOptions();
-        if (_inFlightWindow != defaults._inFlightWindow) Throw(nameof(in_flight_window));
-        if (_closeTimeout != defaults._closeTimeout) Throw(nameof(close_timeout));
-        if (_maxSchemasPerConnection != defaults._maxSchemasPerConnection) Throw(nameof(max_schemas_per_connection));
-        if (_gorilla != defaults._gorilla) Throw(nameof(gorilla));
-        if (_requestDurableAck != defaults._requestDurableAck) Throw(nameof(request_durable_ack));
-        if (_sfDir != defaults._sfDir) Throw(nameof(sf_dir));
-        if (_senderId != defaults._senderId) Throw(nameof(sender_id));
-        if (_sfMaxBytes != defaults._sfMaxBytes) Throw(nameof(sf_max_bytes));
-        if (_sfMaxTotalBytes != defaults._sfMaxTotalBytes) Throw(nameof(sf_max_total_bytes));
-        if (_sfDurability != defaults._sfDurability) Throw(nameof(sf_durability));
-        if (_sfAppendDeadline != defaults._sfAppendDeadline) Throw(nameof(sf_append_deadline_millis));
-        if (_reconnectMaxDuration != defaults._reconnectMaxDuration) Throw(nameof(reconnect_max_duration_millis));
-        if (_reconnectInitialBackoff != defaults._reconnectInitialBackoff) Throw(nameof(reconnect_initial_backoff_millis));
-        if (_reconnectMaxBackoff != defaults._reconnectMaxBackoff) Throw(nameof(reconnect_max_backoff_millis));
-        if (_initialConnectRetry != defaults._initialConnectRetry) Throw(nameof(initial_connect_retry));
-        if (_closeFlushTimeout != defaults._closeFlushTimeout) Throw(nameof(close_flush_timeout_millis));
-        if (_drainOrphans != defaults._drainOrphans) Throw(nameof(drain_orphans));
-        if (_maxBackgroundDrainers != defaults._maxBackgroundDrainers) Throw(nameof(max_background_drainers));
+        if (_inFlightWindowUserSet) Throw(nameof(in_flight_window));
+        if (_closeTimeoutUserSet) Throw(nameof(close_timeout));
+        if (_maxSchemasPerConnectionUserSet) Throw(nameof(max_schemas_per_connection));
+        if (_gorillaUserSet) Throw(nameof(gorilla));
+        if (_requestDurableAckUserSet) Throw(nameof(request_durable_ack));
+        if (_sfDirUserSet) Throw(nameof(sf_dir));
+        if (_senderIdUserSet) Throw(nameof(sender_id));
+        if (_sfMaxBytesUserSet) Throw(nameof(sf_max_bytes));
+        if (_sfMaxTotalBytesUserSet) Throw(nameof(sf_max_total_bytes));
+        if (_sfDurabilityUserSet) Throw(nameof(sf_durability));
+        if (_sfAppendDeadlineUserSet) Throw(nameof(sf_append_deadline_millis));
+        if (_reconnectMaxDurationUserSet) Throw(nameof(reconnect_max_duration_millis));
+        if (_reconnectInitialBackoffUserSet) Throw(nameof(reconnect_initial_backoff_millis));
+        if (_reconnectMaxBackoffUserSet) Throw(nameof(reconnect_max_backoff_millis));
+        if (_initialConnectRetryUserSet) Throw(nameof(initial_connect_retry));
+        if (_closeFlushTimeoutUserSet) Throw(nameof(close_flush_timeout_millis));
+        if (_drainOrphansUserSet) Throw(nameof(drain_orphans));
+        if (_maxBackgroundDrainersUserSet) Throw(nameof(max_background_drainers));
 
         static void Throw(string key) =>
             throw new IngressError(ErrorCode.ConfigError,
@@ -770,7 +777,7 @@ public record SenderOptions
     public int in_flight_window
     {
         get => _inFlightWindow;
-        set => _inFlightWindow = value;
+        set { _inFlightWindow = value; _inFlightWindowUserSet = true; }
     }
 
     /// <summary>
@@ -780,7 +787,7 @@ public record SenderOptions
     public TimeSpan close_timeout
     {
         get => _closeTimeout;
-        set => _closeTimeout = value;
+        set { _closeTimeout = value; _closeTimeoutUserSet = true; }
     }
 
     /// <summary>
@@ -790,7 +797,7 @@ public record SenderOptions
     public int max_schemas_per_connection
     {
         get => _maxSchemasPerConnection;
-        set => _maxSchemasPerConnection = value;
+        set { _maxSchemasPerConnection = value; _maxSchemasPerConnectionUserSet = true; }
     }
 
     /// <summary>
@@ -800,7 +807,7 @@ public record SenderOptions
     public bool request_durable_ack
     {
         get => _requestDurableAck;
-        set => _requestDurableAck = value;
+        set { _requestDurableAck = value; _requestDurableAckUserSet = true; }
     }
 
     /// <summary>
@@ -811,7 +818,7 @@ public record SenderOptions
     public bool gorilla
     {
         get => _gorilla;
-        set => _gorilla = value;
+        set { _gorilla = value; _gorillaUserSet = true; }
     }
 
     /// <summary>
@@ -822,14 +829,14 @@ public record SenderOptions
     public string? sf_dir
     {
         get => _sfDir;
-        set => _sfDir = value;
+        set { _sfDir = value; _sfDirUserSet = true; }
     }
 
     /// <summary>Slot identifier within <see cref="sf_dir" />. Defaults to <c>"default"</c>.</summary>
     public string sender_id
     {
         get => _senderId;
-        set => SetSenderId(value);
+        set { SetSenderId(value); _senderIdUserSet = true; }
     }
 
     private void SetSenderId(string value)
@@ -855,7 +862,7 @@ public record SenderOptions
     public long sf_max_bytes
     {
         get => _sfMaxBytes;
-        set => _sfMaxBytes = value;
+        set { _sfMaxBytes = value; _sfMaxBytesUserSet = true; }
     }
 
     /// <summary>
@@ -876,7 +883,7 @@ public record SenderOptions
     public string sf_durability
     {
         get => _sfDurability;
-        set => _sfDurability = value;
+        set { _sfDurability = value; _sfDurabilityUserSet = true; }
     }
 
     /// <summary>
@@ -886,28 +893,28 @@ public record SenderOptions
     public TimeSpan sf_append_deadline_millis
     {
         get => _sfAppendDeadline;
-        set => _sfAppendDeadline = value;
+        set { _sfAppendDeadline = value; _sfAppendDeadlineUserSet = true; }
     }
 
     /// <summary>Total wall-clock budget for a single reconnect run. Defaults to 5 min.</summary>
     public TimeSpan reconnect_max_duration_millis
     {
         get => _reconnectMaxDuration;
-        set => _reconnectMaxDuration = value;
+        set { _reconnectMaxDuration = value; _reconnectMaxDurationUserSet = true; }
     }
 
     /// <summary>First reconnect backoff. Defaults to 100 ms.</summary>
     public TimeSpan reconnect_initial_backoff_millis
     {
         get => _reconnectInitialBackoff;
-        set => _reconnectInitialBackoff = value;
+        set { _reconnectInitialBackoff = value; _reconnectInitialBackoffUserSet = true; }
     }
 
     /// <summary>Maximum reconnect backoff after exponential growth. Defaults to 5 s.</summary>
     public TimeSpan reconnect_max_backoff_millis
     {
         get => _reconnectMaxBackoff;
-        set => _reconnectMaxBackoff = value;
+        set { _reconnectMaxBackoff = value; _reconnectMaxBackoffUserSet = true; }
     }
 
     /// <summary>
@@ -918,7 +925,7 @@ public record SenderOptions
     public bool initial_connect_retry
     {
         get => _initialConnectRetry;
-        set => _initialConnectRetry = value;
+        set { _initialConnectRetry = value; _initialConnectRetryUserSet = true; }
     }
 
     /// <summary>
@@ -928,7 +935,7 @@ public record SenderOptions
     public TimeSpan close_flush_timeout_millis
     {
         get => _closeFlushTimeout;
-        set => _closeFlushTimeout = value;
+        set { _closeFlushTimeout = value; _closeFlushTimeoutUserSet = true; }
     }
 
     /// <summary>
@@ -939,14 +946,14 @@ public record SenderOptions
     public bool drain_orphans
     {
         get => _drainOrphans;
-        set => _drainOrphans = value;
+        set { _drainOrphans = value; _drainOrphansUserSet = true; }
     }
 
     /// <summary>Cap on concurrent orphan-drain workers. Defaults to 4.</summary>
     public int max_background_drainers
     {
         get => _maxBackgroundDrainers;
-        set => _maxBackgroundDrainers = value;
+        set { _maxBackgroundDrainers = value; _maxBackgroundDrainersUserSet = true; }
     }
 
     /// <summary>
@@ -1026,10 +1033,32 @@ public record SenderOptions
 
     private void ParseBoolWithDefault(string name, string defaultValue, out bool field)
     {
-        if (!bool.TryParse(ReadOptionFromBuilder(name) ?? defaultValue, out field))
+        var raw = ReadOptionFromBuilder(name) ?? defaultValue;
+        if (!TryParseInteropBool(raw, out field))
         {
-            throw new IngressError(ErrorCode.ConfigError, $"`{name}` should be convertible to an bool.");
+            throw new IngressError(ErrorCode.ConfigError,
+                $"`{name}` should be a boolean (true/false/on/off), got `{raw}`");
         }
+    }
+
+    internal static bool TryParseInteropBool(string raw, out bool value)
+    {
+        if (string.Equals(raw, "true", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(raw, "on", StringComparison.OrdinalIgnoreCase))
+        {
+            value = true;
+            return true;
+        }
+
+        if (string.Equals(raw, "false", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(raw, "off", StringComparison.OrdinalIgnoreCase))
+        {
+            value = false;
+            return true;
+        }
+
+        value = false;
+        return false;
     }
 
     private void ParseStringWithDefault(string name, string? defaultValue, out string? field)
@@ -1109,7 +1138,7 @@ public record SenderOptions
 
     private string? ReadOptionFromBuilder(string name)
     {
-        _connectionStringBuilder.TryGetValue(name, out var value);
+        _connectionStringBuilder!.TryGetValue(name, out var value);
         return (string?)value;
     }
 
@@ -1207,7 +1236,7 @@ public record SenderOptions
 
     private void VerifyCorrectKeysInConfigString()
     {
-        foreach (string key in _connectionStringBuilder.Keys)
+        foreach (string key in _connectionStringBuilder!.Keys)
         {
             if (!keySet.Contains(key))
             {

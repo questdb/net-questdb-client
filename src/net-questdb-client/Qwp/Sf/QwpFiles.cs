@@ -61,8 +61,7 @@ internal static class QwpFiles
 
     /// <summary>
     ///     Like <see cref="OpenExclusive" /> but returns <c>null</c> instead of throwing when the
-    ///     file is already locked. Used by the orphan scanner to probe sibling slots without
-    ///     blowing up on a lock collision.
+    ///     file is already locked. Missing-directory / permission / other I/O errors propagate.
     /// </summary>
     public static FileStream? TryOpenExclusive(string path)
     {
@@ -70,11 +69,26 @@ internal static class QwpFiles
         {
             return OpenExclusive(path);
         }
-        catch (IOException)
+        catch (IOException ex) when (IsSharingViolation(ex))
         {
-            // Lock collision only; permission/path errors propagate.
             return null;
         }
+    }
+
+    private static bool IsSharingViolation(IOException ex)
+    {
+        if (ex is FileNotFoundException || ex is DirectoryNotFoundException || ex is PathTooLongException)
+        {
+            return false;
+        }
+
+        const int sharingViolationHResult = unchecked((int)0x80070020);
+        if (ex.HResult == sharingViolationHResult)
+        {
+            return true;
+        }
+
+        return ex.GetType() == typeof(IOException);
     }
 
     /// <summary>

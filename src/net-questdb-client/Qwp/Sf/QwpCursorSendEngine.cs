@@ -446,6 +446,21 @@ internal sealed class QwpCursorSendEngine : IDisposable
 
     private async Task RunLoopAsync(CancellationToken ct)
     {
+        try
+        {
+            await RunLoopBodyAsync(ct).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (Exception ex)
+        {
+            SetTerminal(ex);
+        }
+    }
+
+    private async Task RunLoopBodyAsync(CancellationToken ct)
+    {
         var backoff = new BackoffState();
         var seenFirstConnect = false;
 

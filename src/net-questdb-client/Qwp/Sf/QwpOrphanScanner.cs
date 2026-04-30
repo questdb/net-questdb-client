@@ -66,48 +66,70 @@ internal static class QwpOrphanScanner
             return claimed;
         }
 
-        foreach (var slotDir in QwpFiles.EnumerateSlotDirectories(sfRoot))
+        IEnumerable<string> slotDirs;
+        try
         {
-            var senderId = Path.GetFileName(slotDir);
-            if (string.Equals(senderId, ourSenderId, StringComparison.Ordinal))
-            {
-                continue;
-            }
+            slotDirs = QwpFiles.EnumerateSlotDirectories(sfRoot);
+        }
+        catch (Exception)
+        {
+            return claimed;
+        }
 
-            if (File.Exists(Path.Combine(slotDir, FailedSentinel)))
-            {
-                continue;
-            }
-
-            var slotLock = QwpSlotLock.TryAcquire(slotDir);
-            if (slotLock is null)
-            {
-                continue;
-            }
-
-            var keep = false;
+        foreach (var slotDir in slotDirs)
+        {
             try
             {
-                if (File.Exists(Path.Combine(slotDir, FailedSentinel)))
-                {
-                    continue;
-                }
-
-                if (!HasSegments(slotDir))
-                {
-                    continue;
-                }
-
-                claimed.Add(slotLock);
-                keep = true;
+                TryClaim(slotDir, ourSenderId, claimed);
             }
-            finally
+            catch (Exception)
             {
-                if (!keep) slotLock.Dispose();
+                // Per-slot errors must never abandon already-claimed locks; the next sweep retries.
             }
         }
 
         return claimed;
+    }
+
+    private static void TryClaim(string slotDir, string ourSenderId, List<QwpSlotLock> claimed)
+    {
+        var senderId = Path.GetFileName(slotDir);
+        if (string.Equals(senderId, ourSenderId, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        if (File.Exists(Path.Combine(slotDir, FailedSentinel)))
+        {
+            return;
+        }
+
+        var slotLock = QwpSlotLock.TryAcquire(slotDir);
+        if (slotLock is null)
+        {
+            return;
+        }
+
+        var keep = false;
+        try
+        {
+            if (File.Exists(Path.Combine(slotDir, FailedSentinel)))
+            {
+                return;
+            }
+
+            if (!HasSegments(slotDir))
+            {
+                return;
+            }
+
+            claimed.Add(slotLock);
+            keep = true;
+        }
+        finally
+        {
+            if (!keep) slotLock.Dispose();
+        }
     }
 
     private static bool HasSegments(string slotDir)

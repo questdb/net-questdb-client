@@ -51,6 +51,7 @@ internal sealed class QwpBackgroundDrainerPool : IDisposable
     private readonly SemaphoreSlim _slots;
     private readonly object _trackingLock = new();
     private readonly List<Task> _runningTasks = new();
+    private readonly HashSet<QwpSlotLock> _liveLocks = new();
     private readonly CancellationTokenSource _shutdownCts = new();
     private readonly TimeSpan _shutdownWait;
     private bool _disposed;
@@ -80,7 +81,7 @@ internal sealed class QwpBackgroundDrainerPool : IDisposable
         {
             EnsureNotDisposed();
             linked = CancellationTokenSource.CreateLinkedTokenSource(_shutdownCts.Token, cancellationToken);
-            // No token passed to Task.Run — a pre-cancelled one would skip the delegate and leak.
+            _liveLocks.Add(slotLock);
             task = Task.Run(async () =>
             {
                 try
@@ -130,8 +131,6 @@ internal sealed class QwpBackgroundDrainerPool : IDisposable
             snapshot = _runningTasks.ToArray();
         }
 
-        // Two-phase shutdown: give in-flight drains a chance to finish naturally, then cancel
-        // and join. Dispose is sync so we cap the wait — orphans land on the next sender startup.
         var allJoined = snapshot.Length == 0;
         if (snapshot.Length > 0)
         {
@@ -142,7 +141,6 @@ internal sealed class QwpBackgroundDrainerPool : IDisposable
             }
             catch (Exception)
             {
-                // Drain failures already wrote .failed sentinels; swallow here.
             }
 
             SfCleanup.Run(() => _shutdownCts.Cancel());
@@ -153,12 +151,23 @@ internal sealed class QwpBackgroundDrainerPool : IDisposable
             }
             catch (Exception)
             {
-                // Best-effort joined; tasks may finish later but the lock is theirs to release.
             }
         }
 
+        // Force-release any still-held slot locks; otherwise a wedged drainer keeps the file lock
+        // for the rest of the process lifetime and orphan recovery is broken.
+        QwpSlotLock[] leakedLocks;
+        lock (_trackingLock)
+        {
+            leakedLocks = _liveLocks.ToArray();
+            _liveLocks.Clear();
+        }
+        foreach (var l in leakedLocks)
+        {
+            SfCleanup.Dispose(l);
+        }
+
         SfCleanup.Dispose(_shutdownCts);
-        // Leak the semaphore rather than risk ODE on late WaitAsync/Release from unjoined tasks.
         if (allJoined)
         {
             _slots.Dispose();
@@ -169,29 +178,74 @@ internal sealed class QwpBackgroundDrainerPool : IDisposable
     {
         try
         {
-            await _slots.WaitAsync(cancellationToken).ConfigureAwait(false);
+            try
+            {
+                await _slots.WaitAsync(cancellationToken).ConfigureAwait(false);
+            }
+            catch (ObjectDisposedException)
+            {
+                // Pool's _shutdownCts already disposed; treat as cancellation.
+                return;
+            }
+
             try
             {
                 await _drainer.DrainAsync(slotLock.SlotDirectory, cancellationToken).ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
-                // Cooperative cancellation — leave the slot for the next sender startup.
                 throw;
             }
-            catch (Exception ex)
+            catch (ObjectDisposedException)
+            {
+                // Late teardown of a CTS / drainer dependency is shutdown noise, not a slot failure.
+            }
+            catch (Exception ex) when (IsReplayImpossible(ex))
             {
                 TryDropFailedSentinel(slotLock.SlotDirectory, ex);
             }
+            catch (Exception)
+            {
+                // Transient (timeout, transport, IO) — leave the slot for next attempt.
+            }
             finally
             {
-                _slots.Release();
+                try
+                {
+                    _slots.Release();
+                }
+                catch (ObjectDisposedException)
+                {
+                }
+                catch (SemaphoreFullException)
+                {
+                }
             }
         }
         finally
         {
+            lock (_trackingLock)
+            {
+                _liveLocks.Remove(slotLock);
+            }
             slotLock.Dispose();
         }
+    }
+
+    private static bool IsReplayImpossible(Exception ex)
+    {
+        if (ex is QwpException q)
+        {
+            return q.Status switch
+            {
+                Enums.QwpStatusCode.SchemaMismatch => true,
+                Enums.QwpStatusCode.SecurityError => true,
+                Enums.QwpStatusCode.ParseError => true,
+                _ => false,
+            };
+        }
+
+        return false;
     }
 
     private static void TryDropFailedSentinel(string slotDirectory, Exception ex)

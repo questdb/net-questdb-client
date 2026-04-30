@@ -44,6 +44,7 @@ internal sealed class QwpSegmentManager : IDisposable
     private Task? _workerTask;
     private long _committedBytes;
     private bool _disposed;
+    private Exception? _lastServiceError;
 
     public QwpSegmentManager(QwpSegmentRing ring, long maxTotalBytes, TimeSpan? shutdownWait = null)
     {
@@ -124,7 +125,14 @@ internal sealed class QwpSegmentManager : IDisposable
     {
         while (!_disposed && !ct.IsCancellationRequested)
         {
-            SfCleanup.Run(ServiceRing);
+            try
+            {
+                ServiceRing();
+            }
+            catch (Exception ex)
+            {
+                Volatile.Write(ref _lastServiceError, ex);
+            }
 
             try
             {
@@ -136,13 +144,22 @@ internal sealed class QwpSegmentManager : IDisposable
             }
             catch (ObjectDisposedException)
             {
-                // Dispose hit its shutdown timeout and disposed _wakeup while we were running.
                 break;
             }
         }
 
-        SfCleanup.Run(ServiceRing);
+        try
+        {
+            ServiceRing();
+        }
+        catch (Exception ex)
+        {
+            Volatile.Write(ref _lastServiceError, ex);
+        }
     }
+
+    /// <summary>Last unexpected exception thrown by <c>ServiceRing</c>; null when never faulted.</summary>
+    public Exception? LastServiceError => Volatile.Read(ref _lastServiceError);
 
     private void ServiceRing()
     {

@@ -153,11 +153,10 @@ own framing, codecs, and server handshake. Everything QWP lives in
   `X-QWP-Client-Id`). Supports an optional dump stream that records
   binary frames in both directions; dump writes are serialised under
   `_dumpLock` because send/receive run concurrently.
-- `Senders/QwpWebSocketSender.cs` — owns the lifecycle. Three execution
-  modes:
-  - **Sync** (`in_flight_window=1`): each `Send` blocks until the ACK
-    arrives. Schema/symbol caches advance only on ACK; a failed flush
-    leaves them untouched so retries re-send full schema.
+- `Senders/QwpWebSocketSender.cs` — owns the lifecycle. Two execution
+  modes (sync / `in_flight_window=1` is rejected at construction; the
+  double-buffered encoder pipeline assumes window ≥ 2 — for one-batch-at-a-time
+  ILP semantics use the `http::` scheme instead):
   - **Async pipelined** (default `in_flight_window=128`): bounded
     `Channel<AsyncBatch>` between producer and `SendLoop`; double-buffered
     encoders so batch N+1 encodes while batch N is in flight. Caches

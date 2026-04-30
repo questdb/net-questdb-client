@@ -86,6 +86,34 @@ public class QwpColumnTests
     }
 
     [Test]
+    public void NullBitmap_LazyAllocatedAtRow50_BackfillsAllPriorNonNullsAsZero()
+    {
+        var col = new QwpColumn("c", 0);
+        for (var i = 0; i < 50; i++)
+        {
+            col.AppendLong(i);
+        }
+
+        Assert.That(col.NullBitmap, Is.Null, "no nulls yet → bitmap stays unallocated");
+
+        col.AppendNull();
+
+        Assert.That(col.NullBitmap, Is.Not.Null);
+        Assert.That(col.RowCount, Is.EqualTo(51));
+        Assert.That(col.NullCount, Is.EqualTo(1));
+
+        for (var byteIdx = 0; byteIdx < 6; byteIdx++)
+        {
+            Assert.That(col.NullBitmap![byteIdx], Is.EqualTo(0),
+                $"byte {byteIdx}: rows 0..{byteIdx * 8 + 7} were all non-null");
+        }
+
+        const int nullBit = 50 % 8;
+        Assert.That(col.NullBitmap![6], Is.EqualTo((byte)(1 << nullBit)),
+            "only bit 50%8 in byte 6 is set; bits 0..1 (rows 48..49) and 3..7 stay zero");
+    }
+
+    [Test]
     public void Constructor_BackfillsLeadingNulls()
     {
         var col = new QwpColumn("c", initialNullRows: 4);

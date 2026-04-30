@@ -23,7 +23,10 @@
  ******************************************************************************/
 
 using NUnit.Framework;
+using QuestDB.Enums;
+using QuestDB.Qwp;
 using QuestDB.Qwp.Sf;
+using QuestDB.Utils;
 
 namespace net_questdb_client_tests.Qwp.Sf;
 
@@ -76,11 +79,11 @@ public class QwpBackgroundDrainerPoolTests
     }
 
     [Test]
-    public async Task Enqueue_DrainerThrows_DropsFailedSentinelAndReleasesLock()
+    public async Task Enqueue_ReplayImpossibleError_DropsFailedSentinelAndReleasesLock()
     {
         var slotDir = Path.Combine(_root, "slot");
         var slotLock = QwpSlotLock.Acquire(slotDir);
-        var drainer = new ThrowingDrainer(new InvalidOperationException("boom"));
+        var drainer = new ThrowingDrainer(new QwpException(QwpStatusCode.SchemaMismatch, sequence: 0, message: "schema-mismatch"));
 
         using var pool = new QwpBackgroundDrainerPool(2, drainer);
         pool.Enqueue(slotLock);
@@ -88,10 +91,54 @@ public class QwpBackgroundDrainerPoolTests
 
         Assert.That(File.Exists(Path.Combine(slotDir, ".failed")), Is.True);
         var sentinel = await File.ReadAllTextAsync(Path.Combine(slotDir, ".failed"));
-        Assert.That(sentinel, Does.Contain("boom"));
-        // Lock released even after failure.
+        Assert.That(sentinel, Does.Contain("schema-mismatch"));
         using var reacquired = QwpSlotLock.Acquire(slotDir);
         Assert.That(reacquired.SlotDirectory, Is.EqualTo(slotDir));
+    }
+
+    [Test]
+    public async Task Enqueue_TransientFailure_LeavesSlotForRetry()
+    {
+        var slotDir = Path.Combine(_root, "slot");
+        var slotLock = QwpSlotLock.Acquire(slotDir);
+        var drainer = new ThrowingDrainer(new IngressError(ErrorCode.ServerFlushError, "drain timeout"));
+
+        using var pool = new QwpBackgroundDrainerPool(2, drainer);
+        pool.Enqueue(slotLock);
+        await pool.WaitForAllAsync();
+
+        Assert.That(File.Exists(Path.Combine(slotDir, ".failed")), Is.False,
+            "transient errors must not permanently quarantine the slot");
+        using var reacquired = QwpSlotLock.Acquire(slotDir);
+        Assert.That(reacquired.SlotDirectory, Is.EqualTo(slotDir));
+    }
+
+    [Test]
+    public async Task Enqueue_GenericException_LeavesSlotForRetry()
+    {
+        var slotDir = Path.Combine(_root, "slot");
+        var slotLock = QwpSlotLock.Acquire(slotDir);
+        var drainer = new ThrowingDrainer(new InvalidOperationException("transport-glitch"));
+
+        using var pool = new QwpBackgroundDrainerPool(2, drainer);
+        pool.Enqueue(slotLock);
+        await pool.WaitForAllAsync();
+
+        Assert.That(File.Exists(Path.Combine(slotDir, ".failed")), Is.False);
+    }
+
+    [Test]
+    public async Task Enqueue_QwpAuthError_DropsFailedSentinel()
+    {
+        var slotDir = Path.Combine(_root, "slot");
+        var slotLock = QwpSlotLock.Acquire(slotDir);
+        var drainer = new ThrowingDrainer(new QwpException(QwpStatusCode.SecurityError, 0, "auth"));
+
+        using var pool = new QwpBackgroundDrainerPool(2, drainer);
+        pool.Enqueue(slotLock);
+        await pool.WaitForAllAsync();
+
+        Assert.That(File.Exists(Path.Combine(slotDir, ".failed")), Is.True);
     }
 
     [Test]
@@ -171,6 +218,25 @@ public class QwpBackgroundDrainerPoolTests
         Assert.That(drainer.Drained, Has.Count.EqualTo(slotCount));
         Assert.That(drainer.Drained.ToHashSet(), Has.Count.EqualTo(slotCount),
             "every slot must be drained exactly once");
+    }
+
+    [Test]
+    public void Dispose_WedgedDrainer_StillReleasesSlotLock()
+    {
+        var slotDir = Path.Combine(_root, "slot");
+        var slotLock = QwpSlotLock.Acquire(slotDir);
+        var drainer = new GatedDrainer();
+
+        var pool = new QwpBackgroundDrainerPool(2, drainer, shutdownWait: TimeSpan.FromMilliseconds(50));
+        pool.Enqueue(slotLock);
+
+        pool.Dispose();
+
+        // Slot lock must be released even though the drainer never returned.
+        using var reacquired = QwpSlotLock.Acquire(slotDir);
+        Assert.That(reacquired.SlotDirectory, Is.EqualTo(slotDir));
+
+        drainer.ReleaseAll();
     }
 
     [Test]

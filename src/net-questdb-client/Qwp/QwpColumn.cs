@@ -158,11 +158,15 @@ internal sealed class QwpColumn
         var bitIndex = NonNullCount;
         EnsureBoolCapacity(bitIndex + 1);
         var byteIndex = bitIndex >> 3;
-        var mask = (byte)(1 << (bitIndex & 7));
-        BoolData![byteIndex] = (byte)(BoolData[byteIndex] & ~mask);
+        var bitInByte = bitIndex & 7;
+        if (bitInByte == 0)
+        {
+            BoolData![byteIndex] = 0;
+        }
+        var mask = (byte)(1 << bitInByte);
         if (value)
         {
-            BoolData[byteIndex] |= mask;
+            BoolData![byteIndex] |= mask;
         }
 
         AdvanceNonNull();

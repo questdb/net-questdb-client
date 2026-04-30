@@ -113,7 +113,22 @@ internal sealed class QwpSymbolDictionary
     /// </summary>
     public void Rollback()
     {
-        while (_values.Count > _committedCount)
+        RollbackTo(_committedCount);
+    }
+
+    /// <summary>
+    ///     Drops entries until <see cref="Count" /> equals <paramref name="targetCount" />.
+    ///     <paramref name="targetCount" /> must be ≥ <see cref="CommittedCount" />.
+    /// </summary>
+    public void RollbackTo(int targetCount)
+    {
+        if (targetCount < _committedCount)
+        {
+            throw new ArgumentOutOfRangeException(nameof(targetCount),
+                "cannot roll back below the committed watermark");
+        }
+
+        while (_values.Count > targetCount)
         {
             var last = _values.Count - 1;
             _ids.Remove(_values[last]);

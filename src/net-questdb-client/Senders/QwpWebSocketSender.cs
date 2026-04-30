@@ -57,7 +57,8 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
     private readonly QwpSymbolDictionary _symbolDictionary = new();
     private readonly QwpInFlightWindow _inFlightWindow = new();
     private readonly QwpWebSocketTransport? _transport;
-    private readonly byte[] _receiveBuffer;
+    private byte[] _receiveBuffer;
+    private const int MaxReceiveBufferBytes = 16 * 1024 * 1024;
     private readonly List<QwpTableBuffer> _flushBatch = new();
 
     private readonly SemaphoreSlim? _slot;
@@ -103,7 +104,7 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
         if (options.in_flight_window < 2)
         {
             throw new IngressError(ErrorCode.ConfigError,
-                "WebSocket transport requires async mode (in_flight_window > 1)");
+                $"WebSocket transport requires in_flight_window > 1, got {options.in_flight_window}");
         }
 
         _schemaCache = new QwpSchemaCache(options.max_schemas_per_connection);
@@ -153,7 +154,7 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
             sendChannel = Channel.CreateBounded<AsyncBatch>(new BoundedChannelOptions(options.in_flight_window)
             {
                 SingleReader = true,
-                SingleWriter = false,
+                SingleWriter = true,
                 FullMode = BoundedChannelFullMode.Wait,
             });
             ioCts = new CancellationTokenSource();
@@ -346,8 +347,21 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
     public ISender Symbol(ReadOnlySpan<char> name, ReadOnlySpan<char> value)
     {
         ThrowIfTerminal();
+        var preCount = _symbolDictionary.Count;
         var globalId = _symbolDictionary.Add(value);
-        EnsureCurrentTable().AppendSymbol(name, globalId);
+        try
+        {
+            EnsureCurrentTable().AppendSymbol(name, globalId);
+        }
+        catch
+        {
+            // CancelCurrentRow rolls back column savepoints but not the dict.
+            if (_symbolDictionary.Count > preCount)
+            {
+                _symbolDictionary.RollbackTo(preCount);
+            }
+            throw;
+        }
         return this;
     }
 
@@ -913,7 +927,7 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
                 int read;
                 try
                 {
-                    read = await _transport!.ReceiveFrameAsync(_receiveBuffer, ct).ConfigureAwait(false);
+                    (read, _receiveBuffer) = await _transport!.ReceiveFrameAsync(_receiveBuffer, MaxReceiveBufferBytes, ct).ConfigureAwait(false);
                 }
                 catch (OperationCanceledException)
                 {
@@ -1102,13 +1116,16 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
 
         FinalizeWsTeardown(ioJoined);
 
-        try
+        if (ioJoined)
         {
-            using var closeCts = new CancellationTokenSource(Options.close_flush_timeout_millis);
-            _transport!.CloseAsync(WebSocketCloseStatus.NormalClosure, null, closeCts.Token).GetAwaiter().GetResult();
-        }
-        catch (Exception)
-        {
+            try
+            {
+                using var closeCts = new CancellationTokenSource(Options.close_flush_timeout_millis);
+                _transport!.CloseAsync(WebSocketCloseStatus.NormalClosure, null, closeCts.Token).GetAwaiter().GetResult();
+            }
+            catch (Exception)
+            {
+            }
         }
 
         SfCleanup.Dispose(_transport);
@@ -1143,13 +1160,16 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
 
         FinalizeWsTeardown(ioJoined);
 
-        try
+        if (ioJoined)
         {
-            using var closeCts = new CancellationTokenSource(Options.close_flush_timeout_millis);
-            await _transport!.CloseAsync(WebSocketCloseStatus.NormalClosure, null, closeCts.Token).ConfigureAwait(false);
-        }
-        catch (Exception)
-        {
+            try
+            {
+                using var closeCts = new CancellationTokenSource(Options.close_flush_timeout_millis);
+                await _transport!.CloseAsync(WebSocketCloseStatus.NormalClosure, null, closeCts.Token).ConfigureAwait(false);
+            }
+            catch (Exception)
+            {
+            }
         }
 
         SfCleanup.Dispose(_transport);
@@ -1262,6 +1282,11 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
 
         _inFlightWindow.FailAll(failure);
         _ioCts?.Cancel();
+
+        // Wipe schema/symbol-dict caches so any future code path (or a refactor that lifts the
+        // terminal-only contract) cannot replay reference frames the server never received.
+        _schemaCache.Reset();
+        _symbolDictionary.Reset();
     }
 
     private void GuardLastFlushNotSet()

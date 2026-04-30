@@ -119,7 +119,7 @@ public class BenchQueryWs
         using var resp = await _http.GetAsync(url, HttpCompletionOption.ResponseHeadersRead);
         resp.EnsureSuccessStatusCode();
         await using var stream = await resp.Content.ReadAsStreamAsync();
-        return await CountRowsInJsonAsync(stream);
+        return await CountRowsStreamingAsync(stream);
     }
 
     private async Task SeedNarrowAsync(int rows)
@@ -185,23 +185,57 @@ public class BenchQueryWs
         throw new TimeoutException($"table {table} did not reach {minimum} rows within seeding window");
     }
 
-    private static async Task<long> CountRowsInJsonAsync(Stream stream)
+    private static async Task<long> CountRowsStreamingAsync(Stream stream)
     {
-        // Streaming Utf8JsonReader walk — count outer dataset[][] elements without materialising
-        // the whole response. Mirrors what a real consumer parsing JSON output would do.
-        using var ms = new MemoryStream();
-        await stream.CopyToAsync(ms);
-        var bytes = ms.GetBuffer().AsMemory(0, (int)ms.Length);
-        return CountDatasetRows(bytes.Span);
-    }
-
-    private static long CountDatasetRows(ReadOnlySpan<byte> json)
-    {
-        var reader = new Utf8JsonReader(json);
+        // True streaming Utf8JsonReader walk — refill a buffer as the network feeds it. Avoids the
+        // CopyToAsync(MemoryStream) penalty that would charge HTTP an unfair allocator tax.
+        var buffer = new byte[64 * 1024];
+        var filled = 0;
+        long count = 0;
         var sawDataset = false;
         var depth = 0;
-        long count = 0;
+        var state = new JsonReaderState();
+        var done = false;
 
+        while (!done)
+        {
+            var read = await stream.ReadAsync(buffer.AsMemory(filled, buffer.Length - filled));
+            var isFinal = read == 0;
+            var consumed = ProcessChunk(buffer.AsSpan(0, filled + read), isFinal, ref state,
+                ref sawDataset, ref depth, ref count, out var datasetEnded);
+
+            if (datasetEnded || isFinal)
+            {
+                done = true;
+                break;
+            }
+
+            var leftover = filled + read - consumed;
+            if (leftover > 0)
+            {
+                if (consumed == 0)
+                {
+                    var grown = new byte[buffer.Length * 2];
+                    Array.Copy(buffer, grown, filled + read);
+                    buffer = grown;
+                }
+                else
+                {
+                    Array.Copy(buffer, consumed, buffer, 0, leftover);
+                }
+            }
+            filled = leftover;
+        }
+
+        return count;
+    }
+
+    private static int ProcessChunk(
+        ReadOnlySpan<byte> span, bool isFinal, ref JsonReaderState state,
+        ref bool sawDataset, ref int depth, ref long count, out bool datasetEnded)
+    {
+        datasetEnded = false;
+        var reader = new Utf8JsonReader(span, isFinal, state);
         while (reader.Read())
         {
             if (!sawDataset)
@@ -221,12 +255,18 @@ public class BenchQueryWs
                     break;
                 case JsonTokenType.EndArray:
                     depth--;
-                    if (depth == 0) return count;
+                    if (depth == 0)
+                    {
+                        datasetEnded = true;
+                        state = reader.CurrentState;
+                        return (int)reader.BytesConsumed;
+                    }
                     break;
             }
         }
 
-        return count;
+        state = reader.CurrentState;
+        return (int)reader.BytesConsumed;
     }
 
     private static bool TryParseCount(string body, out long count)
@@ -258,13 +298,47 @@ public class BenchQueryWs
         public override void OnBatch(QwpColumnBatch batch)
         {
             TotalRows += batch.RowCount;
-            if (batch.ColumnCount > 0 && batch.GetColumnWireType(0) == QuestDB.Enums.QwpTypeCode.Long)
+            // Walk every column on every row through the typed accessors so the bench actually
+            // exercises the primitive read path. Earlier shape checked only column 0; in the
+            // narrow schema column 0 is a Symbol so the hot Long/Double accessor went uncalled.
+            var cols = batch.ColumnCount;
+            var rows = batch.RowCount;
+            long acc = 0;
+            for (var c = 0; c < cols; c++)
             {
-                var rows = batch.RowCount;
-                long acc = 0;
-                for (var r = 0; r < rows; r++) acc ^= batch.GetLongValue(0, r);
-                Checksum ^= acc;
+                var t = batch.GetColumnWireType(c);
+                switch (t)
+                {
+                    case QuestDB.Enums.QwpTypeCode.Long:
+                    case QuestDB.Enums.QwpTypeCode.Date:
+                    case QuestDB.Enums.QwpTypeCode.Timestamp:
+                    case QuestDB.Enums.QwpTypeCode.TimestampNanos:
+                        for (var r = 0; r < rows; r++) acc ^= batch.GetLongValue(c, r);
+                        break;
+                    case QuestDB.Enums.QwpTypeCode.Int:
+                    case QuestDB.Enums.QwpTypeCode.IPv4:
+                        for (var r = 0; r < rows; r++) acc ^= batch.GetIntValue(c, r);
+                        break;
+                    case QuestDB.Enums.QwpTypeCode.Double:
+                        for (var r = 0; r < rows; r++)
+                            acc ^= BitConverter.DoubleToInt64Bits(batch.GetDoubleValue(c, r));
+                        break;
+                    case QuestDB.Enums.QwpTypeCode.Float:
+                        for (var r = 0; r < rows; r++)
+                            acc ^= BitConverter.SingleToInt32Bits(batch.GetFloatValue(c, r));
+                        break;
+                    case QuestDB.Enums.QwpTypeCode.Boolean:
+                        for (var r = 0; r < rows; r++) acc ^= batch.GetBoolValue(c, r) ? 1 : 0;
+                        break;
+                    case QuestDB.Enums.QwpTypeCode.Symbol:
+                        for (var r = 0; r < rows; r++) acc ^= batch.GetSymbolId(c, r);
+                        break;
+                    case QuestDB.Enums.QwpTypeCode.Varchar:
+                        for (var r = 0; r < rows; r++) acc ^= batch.GetStringSpan(c, r).Length;
+                        break;
+                }
             }
+            Checksum ^= acc;
         }
     }
 }

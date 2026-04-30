@@ -286,6 +286,24 @@ public class QueryOptionsTests
             $"ws::addr=h:9000;compression_level={level};"));
     }
 
+    [Test]
+    public void Parse_CompressionRaw_IgnoresOutOfRangeLevel()
+    {
+        Assert.DoesNotThrow(() => new QueryOptions(
+            "ws::addr=h:9000;compression=raw;compression_level=99;"));
+    }
+
+    [TestCase("Addr")]
+    [TestCase("ADDR")]
+    [TestCase("AdDr")]
+    public void Parse_AddrKeyIsCaseInsensitive(string keyForm)
+    {
+        var o = new QueryOptions($"ws::{keyForm}=h1:9000,h2:9000;");
+        Assert.That(o.AddressCount, Is.EqualTo(2));
+        Assert.That(o.addresses[0], Is.EqualTo("h1:9000"));
+        Assert.That(o.addresses[1], Is.EqualTo("h2:9000"));
+    }
+
     [TestCase("target=any;", TargetType.any)]
     [TestCase("target=primary;", TargetType.primary)]
     [TestCase("target=replica;", TargetType.replica)]

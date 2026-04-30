@@ -49,10 +49,14 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient
     private int _activeAddressIndex;
     private byte[] _receiveBuffer = new byte[InitialReceiveBufferBytes];
     private byte[] _decompressBuffer = Array.Empty<byte>();
+    private readonly byte[] _cancelFrameBuf = new byte[1 + 8];
+    private readonly byte[] _creditFrameBuf = new byte[1 + 8 + QwpVarint.MaxBytes];
     private ZstdSharp.Decompressor? _decompressor;
-    private long _nextRequestId = 1;
+    private long _nextRequestId;
     private long _currentRequestId = -1;
     private int _disposed;
+    private int _terminal;
+    private bool _drainOkAfterHandlerThrow;
 
     private QwpQueryWebSocketClient(QueryOptions options)
     {
@@ -97,6 +101,7 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient
         ArgumentNullException.ThrowIfNull(sql);
         ArgumentNullException.ThrowIfNull(handler);
         ThrowIfDisposed();
+        ThrowIfTerminal();
 
         var sqlBytes = StrictUtf8.GetByteCount(sql);
         if (sqlBytes > QwpConstants.MaxSqlLengthBytes)
@@ -121,6 +126,8 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient
                 "Execute is in flight; one query at a time per client");
         }
 
+        var graceful = false;
+        _drainOkAfterHandlerThrow = false;
         try
         {
             var attempt = 0;
@@ -128,12 +135,13 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient
             while (true)
             {
                 var requestId = Interlocked.Increment(ref _nextRequestId);
-                Volatile.Write(ref _currentRequestId, requestId);
+                Interlocked.Exchange(ref _currentRequestId, requestId);
                 try
                 {
                     await SendQueryRequestAsync(requestId, sql, _options.initial_credit, bindBlob, bindCount, ct)
                         .ConfigureAwait(false);
                     await DriveQueryLoopAsync(handler, ct).ConfigureAwait(false);
+                    graceful = true;
                     return;
                 }
                 catch (Exception ex) when (
@@ -142,7 +150,7 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient
                     && IsTransportError(ex)
                     && !ct.IsCancellationRequested)
                 {
-                    Volatile.Write(ref _currentRequestId, -1);
+                    Interlocked.Exchange(ref _currentRequestId, -1);
                     await Task.Delay(TimeSpan.FromMilliseconds(backoffMs), ct).ConfigureAwait(false);
                     backoffMs = Math.Min(backoffMs * 2, _options.failover_backoff_max_ms.TotalMilliseconds);
                     attempt++;
@@ -153,7 +161,8 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient
         }
         finally
         {
-            Volatile.Write(ref _currentRequestId, -1);
+            if (!graceful && !_drainOkAfterHandlerThrow) MarkTerminal();
+            Interlocked.Exchange(ref _currentRequestId, -1);
             _executeLock.Release();
         }
     }
@@ -165,6 +174,7 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient
             IngressError ie => ie.code is ErrorCode.SocketError or ErrorCode.ProtocolVersionError,
             System.Net.WebSockets.WebSocketException => true,
             IOException => true,
+            ZstdSharp.ZstdException => true,
             _ => false,
         };
     }
@@ -173,12 +183,11 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient
     {
         _transport?.Dispose();
         _transport = null;
-        _connState.ResetSymbolDict();
-        _connState.ResetSchemas();
 
         var totalAddresses = _options.AddressCount;
         QwpServerInfo? lastInfo = null;
         Exception? lastTransportError = null;
+        var anyRoleMismatch = false;
         for (var step = 1; step <= totalAddresses; step++)
         {
             var idx = (_activeAddressIndex + step) % totalAddresses;
@@ -201,9 +210,12 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient
                     _transport = candidate;
                     _activeAddressIndex = idx;
                     ServerInfo = info;
+                    _connState.ResetSymbolDict();
+                    _connState.ResetSchemas();
                     return;
                 }
 
+                anyRoleMismatch = true;
                 candidate.Dispose();
                 candidate = null;
             }
@@ -219,6 +231,13 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient
             }
         }
 
+        if (!anyRoleMismatch && lastTransportError is not null)
+        {
+            throw new IngressError(ErrorCode.SocketError,
+                $"failover exhausted against every endpoint: {lastTransportError.Message}",
+                lastTransportError);
+        }
+
         throw new QwpRoleMismatchException(_options.target, lastInfo,
             lastTransportError is null
                 ? $"failover exhausted: no endpoint matched target={_options.target}"
@@ -227,14 +246,15 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient
 
     public void Cancel()
     {
-        var rid = Volatile.Read(ref _currentRequestId);
+        var rid = Interlocked.Read(ref _currentRequestId);
         if (rid < 0) return;
+        if (Volatile.Read(ref _disposed) != 0) return;
 
         try
         {
             SendCancelAsync(rid, CancellationToken.None).GetAwaiter().GetResult();
         }
-        catch (Exception)
+        catch
         {
             // Best-effort cancel; the connection is being torn down regardless.
         }
@@ -243,20 +263,24 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient
     public void Dispose()
     {
         if (Interlocked.CompareExchange(ref _disposed, 1, 0) != 0) return;
-        _transport?.Dispose();
-        _decompressor?.Dispose();
-        _executeLock.Dispose();
-        _sendLock.Dispose();
+        DisposeCore();
     }
 
     public ValueTask DisposeAsync()
     {
         if (Interlocked.CompareExchange(ref _disposed, 1, 0) != 0) return default;
-        _transport?.Dispose();
-        _decompressor?.Dispose();
-        _executeLock.Dispose();
-        _sendLock.Dispose();
+        DisposeCore();
         return default;
+    }
+
+    private void DisposeCore()
+    {
+        _transport?.Dispose();
+        if (_executeLock.Wait(TimeSpan.FromSeconds(5)))
+        {
+            try { _decompressor?.Dispose(); }
+            finally { _executeLock.Release(); }
+        }
     }
 
     private static Uri BuildUri(QueryOptions options, string addr)
@@ -307,6 +331,7 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient
     {
         QwpServerInfo? lastInfo = null;
         Exception? lastTransportError = null;
+        var anyRoleMismatch = false;
         for (var i = 0; i < _options.AddressCount; i++)
         {
             var addr = _options.addresses[i];
@@ -331,6 +356,7 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient
                     return;
                 }
 
+                anyRoleMismatch = true;
                 candidate.Dispose();
                 candidate = null;
             }
@@ -344,6 +370,13 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient
                 lastTransportError = ex;
                 candidate?.Dispose();
             }
+        }
+
+        if (!anyRoleMismatch && lastTransportError is not null)
+        {
+            throw new IngressError(ErrorCode.SocketError,
+                $"connect failed against every endpoint: {lastTransportError.Message}",
+                lastTransportError);
         }
 
         throw new QwpRoleMismatchException(_options.target, lastInfo,
@@ -363,8 +396,7 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient
     {
         return target switch
         {
-            TargetType.any => role is QwpConstants.RoleStandalone or QwpConstants.RolePrimary
-                or QwpConstants.RolePrimaryCatchup or QwpConstants.RoleReplica,
+            TargetType.any => true,
             TargetType.primary => role is QwpConstants.RoleStandalone or QwpConstants.RolePrimary
                 or QwpConstants.RolePrimaryCatchup,
             TargetType.replica => role == QwpConstants.RoleReplica,
@@ -405,8 +437,8 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient
                     }
                     catch
                     {
-                        // Drain leftover frames so the connection is reusable after the throw.
-                        await CancelAndDrainAsync(requestIdAtBatch, ct).ConfigureAwait(false);
+                        _drainOkAfterHandlerThrow = await CancelAndDrainAsync(requestIdAtBatch)
+                            .ConfigureAwait(false);
                         throw;
                     }
                     if (_options.initial_credit > 0)
@@ -521,7 +553,7 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient
         await SendFrameAsync(frame, ct).ConfigureAwait(false);
     }
 
-    private async Task SendFrameAsync(byte[] frame, CancellationToken ct)
+    private async Task SendFrameAsync(ReadOnlyMemory<byte> frame, CancellationToken ct)
     {
         await _sendLock.WaitAsync(ct).ConfigureAwait(false);
         try
@@ -571,52 +603,50 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient
 
     private async Task SendCreditAsync(long requestId, long additionalBytes, CancellationToken ct)
     {
-        var len = 1 + 8 + QwpVarint.GetByteCount((ulong)additionalBytes);
-        var frame = new byte[len];
-        frame[0] = QwpConstants.MsgKindCredit;
-        BinaryPrimitives.WriteInt64LittleEndian(frame.AsSpan(1, 8), requestId);
-        QwpVarint.Write(frame.AsSpan(9), (ulong)additionalBytes);
+        _creditFrameBuf[0] = QwpConstants.MsgKindCredit;
+        BinaryPrimitives.WriteInt64LittleEndian(_creditFrameBuf.AsSpan(1, 8), requestId);
+        var varintLen = QwpVarint.Write(_creditFrameBuf.AsSpan(9), (ulong)additionalBytes);
+        var len = 1 + 8 + varintLen;
 
         if (_transport is null) return;
-        await SendFrameAsync(frame, ct).ConfigureAwait(false);
+        await SendFrameAsync(_creditFrameBuf.AsMemory(0, len), ct).ConfigureAwait(false);
     }
 
-    private async Task CancelAndDrainAsync(long requestId, CancellationToken ct)
+    private async Task<bool> CancelAndDrainAsync(long requestId)
     {
-        try { await SendCancelAsync(requestId, ct).ConfigureAwait(false); }
-        catch { /* best-effort */ }
+        try { await SendCancelAsync(requestId, CancellationToken.None).ConfigureAwait(false); }
+        catch { return false; }
 
-        // Drain until a terminal frame arrives, capped to bound a stuck server.
         const int maxDrainFrames = 1024;
         for (var i = 0; i < maxDrainFrames; i++)
         {
             QwpEgressMsgKind kind;
             try
             {
-                (kind, _, _) = await ReadFrameAsync(ct).ConfigureAwait(false);
+                (kind, _, _) = await ReadFrameAsync(CancellationToken.None).ConfigureAwait(false);
             }
             catch
             {
-                return;
+                return false;
             }
 
             if (kind is QwpEgressMsgKind.ResultEnd
                 or QwpEgressMsgKind.QueryError
                 or QwpEgressMsgKind.ExecDone)
             {
-                return;
+                return true;
             }
         }
+        return false;
     }
 
     private async Task SendCancelAsync(long requestId, CancellationToken ct)
     {
-        var frame = new byte[1 + 8];
-        frame[0] = QwpConstants.MsgKindCancel;
-        BinaryPrimitives.WriteInt64LittleEndian(frame.AsSpan(1, 8), requestId);
+        _cancelFrameBuf[0] = QwpConstants.MsgKindCancel;
+        BinaryPrimitives.WriteInt64LittleEndian(_cancelFrameBuf.AsSpan(1, 8), requestId);
 
         if (_transport is null) return;
-        await SendFrameAsync(frame, ct).ConfigureAwait(false);
+        await SendFrameAsync(_cancelFrameBuf, ct).ConfigureAwait(false);
     }
 
     private static QwpServerInfo DecodeServerInfo(ReadOnlyMemory<byte> payload)
@@ -672,16 +702,28 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient
         var p = 9;
         QwpVarint.Read(s.Slice(p), out var consumed1); // final_seq, ignore
         p += consumed1;
-        var totalRows = (long)QwpVarint.Read(s.Slice(p), out _);
+        var totalRows = (long)QwpVarint.Read(s.Slice(p), out var consumed2);
+        p += consumed2;
+        if (p != s.Length)
+        {
+            throw new IngressError(ErrorCode.ProtocolVersionError,
+                $"RESULT_END trailing bytes: consumed {p}, payload {s.Length}");
+        }
         return totalRows;
     }
 
     private static (byte OpType, long RowsAffected) DecodeExecDone(ReadOnlyMemory<byte> payload)
     {
         var s = payload.Span;
-        if (s.Length < 1 + 8 + 1) throw new IngressError(ErrorCode.ProtocolVersionError, "EXEC_DONE too short");
+        if (s.Length < 1 + 8 + 1 + 1) throw new IngressError(ErrorCode.ProtocolVersionError, "EXEC_DONE too short");
         var opType = s[9];
-        var rowsAffected = (long)QwpVarint.Read(s.Slice(10), out _);
+        var rowsAffected = (long)QwpVarint.Read(s.Slice(10), out var consumed);
+        var p = 10 + consumed;
+        if (p != s.Length)
+        {
+            throw new IngressError(ErrorCode.ProtocolVersionError,
+                $"EXEC_DONE trailing bytes: consumed {p}, payload {s.Length}");
+        }
         return (opType, rowsAffected);
     }
 
@@ -694,9 +736,10 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient
         }
         var status = s[9];
         var msgLen = BinaryPrimitives.ReadUInt16LittleEndian(s.Slice(10, 2));
-        if (s.Length < 12 + msgLen)
+        if (s.Length != 12 + msgLen)
         {
-            throw new IngressError(ErrorCode.ProtocolVersionError, "QUERY_ERROR truncated message");
+            throw new IngressError(ErrorCode.ProtocolVersionError,
+                $"QUERY_ERROR length mismatch: msgLen={msgLen} payload={s.Length}");
         }
         var msg = StrictUtf8.GetString(s.Slice(12, msgLen));
         return (status, msg);
@@ -718,6 +761,17 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient
             throw new ObjectDisposedException(nameof(QwpQueryWebSocketClient));
         }
     }
+
+    private void ThrowIfTerminal()
+    {
+        if (Volatile.Read(ref _terminal) != 0)
+        {
+            throw new IngressError(ErrorCode.SocketError,
+                "client is in a terminal state after a prior failure; create a new QueryClient");
+        }
+    }
+
+    private void MarkTerminal() => Volatile.Write(ref _terminal, 1);
 }
 
 #endif

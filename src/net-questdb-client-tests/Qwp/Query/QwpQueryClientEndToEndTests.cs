@@ -418,6 +418,274 @@ public class QwpQueryClientEndToEndTests
         Assert.That(ex!.code, Is.EqualTo(ErrorCode.AuthError));
     }
 
+    [Test]
+    public async Task FirstRequestId_IsOne_MatchingJavaClient()
+    {
+        var schema = new ResultSchema { SchemaId = 1, Columns = { new SchemaColumn("c", QwpTypeCode.Long) } };
+        var data = new ResultBatchData { RowCount = 1, Columns = { new FixedColumnData { DenseBytes = LongLe(0L) } } };
+        var batch = QwpEgressFrameBuilder.BuildResultBatch(1L, 0L, schema, data);
+        var end = QwpEgressFrameBuilder.BuildResultEnd(1L, 0L, 1L);
+
+        await using var server = new DummyQwpServer(new DummyQwpServerOptions
+        {
+            Path = QwpConstants.ReadPath,
+            NegotiatedVersion = "1",
+            FrameHandlerMulti = _ => new[] { batch, end },
+        });
+        await server.StartAsync();
+
+        using var client = QueryClient.New(BuildConnString(server));
+        client.Execute("SELECT 0", new RecordingHandler());
+
+        var receivedList = server.ReceivedFrames.ToList();
+        Assert.That(receivedList.Count, Is.EqualTo(1));
+        var requestId = BinaryPrimitives.ReadInt64LittleEndian(receivedList[0].AsSpan(1, 8));
+        Assert.That(requestId, Is.EqualTo(1L));
+    }
+
+    [Test]
+    public async Task UserCancellation_MarksClientTerminal_NextExecuteThrows()
+    {
+        var schema = new ResultSchema { SchemaId = 1, Columns = { new SchemaColumn("c", QwpTypeCode.Long) } };
+        var batch = QwpEgressFrameBuilder.BuildResultBatch(
+            1L, 0L, schema,
+            new ResultBatchData { RowCount = 1, Columns = { new FixedColumnData { DenseBytes = LongLe(1L) } } });
+
+        // Server emits one batch but never the terminator → client.ReceiveAsync hangs until cancellation.
+        await using var server = new DummyQwpServer(new DummyQwpServerOptions
+        {
+            Path = QwpConstants.ReadPath,
+            NegotiatedVersion = "1",
+            FrameHandlerMulti = _ => new[] { batch },
+        });
+        await server.StartAsync();
+
+        using var client = QueryClient.New(BuildConnString(server));
+        using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(300));
+        Assert.CatchAsync<OperationCanceledException>(async () =>
+            await client.ExecuteAsync("SELECT 1", new RecordingHandler(), cts.Token));
+
+        var ex = Assert.Throws<IngressError>(() => client.Execute("SELECT 2", new RecordingHandler()));
+        Assert.That(ex!.code, Is.EqualTo(ErrorCode.SocketError));
+        StringAssert.Contains("terminal state", ex.Message);
+    }
+
+    [Test]
+    public async Task SqlExceedingMaxLength_Throws()
+    {
+        await using var server = new DummyQwpServer(new DummyQwpServerOptions
+        {
+            Path = QwpConstants.ReadPath,
+            NegotiatedVersion = "1",
+            FrameHandlerMulti = _ => Array.Empty<byte[]>(),
+        });
+        await server.StartAsync();
+
+        using var client = QueryClient.New(BuildConnString(server));
+        var hugeSql = new string('x', QwpConstants.MaxSqlLengthBytes + 1);
+        var ex = Assert.Throws<IngressError>(() => client.Execute(hugeSql, new RecordingHandler()));
+        Assert.That(ex!.code, Is.EqualTo(ErrorCode.InvalidApiCall));
+    }
+
+    [Test]
+    public async Task CacheReset_ClearsSymbolDictAndAllowsNextDeltaToStartAtZero()
+    {
+        var schema = new ResultSchema { SchemaId = 1, Columns = { new SchemaColumn("s", QwpTypeCode.Symbol) } };
+        var dict1 = new DeltaSymbolDict { DeltaStart = 0, Entries = { "alpha", "beta" } };
+        var data1 = new ResultBatchData
+        {
+            RowCount = 1,
+            Columns = { new SymbolColumnData { DenseDictIds = new[] { 0 } } },
+        };
+        var batch1 = QwpEgressFrameBuilder.BuildResultBatch(1L, 0L, schema, data1, dict1);
+        var end1 = QwpEgressFrameBuilder.BuildResultEnd(1L, 0L, 1L);
+
+        var resetFrame = QwpEgressFrameBuilder.BuildCacheReset(QwpConstants.ResetMaskDict);
+
+        // Second query reuses schema id 1 but starts dict delta at 0 — only valid after CACHE_RESET.
+        var dict2 = new DeltaSymbolDict { DeltaStart = 0, Entries = { "gamma" } };
+        var data2 = new ResultBatchData
+        {
+            RowCount = 1,
+            Columns = { new SymbolColumnData { DenseDictIds = new[] { 0 } } },
+        };
+        var batch2 = QwpEgressFrameBuilder.BuildResultBatch(2L, 0L, schema, data2, dict2);
+        var end2 = QwpEgressFrameBuilder.BuildResultEnd(2L, 0L, 1L);
+
+        var queryCount = 0;
+        await using var server = new DummyQwpServer(new DummyQwpServerOptions
+        {
+            Path = QwpConstants.ReadPath,
+            NegotiatedVersion = "1",
+            FrameHandlerMulti = frame =>
+            {
+                if (frame[0] != QwpConstants.MsgKindQueryRequest) return Array.Empty<byte[]>();
+                queryCount++;
+                return queryCount == 1
+                    ? new[] { batch1, end1 }
+                    : new[] { resetFrame, batch2, end2 };
+            },
+        });
+        await server.StartAsync();
+
+        using var client = QueryClient.New(BuildConnString(server));
+        var h1 = new RecordingHandler();
+        client.Execute("SELECT 1", h1);
+        Assert.That(h1.Ended, Is.True);
+
+        var h2 = new RecordingHandler();
+        client.Execute("SELECT 2", h2);
+        Assert.That(h2.Ended, Is.True);
+        Assert.That(h2.Batches.Count, Is.EqualTo(1));
+    }
+
+    [Test]
+    public async Task CreditFlow_WhenInitialCreditSet_SendsCreditFrameAfterEachBatch()
+    {
+        var schema = new ResultSchema { SchemaId = 1, Columns = { new SchemaColumn("c", QwpTypeCode.Long) } };
+        var batch1 = QwpEgressFrameBuilder.BuildResultBatch(
+            1L, 0L, schema,
+            new ResultBatchData { RowCount = 1, Columns = { new FixedColumnData { DenseBytes = LongLe(1L) } } });
+        var batch2 = QwpEgressFrameBuilder.BuildResultBatch(
+            1L, 1L, schema,
+            new ResultBatchData { RowCount = 1, Columns = { new FixedColumnData { DenseBytes = LongLe(2L) } } });
+        var end = QwpEgressFrameBuilder.BuildResultEnd(1L, 1L, 2L);
+
+        // Only respond to QUERY_REQUEST; do nothing for CREDIT/CANCEL frames so they're just captured.
+        await using var server = new DummyQwpServer(new DummyQwpServerOptions
+        {
+            Path = QwpConstants.ReadPath,
+            NegotiatedVersion = "1",
+            FrameHandlerMulti = frame =>
+                frame.Length > 0 && frame[0] == QwpConstants.MsgKindQueryRequest
+                    ? new[] { batch1, batch2, end }
+                    : Array.Empty<byte[]>(),
+        });
+        await server.StartAsync();
+
+        var options = new QueryOptions(BuildConnString(server)) { initial_credit = 4096 };
+        using var client = QueryClient.New(options);
+        client.Execute("SELECT 1", new RecordingHandler());
+
+        var deadline = DateTime.UtcNow.AddSeconds(2);
+        List<byte[]> creditFrames;
+        do
+        {
+            creditFrames = server.ReceivedFrames
+                .Where(f => f.Length > 0 && f[0] == QwpConstants.MsgKindCredit)
+                .ToList();
+            if (creditFrames.Count >= 2) break;
+            await Task.Delay(20);
+        } while (DateTime.UtcNow < deadline);
+
+        Assert.That(creditFrames.Count, Is.EqualTo(2));
+        var rid = BinaryPrimitives.ReadInt64LittleEndian(creditFrames[0].AsSpan(1, 8));
+        Assert.That(rid, Is.EqualTo(1L));
+    }
+
+    [Test]
+    public async Task SliceFrame_BadMagic_ThrowsProtocolVersionError()
+    {
+        var bogus = new byte[QwpConstants.HeaderSize + 1];
+        bogus[0] = (byte)'X'; bogus[1] = bogus[2] = bogus[3] = 0;
+        bogus[QwpConstants.OffsetVersion] = 1;
+        BinaryPrimitives.WriteUInt32LittleEndian(bogus.AsSpan(QwpConstants.OffsetPayloadLength, 4), 1);
+        bogus[QwpConstants.HeaderSize] = QwpConstants.MsgKindResultEnd;
+
+        await using var server = new DummyQwpServer(new DummyQwpServerOptions
+        {
+            Path = QwpConstants.ReadPath,
+            NegotiatedVersion = "1",
+            FrameHandlerMulti = _ => new[] { bogus },
+        });
+        await server.StartAsync();
+
+        using var client = QueryClient.New(BuildConnString(server));
+        var ex = Assert.Throws<IngressError>(() => client.Execute("SELECT 1", new RecordingHandler()));
+        Assert.That(ex!.code, Is.EqualTo(ErrorCode.ProtocolVersionError));
+        StringAssert.Contains("magic", ex.Message);
+    }
+
+    [Test]
+    public async Task SliceFrame_PayloadLengthMismatch_ThrowsProtocolVersionError()
+    {
+        var hdr = new byte[QwpConstants.HeaderSize + 5];
+        BinaryPrimitives.WriteUInt32LittleEndian(hdr.AsSpan(0, 4), QwpConstants.Magic);
+        hdr[QwpConstants.OffsetVersion] = 1;
+        BinaryPrimitives.WriteUInt16LittleEndian(hdr.AsSpan(QwpConstants.OffsetTableCount, 2), 0);
+        // header announces 99 bytes but only 5 follow.
+        BinaryPrimitives.WriteUInt32LittleEndian(hdr.AsSpan(QwpConstants.OffsetPayloadLength, 4), 99);
+        hdr[QwpConstants.HeaderSize] = QwpConstants.MsgKindResultEnd;
+
+        await using var server = new DummyQwpServer(new DummyQwpServerOptions
+        {
+            Path = QwpConstants.ReadPath,
+            NegotiatedVersion = "1",
+            FrameHandlerMulti = _ => new[] { hdr },
+        });
+        await server.StartAsync();
+
+        using var client = QueryClient.New(BuildConnString(server));
+        var ex = Assert.Throws<IngressError>(() => client.Execute("SELECT 1", new RecordingHandler()));
+        Assert.That(ex!.code, Is.EqualTo(ErrorCode.ProtocolVersionError));
+    }
+
+    [Test]
+    public async Task UnknownMsgKind_ThrowsProtocolVersionError()
+    {
+        var hdr = new byte[QwpConstants.HeaderSize + 1];
+        BinaryPrimitives.WriteUInt32LittleEndian(hdr.AsSpan(0, 4), QwpConstants.Magic);
+        hdr[QwpConstants.OffsetVersion] = 1;
+        BinaryPrimitives.WriteUInt16LittleEndian(hdr.AsSpan(QwpConstants.OffsetTableCount, 2), 0);
+        BinaryPrimitives.WriteUInt32LittleEndian(hdr.AsSpan(QwpConstants.OffsetPayloadLength, 4), 1);
+        hdr[QwpConstants.HeaderSize] = 0xFE;
+
+        await using var server = new DummyQwpServer(new DummyQwpServerOptions
+        {
+            Path = QwpConstants.ReadPath,
+            NegotiatedVersion = "1",
+            FrameHandlerMulti = _ => new[] { hdr },
+        });
+        await server.StartAsync();
+
+        using var client = QueryClient.New(BuildConnString(server));
+        var ex = Assert.Throws<IngressError>(() => client.Execute("SELECT 1", new RecordingHandler()));
+        Assert.That(ex!.code, Is.EqualTo(ErrorCode.ProtocolVersionError));
+        StringAssert.Contains("unknown egress frame", ex.Message);
+    }
+
+    [Test]
+    public async Task ExecuteReentrancy_ThrowsInvalidApiCall()
+    {
+        var schema = new ResultSchema { SchemaId = 1, Columns = { new SchemaColumn("c", QwpTypeCode.Long) } };
+        var batch = QwpEgressFrameBuilder.BuildResultBatch(
+            1L, 0L, schema,
+            new ResultBatchData { RowCount = 1, Columns = { new FixedColumnData { DenseBytes = LongLe(1L) } } });
+        var end = QwpEgressFrameBuilder.BuildResultEnd(1L, 0L, 1L);
+
+        var gate = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        await using var server = new DummyQwpServer(new DummyQwpServerOptions
+        {
+            Path = QwpConstants.ReadPath,
+            NegotiatedVersion = "1",
+            FrameHandlerMulti = _ =>
+            {
+                gate.TrySetResult(true);
+                Thread.Sleep(200);
+                return new[] { batch, end };
+            },
+        });
+        await server.StartAsync();
+
+        using var client = QueryClient.New(BuildConnString(server));
+        var first = Task.Run(() => client.Execute("SELECT 1", new RecordingHandler()));
+        await gate.Task;
+
+        var ex = Assert.Throws<IngressError>(() => client.Execute("SELECT 2", new RecordingHandler()));
+        Assert.That(ex!.code, Is.EqualTo(ErrorCode.InvalidApiCall));
+        await first;
+    }
+
     private static string BuildConnString(DummyQwpServer server, string extra = "")
     {
         var addr = server.Uri.Authority;

@@ -98,6 +98,10 @@ internal sealed class QwpResultBatchDecoder
         for (var i = 0; i < deltaCount; i++)
         {
             var len = (int)ReadVarint(payload, ref p);
+            if (len < 0 || len > QwpConstants.MaxResultBatchWireBytes)
+            {
+                throw new QwpDecodeException($"symbol dict entry length out of range: {len}");
+            }
             if (p + len > payload.Length)
             {
                 throw new QwpDecodeException("truncated symbol dict entry");
@@ -110,6 +114,10 @@ internal sealed class QwpResultBatchDecoder
     private void DecodeTableBlock(ReadOnlySpan<byte> payload, ref int p, byte headerFlags, QwpColumnBatch batch)
     {
         var nameLen = (int)ReadVarint(payload, ref p);
+        if (nameLen < 0 || nameLen > QwpConstants.MaxNameLengthBytes)
+        {
+            throw new QwpDecodeException($"table name length out of range: {nameLen}");
+        }
         if (p + nameLen > payload.Length)
         {
             throw new QwpDecodeException("truncated table name");
@@ -142,6 +150,10 @@ internal sealed class QwpResultBatchDecoder
             for (var i = 0; i < colCount; i++)
             {
                 var cnLen = (int)ReadVarint(payload, ref p);
+                if (cnLen < 0 || cnLen > QwpConstants.MaxNameLengthBytes)
+                {
+                    throw new QwpDecodeException($"column name length out of range: {cnLen}");
+                }
                 if (p + cnLen > payload.Length)
                 {
                     throw new QwpDecodeException("truncated column name");
@@ -348,10 +360,27 @@ internal sealed class QwpResultBatchDecoder
             p += 4;
         }
 
-        var heapLen = nonNull > 0 ? offsets[nonNull] - offsets[0] : 0;
+        if (nonNull > 0 && offsets[0] != 0)
+        {
+            throw new QwpDecodeException($"varchar offsets[0] must be 0, got {offsets[0]}");
+        }
+
+        var heapLen = nonNull > 0 ? offsets[nonNull] : 0;
         if (heapLen < 0 || p + heapLen > payload.Length)
         {
             throw new QwpDecodeException("truncated varchar heap");
+        }
+
+        var prev = 0;
+        for (var i = 1; i <= nonNull; i++)
+        {
+            var off = offsets[i];
+            if (off < prev || off > heapLen)
+            {
+                throw new QwpDecodeException(
+                    $"varchar offsets non-monotonic or out of range at index {i}: prev={prev} off={off} heapLen={heapLen}");
+            }
+            prev = off;
         }
 
         col.StringOffsets = offsets;
@@ -365,13 +394,16 @@ internal sealed class QwpResultBatchDecoder
 
     private void DecodeSymbolColumn(ReadOnlySpan<byte> payload, ref int p, ColumnView col, int nonNull)
     {
-        col.ValueBytes = RentScratch(col.ValueBytes, nonNull * 4);
+        if (col.SymbolIdsBuf.Length < Math.Max(nonNull, 1))
+        {
+            col.SymbolIdsBuf = new int[Math.Max(nonNull, 64)];
+        }
+        col.SymbolIds = col.SymbolIdsBuf;
         col.SymbolDict = _state.SymbolDict;
 
         for (var i = 0; i < nonNull; i++)
         {
-            var id = (int)ReadVarint(payload, ref p);
-            BinaryPrimitives.WriteInt32LittleEndian(col.ValueBytes.AsSpan(i * 4, 4), id);
+            col.SymbolIdsBuf[i] = (int)ReadVarint(payload, ref p);
         }
     }
 
@@ -471,6 +503,11 @@ internal sealed class QwpResultBatchDecoder
             }
             int nDims = payload[p];
             p++;
+            if (nDims < 0 || nDims > QwpConstants.MaxArrayDimensions)
+            {
+                throw new QwpDecodeException(
+                    $"array nDims out of range: {nDims} (max {QwpConstants.MaxArrayDimensions})");
+            }
 
             var dimsBytes = nDims * 4;
             if (p + dimsBytes > payload.Length)

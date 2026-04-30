@@ -523,6 +523,149 @@ public class QwpResultBatchDecoderTests
         Assert.Throws<InvalidOperationException>(() => batch.GetBinarySpan(0, 0).ToArray());
     }
 
+    [Test]
+    public void Decode_RejectsHugeColumnNameLength()
+    {
+        // Hand-craft a payload whose column name length varint encodes int.MaxValue.
+        var p = new List<byte>
+        {
+            QwpConstants.MsgKindResultBatch,
+        };
+        p.AddRange(new byte[8]); // requestId = 0
+        p.Add(0x00); // batch_seq = 0
+        p.Add(0x00); // empty table name
+        p.Add(0x01); // row_count
+        p.Add(0x01); // col_count
+        p.Add(QwpConstants.SchemaModeFull);
+        p.Add(0x00); // schema_id
+        // column name length varint (int.MaxValue)
+        WriteVarintTo(p, 0x7FFFFFFFUL);
+
+        var decoder = new QwpResultBatchDecoder(new QwpEgressConnState());
+        var ex = Assert.Throws<QwpDecodeException>(() => decoder.Decode(p.ToArray(), 0, new QwpColumnBatch()));
+        StringAssert.Contains("column name length out of range", ex!.Message);
+    }
+
+    [Test]
+    public void Decode_RejectsTooManyArrayDimensions()
+    {
+        // 200-dim array — exceeds MaxArrayDimensions=32. Use a fully formed but invalid payload.
+        var p = new List<byte>
+        {
+            QwpConstants.MsgKindResultBatch,
+        };
+        p.AddRange(new byte[8]);
+        p.Add(0x00); // batch_seq
+        p.Add(0x00); // empty table name
+        p.Add(0x01); // row_count = 1
+        p.Add(0x01); // col_count = 1
+        p.Add(QwpConstants.SchemaModeFull);
+        p.Add(0x00); // schema_id
+        p.Add(0x01); // col name len = 1
+        p.Add((byte)'a');
+        p.Add((byte)QwpTypeCode.DoubleArray);
+        p.Add(0x00); // null_flag = 0 (no nulls)
+        p.Add(200);  // nDims out of range
+
+        var decoder = new QwpResultBatchDecoder(new QwpEgressConnState());
+        var ex = Assert.Throws<QwpDecodeException>(() => decoder.Decode(p.ToArray(), 0, new QwpColumnBatch()));
+        StringAssert.Contains("array nDims out of range", ex!.Message);
+    }
+
+    [Test]
+    public void Decode_RejectsNonZeroVarcharOffset0()
+    {
+        var p = new List<byte>
+        {
+            QwpConstants.MsgKindResultBatch,
+        };
+        p.AddRange(new byte[8]);
+        p.Add(0x00); // batch_seq
+        p.Add(0x00); // empty table name
+        p.Add(0x01); // row_count
+        p.Add(0x01); // col_count
+        p.Add(QwpConstants.SchemaModeFull);
+        p.Add(0x00); // schema_id
+        p.Add(0x01); p.Add((byte)'v');
+        p.Add((byte)QwpTypeCode.Varchar);
+        p.Add(0x00); // null_flag = 0
+        // offsets[0] = 5 (illegal), offsets[1] = 8
+        WriteI32(p, 5);
+        WriteI32(p, 8);
+        for (var i = 0; i < 8; i++) p.Add((byte)i);
+
+        var decoder = new QwpResultBatchDecoder(new QwpEgressConnState());
+        var ex = Assert.Throws<QwpDecodeException>(() => decoder.Decode(p.ToArray(), 0, new QwpColumnBatch()));
+        StringAssert.Contains("offsets[0] must be 0", ex!.Message);
+    }
+
+    [Test]
+    public void Decode_RejectsNonMonotonicVarcharOffsets()
+    {
+        var p = new List<byte>
+        {
+            QwpConstants.MsgKindResultBatch,
+        };
+        p.AddRange(new byte[8]);
+        p.Add(0x00);
+        p.Add(0x00);
+        p.Add(0x02); // row_count = 2
+        p.Add(0x01);
+        p.Add(QwpConstants.SchemaModeFull);
+        p.Add(0x00);
+        p.Add(0x01); p.Add((byte)'v');
+        p.Add((byte)QwpTypeCode.Varchar);
+        p.Add(0x00);
+        WriteI32(p, 0);
+        WriteI32(p, 5);
+        WriteI32(p, 3); // non-monotonic
+        for (var i = 0; i < 5; i++) p.Add((byte)i);
+
+        var decoder = new QwpResultBatchDecoder(new QwpEgressConnState());
+        var ex = Assert.Throws<QwpDecodeException>(() => decoder.Decode(p.ToArray(), 0, new QwpColumnBatch()));
+        StringAssert.Contains("non-monotonic", ex!.Message);
+    }
+
+    [Test]
+    public void Decode_RejectsSymbolDictDeltaStartMismatch()
+    {
+        var schema = new ResultSchema { SchemaId = 1, Columns = { new SchemaColumn("s", QwpTypeCode.Symbol) } };
+        var dict1 = new DeltaSymbolDict { DeltaStart = 0, Entries = { "alpha", "beta" } };
+        var data1 = new ResultBatchData { RowCount = 1, Columns = { new SymbolColumnData { DenseDictIds = new[] { 0 } } } };
+        var batch1 = QwpEgressFrameBuilder.BuildResultBatch(1L, 0L, schema, data1, dict1);
+
+        var state = new QwpEgressConnState();
+        var decoder = new QwpResultBatchDecoder(state);
+        decoder.Decode(PayloadOf(batch1).Span, HeaderFlagsOf(batch1), new QwpColumnBatch());
+        Assert.That(state.SymbolDict.Size, Is.EqualTo(2));
+
+        // Second batch with deltaStart=0 but cursor is 2 → must throw.
+        var dict2 = new DeltaSymbolDict { DeltaStart = 0, Entries = { "gamma" } };
+        var data2 = new ResultBatchData { RowCount = 1, Columns = { new SymbolColumnData { DenseDictIds = new[] { 0 } } } };
+        var batch2 = QwpEgressFrameBuilder.BuildResultBatch(1L, 1L, schema, data2, dict2);
+
+        Assert.Throws<QwpDecodeException>(() =>
+            decoder.Decode(PayloadOf(batch2).Span, HeaderFlagsOf(batch2), new QwpColumnBatch()));
+    }
+
+    private static void WriteVarintTo(List<byte> dst, ulong v)
+    {
+        while (v >= 0x80)
+        {
+            dst.Add((byte)(v | 0x80));
+            v >>= 7;
+        }
+        dst.Add((byte)v);
+    }
+
+    private static void WriteI32(List<byte> dst, int v)
+    {
+        dst.Add((byte)v);
+        dst.Add((byte)(v >> 8));
+        dst.Add((byte)(v >> 16));
+        dst.Add((byte)(v >> 24));
+    }
+
     private static byte HeaderFlagsOf(byte[] frame) => frame[QwpConstants.OffsetFlags];
 
     private static ReadOnlyMemory<byte> PayloadOf(byte[] frame)

@@ -89,10 +89,11 @@ internal static class QwpTlsAuth
                 return false;
             }
 
+            using var root = X509Certificate2.CreateFromPemFile(rootsPath, rootsPassword);
+            using var serverCert = new X509Certificate2(certificate!);
             chain!.ChainPolicy.TrustMode = X509ChainTrustMode.CustomRootTrust;
-            chain.ChainPolicy.CustomTrustStore.Add(
-                X509Certificate2.CreateFromPemFile(rootsPath, rootsPassword));
-            return chain.Build(new X509Certificate2(certificate!));
+            chain.ChainPolicy.CustomTrustStore.Add(root);
+            return chain.Build(serverCert);
         };
     }
 }

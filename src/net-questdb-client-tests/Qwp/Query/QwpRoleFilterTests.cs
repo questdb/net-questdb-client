@@ -34,14 +34,14 @@ namespace net_questdb_client_tests.Qwp.Query;
 [TestFixture]
 public class QwpRoleFilterTests
 {
-    [TestCase(QwpConstants.RoleStandalone, true)]
-    [TestCase(QwpConstants.RolePrimary, true)]
-    [TestCase(QwpConstants.RoleReplica, true)]
-    [TestCase(QwpConstants.RolePrimaryCatchup, true)]
-    [TestCase((byte)0xFF, false)]
-    public void Any_AcceptsAllKnownRoles(byte role, bool expected)
+    [TestCase(QwpConstants.RoleStandalone)]
+    [TestCase(QwpConstants.RolePrimary)]
+    [TestCase(QwpConstants.RoleReplica)]
+    [TestCase(QwpConstants.RolePrimaryCatchup)]
+    [TestCase((byte)0xFF)]
+    public void Any_AcceptsEveryRoleByteIncludingFutureUnknowns(byte role)
     {
-        Assert.That(QwpQueryWebSocketClient.RoleMatchesTarget(role, TargetType.any), Is.EqualTo(expected));
+        Assert.That(QwpQueryWebSocketClient.RoleMatchesTarget(role, TargetType.any), Is.True);
     }
 
     [TestCase(QwpConstants.RoleStandalone, true)]

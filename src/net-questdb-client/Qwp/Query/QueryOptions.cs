@@ -200,7 +200,7 @@ public sealed class QueryOptions
                     $"malformed config entry `{entry.Trim()}`; key and value must both be non-empty");
             }
 
-            if (key == "addr")
+            if (string.Equals(key, "addr", StringComparison.OrdinalIgnoreCase))
             {
                 foreach (var piece in value.Split(','))
                 {
@@ -307,6 +307,7 @@ public sealed class QueryOptions
 
     private void ValidateCompressionLevel()
     {
+        if (compression == CompressionType.raw) return;
         if (compression_level < QwpConstants.ZstdLevelMin || compression_level > QwpConstants.ZstdLevelMax)
         {
             throw new IngressError(ErrorCode.ConfigError,

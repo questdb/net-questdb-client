@@ -84,27 +84,71 @@ public sealed class QwpColumnBatch
     public byte GetByteValue(int col, int row) => GetFixedByte(col, row);
     /// <summary>Returns the BYTE reinterpreted as int8; <c>0</c> for NULL.</summary>
     public sbyte GetSByteValue(int col, int row) => unchecked((sbyte)GetFixedByte(col, row));
+
     /// <summary>Returns the SHORT (int16); <c>0</c> for NULL.</summary>
-    public short GetShortValue(int col, int row) => GetFixed<short>(col, row, sizeof(short));
+    public short GetShortValue(int col, int row)
+    {
+        var c = Col(col);
+        var i = DenseIndex(c, row);
+        if (i < 0) return 0;
+        return BinaryPrimitives.ReadInt16LittleEndian(c.ValueBytes.AsSpan(i * 2, 2));
+    }
+
     /// <summary>Returns the CHAR (UTF-16 code unit); <c>'\0'</c> for NULL.</summary>
-    public char GetCharValue(int col, int row) => (char)GetFixed<ushort>(col, row, sizeof(ushort));
+    public char GetCharValue(int col, int row)
+    {
+        var c = Col(col);
+        var i = DenseIndex(c, row);
+        if (i < 0) return '\0';
+        return (char)BinaryPrimitives.ReadUInt16LittleEndian(c.ValueBytes.AsSpan(i * 2, 2));
+    }
+
     /// <summary>Returns the INT (int32); <c>0</c> for NULL.</summary>
-    public int GetIntValue(int col, int row) => GetFixed<int>(col, row, sizeof(int));
+    public int GetIntValue(int col, int row)
+    {
+        var c = Col(col);
+        var i = DenseIndex(c, row);
+        if (i < 0) return 0;
+        return BinaryPrimitives.ReadInt32LittleEndian(c.ValueBytes.AsSpan(i * 4, 4));
+    }
+
     /// <summary>Returns the LONG (int64); <c>0</c> for NULL.</summary>
-    public long GetLongValue(int col, int row) => GetFixed<long>(col, row, sizeof(long));
+    public long GetLongValue(int col, int row)
+    {
+        var c = Col(col);
+        var i = DenseIndex(c, row);
+        if (i < 0) return 0;
+        return BinaryPrimitives.ReadInt64LittleEndian(c.ValueBytes.AsSpan(i * 8, 8));
+    }
+
     /// <summary>Returns the FLOAT (32-bit); <c>0</c> for NULL.</summary>
-    public float GetFloatValue(int col, int row) => GetFixed<float>(col, row, sizeof(float));
+    public float GetFloatValue(int col, int row)
+    {
+        var c = Col(col);
+        var i = DenseIndex(c, row);
+        if (i < 0) return 0f;
+        return BitConverter.Int32BitsToSingle(
+            BinaryPrimitives.ReadInt32LittleEndian(c.ValueBytes.AsSpan(i * 4, 4)));
+    }
+
     /// <summary>Returns the DOUBLE (64-bit); <c>0</c> for NULL.</summary>
-    public double GetDoubleValue(int col, int row) => GetFixed<double>(col, row, sizeof(double));
+    public double GetDoubleValue(int col, int row)
+    {
+        var c = Col(col);
+        var i = DenseIndex(c, row);
+        if (i < 0) return 0d;
+        return BitConverter.Int64BitsToDouble(
+            BinaryPrimitives.ReadInt64LittleEndian(c.ValueBytes.AsSpan(i * 8, 8)));
+    }
 
     /// <summary>Returns a TIMESTAMP / TIMESTAMP_NANOS as int64; caller must consult <see cref="GetColumnWireType" /> to know the unit.</summary>
-    public long GetTimestampValue(int col, int row) => GetFixed<long>(col, row, sizeof(long));
+    public long GetTimestampValue(int col, int row) => GetLongValue(col, row);
 
     /// <summary>Returns a DATE as milliseconds since Unix epoch; <c>0</c> for NULL.</summary>
-    public long GetDateValue(int col, int row) => GetFixed<long>(col, row, sizeof(long));
+    public long GetDateValue(int col, int row) => GetLongValue(col, row);
 
     /// <summary>IPv4 address as a packed int (4 bytes little-endian on the wire).</summary>
-    public int GetIPv4Value(int col, int row) => GetFixed<int>(col, row, sizeof(int));
+    public int GetIPv4Value(int col, int row) => GetIntValue(col, row);
 
     /// <summary>Returns the raw bytes of a BINARY value. Span is valid for the duration of the handler.</summary>
     public ReadOnlySpan<byte> GetBinarySpan(int col, int row)
@@ -139,8 +183,7 @@ public sealed class QwpColumnBatch
 
         if (c.TypeCode == QwpTypeCode.Symbol)
         {
-            var id = BinaryPrimitives.ReadInt32LittleEndian(c.ValueBytes.AsSpan(i * 4, 4));
-            return c.SymbolDict!.GetUtf8(id);
+            return c.SymbolDict!.GetUtf8(c.SymbolIds![i]);
         }
 
         var start = c.StringOffsets![i];
@@ -188,7 +231,7 @@ public sealed class QwpColumnBatch
         var c = Col(col);
         var i = DenseIndex(c, row);
         if (i < 0) return -1;
-        return BinaryPrimitives.ReadInt32LittleEndian(c.ValueBytes.AsSpan(i * 4, 4));
+        return c.SymbolIds![i];
     }
 
     /// <summary>Returns the dimensionality of a *_ARRAY value; <c>0</c> for NULL.</summary>
@@ -201,37 +244,40 @@ public sealed class QwpColumnBatch
         return c.ValueBytes[start];
     }
 
-    /// <summary>Allocates and returns the elements of a DOUBLE_ARRAY value; empty array for NULL.</summary>
-    public double[] GetDoubleArrayElements(int col, int row)
+    /// <summary>Returns the DOUBLE_ARRAY element bytes as a span over the column scratch; valid only for the duration of the handler.</summary>
+    public ReadOnlySpan<double> GetDoubleArraySpan(int col, int row)
     {
         var (heap, start, end, nDims) = ArraySpan(col, row);
-        if (nDims < 0) return Array.Empty<double>();
+        if (nDims < 0) return ReadOnlySpan<double>.Empty;
         var valuesStart = start + 1 + nDims * 4;
         var valueByteCount = end - valuesStart;
-        var elementCount = valueByteCount / 8;
-        var result = new double[elementCount];
-        for (var i = 0; i < elementCount; i++)
-        {
-            result[i] = BitConverter.Int64BitsToDouble(
-                BinaryPrimitives.ReadInt64LittleEndian(heap.AsSpan(valuesStart + i * 8, 8)));
-        }
-        return result;
+        return System.Runtime.InteropServices.MemoryMarshal
+            .Cast<byte, double>(heap.AsSpan(valuesStart, valueByteCount));
     }
 
-    /// <summary>Allocates and returns the elements of a LONG_ARRAY value; empty array for NULL.</summary>
-    public long[] GetLongArrayElements(int col, int row)
+    /// <summary>Returns the LONG_ARRAY element bytes as a span over the column scratch; valid only for the duration of the handler.</summary>
+    public ReadOnlySpan<long> GetLongArraySpan(int col, int row)
     {
         var (heap, start, end, nDims) = ArraySpan(col, row);
-        if (nDims < 0) return Array.Empty<long>();
+        if (nDims < 0) return ReadOnlySpan<long>.Empty;
         var valuesStart = start + 1 + nDims * 4;
         var valueByteCount = end - valuesStart;
-        var elementCount = valueByteCount / 8;
-        var result = new long[elementCount];
-        for (var i = 0; i < elementCount; i++)
-        {
-            result[i] = BinaryPrimitives.ReadInt64LittleEndian(heap.AsSpan(valuesStart + i * 8, 8));
-        }
-        return result;
+        return System.Runtime.InteropServices.MemoryMarshal
+            .Cast<byte, long>(heap.AsSpan(valuesStart, valueByteCount));
+    }
+
+    /// <summary>Allocates and returns the elements of a DOUBLE_ARRAY value; empty array for NULL. Prefer <see cref="GetDoubleArraySpan" /> on hot paths.</summary>
+    public double[] GetDoubleArrayElements(int col, int row)
+    {
+        var span = GetDoubleArraySpan(col, row);
+        return span.IsEmpty ? Array.Empty<double>() : span.ToArray();
+    }
+
+    /// <summary>Allocates and returns the elements of a LONG_ARRAY value; empty array for NULL. Prefer <see cref="GetLongArraySpan" /> on hot paths.</summary>
+    public long[] GetLongArrayElements(int col, int row)
+    {
+        var span = GetLongArraySpan(col, row);
+        return span.IsEmpty ? Array.Empty<long>() : span.ToArray();
     }
 
     /// <summary>Allocates and returns the per-dimension shape of an array column; empty array for NULL.</summary>
@@ -325,30 +371,6 @@ public sealed class QwpColumnBatch
         if (i < 0) return 0;
         return c.ValueBytes[i];
     }
-
-    private T GetFixed<T>(int col, int row, int stride) where T : struct
-    {
-        var c = Col(col);
-        var i = DenseIndex(c, row);
-        if (i < 0) return default;
-        var span = c.ValueBytes.AsSpan(i * stride, stride);
-        return ReadFixedLittleEndian<T>(span);
-    }
-
-    private static T ReadFixedLittleEndian<T>(ReadOnlySpan<byte> span) where T : struct
-    {
-        if (typeof(T) == typeof(short)) return (T)(object)BinaryPrimitives.ReadInt16LittleEndian(span);
-        if (typeof(T) == typeof(ushort)) return (T)(object)BinaryPrimitives.ReadUInt16LittleEndian(span);
-        if (typeof(T) == typeof(int)) return (T)(object)BinaryPrimitives.ReadInt32LittleEndian(span);
-        if (typeof(T) == typeof(uint)) return (T)(object)BinaryPrimitives.ReadUInt32LittleEndian(span);
-        if (typeof(T) == typeof(long)) return (T)(object)BinaryPrimitives.ReadInt64LittleEndian(span);
-        if (typeof(T) == typeof(ulong)) return (T)(object)BinaryPrimitives.ReadUInt64LittleEndian(span);
-        if (typeof(T) == typeof(float))
-            return (T)(object)BitConverter.Int32BitsToSingle(BinaryPrimitives.ReadInt32LittleEndian(span));
-        if (typeof(T) == typeof(double))
-            return (T)(object)BitConverter.Int64BitsToDouble(BinaryPrimitives.ReadInt64LittleEndian(span));
-        throw new NotSupportedException(typeof(T).Name);
-    }
 }
 
 internal sealed class ColumnView
@@ -368,12 +390,14 @@ internal sealed class ColumnView
 
     public int[]? NonNullIndex { get; set; }
     public int[]? StringOffsets { get; set; }
+    public int[]? SymbolIds { get; set; }
 
     public byte[] ValueBytes { get; set; } = Array.Empty<byte>();
     public byte[] StringHeap { get; set; } = Array.Empty<byte>();
 
     internal int[] NonNullIndexBuf = Array.Empty<int>();
     internal int[] StringOffsetsBuf = Array.Empty<int>();
+    internal int[] SymbolIdsBuf = Array.Empty<int>();
 
     public QwpEgressSymbolDict? SymbolDict { get; set; }
 
@@ -391,6 +415,7 @@ internal sealed class ColumnView
     {
         NonNullIndex = null;
         StringOffsets = null;
+        SymbolIds = null;
         SymbolDict = null;
     }
 }

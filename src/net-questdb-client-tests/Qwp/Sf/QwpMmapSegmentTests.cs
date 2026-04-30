@@ -234,7 +234,7 @@ public class QwpMmapSegmentTests
     }
 
     [Test]
-    public void Seal_PersistsToDisk_RecoversAfterReopen()
+    public void Reopen_AfterSeal_IsNotSealed_RecoveryReliesOnRingOrdering()
     {
         var path = SegmentPath();
         using (var seg = QwpMmapSegment.Open(path, 4096, 0))
@@ -245,9 +245,7 @@ public class QwpMmapSegmentTests
         }
 
         using var reopened = QwpMmapSegment.Open(path, 4096, 0);
-        Assert.That(reopened.IsSealed, Is.True,
-            "the sealed flag must survive reopen so crash-after-Seal recovery treats the tail as sealed");
-        Assert.Throws<InvalidOperationException>(() => reopened.TryAppend(new byte[] { 4 }));
+        Assert.That(reopened.IsSealed, Is.False);
     }
 
     [Test]

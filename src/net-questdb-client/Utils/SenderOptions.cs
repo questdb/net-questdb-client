@@ -111,7 +111,7 @@ public record SenderOptions
     private TimeSpan _sfAppendDeadline = TimeSpan.FromMilliseconds(30000);
     private TimeSpan _reconnectMaxDuration = TimeSpan.FromMilliseconds(300000);
     private TimeSpan _reconnectInitialBackoff = TimeSpan.FromMilliseconds(100);
-    private TimeSpan _reconnectMaxBackoff = TimeSpan.FromMilliseconds(30000);
+    private TimeSpan _reconnectMaxBackoff = TimeSpan.FromMilliseconds(5000);
     private bool _initialConnectRetry;
     private TimeSpan _closeFlushTimeout = TimeSpan.FromMilliseconds(5000);
     private bool _drainOrphans;
@@ -222,7 +222,7 @@ public record SenderOptions
         ParseMillisecondsWithDefault(nameof(sf_append_deadline_millis), "30000", out _sfAppendDeadline);
         ParseMillisecondsWithDefault(nameof(reconnect_max_duration_millis), "300000", out _reconnectMaxDuration);
         ParseMillisecondsWithDefault(nameof(reconnect_initial_backoff_millis), "100", out _reconnectInitialBackoff);
-        ParseMillisecondsWithDefault(nameof(reconnect_max_backoff_millis), "30000", out _reconnectMaxBackoff);
+        ParseMillisecondsWithDefault(nameof(reconnect_max_backoff_millis), "5000", out _reconnectMaxBackoff);
         ParseBoolOnOff(nameof(initial_connect_retry), "off", out _initialConnectRetry);
         ParseMillisecondsWithDefault(nameof(close_flush_timeout_millis), "5000", out _closeFlushTimeout);
         ParseBoolOnOff(nameof(drain_orphans), "off", out _drainOrphans);

@@ -1223,7 +1223,7 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
     {
         try
         {
-            if (_terminalError is null)
+            if (_terminalError is null && Options.close_flush_timeout_millis.TotalMilliseconds > 0)
             {
                 FlushToSfEngineSync(CancellationToken.None);
                 _sfEngine!.FlushAsync(Options.close_flush_timeout_millis).GetAwaiter().GetResult();
@@ -1246,7 +1246,7 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
     {
         try
         {
-            if (_terminalError is null)
+            if (_terminalError is null && Options.close_flush_timeout_millis.TotalMilliseconds > 0)
             {
                 await FlushToSfEngineAsyncCore(CancellationToken.None).ConfigureAwait(false);
                 await _sfEngine!.FlushAsync(Options.close_flush_timeout_millis).ConfigureAwait(false);

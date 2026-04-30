@@ -57,6 +57,14 @@ namespace QuestDB.Qwp.Sf;
 ///     instance. Don't use this class directly without that external serialisation; <c>List&lt;long&gt;</c>
 ///     for the offset table is not safe for concurrent mutation.
 /// </remarks>
+internal sealed class EmptySegmentHeaderException : IOException
+{
+    public EmptySegmentHeaderException(string path)
+        : base($"segment {path}: header is empty (no SF01 written yet)")
+    {
+    }
+}
+
 internal sealed class QwpMmapSegment : IDisposable
 {
     public const int EnvelopeHeaderSize = 8;
@@ -64,9 +72,6 @@ internal sealed class QwpMmapSegment : IDisposable
     public const uint FileMagic = 0x31304653;
     public const byte FileVersion = 1;
     public const int DefaultMaxFrameLength = 16 * 1024 * 1024;
-
-    private const int OffsetFlags = 5;
-    private const byte FlagSealed = 0x01;
 
     private readonly MemoryMappedFile _mmap;
     private readonly MemoryMappedViewAccessor _view;
@@ -160,22 +165,17 @@ internal sealed class QwpMmapSegment : IDisposable
         {
             view = mmap.CreateViewAccessor(0, capacity, MemoryMappedFileAccess.ReadWrite);
 
-            var (onDiskBaseFsn, sealed_) = ReadOrInitHeader(view, path, baseFsn);
-            if (onDiskBaseFsn != baseFsn)
+            var onDiskBaseFsn = ReadOrInitHeader(view, path, baseFsn);
+            if (baseFsn >= 0 && onDiskBaseFsn != baseFsn)
             {
                 throw new InvalidDataException(
                     $"segment {path}: on-disk baseSeq {onDiskBaseFsn} does not match expected {baseFsn}");
             }
 
-            var (writePos, offsets) = ScanForLastGoodEnvelope(view, capacity, maxFrameLength);
+            var (writePos, offsets) = ScanForLastGoodEnvelope(view, capacity);
             ZeroViewRange(view, writePos, capacity - writePos);
 
-            var seg = new QwpMmapSegment(path, mmap, view, fs, capacity, baseFsn, writePos, offsets, maxFrameLength, flushOnAppend);
-            if (sealed_)
-            {
-                seg.IsSealed = true;
-            }
-            return seg;
+            return new QwpMmapSegment(path, mmap, view, fs, capacity, onDiskBaseFsn, writePos, offsets, maxFrameLength, flushOnAppend);
         }
         catch (Exception)
         {
@@ -183,6 +183,23 @@ internal sealed class QwpMmapSegment : IDisposable
             mmap.Dispose();
             fs.Dispose();
             throw;
+        }
+    }
+
+    /// <summary>Opens an existing segment, reading baseFsn from the header. Returns null if header is empty.</summary>
+    public static QwpMmapSegment? OpenExisting(
+        string path,
+        long capacity,
+        int maxFrameLength = DefaultMaxFrameLength,
+        bool flushOnAppend = false)
+    {
+        try
+        {
+            return Open(path, capacity, baseFsn: -1, maxFrameLength, flushOnAppend);
+        }
+        catch (EmptySegmentHeaderException)
+        {
+            return null;
         }
     }
 
@@ -332,7 +349,10 @@ internal sealed class QwpMmapSegment : IDisposable
         return table[(int)envelopeIndex];
     }
 
-    /// <summary>Marks the segment as no longer accepting appends and persists the flag to disk.</summary>
+    /// <summary>
+    ///     Marks the segment as no longer accepting appends. In-memory only — recovery re-derives
+    ///     sealed state from segment ordering.
+    /// </summary>
     public void Seal()
     {
         if (IsSealed)
@@ -341,9 +361,6 @@ internal sealed class QwpMmapSegment : IDisposable
         }
 
         IsSealed = true;
-        Span<byte> oneByte = stackalloc byte[1];
-        oneByte[0] = FlagSealed;
-        WriteToView(_view, OffsetFlags, oneByte);
         Flush();
     }
 
@@ -400,8 +417,7 @@ internal sealed class QwpMmapSegment : IDisposable
     /// </summary>
     internal static (long WritePosition, List<long> Offsets) ScanForLastGoodEnvelope(
         MemoryMappedViewAccessor view,
-        long capacity,
-        int maxFrameLength)
+        long capacity)
     {
         long offset = HeaderSize;
         var offsets = new List<long>();
@@ -420,7 +436,7 @@ internal sealed class QwpMmapSegment : IDisposable
                 break;
             }
 
-            if (len <= 0 || len > maxFrameLength)
+            if (len <= 0)
             {
                 break;
             }
@@ -449,7 +465,7 @@ internal sealed class QwpMmapSegment : IDisposable
         return (offset, offsets);
     }
 
-    private static (long BaseFsn, bool Sealed) ReadOrInitHeader(
+    private static long ReadOrInitHeader(
         MemoryMappedViewAccessor view, string path, long baseFsn)
     {
         Span<byte> hdr = stackalloc byte[HeaderSize];
@@ -467,8 +483,12 @@ internal sealed class QwpMmapSegment : IDisposable
             {
                 throw new InvalidDataException($"segment {path}: missing SF01 magic but header bytes are non-zero");
             }
+            if (baseFsn < 0)
+            {
+                throw new EmptySegmentHeaderException(path);
+            }
             WriteHeader(view, baseFsn, NowMicros());
-            return (baseFsn, false);
+            return baseFsn;
         }
 
         if (magic != FileMagic)
@@ -483,9 +503,7 @@ internal sealed class QwpMmapSegment : IDisposable
             throw new InvalidDataException($"segment {path}: unsupported version {version}");
         }
 
-        var flags = hdr[OffsetFlags];
-        var sealed_ = (flags & FlagSealed) != 0;
-        return (BinaryPrimitives.ReadInt64LittleEndian(hdr.Slice(8, 8)), sealed_);
+        return BinaryPrimitives.ReadInt64LittleEndian(hdr.Slice(8, 8));
     }
 
     private static void WriteHeader(MemoryMappedViewAccessor view, long baseFsn, long createdAtMicros)

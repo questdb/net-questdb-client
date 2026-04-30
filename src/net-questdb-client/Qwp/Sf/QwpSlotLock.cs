@@ -22,6 +22,8 @@
  *
  ******************************************************************************/
 
+using System.Diagnostics;
+using System.Text;
 using QuestDB.Enums;
 using QuestDB.Utils;
 
@@ -43,14 +45,17 @@ namespace QuestDB.Qwp.Sf;
 internal sealed class QwpSlotLock : IDisposable
 {
     private const string LockFileName = ".lock";
+    private const string PidSidecarName = ".lock.pid";
 
     private readonly FileStream _file;
+    private readonly string _pidSidecarPath;
     private bool _disposed;
 
-    private QwpSlotLock(string slotDirectory, string lockFilePath, FileStream file)
+    private QwpSlotLock(string slotDirectory, string lockFilePath, string pidSidecarPath, FileStream file)
     {
         SlotDirectory = slotDirectory;
         LockFilePath = lockFilePath;
+        _pidSidecarPath = pidSidecarPath;
         _file = file;
     }
 
@@ -70,15 +75,17 @@ internal sealed class QwpSlotLock : IDisposable
         QwpFiles.EnsureDirectory(slotDirectory);
 
         var path = Path.Combine(slotDirectory, LockFileName);
+        var pidPath = Path.Combine(slotDirectory, PidSidecarName);
         var fs = QwpFiles.TryOpenExclusive(path);
         if (fs is null)
         {
             throw new IngressError(
                 ErrorCode.ConfigError,
-                $"slot {slotDirectory} is already locked by another sender (lock file: {path})");
+                $"slot {slotDirectory} is already locked{ReadHolderHint(pidPath)} (lock file: {path})");
         }
 
-        return new QwpSlotLock(slotDirectory, path, fs);
+        WritePidSidecar(pidPath);
+        return new QwpSlotLock(slotDirectory, path, pidPath, fs);
     }
 
     /// <summary>Like <see cref="Acquire" /> but returns <c>null</c> on collision instead of throwing.</summary>
@@ -88,8 +95,37 @@ internal sealed class QwpSlotLock : IDisposable
         QwpFiles.EnsureDirectory(slotDirectory);
 
         var path = Path.Combine(slotDirectory, LockFileName);
+        var pidPath = Path.Combine(slotDirectory, PidSidecarName);
         var fs = QwpFiles.TryOpenExclusive(path);
-        return fs is null ? null : new QwpSlotLock(slotDirectory, path, fs);
+        if (fs is null) return null;
+
+        WritePidSidecar(pidPath);
+        return new QwpSlotLock(slotDirectory, path, pidPath, fs);
+    }
+
+    private static void WritePidSidecar(string pidPath)
+    {
+        try
+        {
+            File.WriteAllText(pidPath, Environment.ProcessId.ToString(), Encoding.ASCII);
+        }
+        catch
+        {
+        }
+    }
+
+    private static string ReadHolderHint(string pidPath)
+    {
+        try
+        {
+            if (!File.Exists(pidPath)) return string.Empty;
+            var s = File.ReadAllText(pidPath, Encoding.ASCII).Trim();
+            return s.Length == 0 ? string.Empty : $" by pid {s}";
+        }
+        catch
+        {
+            return string.Empty;
+        }
     }
 
     /// <inheritdoc />
@@ -107,7 +143,14 @@ internal sealed class QwpSlotLock : IDisposable
         }
         catch (Exception)
         {
-            // Disposal must not throw.
+        }
+
+        try
+        {
+            if (File.Exists(_pidSidecarPath)) File.Delete(_pidSidecarPath);
+        }
+        catch
+        {
         }
     }
 }

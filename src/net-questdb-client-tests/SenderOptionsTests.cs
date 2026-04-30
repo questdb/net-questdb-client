@@ -155,7 +155,7 @@ public class SenderOptionsTests
         Assert.That(opts.sf_append_deadline_millis, Is.EqualTo(TimeSpan.FromSeconds(30)));
         Assert.That(opts.reconnect_max_duration_millis, Is.EqualTo(TimeSpan.FromMinutes(5)));
         Assert.That(opts.reconnect_initial_backoff_millis, Is.EqualTo(TimeSpan.FromMilliseconds(100)));
-        Assert.That(opts.reconnect_max_backoff_millis, Is.EqualTo(TimeSpan.FromSeconds(30)));
+        Assert.That(opts.reconnect_max_backoff_millis, Is.EqualTo(TimeSpan.FromSeconds(5)));
         Assert.That(opts.initial_connect_retry, Is.False);
         Assert.That(opts.close_flush_timeout_millis, Is.EqualTo(TimeSpan.FromSeconds(5)));
         Assert.That(opts.drain_orphans, Is.False);

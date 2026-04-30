@@ -170,26 +170,46 @@ internal sealed class QwpSegmentRing : IDisposable
         {
             CleanupStaleSpares(directory);
 
-            var existing = QwpFiles.EnumerateFiles(directory, FilenamePrefix + "*" + FilenameSuffix)
-                .Where(p => !Path.GetFileName(p).StartsWith(SparePrefix, StringComparison.Ordinal))
-                .Select(p => (Path: p, BaseFsn: ParseBaseFsnFromFileName(Path.GetFileName(p))))
-                .Where(t => t.BaseFsn >= 0)
-                .OrderBy(t => t.BaseFsn)
-                .ToList();
-
-            for (var i = 0; i < existing.Count; i++)
+            // Filename is enumerate-only; ordering comes from the on-disk header baseSeq.
+            var opened = new List<QwpMmapSegment>();
+            try
             {
-                var seg = QwpMmapSegment.Open(existing[i].Path, segmentCapacity, existing[i].BaseFsn, maxFrameLength, flushOnAppend);
-                // Crash between Seal() and next active alloc leaves a sealed tail; treat as sealed.
-                if (i < existing.Count - 1 || seg.IsSealed)
+                foreach (var path in QwpFiles.EnumerateFiles(directory, FilenamePrefix + "*" + FilenameSuffix))
                 {
-                    seg.Seal();
-                    ring._sealedSegments.Add(seg);
+                    if (Path.GetFileName(path).StartsWith(SparePrefix, StringComparison.Ordinal))
+                    {
+                        continue;
+                    }
+
+                    var seg = QwpMmapSegment.OpenExisting(path, segmentCapacity, maxFrameLength, flushOnAppend);
+                    if (seg is null)
+                    {
+                        SfCleanup.DeleteFile(path);
+                        continue;
+                    }
+                    opened.Add(seg);
                 }
-                else
+
+                opened.Sort((a, b) => a.BaseFsn.CompareTo(b.BaseFsn));
+
+                for (var i = 0; i < opened.Count; i++)
                 {
-                    Volatile.Write(ref ring._active, seg);
+                    var seg = opened[i];
+                    if (i < opened.Count - 1)
+                    {
+                        seg.Seal();
+                        ring._sealedSegments.Add(seg);
+                    }
+                    else
+                    {
+                        Volatile.Write(ref ring._active, seg);
+                    }
                 }
+            }
+            catch
+            {
+                foreach (var s in opened) SfCleanup.Dispose(s);
+                throw;
             }
 
             var lastRecovered = Volatile.Read(ref ring._active)
@@ -550,18 +570,6 @@ internal sealed class QwpSegmentRing : IDisposable
     internal static string BuildFileName(long baseFsn)
     {
         return FilenamePrefix + baseFsn.ToString("x16", CultureInfo.InvariantCulture) + FilenameSuffix;
-    }
-
-    private static long ParseBaseFsnFromFileName(string fileName)
-    {
-        if (!fileName.StartsWith(FilenamePrefix, StringComparison.Ordinal) ||
-            !fileName.EndsWith(FilenameSuffix, StringComparison.Ordinal))
-        {
-            return -1;
-        }
-
-        var hex = fileName.AsSpan(FilenamePrefix.Length, fileName.Length - FilenamePrefix.Length - FilenameSuffix.Length);
-        return long.TryParse(hex, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out var fsn) ? fsn : -1;
     }
 
     private static void CleanupStaleSpares(string directory)

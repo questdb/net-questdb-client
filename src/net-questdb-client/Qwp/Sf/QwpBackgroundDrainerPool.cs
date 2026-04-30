@@ -154,22 +154,20 @@ internal sealed class QwpBackgroundDrainerPool : IDisposable
             }
         }
 
-        // Force-release any still-held slot locks; otherwise a wedged drainer keeps the file lock
-        // for the rest of the process lifetime and orphan recovery is broken.
-        QwpSlotLock[] leakedLocks;
-        lock (_trackingLock)
-        {
-            leakedLocks = _liveLocks.ToArray();
-            _liveLocks.Clear();
-        }
-        foreach (var l in leakedLocks)
-        {
-            SfCleanup.Dispose(l);
-        }
-
-        SfCleanup.Dispose(_shutdownCts);
         if (allJoined)
         {
+            QwpSlotLock[] stragglers;
+            lock (_trackingLock)
+            {
+                stragglers = _liveLocks.ToArray();
+                _liveLocks.Clear();
+            }
+            foreach (var l in stragglers)
+            {
+                SfCleanup.Dispose(l);
+            }
+
+            SfCleanup.Dispose(_shutdownCts);
             _slots.Dispose();
         }
     }

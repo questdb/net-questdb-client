@@ -209,6 +209,18 @@ public class QwpMmapSegmentTests
 
         using var third = QwpMmapSegment.Open(path, 4096, 0);
         Assert.That(third.EnvelopeCount, Is.EqualTo(2));
+
+        var dest = new byte[16];
+        var firstOffset = third.OffsetOfEnvelope(0);
+        var secondOffset = third.OffsetOfEnvelope(1);
+        Assert.That(firstOffset, Is.Not.Null);
+        Assert.That(secondOffset, Is.Not.Null);
+
+        var firstLen = third.TryReadFrame(firstOffset!.Value, dest, out _);
+        Assert.That(dest.AsSpan(0, firstLen).ToArray(), Is.EqualTo(new byte[] { 1, 2, 3 }));
+
+        var secondLen = third.TryReadFrame(secondOffset!.Value, dest, out _);
+        Assert.That(dest.AsSpan(0, secondLen).ToArray(), Is.EqualTo(new byte[] { 99, 99, 99 }));
     }
 
     [Test]

@@ -23,11 +23,11 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "example-aot", "src\example-
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "example-qwp-ingest", "src\example-qwp-ingest\example-qwp-ingest.csproj", "{A1B2C3D4-E5F6-4789-A012-345678901234}"
 EndProject
-Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "src", "src", "{827E0CD3-B72D-47B6-A68D-7590B98EB39B}"
-EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "example-qwp-ingest-auth-tls", "src\example-qwp-ingest-auth-tls\example-qwp-ingest-auth-tls.csproj", "{A1FE95A9-4761-4806-8891-A82F468624F8}"
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "example-qwp-query", "src\example-qwp-query\example-qwp-query.csproj", "{A247ACD9-F600-47D3-B8C6-33543B4FB95B}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "src", "src", "{827E0CD3-B72D-47B6-A68D-7590B98EB39B}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution

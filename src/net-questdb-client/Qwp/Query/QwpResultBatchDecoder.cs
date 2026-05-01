@@ -73,12 +73,10 @@ internal sealed class QwpResultBatchDecoder
         var commit = false;
         try
         {
-            var stagedSymbols = new List<byte[]>();
             if ((headerFlags & QwpConstants.FlagDeltaSymbolDict) != 0)
             {
-                DecodeDeltaSymbolDict(payload, ref p, stagedSymbols);
+                DecodeDeltaSymbolDict(payload, ref p);
             }
-            foreach (var entry in stagedSymbols) _state.SymbolDict.AppendEntry(entry);
 
             batch.Reset();
             batch.RequestId = requestId;
@@ -103,12 +101,13 @@ internal sealed class QwpResultBatchDecoder
             }
             else
             {
+                // Symbols already appended into the dict; rewind to the pre-batch cursor on failure.
                 _state.SymbolDict.TruncateTo(preDictSize);
             }
         }
     }
 
-    private void DecodeDeltaSymbolDict(ReadOnlySpan<byte> payload, ref int p, List<byte[]> stagedEntries)
+    private void DecodeDeltaSymbolDict(ReadOnlySpan<byte> payload, ref int p)
     {
         var deltaStart = ReadBoundedVarintAsInt(payload, ref p, "symbol dict deltaStart");
         var deltaCount = ReadBoundedVarintAsInt(payload, ref p, "symbol dict deltaCount");
@@ -130,7 +129,7 @@ internal sealed class QwpResultBatchDecoder
             {
                 throw new QwpDecodeException("truncated symbol dict entry");
             }
-            stagedEntries.Add(payload.Slice(p, len).ToArray());
+            _state.SymbolDict.AppendEntry(payload.Slice(p, len));
             p += len;
         }
     }
@@ -259,11 +258,6 @@ internal sealed class QwpResultBatchDecoder
         }
         else
         {
-            if (TypeHasNoNullSentinel(col.TypeCode))
-            {
-                throw new QwpDecodeException(
-                    $"column type 0x{(byte)col.TypeCode:X2} cannot carry NULL but null_flag={nullFlag}");
-            }
             var bitmapBytes = (rowCount + 7) >> 3;
             if (bitmapBytes > payload.Length - p)
             {
@@ -271,7 +265,7 @@ internal sealed class QwpResultBatchDecoder
             }
             if (col.NonNullIndexBuf.Length < rowCount)
             {
-                col.NonNullIndexBuf = new int[Math.Max(rowCount, 64)];
+                col.NonNullIndexBuf = new int[Math.Max(rowCount, Math.Max(64, col.NonNullIndexBuf.Length * 2))];
             }
             nonNull = BuildNonNullIndex(payload.Slice(p, bitmapBytes), rowCount, col.NonNullIndexBuf);
             nonNullIndex = col.NonNullIndexBuf;
@@ -334,7 +328,7 @@ internal sealed class QwpResultBatchDecoder
                 break;
 
             case QwpTypeCode.Decimal128:
-                DecodeDecimalColumn(payload, ref p, col, nonNull, valueBytes: 16);
+                DecodeDecimalColumn(payload, ref p, col, nonNull, valueBytes: QwpConstants.Decimal128SizeBytes);
                 break;
 
             case QwpTypeCode.Decimal256:
@@ -378,8 +372,11 @@ internal sealed class QwpResultBatchDecoder
             {
                 throw new QwpDecodeException("truncated before timestamp encoding flag");
             }
-            // Server emits the discriminator even with zero non-nulls (FLAG_GORILLA contract).
-            p++;
+            var flag = payload[p++];
+            if (flag != 0x00 && flag != 0x01)
+            {
+                throw new QwpDecodeException($"unknown timestamp encoding flag 0x{flag:X2}");
+            }
             return;
         }
 
@@ -396,7 +393,7 @@ internal sealed class QwpResultBatchDecoder
 
         if (col.StringOffsetsBuf.Length < nonNull + 1)
         {
-            col.StringOffsetsBuf = new int[Math.Max(nonNull + 1, 64)];
+            col.StringOffsetsBuf = new int[Math.Max(nonNull + 1, Math.Max(64, col.StringOffsetsBuf.Length * 2))];
         }
         var offsets = col.StringOffsetsBuf;
         for (var i = 0; i <= nonNull; i++)
@@ -441,14 +438,21 @@ internal sealed class QwpResultBatchDecoder
     {
         if (col.SymbolIdsBuf.Length < Math.Max(nonNull, 1))
         {
-            col.SymbolIdsBuf = new int[Math.Max(nonNull, 64)];
+            col.SymbolIdsBuf = new int[Math.Max(nonNull, Math.Max(64, col.SymbolIdsBuf.Length * 2))];
         }
         col.SymbolIds = col.SymbolIdsBuf;
         col.SymbolDict = _state.SymbolDict;
 
+        var dictSize = _state.SymbolDict.Size;
         for (var i = 0; i < nonNull; i++)
         {
-            col.SymbolIdsBuf[i] = (int)ReadVarint(payload, ref p);
+            var id = (int)ReadVarint(payload, ref p);
+            if ((uint)id >= (uint)dictSize)
+            {
+                throw new QwpDecodeException(
+                    $"symbol id {id} out of range [0, {dictSize})");
+            }
+            col.SymbolIdsBuf[i] = id;
         }
     }
 
@@ -492,19 +496,10 @@ internal sealed class QwpResultBatchDecoder
         }
     }
 
-    private static bool TypeHasNoNullSentinel(QwpTypeCode t) => t switch
-    {
-        QwpTypeCode.Boolean => true,
-        QwpTypeCode.Byte => true,
-        QwpTypeCode.Short => true,
-        QwpTypeCode.Char => true,
-        _ => false,
-    };
-
     private byte[] RentScratch(byte[] existing, int needed)
     {
         if (existing.Length >= needed) return existing;
-        var cap = Math.Max(needed, 64);
+        var cap = Math.Max(needed, Math.Max(64, existing.Length * 2));
         return new byte[cap];
     }
 
@@ -544,7 +539,7 @@ internal sealed class QwpResultBatchDecoder
     {
         if (col.StringOffsetsBuf.Length < nonNull + 1)
         {
-            col.StringOffsetsBuf = new int[Math.Max(nonNull + 1, 64)];
+            col.StringOffsetsBuf = new int[Math.Max(nonNull + 1, Math.Max(64, col.StringOffsetsBuf.Length * 2))];
         }
         var offsets = col.StringOffsetsBuf;
         var heapStart = p;
@@ -557,10 +552,10 @@ internal sealed class QwpResultBatchDecoder
             }
             int nDims = payload[p];
             p++;
-            if (nDims < 0 || nDims > QwpConstants.MaxArrayDimensions)
+            if (nDims < 1 || nDims > QwpConstants.MaxArrayDimensions)
             {
                 throw new QwpDecodeException(
-                    $"array nDims out of range: {nDims} (max {QwpConstants.MaxArrayDimensions})");
+                    $"array nDims out of range: {nDims} (must be in [1, {QwpConstants.MaxArrayDimensions}])");
             }
 
             var dimsBytes = nDims * 4;

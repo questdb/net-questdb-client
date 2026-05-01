@@ -268,6 +268,41 @@ public class QwpQueryClientEndToEndTests
     }
 
     [Test]
+    public async Task UpgradeHeaders_CarryAuthorization_BasicAuth()
+    {
+        await using var server = new DummyQwpServer(new DummyQwpServerOptions
+        {
+            Path = QwpConstants.ReadPath,
+            NegotiatedVersion = "1",
+            FrameHandlerMulti = _ => new[] { QwpEgressFrameBuilder.BuildResultEnd(1L, 0L, 0L) },
+        });
+        await server.StartAsync();
+
+        using var client = QueryClient.New(BuildConnString(server, "username=alice;password=p4ss;"));
+        client.Execute("SELECT 1", new RecordingHandler());
+
+        var expected = "Basic " + Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes("alice:p4ss"));
+        Assert.That(server.LastUpgradeHeaders!["Authorization"], Is.EqualTo(expected));
+    }
+
+    [Test]
+    public async Task UpgradeHeaders_CarryAuthorization_BearerToken()
+    {
+        await using var server = new DummyQwpServer(new DummyQwpServerOptions
+        {
+            Path = QwpConstants.ReadPath,
+            NegotiatedVersion = "1",
+            FrameHandlerMulti = _ => new[] { QwpEgressFrameBuilder.BuildResultEnd(1L, 0L, 0L) },
+        });
+        await server.StartAsync();
+
+        using var client = QueryClient.New(BuildConnString(server, "token=abc.def;"));
+        client.Execute("SELECT 1", new RecordingHandler());
+
+        Assert.That(server.LastUpgradeHeaders!["Authorization"], Is.EqualTo("Bearer abc.def"));
+    }
+
+    [Test]
     public async Task UpgradeHeaders_CarryMaxBatchRowsWhenSet()
     {
         await using var server = new DummyQwpServer(new DummyQwpServerOptions
@@ -836,6 +871,348 @@ public class QwpQueryClientEndToEndTests
         var ex = Assert.Throws<IngressError>(() => client.Execute("SELECT 2", new RecordingHandler()));
         Assert.That(ex!.code, Is.EqualTo(ErrorCode.InvalidApiCall));
         await first;
+    }
+
+    [Test]
+    public async Task Failover_AllEndpointsRejectUpgrade_SurfacesSocketError()
+    {
+        await using var serverA = new DummyQwpServer(new DummyQwpServerOptions
+        {
+            Path = QwpConstants.ReadPath,
+            RejectUpgradeWith = System.Net.HttpStatusCode.BadGateway,
+        });
+        await serverA.StartAsync();
+
+        await using var serverB = new DummyQwpServer(new DummyQwpServerOptions
+        {
+            Path = QwpConstants.ReadPath,
+            RejectUpgradeWith = System.Net.HttpStatusCode.ServiceUnavailable,
+        });
+        await serverB.StartAsync();
+
+        var conn = $"ws::addr={serverA.Uri.Authority},{serverB.Uri.Authority};path={QwpConstants.ReadPath};" +
+                   "target=any;failover=on;failover_max_attempts=2;" +
+                   "failover_backoff_initial_ms=10;failover_backoff_max_ms=20;";
+
+        var ex = Assert.Throws<IngressError>(() => QueryClient.New(conn));
+        Assert.That(ex!.code, Is.EqualTo(ErrorCode.SocketError));
+        StringAssert.Contains("connect failed", ex.Message);
+    }
+
+    [Test]
+    public async Task Failover_AuthErrorOnReconnect_PropagatesWithoutFurtherRetry()
+    {
+        // Server A accepts connect+SERVER_INFO then drops mid-query; server B rejects with 401.
+        // The reconnect catch block (`IngressError ConfigError or AuthError`) must NOT swallow.
+        var serverInfo = QwpEgressFrameBuilder.BuildServerInfo(
+            QwpConstants.RolePrimary, epoch: 1, capabilities: 0, serverWallNs: 0, "c", "node-a");
+
+        await using var serverA = new DummyQwpServer(new DummyQwpServerOptions
+        {
+            Path = QwpConstants.ReadPath,
+            NegotiatedVersion = "2",
+            InitialServerFrame = serverInfo,
+            CloseAfterFrameCount = 1,
+            CloseStatus = System.Net.WebSockets.WebSocketCloseStatus.InternalServerError,
+            FrameHandler = _ => null,
+        });
+        await serverA.StartAsync();
+
+        await using var serverB = new DummyQwpServer(new DummyQwpServerOptions
+        {
+            Path = QwpConstants.ReadPath,
+            RejectUpgradeWith = System.Net.HttpStatusCode.Unauthorized,
+        });
+        await serverB.StartAsync();
+
+        var conn = $"ws::addr={serverA.Uri.Authority},{serverB.Uri.Authority};path={QwpConstants.ReadPath};" +
+                   "target=primary;failover=on;failover_max_attempts=4;" +
+                   "failover_backoff_initial_ms=10;failover_backoff_max_ms=20;";
+        using var client = QueryClient.New(conn);
+
+        var ex = Assert.Throws<IngressError>(() => client.Execute("SELECT 1", new RecordingHandler()));
+        Assert.That(ex!.code, Is.EqualTo(ErrorCode.AuthError));
+    }
+
+    [Test]
+    public async Task Failover_RotatesAcross3Endpoints_ThirdSucceeds()
+    {
+        var schema = new ResultSchema { SchemaId = 1, Columns = { new SchemaColumn("c", QwpTypeCode.Long) } };
+        var data = new ResultBatchData { RowCount = 1, Columns = { new FixedColumnData { DenseBytes = LongLe(99L) } } };
+        var infoC = QwpEgressFrameBuilder.BuildServerInfo(
+            QwpConstants.RolePrimary, epoch: 3, capabilities: 0, serverWallNs: 0, "c", "node-c");
+        var batchC = QwpEgressFrameBuilder.BuildResultBatch(1L, 0L, schema, data);
+        var endC = QwpEgressFrameBuilder.BuildResultEnd(1L, 0L, 1L);
+
+        await using var serverA = new DummyQwpServer(new DummyQwpServerOptions
+        {
+            Path = QwpConstants.ReadPath,
+            RejectUpgradeWith = System.Net.HttpStatusCode.BadGateway,
+        });
+        await using var serverB = new DummyQwpServer(new DummyQwpServerOptions
+        {
+            Path = QwpConstants.ReadPath,
+            RejectUpgradeWith = System.Net.HttpStatusCode.ServiceUnavailable,
+        });
+        await using var serverC = new DummyQwpServer(new DummyQwpServerOptions
+        {
+            Path = QwpConstants.ReadPath,
+            NegotiatedVersion = "2",
+            InitialServerFrame = infoC,
+            FrameHandlerMulti = _ => new[] { batchC, endC },
+        });
+        await serverA.StartAsync();
+        await serverB.StartAsync();
+        await serverC.StartAsync();
+
+        var conn = $"ws::addr={serverA.Uri.Authority},{serverB.Uri.Authority},{serverC.Uri.Authority};" +
+                   $"path={QwpConstants.ReadPath};target=primary;failover=on;failover_max_attempts=4;" +
+                   "failover_backoff_initial_ms=10;failover_backoff_max_ms=20;";
+        using var client = QueryClient.New(conn);
+        Assert.That(client.ServerInfo!.NodeId, Is.EqualTo("node-c"));
+
+        var handler = new RecordingHandler();
+        client.Execute("SELECT 99", handler);
+        Assert.That(handler.Batches[0].LongValues, Is.EqualTo(new[] { 99L }));
+        Assert.That(handler.Ended, Is.True);
+    }
+
+    [Test]
+    public async Task Failover_ExhaustsMaxAttempts_BothServersFailing()
+    {
+        // Both endpoints drop mid-query forever; capped at max_attempts=2 so the test terminates.
+        var serverInfo = QwpEgressFrameBuilder.BuildServerInfo(
+            QwpConstants.RolePrimary, epoch: 1, capabilities: 0, serverWallNs: 0, "c", "n");
+
+        await using var serverA = new DummyQwpServer(new DummyQwpServerOptions
+        {
+            Path = QwpConstants.ReadPath,
+            NegotiatedVersion = "2",
+            InitialServerFrame = serverInfo,
+            CloseAfterFrameCount = 1,
+            CloseStatus = System.Net.WebSockets.WebSocketCloseStatus.InternalServerError,
+            FrameHandler = _ => null,
+        });
+        await using var serverB = new DummyQwpServer(new DummyQwpServerOptions
+        {
+            Path = QwpConstants.ReadPath,
+            NegotiatedVersion = "2",
+            InitialServerFrame = serverInfo,
+            CloseAfterFrameCount = 1,
+            CloseStatus = System.Net.WebSockets.WebSocketCloseStatus.InternalServerError,
+            FrameHandler = _ => null,
+        });
+        await serverA.StartAsync();
+        await serverB.StartAsync();
+
+        var conn = $"ws::addr={serverA.Uri.Authority},{serverB.Uri.Authority};path={QwpConstants.ReadPath};" +
+                   "target=primary;failover=on;failover_max_attempts=2;" +
+                   "failover_backoff_initial_ms=5;failover_backoff_max_ms=10;";
+        using var client = QueryClient.New(conn);
+
+        var ex = Assert.Throws<IngressError>(() => client.Execute("SELECT 1", new RecordingHandler()));
+        Assert.That(ex!.code, Is.EqualTo(ErrorCode.SocketError));
+    }
+
+    [Test]
+    public async Task Failover_AllEndpointsRoleMismatch_RaisesQwpRoleMismatchException()
+    {
+        // Two servers both report REPLICA role; target=primary can't satisfy any.
+        var info = QwpEgressFrameBuilder.BuildServerInfo(
+            QwpConstants.RoleReplica, epoch: 1, capabilities: 0, serverWallNs: 0, "c", "replica");
+
+        await using var serverA = new DummyQwpServer(new DummyQwpServerOptions
+        {
+            Path = QwpConstants.ReadPath,
+            NegotiatedVersion = "2",
+            InitialServerFrame = info,
+        });
+        await using var serverB = new DummyQwpServer(new DummyQwpServerOptions
+        {
+            Path = QwpConstants.ReadPath,
+            NegotiatedVersion = "2",
+            InitialServerFrame = info,
+        });
+        await serverA.StartAsync();
+        await serverB.StartAsync();
+
+        var conn = $"ws::addr={serverA.Uri.Authority},{serverB.Uri.Authority};path={QwpConstants.ReadPath};" +
+                   "target=primary;failover=on;failover_max_attempts=2;" +
+                   "failover_backoff_initial_ms=5;failover_backoff_max_ms=10;";
+
+        var ex = Assert.Throws<QwpRoleMismatchException>(() => QueryClient.New(conn));
+        Assert.That(ex!.Target, Is.EqualTo(TargetType.primary));
+        Assert.That(ex.LastObserved, Is.Not.Null);
+        Assert.That(ex.LastObserved!.Role, Is.EqualTo(QwpConstants.RoleReplica));
+    }
+
+    [Test]
+    public async Task ZstdBatch_MissingPrelude_Throws()
+    {
+        // FlagZstd set but body shorter than prelude (msg_kind + req_id + batch_seq varint = ≥10 bytes).
+        var bogus = new byte[QwpConstants.HeaderSize + 9];
+        BinaryPrimitives.WriteUInt32LittleEndian(bogus.AsSpan(0, 4), QwpConstants.Magic);
+        bogus[QwpConstants.OffsetVersion] = 1;
+        bogus[QwpConstants.OffsetFlags] = QwpConstants.FlagZstd;
+        BinaryPrimitives.WriteUInt16LittleEndian(bogus.AsSpan(QwpConstants.OffsetTableCount, 2), 1);
+        BinaryPrimitives.WriteUInt32LittleEndian(bogus.AsSpan(QwpConstants.OffsetPayloadLength, 4), 9);
+        bogus[QwpConstants.HeaderSize] = QwpConstants.MsgKindResultBatch;
+        // 8 bytes of request_id; no batch_seq varint, no body.
+
+        await using var server = new DummyQwpServer(new DummyQwpServerOptions
+        {
+            Path = QwpConstants.ReadPath,
+            NegotiatedVersion = "1",
+            FrameHandlerMulti = _ => new[] { bogus },
+        });
+        await server.StartAsync();
+
+        using var client = QueryClient.New(BuildConnString(server, "compression=zstd;"));
+        var ex = Assert.Throws<IngressError>(() => client.Execute("SELECT 1", new RecordingHandler()));
+        Assert.That(ex!.code, Is.EqualTo(ErrorCode.ProtocolVersionError));
+        StringAssert.Contains("missing prelude", ex.Message);
+    }
+
+    [Test]
+    public async Task ZstdBatch_EmptyCompressedBody_Throws()
+    {
+        // Valid prelude, FlagZstd set, but no compressed body bytes follow.
+        var payload = new byte[10];
+        payload[0] = QwpConstants.MsgKindResultBatch;
+        // request_id = 1
+        BinaryPrimitives.WriteInt64LittleEndian(payload.AsSpan(1, 8), 1L);
+        payload[9] = 0x00; // batch_seq varint = 0
+
+        var frame = new byte[QwpConstants.HeaderSize + payload.Length];
+        BinaryPrimitives.WriteUInt32LittleEndian(frame.AsSpan(0, 4), QwpConstants.Magic);
+        frame[QwpConstants.OffsetVersion] = 1;
+        frame[QwpConstants.OffsetFlags] = QwpConstants.FlagZstd;
+        BinaryPrimitives.WriteUInt16LittleEndian(frame.AsSpan(QwpConstants.OffsetTableCount, 2), 1);
+        BinaryPrimitives.WriteUInt32LittleEndian(frame.AsSpan(QwpConstants.OffsetPayloadLength, 4), (uint)payload.Length);
+        payload.CopyTo(frame, QwpConstants.HeaderSize);
+
+        await using var server = new DummyQwpServer(new DummyQwpServerOptions
+        {
+            Path = QwpConstants.ReadPath,
+            NegotiatedVersion = "1",
+            FrameHandlerMulti = _ => new[] { frame },
+        });
+        await server.StartAsync();
+
+        using var client = QueryClient.New(BuildConnString(server, "compression=zstd;"));
+        var ex = Assert.Throws<IngressError>(() => client.Execute("SELECT 1", new RecordingHandler()));
+        Assert.That(ex!.code, Is.EqualTo(ErrorCode.ProtocolVersionError));
+        StringAssert.Contains("empty compressed body", ex.Message);
+    }
+
+    [Test]
+    public async Task ZstdBatch_DecompressedSizeOverCap_Throws()
+    {
+        // Regression for C1: oversized declared content size must be rejected before truncation.
+        // Construct a zstd frame whose declared size exceeds MaxResultBatchWireBytes.
+        var oversize = QwpConstants.MaxResultBatchWireBytes + 1;
+        var payload = BuildZstdBatchPayloadCompressing(new byte[oversize]);
+
+        var frame = new byte[QwpConstants.HeaderSize + payload.Length];
+        BinaryPrimitives.WriteUInt32LittleEndian(frame.AsSpan(0, 4), QwpConstants.Magic);
+        frame[QwpConstants.OffsetVersion] = 1;
+        frame[QwpConstants.OffsetFlags] = QwpConstants.FlagZstd;
+        BinaryPrimitives.WriteUInt16LittleEndian(frame.AsSpan(QwpConstants.OffsetTableCount, 2), 1);
+        BinaryPrimitives.WriteUInt32LittleEndian(frame.AsSpan(QwpConstants.OffsetPayloadLength, 4), (uint)payload.Length);
+        payload.CopyTo(frame, QwpConstants.HeaderSize);
+
+        await using var server = new DummyQwpServer(new DummyQwpServerOptions
+        {
+            Path = QwpConstants.ReadPath,
+            NegotiatedVersion = "1",
+            FrameHandlerMulti = _ => new[] { frame },
+        });
+        await server.StartAsync();
+
+        using var client = QueryClient.New(BuildConnString(server, "compression=zstd;"));
+        var ex = Assert.Throws<IngressError>(() => client.Execute("SELECT 1", new RecordingHandler()));
+        Assert.That(ex!.code, Is.EqualTo(ErrorCode.ProtocolVersionError));
+        StringAssert.Contains("exceeds", ex.Message);
+    }
+
+    [Test]
+    public async Task ZstdBatch_CorruptCompressedBody_Throws()
+    {
+        // Valid prelude + garbage where a zstd frame should be.
+        var payload = new byte[10 + 16];
+        payload[0] = QwpConstants.MsgKindResultBatch;
+        BinaryPrimitives.WriteInt64LittleEndian(payload.AsSpan(1, 8), 1L);
+        payload[9] = 0x00;
+        for (var i = 10; i < payload.Length; i++) payload[i] = 0xAB;
+
+        var frame = new byte[QwpConstants.HeaderSize + payload.Length];
+        BinaryPrimitives.WriteUInt32LittleEndian(frame.AsSpan(0, 4), QwpConstants.Magic);
+        frame[QwpConstants.OffsetVersion] = 1;
+        frame[QwpConstants.OffsetFlags] = QwpConstants.FlagZstd;
+        BinaryPrimitives.WriteUInt16LittleEndian(frame.AsSpan(QwpConstants.OffsetTableCount, 2), 1);
+        BinaryPrimitives.WriteUInt32LittleEndian(frame.AsSpan(QwpConstants.OffsetPayloadLength, 4), (uint)payload.Length);
+        payload.CopyTo(frame, QwpConstants.HeaderSize);
+
+        await using var server = new DummyQwpServer(new DummyQwpServerOptions
+        {
+            Path = QwpConstants.ReadPath,
+            NegotiatedVersion = "1",
+            FrameHandlerMulti = _ => new[] { frame },
+        });
+        await server.StartAsync();
+
+        using var client = QueryClient.New(BuildConnString(server, "compression=zstd;"));
+        // Corrupt zstd payload either fails the size pre-check (ProtocolVersionError) or fails Unwrap
+        // (ZstdSharp.ZstdException). Either is acceptable — both leave the connection terminal.
+        Assert.Catch(() => client.Execute("SELECT 1", new RecordingHandler()));
+    }
+
+    [Test]
+    public async Task MixedRawAndZstdBatches_InSameQuery_BothDecode()
+    {
+        var schema = new ResultSchema { SchemaId = 1, Columns = { new SchemaColumn("c", QwpTypeCode.Long) } };
+        var dataA = new ResultBatchData { RowCount = 1, Columns = { new FixedColumnData { DenseBytes = LongLe(11L) } } };
+        var dataB = new ResultBatchData { RowCount = 1, Columns = { new FixedColumnData { DenseBytes = LongLe(22L) } } };
+
+        var rawBatch = QwpEgressFrameBuilder.BuildResultBatch(1L, 0L, schema, dataA);
+        var rawBatchB = QwpEgressFrameBuilder.BuildResultBatch(
+            1L, 1L, new ResultSchema { Mode = QwpConstants.SchemaModeReference, SchemaId = 1, Columns = schema.Columns }, dataB);
+        var zstdBatchB = QwpEgressFrameBuilder.CompressResultBatch(rawBatchB);
+        var end = QwpEgressFrameBuilder.BuildResultEnd(1L, 1L, 2L);
+
+        await using var server = new DummyQwpServer(new DummyQwpServerOptions
+        {
+            Path = QwpConstants.ReadPath,
+            NegotiatedVersion = "1",
+            FrameHandlerMulti = _ => new[] { rawBatch, zstdBatchB, end },
+        });
+        await server.StartAsync();
+
+        using var client = QueryClient.New(BuildConnString(server, "compression=zstd;"));
+        var handler = new RecordingHandler();
+        client.Execute("SELECT c", handler);
+
+        Assert.That(handler.Batches.Count, Is.EqualTo(2));
+        Assert.That(handler.Batches[0].LongValues, Is.EqualTo(new[] { 11L }));
+        Assert.That(handler.Batches[1].LongValues, Is.EqualTo(new[] { 22L }));
+        Assert.That(handler.Ended, Is.True);
+    }
+
+    private static byte[] BuildZstdBatchPayloadCompressing(byte[] body)
+    {
+        // Prelude: msg_kind + request_id(1) + batch_seq varint(0)
+        const int preludeLen = 1 + 8 + 1;
+        using var compressor = new ZstdSharp.Compressor(level: 1);
+        var bound = ZstdSharp.Compressor.GetCompressBound(body.Length);
+        var compressed = new byte[bound];
+        var written = compressor.Wrap(body, compressed);
+
+        var payload = new byte[preludeLen + written];
+        payload[0] = QwpConstants.MsgKindResultBatch;
+        BinaryPrimitives.WriteInt64LittleEndian(payload.AsSpan(1, 8), 1L);
+        payload[9] = 0x00;
+        compressed.AsSpan(0, written).CopyTo(payload.AsSpan(preludeLen));
+        return payload;
     }
 
     private static string BuildConnString(DummyQwpServer server, string extra = "")

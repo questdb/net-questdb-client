@@ -89,11 +89,25 @@ internal static class QwpTlsAuth
                 return false;
             }
 
-            using var root = X509Certificate2.CreateFromPemFile(rootsPath, rootsPassword);
+            using var root = LoadTrustRoot(rootsPath, rootsPassword);
             using var serverCert = new X509Certificate2(certificate!);
             chain!.ChainPolicy.TrustMode = X509ChainTrustMode.CustomRootTrust;
             chain.ChainPolicy.CustomTrustStore.Add(root);
             return chain.Build(serverCert);
         };
+    }
+
+    internal static X509Certificate2 LoadTrustRoot(string path, string? password)
+    {
+        // CreateFromPemFile's second arg is a key file path, not a password — leave it null for PEM.
+        var ext = System.IO.Path.GetExtension(path);
+        if (string.Equals(ext, ".pfx", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(ext, ".p12", StringComparison.OrdinalIgnoreCase))
+        {
+#pragma warning disable SYSLIB0057
+            return new X509Certificate2(path, password);
+#pragma warning restore SYSLIB0057
+        }
+        return X509Certificate2.CreateFromPemFile(path);
     }
 }

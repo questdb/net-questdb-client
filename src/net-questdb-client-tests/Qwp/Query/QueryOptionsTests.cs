@@ -48,7 +48,6 @@ public class QueryOptionsTests
         Assert.That(o.failover_max_attempts, Is.EqualTo(8));
         Assert.That(o.failover_backoff_initial_ms.TotalMilliseconds, Is.EqualTo(50));
         Assert.That(o.failover_backoff_max_ms.TotalMilliseconds, Is.EqualTo(1000));
-        Assert.That(o.buffer_pool_size, Is.EqualTo(4));
         Assert.That(o.max_batch_rows, Is.EqualTo(0));
         Assert.That(o.initial_credit, Is.EqualTo(0));
     }
@@ -101,7 +100,7 @@ public class QueryOptionsTests
             "compression=zstd;compression_level=5;" +
             "target=primary;failover=on;failover_max_attempts=4;" +
             "failover_backoff_initial_ms=100;failover_backoff_max_ms=2000;" +
-            "buffer_pool_size=8;max_batch_rows=5000;token=abc;");
+            "max_batch_rows=5000;token=abc;");
 
         Assert.That(o.protocol, Is.EqualTo(ProtocolType.wss));
         Assert.That(o.addr, Is.EqualTo("a:9000"));
@@ -117,7 +116,6 @@ public class QueryOptionsTests
         Assert.That(o.failover_max_attempts, Is.EqualTo(4));
         Assert.That(o.failover_backoff_initial_ms.TotalMilliseconds, Is.EqualTo(100));
         Assert.That(o.failover_backoff_max_ms.TotalMilliseconds, Is.EqualTo(2000));
-        Assert.That(o.buffer_pool_size, Is.EqualTo(8));
         Assert.That(o.max_batch_rows, Is.EqualTo(5000));
         Assert.That(o.token, Is.EqualTo("abc"));
     }
@@ -346,13 +344,6 @@ public class QueryOptionsTests
     {
         Assert.Throws<IngressError>(() => new QueryOptions(
             "ws::addr=h:9000;failover_max_attempts=0;"));
-    }
-
-    [Test]
-    public void Parse_BufferPoolSizeZero_Rejected()
-    {
-        Assert.Throws<IngressError>(() => new QueryOptions(
-            "ws::addr=h:9000;buffer_pool_size=0;"));
     }
 
     [Test]

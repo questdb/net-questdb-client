@@ -119,6 +119,12 @@ internal sealed class QwpWebSocketTransport : IQwpCursorTransport
     public int NegotiatedVersion => _negotiatedVersion;
 
     /// <summary>
+    ///     Server-selected <c>X-QWP-Content-Encoding</c> from the upgrade response (e.g.
+    ///     <c>"zstd;level=3"</c>); <c>null</c> when omitted (= raw) or before <see cref="ConnectAsync" />.
+    /// </summary>
+    public string? NegotiatedContentEncoding { get; private set; }
+
+    /// <summary>
     ///     Opens the TCP/TLS connection, performs the WebSocket upgrade, and validates that the
     ///     server selected a version this client speaks.
     /// </summary>
@@ -157,6 +163,18 @@ internal sealed class QwpWebSocketTransport : IQwpCursorTransport
                 ErrorCode.ProtocolVersionError,
                 $"server negotiated QWP version {_negotiatedVersion}; this client supports v1..v{_options.ClientMaxVersion}");
         }
+        NegotiatedContentEncoding = ReadOptionalHeader(QwpConstants.HeaderContentEncoding);
+    }
+
+    private string? ReadOptionalHeader(string name)
+    {
+        var headers = _client.HttpResponseHeaders;
+        if (headers is null || !headers.TryGetValue(name, out var values)) return null;
+        foreach (var v in values)
+        {
+            if (!string.IsNullOrEmpty(v)) return v;
+        }
+        return null;
     }
 
     /// <summary>Sends one QWP frame as a single WebSocket BINARY message.</summary>

@@ -54,11 +54,13 @@ public sealed class QueryOptions
         "compression", "compression_level",
         "target", "failover", "failover_max_attempts",
         "failover_backoff_initial_ms", "failover_backoff_max_ms",
-        "buffer_pool_size", "max_batch_rows",
+        "max_batch_rows",
         "client_id",
     };
 
     private List<string> _addresses = new();
+    private string[]? _singletonAddrCache;
+    private string? _singletonAddrCacheKey;
 
     /// <summary>Constructs an instance with default values; mutate properties before passing to <c>QueryClient.New</c>.</summary>
     public QueryOptions()
@@ -80,9 +82,19 @@ public sealed class QueryOptions
     public string addr { get; set; } = "localhost:9000";
 
     /// <summary>Failover address list; falls back to a single-element list of <see cref="addr" /> when no multi-address connstring keys were provided.</summary>
-    public IReadOnlyList<string> addresses => _addresses.Count == 0
-        ? new[] { addr }
-        : _addresses;
+    public IReadOnlyList<string> addresses
+    {
+        get
+        {
+            if (_addresses.Count > 0) return _addresses;
+            if (_singletonAddrCache is null || !ReferenceEquals(_singletonAddrCacheKey, addr))
+            {
+                _singletonAddrCache = new[] { addr };
+                _singletonAddrCacheKey = addr;
+            }
+            return _singletonAddrCache;
+        }
+    }
 
     /// <summary>Number of addresses available for failover; <c>1</c> when only <see cref="addr" /> is set.</summary>
     public int AddressCount => _addresses.Count == 0 ? 1 : _addresses.Count;
@@ -122,8 +134,6 @@ public sealed class QueryOptions
     /// <summary>Cap on the failover back-off interval.</summary>
     public TimeSpan failover_backoff_max_ms { get; set; } = TimeSpan.FromMilliseconds(1000);
 
-    /// <summary>Number of decoder buffers retained in the per-client pool; one per concurrently-decoded batch.</summary>
-    public int buffer_pool_size { get; set; } = 4;
     /// <summary>Optional cap on rows per decoded batch; <c>0</c> defers to the server's batch size.</summary>
     public int max_batch_rows { get; set; }
     /// <summary>Optional client identifier echoed in upgrade headers; useful for server-side logs.</summary>
@@ -257,7 +267,6 @@ public sealed class QueryOptions
         failover_backoff_max_ms = TimeSpan.FromMilliseconds(
             ReadInt(builder, "failover_backoff_max_ms", 1000));
 
-        buffer_pool_size = ReadInt(builder, "buffer_pool_size", 4);
         max_batch_rows = ReadInt(builder, "max_batch_rows", 0);
     }
 
@@ -343,12 +352,6 @@ public sealed class QueryOptions
         {
             throw new IngressError(ErrorCode.ConfigError,
                 "`failover_backoff_initial_ms` must be <= `failover_backoff_max_ms`");
-        }
-
-        if (buffer_pool_size < 1)
-        {
-            throw new IngressError(ErrorCode.ConfigError,
-                $"`buffer_pool_size` must be >= 1, got {buffer_pool_size}");
         }
 
         if (max_batch_rows < 0)

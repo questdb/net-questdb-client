@@ -35,6 +35,19 @@ public interface IQwpQueryClient : IDisposable, IAsyncDisposable
     /// <summary>Server identity / role observed during connect; null for v1 servers.</summary>
     QwpServerInfo? ServerInfo { get; }
 
+    /// <summary>QWP version negotiated at the WebSocket upgrade; <c>0</c> until connect completes.</summary>
+    int NegotiatedVersion { get; }
+
+    /// <summary>Server-selected batch-body compression (e.g. <c>"zstd;level=3"</c>); <c>null</c> means raw.</summary>
+    string? NegotiatedCompression { get; }
+
+    /// <summary>
+    ///     <c>true</c> when the most recent <c>Dispose</c>/<c>DisposeAsync</c> hit its 5-second
+    ///     grace window before the in-flight Execute drained — the native zstd handle was released
+    ///     best-effort but the I/O loop may still be running.
+    /// </summary>
+    bool WasLastCloseTimedOut { get; }
+
     /// <summary>
     ///     Submits the SQL query and synchronously drives the handler until the server emits a
     ///     terminator (RESULT_END, EXEC_DONE, or QUERY_ERROR). Throws on transport or protocol

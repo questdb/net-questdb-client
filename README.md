@@ -165,6 +165,18 @@ await sender.SendAsync();
 
 `in_flight_window` controls the pipeline depth; valid range is `2..N`. The WebSocket transport is async-only — `in_flight_window=1` is rejected.
 
+#### Multi-address failover
+
+Pass a comma-separated list to `addr=` to enable role-aware failover across multiple QuestDB nodes:
+
+```csharp
+using var sender = Sender.New("ws::addr=node-a:9000,node-b:9000,node-c:9000;");
+```
+
+The sender walks the list in order. If a node returns `503 + X-QuestDB-Role`, it is skipped — `REPLICA` is shelved as structurally unwritable, `PRIMARY_CATCHUP` is treated as transiently unavailable, and the sender retries them after a backoff (`PRIMARY_CATCHUP` is preferred over `REPLICA` on retry since it tends to recover quickly). `PRIMARY` and `STANDALONE` accept the upgrade. Auth failures (`401`/`403`) remain terminal and do not fall through to the next address.
+
+In SF mode (`sf_dir=...`), the same rotation applies on every reconnect — when the active node loses its primary role, the engine's reconnect loop walks past the demoted node and picks up wherever the new primary lands. Backoff applies once per full round, not per host attempt.
+
 #### Examples
 
 Working sample projects (drop-in copies):

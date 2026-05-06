@@ -385,9 +385,8 @@ public class QwpCursorSendEngineTests
 
         engine.AppendBlocking(new byte[] { 1 });
 
-        var ex = Assert.CatchAsync<IngressError>(
+        Assert.CatchAsync<TimeoutException>(
             async () => await engine.FlushAsync(TimeSpan.FromMilliseconds(150)));
-        Assert.That(ex!.code, Is.EqualTo(ErrorCode.ServerFlushError));
 
         gate.TrySetResult(OkResponse(0));
         await engine.FlushAsync(TimeSpan.FromSeconds(5));

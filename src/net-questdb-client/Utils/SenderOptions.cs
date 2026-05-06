@@ -233,7 +233,6 @@ public record SenderOptions
         ValidateWebSocketKeys();
         ValidateAuthCombination();
         ValidateTlsCombination();
-        ValidateMultiAddressForWebSocket();
         ValidateGzipForWebSocket();
 
         if (_autoFlush == AutoFlushType.off)
@@ -308,15 +307,6 @@ public record SenderOptions
         }
     }
 
-    private void ValidateMultiAddressForWebSocket()
-    {
-        if (IsWebSocket() && _addresses.Count > 1)
-        {
-            throw new IngressError(ErrorCode.ConfigError,
-                $"multiple `addr` entries are not supported for ws/wss; got {_addresses.Count}");
-        }
-    }
-
     private void ValidateGzipForWebSocket()
     {
         if (IsWebSocket() && _gzip)
@@ -363,7 +353,6 @@ public record SenderOptions
         ValidateAuthCombination();
         ValidateTlsCombination();
         ValidateStoreAndForwardOptions();
-        ValidateMultiAddressForWebSocket();
         ValidateGzipForWebSocket();
         ValidateWebSocketKeys();
         ValidateWebSocketKeysAgainstDefaults();
@@ -494,8 +483,10 @@ public record SenderOptions
     ///     List of all configured addresses for failover.
     /// </summary>
     /// <remarks>
-    ///     Contains all addresses specified via multiple `addr` entries in the configuration string.
-    ///     The list is never empty; it contains at least the primary address.
+    ///     Populated from <c>addr=h1:p1,h2:p2,...</c>. Supported on every protocol; the list is
+    ///     never empty. For ws/wss the sender walks the list with role-aware skipping
+    ///     (<c>REPLICA</c> and <c>PRIMARY_CATCHUP</c> upgrade rejections are detected via
+    ///     <c>503</c> + <c>X-QuestDB-Role</c> and rotated past).
     /// </remarks>
     [JsonIgnore]
     public IReadOnlyList<string> addresses => _addresses.AsReadOnly();
@@ -1079,6 +1070,35 @@ public record SenderOptions
         }
     }
 
+    internal Uri BuildUri(int addressIndex, string path)
+    {
+        if (addressIndex < 0 || addressIndex >= _addresses.Count)
+        {
+            throw new ArgumentOutOfRangeException(nameof(addressIndex));
+        }
+        SplitHostPort(_addresses[addressIndex], out var host, out var port);
+        if (port < 0)
+        {
+            port = protocol switch
+            {
+                ProtocolType.http or ProtocolType.https or ProtocolType.ws or ProtocolType.wss => 9000,
+                ProtocolType.tcp or ProtocolType.tcps => 9009,
+                _ => throw new NotImplementedException(),
+            };
+        }
+        var scheme = protocol switch
+        {
+            ProtocolType.wss => "wss",
+            ProtocolType.ws => "ws",
+            ProtocolType.https => "https",
+            ProtocolType.http => "http",
+            ProtocolType.tcps => "tcps",
+            ProtocolType.tcp => "tcp",
+            _ => throw new NotImplementedException(),
+        };
+        return new Uri($"{scheme}://{host}:{port}{path}");
+    }
+
     private static void SplitHostPort(string addr, out string host, out int port)
     {
         // Bracketed IPv6: [host] or [host]:port
@@ -1279,7 +1299,16 @@ public record SenderOptions
 
             if (key == "addr")
             {
-                _addresses.Add(value);
+                foreach (var piece in value.Split(','))
+                {
+                    var trimmed = piece.Trim();
+                    if (trimmed.Length == 0)
+                    {
+                        throw new IngressError(ErrorCode.ConfigError,
+                            $"empty entry in comma-separated `addr={value}`");
+                    }
+                    _addresses.Add(trimmed);
+                }
             }
         }
 
@@ -1415,10 +1444,14 @@ public record SenderOptions
 
     private void ParseAddresses()
     {
-        // If no addresses were parsed from config string, use the primary addr
         if (_addresses.Count == 0)
         {
             _addresses.Add(_addr);
+        }
+        else
+        {
+            // _addr from DbConnectionStringBuilder still has the raw `h1:p,h2:p`; normalise to first.
+            _addr = _addresses[0];
         }
     }
 

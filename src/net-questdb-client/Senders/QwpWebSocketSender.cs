@@ -136,13 +136,9 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
             return;
         }
 
-        var transportOpts = new QwpWebSocketTransportOptions
-        {
-            Uri = BuildUri(options),
-            AuthorizationHeader = BuildAuthHeader(options),
-            RequestDurableAck = options.request_durable_ack,
-            RemoteCertificateValidationCallback = BuildCertificateValidator(options),
-        };
+        var authHeader = BuildAuthHeader(options);
+        var certValidator = BuildCertificateValidator(options);
+        var tracker = new QwpHostHealthTracker(options.addresses);
 
         QwpWebSocketTransport? transport = null;
         SemaphoreSlim? slot = null;
@@ -150,19 +146,7 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
         CancellationTokenSource? ioCts = null;
         try
         {
-            transport = new QwpWebSocketTransport(transportOpts);
-            using (var connectCts = new CancellationTokenSource(options.auth_timeout))
-            {
-                try
-                {
-                    transport.ConnectAsync(connectCts.Token).GetAwaiter().GetResult();
-                }
-                catch (OperationCanceledException) when (connectCts.IsCancellationRequested)
-                {
-                    throw new IngressError(ErrorCode.SocketError,
-                        $"WebSocket upgrade exceeded auth_timeout={options.auth_timeout.TotalMilliseconds}ms");
-                }
-            }
+            transport = ConnectInitialTransport(options, tracker, authHeader, certValidator);
 
             slot = new SemaphoreSlim(options.in_flight_window, options.in_flight_window);
             sendChannel = Channel.CreateBounded<AsyncBatch>(new BoundedChannelOptions(options.in_flight_window)
@@ -205,13 +189,10 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
                 segmentCapacity: options.sf_max_bytes,
                 flushOnAppend: options.sf_fsync);
 
-            var transportOpts = new QwpWebSocketTransportOptions
-            {
-                Uri = BuildUri(options),
-                AuthorizationHeader = BuildAuthHeader(options),
-                RequestDurableAck = options.request_durable_ack,
-                RemoteCertificateValidationCallback = BuildCertificateValidator(options),
-            };
+            var authHeader = BuildAuthHeader(options);
+            var certValidator = BuildCertificateValidator(options);
+            var tracker = new QwpHostHealthTracker(options.addresses);
+            var transportFactory = BuildHostRotatingFactory(options, tracker, authHeader, certValidator);
 
             var policy = new QwpReconnectPolicy(
                 options.reconnect_initial_backoff_millis,
@@ -222,21 +203,23 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
             engine = new QwpCursorSendEngine(
                 slotLock,
                 ring,
-                () => new QwpWebSocketTransport(transportOpts),
+                transportFactory,
                 policy,
                 options.sf_append_deadline_millis,
                 options.initial_connect_retry,
-                maxTotalBytes: options.sf_max_total_bytes);
+                maxTotalBytes: options.sf_max_total_bytes,
+                skipBackoffPredicate: () => !tracker.IsRoundExhausted);
 
             engine.Start();
 
             if (options.drain_orphans)
             {
                 var drainer = new QwpBackgroundDrainer(
-                    () => new QwpWebSocketTransport(transportOpts),
+                    transportFactory,
                     policy,
                     segmentCapacity: options.sf_max_bytes,
-                    drainTimeout: options.reconnect_max_duration_millis);
+                    drainTimeout: options.reconnect_max_duration_millis,
+                    skipBackoffPredicate: () => !tracker.IsRoundExhausted);
                 pool = new QwpBackgroundDrainerPool(
                     options.max_background_drainers,
                     drainer,
@@ -1389,12 +1372,94 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
         return (utc - DateTime.UnixEpoch).Ticks / TicksPerMicrosecond;
     }
 
-    private static Uri BuildUri(SenderOptions options)
+    private static QwpWebSocketTransport ConnectInitialTransport(
+        SenderOptions options,
+        QwpHostHealthTracker tracker,
+        string? authHeader,
+        System.Net.Security.RemoteCertificateValidationCallback? certValidator)
     {
-        var scheme = options.protocol == ProtocolType.wss ? "wss" : "ws";
-        var host = options.Host;
-        var port = options.Port;
-        return new Uri($"{scheme}://{host}:{port}{QwpConstants.WritePath}");
+        Exception? lastFailure = null;
+        var hostCount = tracker.Count;
+        for (var attempt = 0; attempt < hostCount; attempt++)
+        {
+            var idx = tracker.PickNext();
+            if (idx < 0) break;
+
+            var transportOpts = new QwpWebSocketTransportOptions
+            {
+                Uri = options.BuildUri(idx, QwpConstants.WritePath),
+                AuthorizationHeader = authHeader,
+                RequestDurableAck = options.request_durable_ack,
+                RemoteCertificateValidationCallback = certValidator,
+            };
+
+            QwpWebSocketTransport? candidate = null;
+            try
+            {
+                candidate = new QwpWebSocketTransport(transportOpts);
+                using var connectCts = new CancellationTokenSource(options.auth_timeout);
+                try
+                {
+                    candidate.ConnectAsync(connectCts.Token).GetAwaiter().GetResult();
+                }
+                catch (OperationCanceledException) when (connectCts.IsCancellationRequested)
+                {
+                    throw new IngressError(ErrorCode.SocketError,
+                        $"WebSocket upgrade to {transportOpts.Uri} exceeded auth_timeout={options.auth_timeout.TotalMilliseconds}ms");
+                }
+
+                tracker.RecordSuccess(idx);
+                return candidate;
+            }
+            catch (IngressError ex) when (ex.code == ErrorCode.AuthError)
+            {
+                candidate?.Dispose();
+                throw;
+            }
+            catch (QwpIngressRoleRejectedException ex)
+            {
+                candidate?.Dispose();
+                tracker.RecordRoleReject(idx, ex.IsTransient);
+                lastFailure = ex;
+            }
+            catch (Exception ex)
+            {
+                candidate?.Dispose();
+                tracker.RecordTransportError(idx);
+                lastFailure = ex;
+            }
+        }
+
+        throw new IngressError(ErrorCode.SocketError,
+            $"WebSocket ingress failed against all {tracker.Count} configured endpoint(s): {lastFailure?.Message}",
+            lastFailure);
+    }
+
+    private static Func<IQwpCursorTransport> BuildHostRotatingFactory(
+        SenderOptions options,
+        QwpHostHealthTracker tracker,
+        string? authHeader,
+        System.Net.Security.RemoteCertificateValidationCallback? certValidator)
+    {
+        return () =>
+        {
+            var idx = tracker.PickNext();
+            if (idx < 0)
+            {
+                tracker.BeginRound(forgetClassifications: true);
+                idx = tracker.PickNext();
+            }
+
+            var transportOpts = new QwpWebSocketTransportOptions
+            {
+                Uri = options.BuildUri(idx, QwpConstants.WritePath),
+                AuthorizationHeader = authHeader,
+                RequestDurableAck = options.request_durable_ack,
+                RemoteCertificateValidationCallback = certValidator,
+            };
+
+            return new QwpTrackedCursorTransport(new QwpWebSocketTransport(transportOpts), tracker, idx);
+        };
     }
 
     private static string? BuildAuthHeader(SenderOptions options) =>

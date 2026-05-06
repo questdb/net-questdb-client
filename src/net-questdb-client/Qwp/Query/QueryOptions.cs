@@ -54,6 +54,7 @@ public sealed class QueryOptions
         "compression", "compression_level",
         "target", "failover", "failover_max_attempts",
         "failover_backoff_initial_ms", "failover_backoff_max_ms",
+        "lb_strategy",
         "max_batch_rows",
         "client_id",
     };
@@ -125,6 +126,8 @@ public sealed class QueryOptions
 
     /// <summary>Server-side target preference forwarded with the upgrade request.</summary>
     public TargetType target { get; set; } = TargetType.any;
+    /// <summary>Initial address-pick strategy across the configured endpoints.</summary>
+    public LoadBalanceStrategy lb_strategy { get; set; } = LoadBalanceStrategy.random;
     /// <summary>Whether to retry against alternative addresses on connect failure.</summary>
     public bool failover { get; set; } = true;
     /// <summary>Cap on consecutive failover attempts before surfacing the underlying error.</summary>
@@ -260,6 +263,7 @@ public sealed class QueryOptions
         compression_level = ReadInt(builder, "compression_level", 3);
 
         target = ReadEnum(builder, "target", TargetType.any);
+        lb_strategy = ReadEnum(builder, "lb_strategy", LoadBalanceStrategy.random);
         failover = ReadBoolOnOff(builder, "failover", true);
         failover_max_attempts = ReadInt(builder, "failover_max_attempts", 8);
         failover_backoff_initial_ms = TimeSpan.FromMilliseconds(

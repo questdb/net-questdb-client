@@ -757,7 +757,8 @@ public class QwpQueryClientEndToEndTests
         await serverB.StartAsync();
 
         var conn = $"ws::addr={serverA.Uri.Authority},{serverB.Uri.Authority};path={QwpConstants.ReadPath};" +
-                   "target=primary;failover=on;failover_max_attempts=4;failover_backoff_initial_ms=10;failover_backoff_max_ms=20;";
+                   "target=primary;failover=on;failover_max_attempts=4;lb_strategy=first;" +
+                   "failover_backoff_initial_ms=10;failover_backoff_max_ms=20;";
         using var client = QueryClient.New(conn);
         var handler = new RecordingHandler();
         client.Execute("SELECT 7", handler);
@@ -926,7 +927,7 @@ public class QwpQueryClientEndToEndTests
         await serverB.StartAsync();
 
         var conn = $"ws::addr={serverA.Uri.Authority},{serverB.Uri.Authority};path={QwpConstants.ReadPath};" +
-                   "target=primary;failover=on;failover_max_attempts=4;" +
+                   "target=primary;failover=on;failover_max_attempts=4;lb_strategy=first;" +
                    "failover_backoff_initial_ms=10;failover_backoff_max_ms=20;";
         using var client = QueryClient.New(conn);
 
@@ -967,7 +968,7 @@ public class QwpQueryClientEndToEndTests
 
         var conn = $"ws::addr={serverA.Uri.Authority},{serverB.Uri.Authority},{serverC.Uri.Authority};" +
                    $"path={QwpConstants.ReadPath};target=primary;failover=on;failover_max_attempts=4;" +
-                   "failover_backoff_initial_ms=10;failover_backoff_max_ms=20;";
+                   "lb_strategy=first;failover_backoff_initial_ms=10;failover_backoff_max_ms=20;";
         using var client = QueryClient.New(conn);
         Assert.That(client.ServerInfo!.NodeId, Is.EqualTo("node-c"));
 
@@ -1196,6 +1197,87 @@ public class QwpQueryClientEndToEndTests
         Assert.That(handler.Batches[0].LongValues, Is.EqualTo(new[] { 11L }));
         Assert.That(handler.Batches[1].LongValues, Is.EqualTo(new[] { 22L }));
         Assert.That(handler.Ended, Is.True);
+    }
+
+    [Test]
+    public async Task LbStrategy_Random_DistributesAcrossEndpoints()
+    {
+        var schema = new ResultSchema { SchemaId = 1, Columns = { new SchemaColumn("n", QwpTypeCode.Long) } };
+        var data = new ResultBatchData { RowCount = 1, Columns = { new FixedColumnData { DenseBytes = LongLe(1L) } } };
+        var batch = QwpEgressFrameBuilder.BuildResultBatch(1L, 0L, schema, data);
+        var end = QwpEgressFrameBuilder.BuildResultEnd(1L, 0L, 1L);
+
+        var servers = new DummyQwpServer[4];
+        for (var i = 0; i < servers.Length; i++)
+        {
+            var info = QwpEgressFrameBuilder.BuildServerInfo(
+                QwpConstants.RolePrimary, epoch: (ulong)(i + 1), capabilities: 0, serverWallNs: 0,
+                clusterId: "c", nodeId: $"node-{i}");
+            servers[i] = new DummyQwpServer(new DummyQwpServerOptions
+            {
+                Path = QwpConstants.ReadPath,
+                NegotiatedVersion = "2",
+                InitialServerFrame = info,
+                FrameHandlerMulti = _ => new[] { batch, end },
+            });
+            await servers[i].StartAsync();
+        }
+        try
+        {
+            var addrCsv = string.Join(",", servers.Select(s => s.Uri.Authority));
+            var connBase = $"ws::addr={addrCsv};path={QwpConstants.ReadPath};target=primary;failover=off;";
+
+            var picked = new HashSet<string>();
+            const int trials = 50;
+            for (var t = 0; t < trials; t++)
+            {
+                using var client = QueryClient.New(connBase);
+                client.Execute("SELECT 1", new RecordingHandler());
+                Assert.That(client.ServerInfo, Is.Not.Null);
+                picked.Add(client.ServerInfo!.NodeId);
+            }
+            Assert.That(picked.Count, Is.GreaterThan(1),
+                $"random LB should hit >1 distinct node across {trials} trials, got: [{string.Join(",", picked)}]");
+        }
+        finally
+        {
+            foreach (var s in servers) await s.DisposeAsync();
+        }
+    }
+
+    [Test]
+    public async Task LbStrategy_First_AlwaysPicksAddressZero()
+    {
+        var info0 = QwpEgressFrameBuilder.BuildServerInfo(
+            QwpConstants.RolePrimary, epoch: 1, capabilities: 0, serverWallNs: 0, "c", "node-0");
+        var info1 = QwpEgressFrameBuilder.BuildServerInfo(
+            QwpConstants.RolePrimary, epoch: 2, capabilities: 0, serverWallNs: 0, "c", "node-1");
+
+        var schema = new ResultSchema { SchemaId = 1, Columns = { new SchemaColumn("n", QwpTypeCode.Long) } };
+        var data = new ResultBatchData { RowCount = 1, Columns = { new FixedColumnData { DenseBytes = LongLe(0L) } } };
+        var batch = QwpEgressFrameBuilder.BuildResultBatch(1L, 0L, schema, data);
+        var end = QwpEgressFrameBuilder.BuildResultEnd(1L, 0L, 1L);
+
+        await using var s0 = new DummyQwpServer(new DummyQwpServerOptions
+        {
+            Path = QwpConstants.ReadPath, NegotiatedVersion = "2", InitialServerFrame = info0,
+            FrameHandlerMulti = _ => new[] { batch, end },
+        });
+        await using var s1 = new DummyQwpServer(new DummyQwpServerOptions
+        {
+            Path = QwpConstants.ReadPath, NegotiatedVersion = "2", InitialServerFrame = info1,
+            FrameHandlerMulti = _ => new[] { batch, end },
+        });
+        await s0.StartAsync();
+        await s1.StartAsync();
+
+        var conn = $"ws::addr={s0.Uri.Authority},{s1.Uri.Authority};path={QwpConstants.ReadPath};" +
+                   "target=primary;lb_strategy=first;";
+        for (var t = 0; t < 5; t++)
+        {
+            using var client = QueryClient.New(conn);
+            Assert.That(client.ServerInfo!.NodeId, Is.EqualTo("node-0"));
+        }
     }
 
     private static byte[] BuildZstdBatchPayloadCompressing(byte[] body)

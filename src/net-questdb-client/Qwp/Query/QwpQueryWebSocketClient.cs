@@ -64,6 +64,10 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient
     {
         _options = options;
         _decoder = new QwpResultBatchDecoder(_connState);
+        if (options.lb_strategy == LoadBalanceStrategy.random && options.AddressCount > 1)
+        {
+            _activeAddressIndex = Random.Shared.Next(options.AddressCount);
+        }
     }
 
     internal static async Task<QwpQueryWebSocketClient> CreateAsync(QueryOptions options, CancellationToken ct)
@@ -356,9 +360,12 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient
         QwpServerInfo? lastInfo = null;
         Exception? lastTransportError = null;
         var anyRoleMismatch = false;
-        for (var i = 0; i < _options.AddressCount; i++)
+        var totalAddresses = _options.AddressCount;
+        var startOffset = _activeAddressIndex;
+        for (var step = 0; step < totalAddresses; step++)
         {
-            var addr = _options.addresses[i];
+            var idx = (startOffset + step) % totalAddresses;
+            var addr = _options.addresses[idx];
             QwpWebSocketTransport? candidate = null;
             try
             {
@@ -375,7 +382,7 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient
                 if (EndpointMatchesTarget(info))
                 {
                     _transport = candidate;
-                    _activeAddressIndex = i;
+                    _activeAddressIndex = idx;
                     ServerInfo = info;
                     return;
                 }

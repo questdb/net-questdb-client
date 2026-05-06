@@ -50,12 +50,14 @@ internal sealed class QwpBackgroundDrainer : IQwpSlotDrainer
     private readonly QwpReconnectPolicy _reconnectPolicy;
     private readonly long _segmentCapacity;
     private readonly TimeSpan _drainTimeout;
+    private readonly Func<bool>? _skipBackoffPredicate;
 
     public QwpBackgroundDrainer(
         Func<IQwpCursorTransport> transportFactory,
         QwpReconnectPolicy reconnectPolicy,
         long segmentCapacity,
-        TimeSpan drainTimeout)
+        TimeSpan drainTimeout,
+        Func<bool>? skipBackoffPredicate = null)
     {
         ArgumentNullException.ThrowIfNull(transportFactory);
         ArgumentNullException.ThrowIfNull(reconnectPolicy);
@@ -73,6 +75,7 @@ internal sealed class QwpBackgroundDrainer : IQwpSlotDrainer
         _reconnectPolicy = reconnectPolicy;
         _segmentCapacity = segmentCapacity;
         _drainTimeout = drainTimeout;
+        _skipBackoffPredicate = skipBackoffPredicate;
     }
 
     public async Task DrainAsync(string slotDirectory, CancellationToken cancellationToken)
@@ -90,7 +93,8 @@ internal sealed class QwpBackgroundDrainer : IQwpSlotDrainer
                 _transportFactory,
                 _reconnectPolicy,
                 appendDeadline: TimeSpan.FromSeconds(30),
-                initialConnectRetry: false);
+                initialConnectRetry: false,
+                skipBackoffPredicate: _skipBackoffPredicate);
 
             if (ring.NextFsn > ring.OldestFsn)
             {

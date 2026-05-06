@@ -206,6 +206,14 @@ internal static class QwpConstants
     /// <summary>Server → client: negotiated QWP version.</summary>
     public const string HeaderVersion = "X-QWP-Version";
 
+    /// <summary>Server → client: replication role on both 101 (diagnostic) and 503 (role-reject) responses.</summary>
+    public const string HeaderQuestDbRole = "X-QuestDB-Role";
+
+    public const string RoleStandaloneName = "STANDALONE";
+    public const string RolePrimaryName = "PRIMARY";
+    public const string RoleReplicaName = "REPLICA";
+    public const string RolePrimaryCatchupName = "PRIMARY_CATCHUP";
+
     /// <summary>Client → server: opt-in for STATUS_DURABLE_ACK frames.</summary>
     public const string HeaderRequestDurableAck = "X-QWP-Request-Durable-Ack";
 }

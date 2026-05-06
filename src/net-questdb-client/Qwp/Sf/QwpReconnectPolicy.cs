@@ -84,7 +84,7 @@ internal sealed class QwpReconnectPolicy
     /// <summary>Total wall-clock wait budget across the whole reconnect run.</summary>
     public TimeSpan MaxOutageDuration { get; }
 
-    /// <summary>Jitter transform that spreads <c>base</c> over <c>[base, 2·base)</c> using <see cref="Random.Shared" />.</summary>
+    /// <summary>Full-jitter transform that picks uniformly from <c>[0, base]</c> using <see cref="Random.Shared" />.</summary>
     public static TimeSpan UniformDoubleJitter(TimeSpan baseBackoff)
     {
         if (baseBackoff <= TimeSpan.Zero)
@@ -92,8 +92,8 @@ internal sealed class QwpReconnectPolicy
             return baseBackoff;
         }
 
-        var extraTicks = (long)(Random.Shared.NextDouble() * baseBackoff.Ticks);
-        return TimeSpan.FromTicks(baseBackoff.Ticks + extraTicks);
+        var ticks = (long)(Random.Shared.NextDouble() * (baseBackoff.Ticks + 1));
+        return TimeSpan.FromTicks(ticks);
     }
 
     /// <summary>

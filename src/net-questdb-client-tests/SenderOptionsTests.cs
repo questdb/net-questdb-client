@@ -423,6 +423,39 @@ public class SenderOptionsTests
     }
 
     [Test]
+    public void IPv6_BracketedWithPort()
+    {
+        var opts = new SenderOptions("http::addr=[::1]:9000;");
+        Assert.That(opts.Host, Is.EqualTo("::1"));
+        Assert.That(opts.Port, Is.EqualTo(9000));
+    }
+
+    [Test]
+    public void IPv6_BracketedWithoutPort_UsesProtocolDefault()
+    {
+        var opts = new SenderOptions("http::addr=[fe80::1];");
+        Assert.That(opts.Host, Is.EqualTo("fe80::1"));
+        Assert.That(opts.Port, Is.EqualTo(9000));
+    }
+
+    [Test]
+    public void IPv6_BareUnbracketed_UsesProtocolDefault()
+    {
+        var opts = new SenderOptions("http::addr=fe80::1;");
+        Assert.That(opts.Host, Is.EqualTo("fe80::1"));
+        Assert.That(opts.Port, Is.EqualTo(9000));
+    }
+
+    [Test]
+    public void IPv6_BareUnbracketed_TcpDefaultPort()
+    {
+        var opts = new SenderOptions("tcp::addr=fe80::1;");
+        Assert.That(opts.Host, Is.EqualTo("fe80::1"));
+        Assert.That(opts.Port, Is.EqualTo(9009));
+    }
+
+
+    [Test]
     public void Sf_AllKeysOnHttpScheme_RejectedIndividually()
     {
         var keys = new[]
@@ -626,5 +659,96 @@ public class SenderOptionsTests
         Assert.That(
             () => new SenderOptions("http::addr=localhost:9000;ping_timeout=1000;"),
             Throws.TypeOf<IngressError>().With.Message.Contains("ping_timeout"));
+    }
+
+    [Test]
+    public void AddrSetter_RefreshesAddresses()
+    {
+        var opts = new SenderOptions { protocol = QuestDB.Enums.ProtocolType.ws, addr = "h1:9000,h2:9000,h3:9000" };
+        Assert.That(opts.AddressCount, Is.EqualTo(3));
+        Assert.That(opts.addresses[0], Is.EqualTo("h1:9000"));
+        Assert.That(opts.addresses[2], Is.EqualTo("h3:9000"));
+    }
+
+    [Test]
+    public void AddrSetter_OverwritesPreviousList()
+    {
+        var opts = new SenderOptions { protocol = QuestDB.Enums.ProtocolType.ws, addr = "h1:9000,h2:9000" };
+        opts.addr = "single:9000";
+        Assert.That(opts.AddressCount, Is.EqualTo(1));
+        Assert.That(opts.addresses[0], Is.EqualTo("single:9000"));
+    }
+
+    [Test]
+    public void Proxy_OnHttpScheme_Programmatic_Rejected()
+    {
+        var opts = new SenderOptions
+        {
+            protocol = QuestDB.Enums.ProtocolType.http,
+            addr = "localhost:9000",
+            proxy = "http://p:8080",
+        };
+        Assert.That(() => QuestDB.Sender.New(opts), Throws.TypeOf<IngressError>().With.Message.Contains("proxy"));
+    }
+
+    [Test]
+    public void Proxy_OnHttpScheme_String_Rejected()
+    {
+        Assert.That(
+            () => new SenderOptions("http::addr=localhost:9000;proxy=http://p:8080;"),
+            Throws.TypeOf<IngressError>().With.Message.Contains("proxy"));
+    }
+
+    [Test]
+    public void SfMaxTotalBytes_LessThanTwiceSfMaxBytes_Rejected()
+    {
+        Assert.That(
+            () => new SenderOptions("ws::addr=h:9000;sf_dir=/tmp/test;sf_max_bytes=8000000;sf_max_total_bytes=10000000;"),
+            Throws.TypeOf<IngressError>().With.Message.Contains("sf_max_total_bytes"));
+    }
+
+    [Test]
+    public void SfMaxBytes_NonPositive_Rejected()
+    {
+        Assert.That(
+            () => new SenderOptions("ws::addr=h:9000;sf_dir=/tmp/test;sf_max_bytes=0;"),
+            Throws.TypeOf<IngressError>().With.Message.Contains("sf_max_bytes"));
+    }
+
+    [Test]
+    public void Tcp_MultiAddr_Rejected()
+    {
+        Assert.That(
+            () => new SenderOptions("tcp::addr=h1:9009,h2:9009;"),
+            Throws.TypeOf<IngressError>().With.Message.Contains("tcp"));
+    }
+
+    [TestCase("http", "in_flight_window=4")]
+    [TestCase("http", "max_schemas_per_connection=10")]
+    [TestCase("http", "gorilla=on")]
+    [TestCase("http", "request_durable_ack=on")]
+    [TestCase("http", "sf_dir=/tmp/x")]
+    [TestCase("http", "sender_id=foo")]
+    [TestCase("http", "ping_timeout=1000")]
+    [TestCase("http", "proxy=http://p:8080")]
+    [TestCase("https", "in_flight_window=4")]
+    [TestCase("https", "gorilla=on")]
+    [TestCase("https", "ping_timeout=1000")]
+    [TestCase("https", "proxy=http://p:8080")]
+    [TestCase("tcp", "in_flight_window=4")]
+    [TestCase("tcp", "gorilla=on")]
+    [TestCase("tcp", "ping_timeout=1000")]
+    [TestCase("tcp", "proxy=http://p:8080")]
+    [TestCase("tcps", "in_flight_window=4")]
+    [TestCase("tcps", "gorilla=on")]
+    [TestCase("tcps", "ping_timeout=1000")]
+    [TestCase("tcps", "proxy=http://p:8080")]
+    public void WsOnlyKey_OnNonWsScheme_Rejected(string scheme, string kv)
+    {
+        var addr = scheme.StartsWith("tcp") ? "addr=localhost:9009" : "addr=localhost:9000";
+        Assert.That(
+            () => new SenderOptions($"{scheme}::{addr};{kv};"),
+            Throws.TypeOf<IngressError>(),
+            $"key `{kv.Split('=')[0]}` must be rejected on {scheme} scheme");
     }
 }

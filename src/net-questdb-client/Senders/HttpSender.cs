@@ -59,6 +59,8 @@ internal class HttpSender : AbstractSender
     private readonly Func<HttpRequestMessage> _sendRequestFactory;
     private readonly Func<HttpRequestMessage> _settingRequestFactory;
 
+    private Lazy<X509Certificate2>? _trustRoot;
+
     /// <summary>
     ///     Manages round-robin address rotation for failover.
     /// </summary>
@@ -93,24 +95,6 @@ internal class HttpSender : AbstractSender
     {
     }
 
-    /// <summary>
-    ///     Configure and initialize the SocketsHttpHandler and HttpClient, set TLS and authentication options, determine the
-    ///     Line Protocol version (probing /settings when set to Auto), and create the internal send buffer.
-    /// </summary>
-    /// <remarks>
-    ///     - Applies pool and connection settings from Options.
-    ///     - When using HTTPS, configures TLS protocols, optional remote-certificate validation override (when tls_verify is
-    ///     unsafe_off), optional custom root CA installation, and optional client certificates.
-    ///     - Sets connection timeout, PreAuthenticate, BaseAddress, and disables HttpClient timeout.
-    ///     - Adds Basic or Bearer Authorization header when credentials or token are provided.
-    ///     - If protocol_version is Auto, probes the server's /settings with a 1-second retry window to select the highest
-    ///     mutually supported protocol up to V3, falling back to V1 on errors or unexpected responses.
-    ///     - Initializes the Buffer with init_buf_size, max_name_len, max_buf_size, and the chosen protocol version.
-    /// </remarks>
-    /// <summary>
-    ///     Creates a configured <see cref="SocketsHttpHandler" /> for a specific host.
-    ///     Each handler is isolated to prevent TLS TargetHost conflicts between different addresses.
-    /// </summary>
     private SocketsHttpHandler CreateHandler(string host)
     {
         var handler = new SocketsHttpHandler
@@ -130,9 +114,11 @@ internal class HttpSender : AbstractSender
             }
             else
             {
-                var trustRoot = Options.tls_roots is not null
-                    ? new Lazy<X509Certificate2>(() => QwpTlsAuth.LoadTrustRoot(Options.tls_roots!, Options.tls_roots_password))
-                    : null;
+                if (_trustRoot is null && Options.tls_roots is not null)
+                {
+                    _trustRoot = new Lazy<X509Certificate2>(() => QwpTlsAuth.LoadTrustRoot(Options.tls_roots!, Options.tls_roots_password));
+                }
+                var trustRoot = _trustRoot;
                 handler.SslOptions.RemoteCertificateValidationCallback =
                     (_, certificate, chain, errors) =>
                     {
@@ -836,6 +822,13 @@ internal class HttpSender : AbstractSender
         }
 
         _handlerCache.Clear();
+
+        if (_trustRoot is { IsValueCreated: true })
+        {
+            _trustRoot.Value.Dispose();
+        }
+        _trustRoot = null;
+
         Buffer.Clear();
         Buffer.TrimExcessBuffers();
     }

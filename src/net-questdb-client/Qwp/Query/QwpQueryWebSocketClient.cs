@@ -35,8 +35,7 @@ namespace QuestDB.Qwp.Query;
 
 internal sealed class QwpQueryWebSocketClient : IQwpQueryClient
 {
-    private static readonly UTF8Encoding StrictUtf8 = new(false, throwOnInvalidBytes: true);
-    private static readonly UTF8Encoding LenientUtf8 = new(false, throwOnInvalidBytes: false);
+    private static readonly UTF8Encoding StrictUtf8 = QwpConstants.StrictUtf8;
     private const int InitialReceiveBufferBytes = 64 * 1024;
     private const int InitialDecompressBufferBytes = 256 * 1024;
 
@@ -335,7 +334,7 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient
                 candidate?.Dispose();
                 throw;
             }
-            catch (IngressError ex) when (ex.code is ErrorCode.ConfigError or ErrorCode.AuthError)
+            catch (IngressError ex) when (ex.code is ErrorCode.AuthError)
             {
                 candidate?.Dispose();
                 throw;
@@ -458,9 +457,10 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient
         return options.compression switch
         {
             CompressionType.raw => null,
-            CompressionType.zstd => $"zstd;level={options.compression_level},raw",
+            CompressionType.zstd => $"zstd;level={options.compression_level}",
             CompressionType.auto => $"zstd;level={options.compression_level},raw",
-            _ => null,
+            _ => throw new InvalidOperationException(
+                $"unknown CompressionType {options.compression}"),
         };
     }
 
@@ -911,7 +911,7 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient
         {
             throw new IngressError(ErrorCode.ProtocolVersionError, "SERVER_INFO truncated at cluster_id");
         }
-        var clusterId = LenientUtf8.GetString(s.Slice(24, clusterIdLen));
+        var clusterId = StrictUtf8.GetString(s.Slice(24, clusterIdLen));
         var nodeIdLenOffset = 24 + clusterIdLen;
         var nodeIdLen = BinaryPrimitives.ReadUInt16LittleEndian(s.Slice(nodeIdLenOffset, 2));
         var nodeIdStart = nodeIdLenOffset + 2;
@@ -924,7 +924,7 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient
             throw new IngressError(ErrorCode.ProtocolVersionError,
                 $"SERVER_INFO length mismatch: consumed {nodeIdStart + nodeIdLen}, payload {s.Length}");
         }
-        var nodeId = LenientUtf8.GetString(s.Slice(nodeIdStart, nodeIdLen));
+        var nodeId = StrictUtf8.GetString(s.Slice(nodeIdStart, nodeIdLen));
 
         return new QwpServerInfo
         {
@@ -986,7 +986,7 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient
             throw new IngressError(ErrorCode.ProtocolVersionError,
                 $"QUERY_ERROR length mismatch: msgLen={msgLen} payload={s.Length}");
         }
-        var msg = LenientUtf8.GetString(s.Slice(12, msgLen));
+        var msg = StrictUtf8.GetString(s.Slice(12, msgLen));
         return (requestId, status, msg);
     }
 

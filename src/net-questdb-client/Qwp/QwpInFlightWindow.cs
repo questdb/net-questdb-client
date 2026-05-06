@@ -129,6 +129,12 @@ internal sealed class QwpInFlightWindow
     /// </remarks>
     public void AcknowledgeUpTo(long sequence)
     {
+        if (sequence < 0)
+        {
+            throw new InvalidOperationException(
+                $"ack sequence must be ≥ 0; got {sequence}");
+        }
+
         TaskCompletionSource<bool>? wakeup;
         lock (_lock)
         {

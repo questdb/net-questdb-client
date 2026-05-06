@@ -666,7 +666,7 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             FailTerminal(ex);
-            throw _terminalError!;
+            throw LoadTerminal()!;
         }
     }
 
@@ -686,7 +686,7 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             FailTerminal(ex);
-            throw _terminalError!;
+            throw LoadTerminal()!;
         }
 
         OnFlushSucceeded();
@@ -708,7 +708,7 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             FailTerminal(ex);
-            throw _terminalError!;
+            throw LoadTerminal()!;
         }
 
         OnFlushSucceeded();
@@ -743,7 +743,7 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             FailTerminal(ex);
-            throw _terminalError!;
+            throw LoadTerminal()!;
         }
     }
 
@@ -779,14 +779,17 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
     ///     Encodes the pending tables, hands the resulting frame to the send loop, and (if requested)
     ///     waits for the in-flight window to drain. Truly async: every wait uses <c>WaitAsync</c>.
     /// </summary>
-    private async ValueTask EnqueueAsyncCore(CancellationToken ct, bool awaitDrain)
+    private ValueTask EnqueueAsyncCore(CancellationToken ct, bool awaitDrain)
+        => EnqueueAsyncCore(ct, awaitDrain, drainTimeout: Timeout.InfiniteTimeSpan);
+
+    private async ValueTask EnqueueAsyncCore(CancellationToken ct, bool awaitDrain, TimeSpan drainTimeout)
     {
         var linked = ct.CanBeCanceled
             ? CancellationTokenSource.CreateLinkedTokenSource(_ioCts!.Token, ct)
             : null;
         try
         {
-            await EnqueueAsyncBody(linked?.Token ?? _ioCts!.Token, awaitDrain).ConfigureAwait(false);
+            await EnqueueAsyncBody(linked?.Token ?? _ioCts!.Token, awaitDrain, drainTimeout).ConfigureAwait(false);
         }
         finally
         {
@@ -794,7 +797,7 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
         }
     }
 
-    private async ValueTask EnqueueAsyncBody(CancellationToken linkedCt, bool awaitDrain)
+    private async ValueTask EnqueueAsyncBody(CancellationToken linkedCt, bool awaitDrain, TimeSpan drainTimeout)
     {
         var idx = _encoderIndex;
         _encoderIndex = (idx + 1) & 1;
@@ -842,10 +845,10 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
                 {
                     try
                     {
-                        await _inFlightWindow.AwaitEmptyAsync(Options.close_flush_timeout_millis, linkedCt).ConfigureAwait(false);
+                        await _inFlightWindow.AwaitEmptyAsync(drainTimeout, linkedCt).ConfigureAwait(false);
                         drainedSuccessfully = true;
                     }
-                    catch (OperationCanceledException) when (_terminalError is not null)
+                    catch (OperationCanceledException) when (LoadTerminal() is not null)
                     {
                     }
                     catch (Exception ex) when (ex is not OperationCanceledException && ex is not IngressError)
@@ -854,7 +857,7 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
                     }
                 }
             }
-            catch (OperationCanceledException) when (_terminalError is not null)
+            catch (OperationCanceledException) when (LoadTerminal() is not null)
             {
             }
         }
@@ -877,7 +880,12 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
 
     private void EnqueueSync(CancellationToken ct, bool awaitDrain)
     {
-        EnqueueAsyncCore(ct, awaitDrain).GetAwaiter().GetResult();
+        EnqueueAsyncCore(ct, awaitDrain, drainTimeout: Timeout.InfiniteTimeSpan).GetAwaiter().GetResult();
+    }
+
+    private void EnqueueSync(CancellationToken ct, bool awaitDrain, TimeSpan drainTimeout)
+    {
+        EnqueueAsyncCore(ct, awaitDrain, drainTimeout).GetAwaiter().GetResult();
     }
 
     private void OnFlushSucceeded()
@@ -1107,7 +1115,7 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
             ThrowIfDisposed();
             throw;
         }
-        catch (OperationCanceledException) when (_terminalError is not null)
+        catch (OperationCanceledException) when (LoadTerminal() is not null)
         {
             ThrowIfTerminal();
             throw;
@@ -1115,7 +1123,7 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
         catch (Exception ex) when (ex is not OperationCanceledException && ex is not IngressError)
         {
             FailTerminal(ex);
-            throw _terminalError!;
+            throw LoadTerminal()!;
         }
         finally
         {
@@ -1151,10 +1159,10 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
     {
         try
         {
-            if (_terminalError is null)
+            if (LoadTerminal() is null)
             {
                 using var flushCts = new CancellationTokenSource(Options.close_flush_timeout_millis);
-                EnqueueSync(flushCts.Token, awaitDrain: true);
+                EnqueueSync(flushCts.Token, awaitDrain: true, drainTimeout: Options.close_flush_timeout_millis);
             }
         }
         catch (Exception)
@@ -1193,10 +1201,10 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
     {
         try
         {
-            if (_terminalError is null)
+            if (LoadTerminal() is null)
             {
                 using var flushCts = new CancellationTokenSource(Options.close_flush_timeout_millis);
-                await EnqueueAsyncCore(flushCts.Token, awaitDrain: true).ConfigureAwait(false);
+                await EnqueueAsyncCore(flushCts.Token, awaitDrain: true, drainTimeout: Options.close_flush_timeout_millis).ConfigureAwait(false);
             }
         }
         catch (Exception)
@@ -1250,7 +1258,7 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
     {
         try
         {
-            if (_terminalError is null && Options.close_flush_timeout_millis.TotalMilliseconds > 0)
+            if (LoadTerminal() is null && Options.close_flush_timeout_millis.TotalMilliseconds > 0)
             {
                 FlushToSfEngineSync(CancellationToken.None);
                 _sfEngine!.FlushAsync(Options.close_flush_timeout_millis).GetAwaiter().GetResult();
@@ -1273,7 +1281,7 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
     {
         try
         {
-            if (_terminalError is null && Options.close_flush_timeout_millis.TotalMilliseconds > 0)
+            if (LoadTerminal() is null && Options.close_flush_timeout_millis.TotalMilliseconds > 0)
             {
                 await FlushToSfEngineAsyncCore(CancellationToken.None).ConfigureAwait(false);
                 await _sfEngine!.FlushAsync(Options.close_flush_timeout_millis).ConfigureAwait(false);
@@ -1302,6 +1310,8 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
         return _currentTable;
     }
 
+    private IngressError? LoadTerminal() => Volatile.Read(ref _terminalError);
+
     private void ThrowIfTerminal()
     {
         if (Volatile.Read(ref _disposed) != 0)
@@ -1309,7 +1319,7 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
             throw new ObjectDisposedException(nameof(QwpWebSocketSender));
         }
 
-        var terminal = Volatile.Read(ref _terminalError);
+        var terminal = LoadTerminal();
         if (terminal is not null)
         {
             // Re-wrap so the user sees a fresh stack trace pointing to their call site, but
@@ -1408,13 +1418,7 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
 
     private static long DateTimeToMicros(DateTime value)
     {
-        var utc = value.Kind switch
-        {
-            DateTimeKind.Utc => value,
-            DateTimeKind.Local => value.ToUniversalTime(),
-            _ => throw new IngressError(ErrorCode.InvalidApiCall,
-                "DateTime.Kind must be Utc or Local; got Unspecified"),
-        };
+        var utc = value.Kind == DateTimeKind.Local ? value.ToUniversalTime() : value;
         return (utc - DateTime.UnixEpoch).Ticks / TicksPerMicrosecond;
     }
 

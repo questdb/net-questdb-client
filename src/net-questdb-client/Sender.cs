@@ -64,30 +64,27 @@ public static class Sender
     /// <param name="options"></param>
     /// <returns></returns>
     /// <exception cref="NotSupportedException"></exception>
-    public static ISender New(SenderOptions options)
+    public static ISender New(SenderOptions? options = null)
     {
-        ArgumentNullException.ThrowIfNull(options);
+        if (options is null)
+        {
+            return new HttpSender(new SenderOptions("http::addr=localhost:9000;"));
+        }
         options.EnsureValid();
 
-        switch (options.protocol)
+        return options.protocol switch
         {
-            case ProtocolType.http:
-            case ProtocolType.https:
-                return new HttpSender(options);
-            case ProtocolType.tcp:
-            case ProtocolType.tcps:
-                return new TcpSender(options);
-            case ProtocolType.ws:
-            case ProtocolType.wss:
+            ProtocolType.http or ProtocolType.https => new HttpSender(options),
+            ProtocolType.tcp or ProtocolType.tcps => new TcpSender(options),
 #if NET7_0_OR_GREATER
-                return new QwpWebSocketSender(options);
+            ProtocolType.ws or ProtocolType.wss => new QwpWebSocketSender(options),
 #else
-                throw new IngressError(ErrorCode.ConfigError,
-                    "ws::/wss:: senders require .NET 7 or later; HTTP and TCP transports remain available on net6.0");
+            ProtocolType.ws or ProtocolType.wss => throw new IngressError(ErrorCode.ConfigError,
+                "ws::/wss:: senders require .NET 7 or later; HTTP and TCP transports remain available on net6.0"),
 #endif
-        }
-
-        throw new NotImplementedException();
+            _ => throw new ArgumentOutOfRangeException(nameof(options.protocol),
+                options.protocol, "unknown ProtocolType"),
+        };
     }
 
     /// <summary>

@@ -328,9 +328,9 @@ internal sealed class QwpColumn
         }
 
         // Reserve worst-case UTF-8 footprint so we encode in one pass; trim by actual length below.
-        var maxBytes = Encoding.UTF8.GetMaxByteCount(value.Length);
+        var maxBytes = QwpConstants.StrictUtf8.GetMaxByteCount(value.Length);
         EnsureStringCapacity(StrLen + maxBytes);
-        var written = Encoding.UTF8.GetBytes(value, StrData.AsSpan(StrLen, maxBytes));
+        var written = QwpConstants.StrictUtf8.GetBytes(value, StrData.AsSpan(StrLen, maxBytes));
         StrLen += written;
 
         // Offsets array carries one trailing offset per non-null value, so length = NonNullCount + 1.
@@ -440,13 +440,7 @@ internal sealed class QwpColumn
         {
             Array.Clear(NullBitmap, 0, NullBitmap.Length);
         }
-        DecimalScaleSet = false;
-        DecimalScale = 0;
-        GeohashPrecisionSet = false;
-        GeohashPrecisionBits = 0;
-        // FixedData / BoolData / StrOffsets / StrData / SymbolIds keep their allocations for
-        // amortised cost. The non-null counters bound reads so stale bytes are invisible.
-        // TypeCode and IsTyped remain so the schema stays describable.
+        // Type / scale / precision pinned for column lifetime so server-side schema doesn't drift.
     }
 
     /// <summary>Appends a SYMBOL value as a global dictionary id. Dictionary lookup is the caller's responsibility.</summary>
@@ -477,63 +471,64 @@ internal sealed class QwpColumn
 
         Span<int> bits = stackalloc int[4];
         decimal.GetBits(value, bits);
-        var lo = (uint)bits[0];
-        var mid = (uint)bits[1];
-        var hi = (uint)bits[2];
         var flags = bits[3];
         var negative = (flags & unchecked((int)0x80000000)) != 0;
         var scale = (byte)((flags >> 16) & 0x7F);
 
+        byte targetScale;
         if (!DecimalScaleSet)
         {
+            targetScale = scale;
             DecimalScale = scale;
             DecimalScaleSet = true;
         }
-        else if (DecimalScale != scale)
+        else
         {
-            throw new IngressError(ErrorCode.InvalidApiCall,
-                $"column '{Name}' decimal scale mismatch: previously {DecimalScale}, now {scale}. " +
-                "Pre-scale values to a uniform scale (e.g. via decimal arithmetic) before appending.");
+            targetScale = DecimalScale;
         }
+
+        var mantissa = (new BigInteger((uint)bits[2]) << 64)
+            | (new BigInteger((uint)bits[1]) << 32)
+            | new BigInteger((uint)bits[0]);
+
+        if (scale != targetScale)
+        {
+            if (scale < targetScale)
+            {
+                mantissa *= BigInteger.Pow(10, targetScale - scale);
+            }
+            else
+            {
+                var divisor = BigInteger.Pow(10, scale - targetScale);
+                if (!(mantissa % divisor).IsZero)
+                {
+                    throw new IngressError(ErrorCode.InvalidApiCall,
+                        $"column '{Name}' decimal value {value} cannot be losslessly represented at scale {targetScale}");
+                }
+                mantissa /= divisor;
+            }
+        }
+
+        if (negative) mantissa = -mantissa;
 
         EnsureFixedCapacity(FixedLen + QwpConstants.Decimal128SizeBytes);
         var dest = FixedData.AsSpan(FixedLen, QwpConstants.Decimal128SizeBytes);
-
-        if (!negative)
-        {
-            // Sign-extend the 96-bit unsigned magnitude with a zero high word.
-            BinaryPrimitives.WriteUInt32LittleEndian(dest.Slice(0, 4), lo);
-            BinaryPrimitives.WriteUInt32LittleEndian(dest.Slice(4, 4), mid);
-            BinaryPrimitives.WriteUInt32LittleEndian(dest.Slice(8, 4), hi);
-            BinaryPrimitives.WriteUInt32LittleEndian(dest.Slice(12, 4), 0u);
-        }
-        else
-        {
-            // Two's-complement of the 128-bit value: ~v + 1, with sign-extension across the high word.
-            var b0 = ~lo;
-            var b1 = ~mid;
-            var b2 = ~hi;
-            var b3 = ~0u;
-
-            var sum = b0 + 1ul;
-            b0 = (uint)sum;
-            var carry = (uint)(sum >> 32);
-            sum = (ulong)b1 + carry;
-            b1 = (uint)sum;
-            carry = (uint)(sum >> 32);
-            sum = (ulong)b2 + carry;
-            b2 = (uint)sum;
-            carry = (uint)(sum >> 32);
-            b3 += carry;
-
-            BinaryPrimitives.WriteUInt32LittleEndian(dest.Slice(0, 4), b0);
-            BinaryPrimitives.WriteUInt32LittleEndian(dest.Slice(4, 4), b1);
-            BinaryPrimitives.WriteUInt32LittleEndian(dest.Slice(8, 4), b2);
-            BinaryPrimitives.WriteUInt32LittleEndian(dest.Slice(12, 4), b3);
-        }
-
+        WriteSignedDecimal128(dest, mantissa, value);
         FixedLen += QwpConstants.Decimal128SizeBytes;
         AdvanceNonNull();
+    }
+
+    private void WriteSignedDecimal128(Span<byte> dest, BigInteger value, decimal source)
+    {
+        var bytes = value.ToByteArray(isUnsigned: false, isBigEndian: false);
+        if (bytes.Length > QwpConstants.Decimal128SizeBytes)
+        {
+            throw new IngressError(ErrorCode.InvalidApiCall,
+                $"column '{Name}' decimal value {source} at scale {DecimalScale} overflows Decimal128 range");
+        }
+        var fill = value.Sign < 0 ? (byte)0xFF : (byte)0x00;
+        dest.Fill(fill);
+        bytes.AsSpan().CopyTo(dest);
     }
 
     /// <summary>

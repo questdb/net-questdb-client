@@ -113,4 +113,108 @@ public class QwpWireFormatVectorsTests
     {
         Assert.That(QwpCrc32C.Compute(input), Is.EqualTo(expected));
     }
+
+    [TestCase((sbyte)0, new byte[] { 0x00 })]
+    [TestCase((sbyte)1, new byte[] { 0x01 })]
+    [TestCase((sbyte)-1, new byte[] { 0xFF })]
+    [TestCase((sbyte)127, new byte[] { 0x7F })]
+    [TestCase((sbyte)-128, new byte[] { 0x80 })]
+    public void Byte_Vector_PinnedBytes(sbyte value, byte[] expected)
+    {
+        var col = new QwpColumn("b", 0);
+        col.AppendByte(value);
+        Assert.That(col.FixedLen, Is.EqualTo(1));
+        Assert.That(col.FixedData!.AsSpan(0, 1).ToArray(), Is.EqualTo(expected));
+    }
+
+    [TestCase((short)0, new byte[] { 0x00, 0x00 })]
+    [TestCase((short)1, new byte[] { 0x01, 0x00 })]
+    [TestCase((short)-1, new byte[] { 0xFF, 0xFF })]
+    [TestCase(short.MaxValue, new byte[] { 0xFF, 0x7F })]
+    [TestCase(short.MinValue, new byte[] { 0x00, 0x80 })]
+    public void Short_Vector_PinnedBytes(short value, byte[] expected)
+    {
+        var col = new QwpColumn("s", 0);
+        col.AppendShort(value);
+        Assert.That(col.FixedLen, Is.EqualTo(2));
+        Assert.That(col.FixedData!.AsSpan(0, 2).ToArray(), Is.EqualTo(expected));
+    }
+
+    [TestCase(0, new byte[] { 0x00, 0x00, 0x00, 0x00 })]
+    [TestCase(1, new byte[] { 0x01, 0x00, 0x00, 0x00 })]
+    [TestCase(-1, new byte[] { 0xFF, 0xFF, 0xFF, 0xFF })]
+    [TestCase(int.MaxValue, new byte[] { 0xFF, 0xFF, 0xFF, 0x7F })]
+    [TestCase(int.MinValue, new byte[] { 0x00, 0x00, 0x00, 0x80 })]
+    public void Int_Vector_PinnedBytes(int value, byte[] expected)
+    {
+        var col = new QwpColumn("i", 0);
+        col.AppendInt(value);
+        Assert.That(col.FixedLen, Is.EqualTo(4));
+        Assert.That(col.FixedData!.AsSpan(0, 4).ToArray(), Is.EqualTo(expected));
+    }
+
+    [TestCase(0L, new byte[] { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 })]
+    [TestCase(1L, new byte[] { 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 })]
+    [TestCase(-1L, new byte[] { 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF })]
+    [TestCase(long.MaxValue, new byte[] { 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x7F })]
+    [TestCase(long.MinValue, new byte[] { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x80 })]
+    public void Long_Vector_PinnedBytes(long value, byte[] expected)
+    {
+        var col = new QwpColumn("l", 0);
+        col.AppendLong(value);
+        Assert.That(col.FixedLen, Is.EqualTo(8));
+        Assert.That(col.FixedData!.AsSpan(0, 8).ToArray(), Is.EqualTo(expected));
+    }
+
+    [TestCase((char)0, new byte[] { 0x00, 0x00 })]
+    [TestCase('A', new byte[] { 0x41, 0x00 })]
+    [TestCase('中', new byte[] { 0x2D, 0x4E })]
+    [TestCase((char)0xFFFF, new byte[] { 0xFF, 0xFF })]
+    public void Char_Vector_PinnedBytes(char value, byte[] expected)
+    {
+        var col = new QwpColumn("c", 0);
+        col.AppendChar(value);
+        Assert.That(col.FixedLen, Is.EqualTo(2));
+        Assert.That(col.FixedData!.AsSpan(0, 2).ToArray(), Is.EqualTo(expected));
+    }
+
+    [Test]
+    public void Boolean_Vector_BitPackedLsbFirst()
+    {
+        // 11 booleans: positions 0,2,4,6,8,10 are true → byte 0 = 0b01010101 = 0x55, byte 1 = 0b00000101 = 0x05.
+        var col = new QwpColumn("b", 0);
+        for (var i = 0; i < 11; i++) col.AppendBool(i % 2 == 0);
+        Assert.That(col.BoolData, Is.Not.Null);
+        Assert.That(col.BoolData!.AsSpan(0, 2).ToArray(), Is.EqualTo(new byte[] { 0x55, 0x05 }));
+    }
+
+    [Test]
+    public void Float_Vector_PinnedBytes()
+    {
+        var col = new QwpColumn("f", 0);
+        col.AppendFloat(1.0f);
+        col.AppendFloat(-1.0f);
+        col.AppendFloat(0.0f);
+        Assert.That(col.FixedLen, Is.EqualTo(12));
+        Assert.That(col.FixedData!.AsSpan(0, 12).ToArray(), Is.EqualTo(new byte[]
+        {
+            0x00, 0x00, 0x80, 0x3F,
+            0x00, 0x00, 0x80, 0xBF,
+            0x00, 0x00, 0x00, 0x00,
+        }));
+    }
+
+    [Test]
+    public void Double_Vector_PinnedBytes()
+    {
+        var col = new QwpColumn("d", 0);
+        col.AppendDouble(1.0);
+        col.AppendDouble(-1.0);
+        Assert.That(col.FixedLen, Is.EqualTo(16));
+        Assert.That(col.FixedData!.AsSpan(0, 16).ToArray(), Is.EqualTo(new byte[]
+        {
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xF0, 0x3F,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xF0, 0xBF,
+        }));
+    }
 }

@@ -265,9 +265,26 @@ public class QwpQueryClientEndToEndTests
 
         Assert.That(server.LastUpgradeHeaders, Is.Not.Null);
         Assert.That(server.LastUpgradeHeaders![QwpConstants.HeaderClientId], Is.EqualTo("tester/9.9"));
-        Assert.That(server.LastUpgradeHeaders[QwpConstants.HeaderAcceptEncoding], Is.EqualTo("zstd;level=5,raw"));
+        Assert.That(server.LastUpgradeHeaders[QwpConstants.HeaderAcceptEncoding], Is.EqualTo("zstd;level=5"));
         Assert.That(server.LastUpgradeHeaders[QwpConstants.HeaderMaxVersion],
             Is.EqualTo(QwpConstants.SupportedEgressVersion.ToString()));
+    }
+
+    [Test]
+    public async Task UpgradeHeaders_CompressionAuto_AdvertisesZstdWithRawFallback()
+    {
+        await using var server = new DummyQwpServer(new DummyQwpServerOptions
+        {
+            Path = QwpConstants.ReadPath,
+            NegotiatedVersion = "1",
+            FrameHandlerMulti = _ => new[] { QwpEgressFrameBuilder.BuildResultEnd(1L, 0L, 0L) },
+        });
+        await server.StartAsync();
+
+        using var client = QueryClient.New(BuildConnString(server, "compression=auto;compression_level=3;"));
+        client.Execute("SELECT 1", new RecordingHandler());
+
+        Assert.That(server.LastUpgradeHeaders![QwpConstants.HeaderAcceptEncoding], Is.EqualTo("zstd;level=3,raw"));
     }
 
     [Test]

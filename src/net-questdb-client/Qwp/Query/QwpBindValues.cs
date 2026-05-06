@@ -316,7 +316,7 @@ public sealed class QwpBindValues
 
         if (!IsBindableType(typeCode))
         {
-            throw new IngressError(ErrorCode.InvalidApiCall, $"unsupported bind type 0x{(byte)typeCode:X2}");
+            throw new IngressError(ErrorCode.InvalidApiCall, $"type {typeCode} (0x{(byte)typeCode:X2}) is not bindable");
         }
 
         Advance(index);
@@ -384,7 +384,7 @@ public sealed class QwpBindValues
     {
         if (!IsBindableType(typeCode))
         {
-            throw new IngressError(ErrorCode.InvalidApiCall, $"unsupported bind type 0x{(byte)typeCode:X2}");
+            throw new IngressError(ErrorCode.InvalidApiCall, $"type {typeCode} (0x{(byte)typeCode:X2}) is not bindable");
         }
 
         WriteByte((byte)typeCode);

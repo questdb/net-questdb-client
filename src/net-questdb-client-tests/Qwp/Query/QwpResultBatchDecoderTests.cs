@@ -1156,4 +1156,85 @@ public class QwpResultBatchDecoderTests
         var ex = Assert.Throws<QwpDecodeException>(() => decoder.Decode(grown, HeaderFlagsOf(frame), new QwpColumnBatch()));
         StringAssert.Contains("trailing bytes", ex!.Message);
     }
+
+    [Test]
+    public void Decode_EmptyResultSet_RowCountZero_Succeeds()
+    {
+        var schema = new ResultSchema
+        {
+            SchemaId = 90,
+            Columns = { new SchemaColumn("id", QwpTypeCode.Long), new SchemaColumn("name", QwpTypeCode.Varchar) },
+        };
+        var data = new ResultBatchData
+        {
+            RowCount = 0,
+            Columns = { new FixedColumnData { DenseBytes = Array.Empty<byte>() }, new VarcharColumnData { DenseValues = Array.Empty<string>() } },
+        };
+        var (_, batch, _, _) = DecodeOneBatch(schema, data);
+        Assert.That(batch.RowCount, Is.EqualTo(0));
+        Assert.That(batch.ColumnCount, Is.EqualTo(2));
+        Assert.That(batch.GetColumnName(0), Is.EqualTo("id"));
+        Assert.That(batch.GetColumnName(1), Is.EqualTo("name"));
+    }
+
+    [Test]
+    public void Decode_Decimal128_OutOfRangeScale_Throws()
+    {
+        var schema = new ResultSchema { SchemaId = 80, Columns = { new SchemaColumn("d", QwpTypeCode.Decimal128) } };
+        var data = new ResultBatchData
+        {
+            RowCount = 1,
+            Columns = { new DecimalColumnData { Scale = 200, DenseBytes = new byte[16] } },
+        };
+        Assert.Throws<QwpDecodeException>(() => DecodeOneBatch(schema, data));
+    }
+
+    [Test]
+    public void Decode_Decimal64_OutOfRangeScale_Throws()
+    {
+        var schema = new ResultSchema { SchemaId = 81, Columns = { new SchemaColumn("d", QwpTypeCode.Decimal64) } };
+        var data = new ResultBatchData
+        {
+            RowCount = 1,
+            Columns = { new DecimalColumnData { Scale = 25, DenseBytes = new byte[8] } },
+        };
+        Assert.Throws<QwpDecodeException>(() => DecodeOneBatch(schema, data));
+    }
+
+    [Test]
+    public void Decode_RegisterSchemaCollision_RewindsSymbolDict()
+    {
+        var state = new QwpEgressConnState();
+        var decoder = new QwpResultBatchDecoder(state);
+
+        var schemaA = new ResultSchema { SchemaId = 99, Columns = { new SchemaColumn("a", QwpTypeCode.Long) } };
+        var frameA = QwpEgressFrameBuilder.BuildResultBatch(1L, 0L, schemaA, new ResultBatchData
+        {
+            RowCount = 1,
+            Columns = { new FixedColumnData { DenseBytes = LongsLe(42L) } },
+        });
+        decoder.Decode(PayloadOf(frameA).Span, HeaderFlagsOf(frameA), new QwpColumnBatch());
+        Assert.That(state.SymbolDict.Size, Is.EqualTo(0));
+
+        var schemaB = new ResultSchema
+        {
+            SchemaId = 99,
+            Columns = { new SchemaColumn("a", QwpTypeCode.Long), new SchemaColumn("b", QwpTypeCode.Symbol) },
+        };
+        var dictB = new DeltaSymbolDict { DeltaStart = 0, Entries = { "newSym" } };
+        var frameB = QwpEgressFrameBuilder.BuildResultBatch(1L, 1L, schemaB, new ResultBatchData
+        {
+            RowCount = 1,
+            Columns =
+            {
+                new FixedColumnData { DenseBytes = LongsLe(7L) },
+                new SymbolColumnData { DenseDictIds = new[] { 0 } },
+            },
+        }, dictB);
+
+        Assert.Throws<QwpDecodeException>(() =>
+            decoder.Decode(PayloadOf(frameB).Span, HeaderFlagsOf(frameB), new QwpColumnBatch()));
+        // Symbol dict rolled back so the next batch sees the pre-failure cursor.
+        Assert.That(state.SymbolDict.Size, Is.EqualTo(0));
+    }
 }

@@ -39,6 +39,27 @@ namespace net_questdb_client_tests.Qwp;
 public class QwpWebSocketSenderTests
 {
     [Test]
+    public async Task Send_RowInProgress_Throws()
+    {
+        await using var server = StartServerWithOkAcks();
+        using var sender = NewSender(server, "auto_flush=off;");
+
+        sender.Table("t").Column("x", 1L);  // no At()/AtNow() — row uncommitted
+        var ex = Assert.Throws<IngressError>(() => sender.Send());
+        Assert.That(ex!.Message, Does.Contain("row in progress"));
+    }
+
+    [Test]
+    public async Task SendAsync_RowInProgress_Throws()
+    {
+        await using var server = StartServerWithOkAcks();
+        using var sender = NewSender(server, "auto_flush=off;");
+
+        sender.Table("t").Column("x", 1L);
+        Assert.ThrowsAsync<IngressError>(async () => await sender.SendAsync());
+    }
+
+    [Test]
     public async Task EndToEnd_SingleRow_ServerReceivesValidQwpFrame()
     {
         await using var server = StartServerWithOkAcks();
@@ -904,14 +925,14 @@ public class QwpWebSocketSenderTests
     }
 
     [Test]
-    public async Task At_DateTimeUnspecifiedKind_Rejected()
+    public async Task At_DateTimeUnspecifiedKind_TreatedAsUtc()
     {
         await using var server = StartServerWithOkAcks();
         await using var sender = NewSender(server, "auto_flush=off;");
 
         sender.Table("t").Column("v", 1L);
         var unspecified = new DateTime(2026, 4, 28, 12, 0, 0, DateTimeKind.Unspecified);
-        Assert.Throws<IngressError>(() => sender.At(unspecified));
+        Assert.DoesNotThrow(() => sender.At(unspecified));
     }
 
     [Test]

@@ -170,7 +170,7 @@ internal sealed class QwpMmapSegment : IDisposable
                     $"segment {path}: on-disk baseSeq {onDiskBaseFsn} does not match expected {baseFsn}");
             }
 
-            var (writePos, offsets) = ScanForLastGoodEnvelope(view, capacity);
+            var (writePos, offsets) = ScanForLastGoodEnvelope(view, capacity, maxFrameLength);
             ZeroViewRange(view, writePos, capacity - writePos);
 
             return new QwpMmapSegment(path, mmap, view, fs, capacity, onDiskBaseFsn, writePos, offsets, maxFrameLength);
@@ -409,7 +409,8 @@ internal sealed class QwpMmapSegment : IDisposable
     /// </summary>
     internal static unsafe (long WritePosition, List<long> Offsets) ScanForLastGoodEnvelope(
         MemoryMappedViewAccessor view,
-        long capacity)
+        long capacity,
+        int maxFrameLength = DefaultMaxFrameLength)
     {
         long offset = HeaderSize;
         var offsets = new List<long>();
@@ -432,6 +433,11 @@ internal sealed class QwpMmapSegment : IDisposable
                 }
 
                 if (len <= 0)
+                {
+                    break;
+                }
+
+                if (len > maxFrameLength)
                 {
                     break;
                 }

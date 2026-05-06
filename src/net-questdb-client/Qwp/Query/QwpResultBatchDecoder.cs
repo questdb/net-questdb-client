@@ -39,7 +39,7 @@ namespace QuestDB.Qwp.Query;
 /// </remarks>
 internal sealed class QwpResultBatchDecoder
 {
-    private static readonly UTF8Encoding LenientUtf8 = new(false, throwOnInvalidBytes: false);
+    private static readonly UTF8Encoding StrictUtf8 = QwpConstants.StrictUtf8;
 
     private readonly QwpEgressConnState _state;
 
@@ -87,18 +87,17 @@ internal sealed class QwpResultBatchDecoder
             {
                 throw new QwpDecodeException($"trailing bytes after RESULT_BATCH: consumed {p}, payload {payload.Length}");
             }
+
+            // Inside try so a RegisterSchema throw still rewinds the symbol dict.
+            if (stagedSchemaId is { } id && stagedSchema is { } sc)
+            {
+                _state.RegisterSchema(id, sc);
+            }
             commit = true;
         }
         finally
         {
-            if (commit)
-            {
-                if (stagedSchemaId is { } id && stagedSchema is { } sc)
-                {
-                    _state.RegisterSchema(id, sc);
-                }
-            }
-            else
+            if (!commit)
             {
                 // Symbols already appended into the dict; rewind to the pre-batch cursor on failure.
                 _state.SymbolDict.TruncateTo(preDictSize);
@@ -201,7 +200,7 @@ internal sealed class QwpResultBatchDecoder
                 {
                     throw new QwpDecodeException("truncated column name");
                 }
-                var name = LenientUtf8.GetString(payload.Slice(p, cnLen));
+                var name = StrictUtf8.GetString(payload.Slice(p, cnLen));
                 p += cnLen;
                 if (p >= payload.Length)
                 {
@@ -467,6 +466,18 @@ internal sealed class QwpResultBatchDecoder
             throw new QwpDecodeException("truncated before decimal scale prefix");
         }
         var scale = payload[p++];
+        var maxScale = valueBytes switch
+        {
+            8  => QwpConstants.MaxDecimal64Scale,
+            16 => QwpConstants.MaxDecimal128Scale,
+            32 => QwpConstants.MaxDecimal256Scale,
+            _  => byte.MaxValue,
+        };
+        if (scale > maxScale)
+        {
+            throw new QwpDecodeException(
+                $"decimal scale {scale} exceeds the wire-format max {maxScale} for {valueBytes}-byte decimals");
+        }
         SetScale(col, scale);
         CopyFixed(payload, ref p, col, nonNull * valueBytes);
     }

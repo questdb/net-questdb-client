@@ -82,7 +82,7 @@ public record SenderOptions
     private ProtocolType _protocol = ProtocolType.http;
     private ProtocolVersion _protocol_version = ProtocolVersion.Auto;
     private int _requestMinThroughput = 102400;
-    private TimeSpan _requestTimeout = TimeSpan.FromMilliseconds(30000);
+    private TimeSpan _requestTimeout = TimeSpan.FromMilliseconds(10000);
     private TimeSpan _retryTimeout = TimeSpan.FromMilliseconds(10000);
     private string? _tlsRoots;
     private string? _tlsRootsPassword;
@@ -131,6 +131,7 @@ public record SenderOptions
     private bool _drainOrphansUserSet;
     private bool _maxBackgroundDrainersUserSet;
     private bool _pingTimeoutUserSet;
+    private bool _proxyUserSet;
 
     /// <summary>
     ///     Construct a <see cref="SenderOptions" /> object with default values.
@@ -174,7 +175,7 @@ public record SenderOptions
         ParseStringWithDefault(nameof(token), null, out _token);
         ParseIntWithDefault(nameof(request_min_throughput), "102400", out _requestMinThroughput);
         ParseMillisecondsWithDefault(nameof(auth_timeout), "15000", out _authTimeout);
-        ParseMillisecondsWithDefault(nameof(request_timeout), "30000", out _requestTimeout);
+        ParseMillisecondsWithDefault(nameof(request_timeout), "10000", out _requestTimeout);
         ParseMillisecondsWithDefault(nameof(retry_timeout), "10000", out _retryTimeout);
         ParseMillisecondsWithDefault(nameof(pool_timeout), "120000", out _poolTimeout);
         ParseEnumWithDefault(nameof(tls_verify), "on", out _tlsVerify);
@@ -217,25 +218,13 @@ public record SenderOptions
         ParseMillisecondsWithDefault(nameof(ping_timeout), "5000", out _pingTimeout);
         ParseStringWithDefault(nameof(proxy), null, out _proxy);
 
-        ValidateWebSocketKeys();
-        ValidateAuthCombination();
-        ValidateTlsCombination();
-        ValidateGzipForWebSocket();
-        ValidateAutoFlushBytesForWebSocket();
-        ValidateTimeouts();
-
-        if (_autoFlush == AutoFlushType.off)
-        {
-            _autoFlushRows = -1;
-            _autoFlushBytes = -1;
-            _autoFlushInterval = TimeSpan.FromMilliseconds(-1);
-        }
-
         if (IsWebSocket() && _autoFlush != AutoFlushType.off)
         {
             if (!IsKeyExplicit(nameof(auto_flush_rows))) _autoFlushRows = 1000;
             if (!IsKeyExplicit(nameof(auto_flush_interval))) _autoFlushInterval = TimeSpan.FromMilliseconds(100);
         }
+
+        EnsureValid();
     }
 
     private void ValidateAuthCombination()
@@ -383,6 +372,7 @@ public record SenderOptions
     {
         ValidateAuthCombination();
         ValidateTlsCombination();
+        ValidateMultiAddressForTcp();
         ValidateStoreAndForwardOptions();
         ValidateGzipForWebSocket();
         ValidateAutoFlushBytesForWebSocket();
@@ -390,6 +380,15 @@ public record SenderOptions
         ValidateWebSocketKeys();
         ValidateWebSocketKeysAgainstDefaults();
         ApplyAutoFlushNormalisation();
+    }
+
+    private void ValidateMultiAddressForTcp()
+    {
+        if ((protocol == ProtocolType.tcp || protocol == ProtocolType.tcps) && _addresses.Count > 1)
+        {
+            throw new IngressError(ErrorCode.ConfigError,
+                "Multiple `addr=` entries are not supported on tcp/tcps; use http/https or ws/wss for multi-host failover.");
+        }
     }
 
     private void ValidateStoreAndForwardOptions()
@@ -406,6 +405,22 @@ public record SenderOptions
         if (!_sfMaxTotalBytesUserSet && !string.IsNullOrEmpty(_sfDir))
         {
             _sfMaxTotalBytes = 10L * 1024 * 1024 * 1024;
+        }
+
+        if (_sfMaxBytes <= 0)
+        {
+            throw new IngressError(ErrorCode.ConfigError,
+                $"`sf_max_bytes` must be > 0; got {_sfMaxBytes}");
+        }
+        if (_sfMaxTotalBytes <= 0)
+        {
+            throw new IngressError(ErrorCode.ConfigError,
+                $"`sf_max_total_bytes` must be > 0; got {_sfMaxTotalBytes}");
+        }
+        if (_sfMaxTotalBytes < 2 * _sfMaxBytes)
+        {
+            throw new IngressError(ErrorCode.ConfigError,
+                $"`sf_max_total_bytes` ({_sfMaxTotalBytes}) must be >= 2 * `sf_max_bytes` ({_sfMaxBytes}) so the segment manager has room to provision a hot spare.");
         }
     }
 
@@ -434,6 +449,7 @@ public record SenderOptions
         if (_drainOrphansUserSet) Throw(nameof(drain_orphans));
         if (_maxBackgroundDrainersUserSet) Throw(nameof(max_background_drainers));
         if (_pingTimeoutUserSet) Throw(nameof(ping_timeout));
+        if (_proxyUserSet) Throw(nameof(proxy));
 
         static void Throw(string key) =>
             throw new IngressError(ErrorCode.ConfigError,
@@ -442,11 +458,6 @@ public record SenderOptions
 
     private void ApplyAutoFlushNormalisation()
     {
-        if (_connectionStringBuilder is not null)
-        {
-            return;
-        }
-
         if (_autoFlush == AutoFlushType.off)
         {
             _autoFlushRows = -1;
@@ -506,7 +517,28 @@ public record SenderOptions
     public string addr
     {
         get => _addr;
-        set => _addr = value;
+        set
+        {
+            _addr = value;
+            _addresses.Clear();
+            if (!string.IsNullOrEmpty(value))
+            {
+                foreach (var piece in value.Split(','))
+                {
+                    var trimmed = piece.Trim();
+                    if (trimmed.Length == 0)
+                    {
+                        throw new IngressError(ErrorCode.ConfigError,
+                            $"empty entry in comma-separated `addr={value}`");
+                    }
+                    _addresses.Add(trimmed);
+                }
+                if (_addresses.Count > 0)
+                {
+                    _addr = _addresses[0];
+                }
+            }
+        }
     }
 
     /// <summary>
@@ -990,7 +1022,11 @@ public record SenderOptions
     public string? proxy
     {
         get => _proxy;
-        set => _proxy = value;
+        set
+        {
+            _proxy = value;
+            _proxyUserSet = true;
+        }
     }
 
     /// <summary>
@@ -1113,7 +1149,6 @@ public record SenderOptions
             return;
         }
 
-        // Bare hostname or IPv4 with optional :port. Disallow ambiguous unbracketed IPv6.
         var firstColon = addr.IndexOf(':');
         if (firstColon < 0)
         {
@@ -1124,8 +1159,9 @@ public record SenderOptions
 
         if (addr.IndexOf(':', firstColon + 1) >= 0)
         {
-            throw new IngressError(ErrorCode.ConfigError,
-                $"ambiguous address `{addr}`: wrap IPv6 in brackets, e.g. `[::1]:9000`");
+            host = addr;
+            port = -1;
+            return;
         }
 
         host = addr.Substring(0, firstColon);
@@ -1255,8 +1291,8 @@ public record SenderOptions
             throw new IngressError(ErrorCode.ConfigError, "Config string must contain a protocol, separated by `::`");
         }
 
-        var splits = confStr.Split("::");
-        var paramString = splits[1];
+        var schemeEnd = confStr.IndexOf("::", StringComparison.Ordinal);
+        var paramString = confStr.Substring(schemeEnd + 2);
 
         // Parse addresses manually before using DbConnectionStringBuilder
         // because DbConnectionStringBuilder only keeps the last value for duplicate keys
@@ -1302,7 +1338,7 @@ public record SenderOptions
 
         VerifyCorrectKeysInConfigString();
 
-        _connectionStringBuilder.Add("protocol", splits[0]);
+        _connectionStringBuilder.Add("protocol", confStr.Substring(0, schemeEnd));
     }
 
     private string? ReadOptionFromBuilder(string name)

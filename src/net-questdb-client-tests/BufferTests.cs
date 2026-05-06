@@ -1,5 +1,6 @@
 using NUnit.Framework;
 using QuestDB.Buffers;
+using QuestDB.Utils;
 
 namespace net_questdb_client_tests;
 
@@ -170,4 +171,16 @@ public class BufferTests
         });
     }
 
+    [Test]
+    public void At_LocalDateTimeKind_NormalisedToUtc()
+    {
+        var local = DateTime.SpecifyKind(new DateTime(1970, 1, 1, 0, 0, 1), DateTimeKind.Local);
+        var bufferLocal = new BufferV3(128, 128, 128);
+        bufferLocal.Table("t").Column("x", 1).At(local);
+
+        var bufferUtc = new BufferV3(128, 128, 128);
+        bufferUtc.Table("t").Column("x", 1).At(local.ToUniversalTime());
+
+        Assert.That(bufferLocal.GetSendBuffer().ToArray(), Is.EqualTo(bufferUtc.GetSendBuffer().ToArray()));
+    }
 }

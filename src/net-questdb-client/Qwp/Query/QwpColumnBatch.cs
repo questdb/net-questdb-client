@@ -26,6 +26,7 @@ using System.Buffers.Binary;
 using System.Numerics;
 using System.Text;
 using QuestDB.Enums;
+using QuestDB.Qwp;
 
 namespace QuestDB.Qwp.Query;
 
@@ -377,7 +378,7 @@ public sealed class QwpColumnBatch
         var c = Col(col);
         return c.TypeCode switch
         {
-            QwpTypeCode.Varchar or QwpTypeCode.Symbol => Encoding.UTF8.GetString(GetStringSpan(col, row)),
+            QwpTypeCode.Varchar or QwpTypeCode.Symbol => QwpConstants.StrictUtf8.GetString(GetStringSpan(col, row)),
             QwpTypeCode.Boolean => GetBoolValue(col, row).ToString(),
             QwpTypeCode.Byte => GetByteValue(col, row).ToString(),
             QwpTypeCode.Short => GetShortValue(col, row).ToString(),

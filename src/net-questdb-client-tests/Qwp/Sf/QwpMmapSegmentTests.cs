@@ -313,9 +313,30 @@ public class QwpMmapSegmentTests
     [Test]
     public void Append_FrameLargerThanMaxFrameLength_Throws()
     {
-        // _maxFrameLength prevents oversized frames that would be silently truncated on reopen.
         using var seg = QwpMmapSegment.Open(SegmentPath(), 4096, 0, maxFrameLength: 64);
         Assert.Throws<ArgumentException>(() => seg.TryAppend(new byte[65]));
+    }
+
+    [Test]
+    public void Reopen_RejectsEnvelopeLargerThanMaxFrameLength()
+    {
+        var path = SegmentPath();
+        using (var seg = QwpMmapSegment.Open(path, 4096, 0, maxFrameLength: 4096))
+        {
+            seg.TryAppend(new byte[200]);
+        }
+
+        // Forge an oversized envelope after the legit one. With maxFrameLength=250, the legit
+        // 200-byte envelope is fine, but the forged 500-byte one is treated as a torn tail.
+        var bytes = File.ReadAllBytes(path);
+        var firstEnvelopeBodyEnd = QwpMmapSegment.HeaderSize + QwpMmapSegment.EnvelopeHeaderSize + 200;
+        BitConverter.GetBytes(500).CopyTo(bytes, firstEnvelopeBodyEnd + 4);
+        bytes[firstEnvelopeBodyEnd + 0] = 0xAB;
+        bytes[firstEnvelopeBodyEnd + 1] = 0xCD;
+        File.WriteAllBytes(path, bytes);
+
+        using var reopened = QwpMmapSegment.Open(path, 4096, 0, maxFrameLength: 250);
+        Assert.That(reopened.EnvelopeCount, Is.EqualTo(1));
     }
 
     private string SegmentPath() => Path.Combine(_tempDir, "sf-0000000000000000.sfa");

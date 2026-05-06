@@ -394,11 +394,11 @@ internal static class QwpEncoder
             return;
         }
 
-        var maxBytes = Encoding.UTF8.GetMaxByteCount(value.Length);
+        var maxBytes = QwpConstants.StrictUtf8.GetMaxByteCount(value.Length);
         if (maxBytes <= 256)
         {
             Span<byte> scratch = stackalloc byte[256];
-            var written = Encoding.UTF8.GetBytes(value, scratch);
+            var written = QwpConstants.StrictUtf8.GetBytes(value, scratch);
             buf.WriteVarint((ulong)written);
             buf.WriteBytes(scratch.Slice(0, written));
             return;
@@ -407,7 +407,7 @@ internal static class QwpEncoder
         var rented = ArrayPool<byte>.Shared.Rent(maxBytes);
         try
         {
-            var written = Encoding.UTF8.GetBytes(value, rented);
+            var written = QwpConstants.StrictUtf8.GetBytes(value, rented);
             buf.WriteVarint((ulong)written);
             buf.WriteBytes(rented.AsSpan(0, written));
         }

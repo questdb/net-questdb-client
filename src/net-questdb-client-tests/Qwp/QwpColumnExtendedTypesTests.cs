@@ -339,24 +339,82 @@ public class QwpColumnExtendedTypesTests
     }
 
     [Test]
-    public void Clear_ResetsDecimalScaleAndGeohashPrecision()
+    public void Clear_PreservesDecimalScaleAndGeohashPrecision()
     {
         var col = new QwpColumn("c", 0);
         col.AppendDecimal128(1.5m);
         Assert.That(col.DecimalScaleSet, Is.True);
+        Assert.That(col.DecimalScale, Is.EqualTo((byte)1));
         col.Clear();
-        Assert.That(col.DecimalScaleSet, Is.False);
+        Assert.That(col.DecimalScaleSet, Is.True);
+        Assert.That(col.DecimalScale, Is.EqualTo((byte)1));
 
-        // After Clear, a value with a different scale is accepted.
-        col.AppendDecimal128(2.55m);
+        col.AppendDecimal128(2.5m);
+        Assert.That(col.DecimalScale, Is.EqualTo((byte)1));
+    }
+
+    [Test]
+    public void AppendDecimal128_LosslessRescaleUp_PadsTrailingZeros()
+    {
+        var col = new QwpColumn("c", 0);
+        col.AppendDecimal128(1.50m); // scale 2 → locks
+        col.AppendDecimal128(1.5m);  // scale 1 → must rescale up to 2
+
         Assert.That(col.DecimalScale, Is.EqualTo((byte)2));
+        Assert.That(col.NonNullCount, Is.EqualTo(2));
+        var first = ReadInt128(col.FixedData!.AsSpan(0, 16));
+        var second = ReadInt128(col.FixedData!.AsSpan(16, 16));
+        Assert.That(first, Is.EqualTo(new BigInteger(150)));
+        Assert.That(second, Is.EqualTo(new BigInteger(150)));
+    }
+
+    [Test]
+    public void AppendDecimal128_LosslessRescaleDown_DropsTrailingZeros()
+    {
+        var col = new QwpColumn("c", 0);
+        col.AppendDecimal128(1.5m);   // scale 1 → locks
+        col.AppendDecimal128(1.50m);  // scale 2 with trailing zero → rescale down to 1
+
+        Assert.That(col.DecimalScale, Is.EqualTo((byte)1));
+        var first = ReadInt128(col.FixedData!.AsSpan(0, 16));
+        var second = ReadInt128(col.FixedData!.AsSpan(16, 16));
+        Assert.That(first, Is.EqualTo(new BigInteger(15)));
+        Assert.That(second, Is.EqualTo(new BigInteger(15)));
+    }
+
+    [Test]
+    public void AppendDecimal128_RescaleDownLossy_Throws()
+    {
+        var col = new QwpColumn("c", 0);
+        col.AppendDecimal128(1.5m);
+        var ex = Assert.Throws<IngressError>(() => col.AppendDecimal128(1.55m));
+        Assert.That(ex!.Message, Does.Contain("losslessly"));
+    }
+
+    [Test]
+    public void AppendDecimal128_NegativeRescale_PreservesValue()
+    {
+        var col = new QwpColumn("c", 0);
+        col.AppendDecimal128(-1.50m);
+        col.AppendDecimal128(-1.5m);
+
+        Assert.That(col.DecimalScale, Is.EqualTo((byte)2));
+        var first = ReadInt128(col.FixedData!.AsSpan(0, 16));
+        var second = ReadInt128(col.FixedData!.AsSpan(16, 16));
+        Assert.That(first, Is.EqualTo(new BigInteger(-150)));
+        Assert.That(second, Is.EqualTo(new BigInteger(-150)));
+    }
+
+    [Test]
+    public void AppendVarchar_LoneSurrogate_ThrowsStrictUtf8()
+    {
+        var col = new QwpColumn("c", 0);
+        Assert.Throws<System.Text.EncoderFallbackException>(() => col.AppendVarchar("\uD800"));
     }
 
     /// <summary>Reads a 16-byte little-endian two's-complement integer.</summary>
     private static BigInteger ReadInt128(ReadOnlySpan<byte> bytes)
     {
-        // BigInteger ctor takes signed two's-complement when isUnsigned=false,
-        // and is little-endian when isBigEndian=false (matches the wire format).
         return new BigInteger(bytes, isUnsigned: false, isBigEndian: false);
     }
 }

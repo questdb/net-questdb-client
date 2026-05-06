@@ -308,8 +308,9 @@ behaviours:
   only — never ship to prod).
 - `tls_roots`, `tls_roots_password`: PFX path + optional password for
   pinning a custom CA bundle.
-- Multiple `addr=` entries are HTTP-only (multi-endpoint failover via
-  `AddressProvider`). WS rejects multi-addr.
+- Multiple `addr=` entries are supported on HTTP/HTTPS (failover via
+  `AddressProvider`) and on WS/WSS (role-aware skipping via
+  `QwpHostHealthTracker`). TCP/TCPS reject multi-addr.
 - `gzip=on` rejected for ws/wss (binary protocol; the WS-only key
   check is value-based so it works for both string-ctor and
   programmatic init paths).

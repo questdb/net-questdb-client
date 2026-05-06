@@ -280,4 +280,12 @@ public class QwpInFlightWindowTests
 
         Assert.DoesNotThrowAsync(async () => await awaiter);
     }
+
+    [Test]
+    public void AcknowledgeUpTo_NegativeSequence_Throws()
+    {
+        var w = new QwpInFlightWindow();
+        Assert.Throws<InvalidOperationException>(() => w.AcknowledgeUpTo(-1));
+        Assert.Throws<InvalidOperationException>(() => w.AcknowledgeUpTo(-100));
+    }
 }

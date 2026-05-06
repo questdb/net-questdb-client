@@ -183,7 +183,7 @@ public class QwpReconnectPolicyTests
     }
 
     [Test]
-    public void Jitter_UniformDouble_SpreadsBackoffAcrossDoubleRange()
+    public void Jitter_UniformDouble_SpreadsBackoffAcrossFullRange()
     {
         var policy = new QwpReconnectPolicy(
             TimeSpan.FromMilliseconds(100),
@@ -193,14 +193,34 @@ public class QwpReconnectPolicyTests
 
         var samples = Enumerable.Range(0, 64).Select(_ => policy.ComputeBackoff(0)).ToArray();
 
-        // Every sample must lie in [base, 2·base) — Java's [base, 2*base) jitter window.
         foreach (var s in samples)
         {
-            Assert.That(s, Is.GreaterThanOrEqualTo(TimeSpan.FromMilliseconds(100)));
-            Assert.That(s, Is.LessThan(TimeSpan.FromMilliseconds(200)));
+            Assert.That(s, Is.GreaterThanOrEqualTo(TimeSpan.Zero));
+            Assert.That(s, Is.LessThanOrEqualTo(TimeSpan.FromMilliseconds(100)));
         }
 
         Assert.That(samples.Distinct().Count(), Is.GreaterThan(1),
             "uniform jitter must produce varied samples — otherwise it's not actually random");
+    }
+
+    [Test]
+    public void Jitter_UniformDouble_StillFiresWhenSaturated()
+    {
+        var policy = new QwpReconnectPolicy(
+            TimeSpan.FromMilliseconds(100),
+            TimeSpan.FromMilliseconds(100),
+            TimeSpan.FromSeconds(10),
+            jitter: QwpReconnectPolicy.UniformDoubleJitter);
+
+        var samples = Enumerable.Range(0, 64).Select(_ => policy.ComputeBackoff(10)).ToArray();
+
+        foreach (var s in samples)
+        {
+            Assert.That(s, Is.GreaterThanOrEqualTo(TimeSpan.Zero));
+            Assert.That(s, Is.LessThanOrEqualTo(TimeSpan.FromMilliseconds(100)));
+        }
+
+        Assert.That(samples.Distinct().Count(), Is.GreaterThan(1),
+            "jitter must still vary samples once exponential growth saturates at MaxBackoff");
     }
 }

@@ -22,6 +22,8 @@
  *
  ******************************************************************************/
 
+using System.Text;
+
 namespace QuestDB.Qwp;
 
 /// <summary>
@@ -29,6 +31,9 @@ namespace QuestDB.Qwp;
 /// </summary>
 internal static class QwpConstants
 {
+    /// <summary>Strict UTF-8 (throws on invalid bytes / lone surrogates) for all wire identifiers.</summary>
+    public static readonly UTF8Encoding StrictUtf8 = new(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true);
+
     /// <summary>The 4-byte magic that opens every QWP v1 frame: ASCII "QWP1" stored little-endian.</summary>
     public const uint Magic = 0x31_50_57_51u;
 
@@ -106,6 +111,15 @@ internal static class QwpConstants
 
     /// <summary>DECIMAL64 unscaled value size on the wire, in bytes.</summary>
     public const int Decimal64SizeBytes = 8;
+
+    /// <summary>Inclusive upper bound on Decimal64 scale (digits after the decimal point).</summary>
+    public const int MaxDecimal64Scale = 18;
+
+    /// <summary>Inclusive upper bound on Decimal128 scale (digits after the decimal point).</summary>
+    public const int MaxDecimal128Scale = 38;
+
+    /// <summary>Inclusive upper bound on Decimal256 scale (digits after the decimal point).</summary>
+    public const int MaxDecimal256Scale = 76;
 
     /// <summary>DECIMAL128 unscaled value size on the wire, in bytes.</summary>
     public const int Decimal128SizeBytes = 16;

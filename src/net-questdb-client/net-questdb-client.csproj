@@ -18,7 +18,7 @@
         <RepositoryUrl>https://github.com/questdb/net-questdb-client</RepositoryUrl>
         <PackageTags>QuestDB, ILP, QWP, WebSocket, columnar, ingest, query, store-and-forward</PackageTags>
         <Company>QuestDB Limited</Company>
-        <PackageVersion>3.3.0</PackageVersion>
+        <PackageVersion>4.0.0</PackageVersion>
         <GenerateDocumentationFile>true</GenerateDocumentationFile>
         <TargetFrameworks>net6.0;net7.0;net8.0;net9.0;net10.0</TargetFrameworks>
     </PropertyGroup>

@@ -374,6 +374,12 @@ public sealed class QueryOptions
                 "`failover_max_duration_ms` must be non-negative (0 = unbounded)");
         }
 
+        if (failover_max_duration_ms > TimeSpan.FromDays(1))
+        {
+            throw new IngressError(ErrorCode.ConfigError,
+                "`failover_max_duration_ms` must be <= 86_400_000 ms (1 day)");
+        }
+
         if (auth_timeout_ms <= TimeSpan.Zero)
         {
             throw new IngressError(ErrorCode.ConfigError,

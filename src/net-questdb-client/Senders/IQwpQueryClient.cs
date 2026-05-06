@@ -30,6 +30,11 @@ namespace QuestDB.Senders;
 ///     Public surface of the QWP egress query client. One instance owns one WebSocket; one
 ///     in-flight query at a time per the Phase-1 server contract.
 /// </summary>
+/// <remarks>
+///     <see cref="IDisposable.Dispose" /> may block the calling thread up to 5 seconds while the
+///     in-flight Execute drains; prefer <see cref="IAsyncDisposable.DisposeAsync" /> from async
+///     contexts (UI threads on WinForms / WPF / Avalonia in particular).
+/// </remarks>
 public interface IQwpQueryClient : IDisposable, IAsyncDisposable
 {
     /// <summary>Server identity / role observed during connect; null for v1 servers.</summary>
@@ -70,5 +75,12 @@ public interface IQwpQueryClient : IDisposable, IAsyncDisposable
     ///     with a <c>QUERY_ERROR</c> (status <c>STATUS_CANCELLED</c>) or, if the server raced to
     ///     finish, a normal <c>RESULT_END</c>. No-op if no query is in flight.
     /// </summary>
+    /// <remarks>
+    ///     Cooperative cancel only: this method does not interrupt an in-progress
+    ///     <see cref="System.Net.WebSockets.WebSocket.ReceiveAsync(System.ArraySegment{byte}, CancellationToken)" />.
+    ///     If the server hangs and never acknowledges, <c>ExecuteAsync</c> will not return. For a
+    ///     hard cancel that aborts the receive loop, pass a <see cref="CancellationToken" /> to
+    ///     <c>ExecuteAsync</c> and cancel that token instead.
+    /// </remarks>
     void Cancel();
 }

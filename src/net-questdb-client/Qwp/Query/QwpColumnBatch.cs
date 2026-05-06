@@ -255,11 +255,20 @@ public sealed class QwpColumnBatch
     }
 
     /// <summary>Returns a LONG256 value as a non-negative <see cref="BigInteger" />; <see cref="BigInteger.Zero" /> for NULL.</summary>
+    /// <remarks>
+    ///     <see cref="BigInteger.Zero" /> is also a legal non-null LONG256 value. Use <see cref="IsNull" />
+    ///     to disambiguate.
+    /// </remarks>
     public BigInteger GetLong256(int col, int row)
     {
+        var c = Col(col);
+        if (c.TypeCode != QwpTypeCode.Long256)
+        {
+            throw new InvalidOperationException(
+                $"GetLong256 requires a LONG256 column, got {c.TypeCode}");
+        }
         if (IsNull(col, row)) return BigInteger.Zero;
         Span<byte> bytes = stackalloc byte[QwpConstants.Long256SizeBytes];
-        var c = Col(col);
         var i = DenseIndex(c, row);
         c.ValueBytes.AsSpan(i * QwpConstants.Long256SizeBytes, QwpConstants.Long256SizeBytes).CopyTo(bytes);
         return new BigInteger(bytes, isUnsigned: true, isBigEndian: false);
@@ -287,6 +296,10 @@ public sealed class QwpColumnBatch
     }
 
     /// <summary>Returns a UUID as <see cref="Guid" />; <see cref="Guid.Empty" /> for NULL. Inverse of <c>QwpBindValues.SetUuid(int, Guid)</c>.</summary>
+    /// <remarks>
+    ///     <see cref="Guid.Empty" /> is also a legal non-null UUID value (the spec defines NULL as both halves
+    ///     equal to <c>long.MinValue</c>, not all zeros). Use <see cref="IsNull" /> to disambiguate.
+    /// </remarks>
     public Guid GetUuid(int col, int row)
     {
         if (IsNull(col, row)) return Guid.Empty;

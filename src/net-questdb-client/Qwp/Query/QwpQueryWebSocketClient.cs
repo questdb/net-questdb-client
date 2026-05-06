@@ -250,8 +250,7 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient
         {
             throw new ObjectDisposedException(nameof(QwpQueryWebSocketClient));
         }
-        _transport?.Dispose();
-        _transport = null;
+        Interlocked.Exchange(ref _transport, null)?.Dispose();
         _hostTracker.BeginRound(forgetClassifications: false);
 
         var (info, lastError, anyRoleMismatch) = await WalkTrackerAsync(ct).ConfigureAwait(false);
@@ -295,26 +294,30 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient
                 candidate = BuildTransport(addr);
                 using var connectCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
                 connectCts.CancelAfter(_options.auth_timeout_ms);
+
+                QwpServerInfo? info;
                 try
                 {
                     await candidate.ConnectAsync(connectCts.Token).ConfigureAwait(false);
+                    info = candidate.NegotiatedVersion >= 2
+                        ? await ReadServerInfoFrameAsync(candidate, connectCts.Token).ConfigureAwait(false)
+                        : null;
                 }
                 catch (OperationCanceledException) when (connectCts.IsCancellationRequested && !ct.IsCancellationRequested)
                 {
                     throw new IngressError(ErrorCode.SocketError,
-                        $"WebSocket upgrade to {addr} exceeded auth_timeout={_options.auth_timeout_ms.TotalMilliseconds}ms");
-                }
-
-                QwpServerInfo? info = null;
-                if (candidate.NegotiatedVersion >= 2)
-                {
-                    info = await ReadServerInfoFrameAsync(candidate, ct).ConfigureAwait(false);
+                        $"WebSocket upgrade or SERVER_INFO read for {addr} exceeded auth_timeout={_options.auth_timeout_ms.TotalMilliseconds}ms");
                 }
 
                 lastInfo = info;
                 if (EndpointMatchesTarget(info))
                 {
-                    _transport = candidate;
+                    if (Volatile.Read(ref _disposed) != 0)
+                    {
+                        candidate.Dispose();
+                        throw new ObjectDisposedException(nameof(QwpQueryWebSocketClient));
+                    }
+                    Interlocked.Exchange(ref _transport, candidate)?.Dispose();
                     _activeAddressIndex = idx;
                     _hostTracker.RecordSuccess(idx);
                     return (lastInfo, lastError, anyRoleMismatch);
@@ -322,8 +325,15 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient
 
                 anyRoleMismatch = true;
                 _hostTracker.RecordRoleReject(idx, transient: info?.Role == QwpConstants.RolePrimaryCatchup);
+                lastError = new IngressError(ErrorCode.ConfigError,
+                    $"endpoint {addr} role {info?.RoleName ?? "<none>"} does not match target={_options.target}");
                 candidate.Dispose();
                 candidate = null;
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                candidate?.Dispose();
+                throw;
             }
             catch (IngressError ex) when (ex.code is ErrorCode.ConfigError or ErrorCode.AuthError)
             {
@@ -349,9 +359,9 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient
 
     public void Cancel()
     {
-        Interlocked.Exchange(ref _cancelRequested, 1);
         var rid = Interlocked.Read(ref _currentRequestId);
         if (rid < 0) return;
+        Interlocked.Exchange(ref _cancelRequested, 1);
         if (Volatile.Read(ref _disposed) != 0) return;
 
         try
@@ -509,22 +519,11 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient
 
     private async Task<QwpServerInfo> ReadServerInfoFrameAsync(QwpWebSocketTransport transport, CancellationToken ct)
     {
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
-        using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct, timeout.Token);
-        (int read, byte[] buffer) recv;
-        try
-        {
-            recv = await transport
-                .ReceiveFrameAsync(_receiveBuffer, QwpConstants.MaxResultBatchWireBytes, linked.Token)
-                .ConfigureAwait(false);
-        }
-        catch (OperationCanceledException) when (timeout.IsCancellationRequested && !ct.IsCancellationRequested)
-        {
-            throw new IngressError(ErrorCode.SocketError,
-                "timed out waiting for SERVER_INFO from v2 server (5s)");
-        }
-        _receiveBuffer = recv.buffer;
-        var (kind, payload, _) = SliceFrame(recv.buffer, recv.read);
+        var recv = await transport
+            .ReceiveFrameAsync(_receiveBuffer, QwpConstants.MaxResultBatchWireBytes, ct)
+            .ConfigureAwait(false);
+        _receiveBuffer = recv.Buffer;
+        var (kind, payload, _) = SliceFrame(recv.Buffer, recv.Read);
         if (kind != QwpEgressMsgKind.ServerInfo)
         {
             throw new IngressError(ErrorCode.ProtocolVersionError,
@@ -555,11 +554,6 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient
                     var batchRid = _batch.RequestId;
                     if (batchRid != activeRid)
                     {
-                        if (_options.initial_credit > 0)
-                        {
-                            await SendCreditAsync(batchRid, batchBytes + QwpConstants.HeaderSize, ct)
-                                .ConfigureAwait(false);
-                        }
                         continue;
                     }
                     try
@@ -598,6 +592,11 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient
                 case QwpEgressMsgKind.QueryError:
                     var (errRid, status, message) = DecodeQueryError(payload);
                     if (errRid != activeRid && errRid != QwpConstants.RequestIdWildcard) continue;
+                    if (errRid == QwpConstants.RequestIdWildcard)
+                    {
+                        Interlocked.Exchange(ref _transport, null)?.Dispose();
+                        MarkTerminal();
+                    }
                     _executeFinishedCleanly = true;
                     handler.OnError(status, message);
                     return;
@@ -781,14 +780,28 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient
             try
             {
                 written = decompressor.Unwrap(compressed, _decompressBuffer.AsSpan(preludeLen, attemptSize));
+                return _decompressBuffer.AsMemory(0, preludeLen + written);
             }
-            catch (Exception ex) when (!sizeKnown && attemptSize < QwpConstants.MaxResultBatchWireBytes)
+            catch (Exception ex) when (!sizeKnown && attemptSize < QwpConstants.MaxResultBatchWireBytes
+                && IsZstdDestinationTooSmall(ex))
             {
                 attemptSize = (int)Math.Min((long)attemptSize * 2, QwpConstants.MaxResultBatchWireBytes);
-                continue;
             }
-            return _decompressBuffer.AsMemory(0, preludeLen + written);
+            catch (Exception ex)
+            {
+                throw new IngressError(ErrorCode.ProtocolVersionError,
+                    $"zstd RESULT_BATCH decompression failed (attemptSize={attemptSize}, sizeKnown={sizeKnown}): {ex.Message}",
+                    ex);
+            }
         }
+    }
+
+    private static bool IsZstdDestinationTooSmall(Exception ex)
+    {
+        var msg = ex.Message ?? string.Empty;
+        return msg.Contains("Destination", StringComparison.OrdinalIgnoreCase)
+            || msg.Contains("dstSize", StringComparison.Ordinal)
+            || msg.Contains("buffer too small", StringComparison.OrdinalIgnoreCase);
     }
 
     private async Task SendCreditAsync(long requestId, long additionalBytes, CancellationToken ct)
@@ -858,11 +871,19 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient
 
     private async Task SendCancelAsync(long requestId, CancellationToken ct)
     {
-        _cancelFrameBuf[0] = QwpConstants.MsgKindCancel;
-        BinaryPrimitives.WriteInt64LittleEndian(_cancelFrameBuf.AsSpan(1, 8), requestId);
-
-        if (_transport is null) return;
-        await SendFrameAsync(_cancelFrameBuf, ct).ConfigureAwait(false);
+        await _sendLock.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            var transport = _transport;
+            if (transport is null) return;
+            _cancelFrameBuf[0] = QwpConstants.MsgKindCancel;
+            BinaryPrimitives.WriteInt64LittleEndian(_cancelFrameBuf.AsSpan(1, 8), requestId);
+            await transport.SendBinaryAsync(_cancelFrameBuf, ct).ConfigureAwait(false);
+        }
+        finally
+        {
+            _sendLock.Release();
+        }
     }
 
     private static QwpServerInfo DecodeServerInfo(ReadOnlyMemory<byte> payload)

@@ -373,9 +373,10 @@ internal sealed class QwpResultBatchDecoder
                 throw new QwpDecodeException("truncated before timestamp encoding flag");
             }
             var flag = payload[p++];
-            if (flag != 0x00 && flag != 0x01)
+            if (flag != 0x00)
             {
-                throw new QwpDecodeException($"unknown timestamp encoding flag 0x{flag:X2}");
+                throw new QwpDecodeException(
+                    $"timestamp encoding flag 0x{flag:X2} invalid for nonNull=0; only 0x00 (raw) is valid");
             }
             return;
         }

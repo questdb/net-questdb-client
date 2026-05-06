@@ -142,7 +142,7 @@ internal class HttpSender : AbstractSender
                         {
                             chain!.ChainPolicy.TrustMode = X509ChainTrustMode.CustomRootTrust;
                             chain.ChainPolicy.CustomTrustStore.Add(
-                                X509Certificate2.CreateFromPemFile(Options.tls_roots, Options.tls_roots_password));
+                                QwpTlsAuth.LoadTrustRoot(Options.tls_roots, Options.tls_roots_password));
                         }
 
                         return chain!.Build(new X509Certificate2(certificate!));

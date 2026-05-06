@@ -167,11 +167,26 @@ public sealed class DummyQwpServer : IAsyncDisposable
         if (_options.RejectUpgradeWith is { } rejectStatus)
         {
             ctx.Response.StatusCode = (int)rejectStatus;
+            if (_options.RejectUpgradeRoleHeader is { Length: > 0 } role)
+            {
+                ctx.Response.Headers["X-QuestDB-Role"] = role;
+            }
             await ctx.Response.WriteAsync("rejected by test").ConfigureAwait(false);
             return;
         }
 
+        if (_options.RoleHeader is { Length: > 0 } acceptRole)
+        {
+            ctx.Response.Headers["X-QuestDB-Role"] = acceptRole;
+        }
+
         using var ws = await ctx.WebSockets.AcceptWebSocketAsync().ConfigureAwait(false);
+
+        if (_options.InitialServerFrame is { Length: > 0 } initial)
+        {
+            await ws.SendAsync(initial, WebSocketMessageType.Binary, endOfMessage: true, ctx.RequestAborted)
+                .ConfigureAwait(false);
+        }
 
         var receiveBuf = new byte[_options.ReceiveBufferSize];
         var framesHandled = 0;
@@ -251,6 +266,12 @@ public sealed class DummyQwpServerOptions
     /// <summary>If set, the server returns this HTTP status during the upgrade and never opens the WebSocket.</summary>
     public HttpStatusCode? RejectUpgradeWith { get; init; }
 
+    /// <summary>Optional <c>X-QuestDB-Role</c> header value attached to a rejection response (used with 503 to test role-aware failover).</summary>
+    public string? RejectUpgradeRoleHeader { get; init; }
+
+    /// <summary>Optional <c>X-QuestDB-Role</c> header value attached to a successful 101 response (diagnostic / tests).</summary>
+    public string? RoleHeader { get; init; }
+
     /// <summary>If set, Kestrel binds an HTTPS listener using this certificate; <see cref="DummyQwpServer.Uri" /> returns a <c>wss://</c> URI.</summary>
     public X509Certificate2? TlsCertificate { get; init; }
 
@@ -262,6 +283,12 @@ public sealed class DummyQwpServerOptions
 
     /// <summary>Optional close reason text accompanying <see cref="CloseStatus" />.</summary>
     public string? CloseReason { get; init; } = "test injected close";
+
+    /// <summary>
+    ///     Frame the server sends to the client immediately after accepting the WebSocket and before
+    ///     reading the first client frame. Use this to emit a v2 <c>SERVER_INFO</c>.
+    /// </summary>
+    public byte[]? InitialServerFrame { get; init; }
 
     /// <summary>Per-frame response generator. Return null/empty to suppress a response.</summary>
     public Func<byte[], byte[]?>? FrameHandler { get; init; }

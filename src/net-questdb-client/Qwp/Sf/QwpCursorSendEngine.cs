@@ -45,6 +45,7 @@ internal sealed class QwpCursorSendEngine : IDisposable
     private readonly QwpReconnectPolicy _reconnectPolicy;
     private readonly TimeSpan _appendDeadline;
     private readonly bool _initialConnectRetry;
+    private readonly Func<bool>? _skipBackoffPredicate;
     private readonly object _stateLock = new();
     private readonly byte[] _sendBuffer;
     private readonly byte[] _ackBuffer;
@@ -77,6 +78,11 @@ internal sealed class QwpCursorSendEngine : IDisposable
     ///     a failed initial connect immediately marks the engine terminal.
     /// </param>
     /// <param name="maxTotalBytes">Disk cap forwarded to the engine's <see cref="QwpSegmentManager" />.</param>
+    /// <param name="skipBackoffPredicate">
+    ///     When non-null and returns <c>true</c> after a connect failure, the engine retries
+    ///     immediately instead of waiting the reconnect backoff. Lets multi-host failover walk
+    ///     the full address list before paying the backoff cost.
+    /// </param>
     public QwpCursorSendEngine(
         QwpSlotLock? slotLock,
         QwpSegmentRing ring,
@@ -84,7 +90,8 @@ internal sealed class QwpCursorSendEngine : IDisposable
         QwpReconnectPolicy reconnectPolicy,
         TimeSpan appendDeadline,
         bool initialConnectRetry,
-        long maxTotalBytes = long.MaxValue)
+        long maxTotalBytes = long.MaxValue,
+        Func<bool>? skipBackoffPredicate = null)
     {
         ArgumentNullException.ThrowIfNull(ring);
         ArgumentNullException.ThrowIfNull(transportFactory);
@@ -100,6 +107,7 @@ internal sealed class QwpCursorSendEngine : IDisposable
         _reconnectPolicy = reconnectPolicy;
         _appendDeadline = appendDeadline;
         _initialConnectRetry = initialConnectRetry;
+        _skipBackoffPredicate = skipBackoffPredicate;
         _cursorFsn = ring.OldestFsn;
         _ackedFsn = ring.OldestFsn;
         _segmentManager = new QwpSegmentManager(ring, maxTotalBytes);
@@ -384,8 +392,7 @@ internal sealed class QwpCursorSendEngine : IDisposable
             var remainingMs = deadlineMs - Environment.TickCount64;
             if (remainingMs <= 0)
             {
-                throw new IngressError(
-                    ErrorCode.ServerFlushError,
+                throw new TimeoutException(
                     $"close_flush_timeout ({timeout.TotalMilliseconds:F0} ms) expired with un-acked frames pending");
             }
 
@@ -527,11 +534,30 @@ internal sealed class QwpCursorSendEngine : IDisposable
                     return;
                 }
                 catch (IngressError ex) when (
-                    ex.code is ErrorCode.AuthError or ErrorCode.ProtocolVersionError)
+                    ex.code is ErrorCode.AuthError or ErrorCode.ProtocolVersionError
+                    && ex is not QwpIngressRoleRejectedException)
                 {
-                    // No retry budget: bad creds and version mismatches won't fix themselves over time.
                     SetTerminal(ex);
                     return;
+                }
+                catch (QwpIngressRoleRejectedException)
+                {
+                    // Role-reject retries indefinitely; don't accumulate elapsed against the give-up budget.
+                    backoff.Reset();
+                    if (_skipBackoffPredicate?.Invoke() == true)
+                    {
+                        continue;
+                    }
+
+                    try
+                    {
+                        await Task.Delay(_reconnectPolicy.InitialBackoff, ct).ConfigureAwait(false);
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        return;
+                    }
+                    continue;
                 }
                 catch (Exception ex)
                 {
@@ -539,6 +565,11 @@ internal sealed class QwpCursorSendEngine : IDisposable
                     {
                         SetTerminal(ex);
                         return;
+                    }
+
+                    if (_skipBackoffPredicate?.Invoke() == true)
+                    {
+                        continue;
                     }
 
                     if (!await BackoffOrGiveUpAsync(ex, backoff, ct).ConfigureAwait(false))

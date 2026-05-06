@@ -100,5 +100,10 @@ public class Program
     {
         BenchmarkRunner.Run<BenchSfThroughput>(config);
     }
+
+    public static void RunQueryWsBench(ManualConfig config)
+    {
+        BenchmarkRunner.Run<BenchQueryWs>(config);
+    }
 #endif
 }

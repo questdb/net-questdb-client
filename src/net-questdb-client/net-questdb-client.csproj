@@ -25,4 +25,8 @@
     <ItemGroup>
         <InternalsVisibleTo Include="net-questdb-client-tests" />
     </ItemGroup>
+    <ItemGroup Condition="'$(TargetFramework)' != 'net6.0'">
+        <!-- Egress consumer only; the egress decode path is #if NET7_0_OR_GREATER. -->
+        <PackageReference Include="ZstdSharp.Port" Version="0.8.4" />
+    </ItemGroup>
 </Project>

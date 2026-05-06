@@ -96,4 +96,10 @@ public enum QwpTypeCode : byte
 
     /// <summary>UTF-16 code unit (2 bytes little-endian).</summary>
     Char = 0x16,
+
+    /// <summary>Opaque byte sequence; same wire layout as VARCHAR but no UTF-8 contract.</summary>
+    Binary = 0x17,
+
+    /// <summary>IPv4 address; same wire layout as INT (4 bytes little-endian).</summary>
+    IPv4 = 0x18,
 }

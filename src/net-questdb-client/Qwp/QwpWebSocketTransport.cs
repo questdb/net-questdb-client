@@ -99,6 +99,14 @@ internal sealed class QwpWebSocketTransport : IQwpCursorTransport
         {
             ws.RemoteCertificateValidationCallback = options.RemoteCertificateValidationCallback;
         }
+
+        if (options.ExtraRequestHeaders is { } extra)
+        {
+            foreach (var kv in extra)
+            {
+                ws.SetRequestHeader(kv.Key, kv.Value);
+            }
+        }
     }
 
     /// <summary>True once the upgrade has succeeded and the WebSocket is open.</summary>
@@ -109,6 +117,12 @@ internal sealed class QwpWebSocketTransport : IQwpCursorTransport
     ///     has run; always <c>1</c> in v1.
     /// </summary>
     public int NegotiatedVersion => _negotiatedVersion;
+
+    /// <summary>
+    ///     Server-selected <c>X-QWP-Content-Encoding</c> from the upgrade response (e.g.
+    ///     <c>"zstd;level=3"</c>); <c>null</c> when omitted (= raw) or before <see cref="ConnectAsync" />.
+    /// </summary>
+    public string? NegotiatedContentEncoding { get; private set; }
 
     /// <summary>
     ///     Opens the TCP/TLS connection, performs the WebSocket upgrade, and validates that the
@@ -128,8 +142,10 @@ internal sealed class QwpWebSocketTransport : IQwpCursorTransport
         }
         catch (Exception ex)
         {
-            // 401/403/404 are permanent and won't fix on retry; everything else (incl. 5xx) is left
-            // transient so the SF reconnect loop can handle LB / server hiccups.
+            // 401/403/404 are permanent and won't fix on retry; 503 + X-QuestDB-Role is the
+            // ingress role-reject path (REPLICA / PRIMARY_CATCHUP) and surfaces as a typed
+            // exception so the host tracker can classify the endpoint. Everything else
+            // (incl. other 5xx) stays transient for the reconnect loop.
             var status = (int)_client.HttpStatusCode;
             if (status is 401 or 403 or 404)
             {
@@ -137,18 +153,39 @@ internal sealed class QwpWebSocketTransport : IQwpCursorTransport
                     $"WebSocket upgrade rejected with HTTP {status} for {_options.Uri}", ex);
             }
 
+            if (status == 503)
+            {
+                var role = ReadOptionalHeader(QwpConstants.HeaderQuestDbRole);
+                if (!string.IsNullOrEmpty(role))
+                {
+                    throw new QwpIngressRoleRejectedException(role!, _options.Uri!, ex);
+                }
+            }
+
             throw new IngressError(ErrorCode.SocketError, $"failed to connect to {_options.Uri}", ex);
         }
 
         _negotiatedVersion = ReadNegotiatedVersion();
-        if (_negotiatedVersion != QwpConstants.SupportedIngestVersion)
+        if (_negotiatedVersion < 1 || _negotiatedVersion > _options.ClientMaxVersion)
         {
             await TryCloseAsync(WebSocketCloseStatus.ProtocolError, "unsupported QWP version", ct)
                 .ConfigureAwait(false);
             throw new IngressError(
                 ErrorCode.ProtocolVersionError,
-                $"server negotiated QWP version {_negotiatedVersion}; this client supports v{QwpConstants.SupportedIngestVersion} only");
+                $"server negotiated QWP version {_negotiatedVersion}; this client supports v1..v{_options.ClientMaxVersion}");
         }
+        NegotiatedContentEncoding = ReadOptionalHeader(QwpConstants.HeaderContentEncoding);
+    }
+
+    private string? ReadOptionalHeader(string name)
+    {
+        var headers = _client.HttpResponseHeaders;
+        if (headers is null || !headers.TryGetValue(name, out var values)) return null;
+        foreach (var v in values)
+        {
+            if (!string.IsNullOrEmpty(v)) return v;
+        }
+        return null;
     }
 
     /// <summary>Sends one QWP frame as a single WebSocket BINARY message.</summary>
@@ -421,6 +458,9 @@ internal sealed class QwpWebSocketTransportOptions
 
     /// <summary>Optional callback for TLS certificate validation; bypassed when null.</summary>
     public RemoteCertificateValidationCallback? RemoteCertificateValidationCallback { get; init; }
+
+    /// <summary>Extra HTTP request headers to set on the WebSocket upgrade.</summary>
+    public IReadOnlyDictionary<string, string>? ExtraRequestHeaders { get; init; }
 }
 
 #endif

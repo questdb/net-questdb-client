@@ -197,7 +197,7 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
                 options.reconnect_initial_backoff_millis,
                 options.reconnect_max_backoff_millis,
                 options.reconnect_max_duration_millis,
-                jitter: QwpReconnectPolicy.UniformDoubleJitter);
+                jitter: QwpReconnectPolicy.EqualJitter);
 
             engine = new QwpCursorSendEngine(
                 slotLock,

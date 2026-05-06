@@ -39,7 +39,7 @@ internal enum QwpHostState
 /// <summary>
 ///     Per-sender bookkeeping that ranks the configured <c>addr=</c> list when
 ///     selecting the next endpoint to try. Classifications are populated from
-///     the outcome of each connect attempt: a <c>503 + X-QuestDB-Role:
+///     the outcome of each connect attempt: a <c>421 + X-QuestDB-Role:
 ///     PRIMARY_CATCHUP</c> reject becomes <see cref="QwpHostState.TransientReject" />,
 ///     a <c>REPLICA</c> reject becomes <see cref="QwpHostState.TopologyReject" />,
 ///     any other transport failure becomes <see cref="QwpHostState.TransportError" />,

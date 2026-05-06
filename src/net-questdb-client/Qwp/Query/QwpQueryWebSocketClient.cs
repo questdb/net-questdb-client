@@ -195,7 +195,7 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient
                     && Volatile.Read(ref _disposed) == 0)
                 {
                     if (_activeAddressIndex >= 0) _hostTracker.RecordMidStreamFailure(_activeAddressIndex);
-                    var sleep = QwpReconnectPolicy.UniformDoubleJitter(TimeSpan.FromMilliseconds(backoffMs));
+                    var sleep = QwpReconnectPolicy.FullJitter(TimeSpan.FromMilliseconds(backoffMs));
                     if (sleep > _options.failover_backoff_max_ms) sleep = _options.failover_backoff_max_ms;
                     await Task.Delay(sleep, ct).ConfigureAwait(false);
                     if (Volatile.Read(ref _cancelRequested) != 0)

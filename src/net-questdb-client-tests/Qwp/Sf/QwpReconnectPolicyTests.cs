@@ -183,13 +183,13 @@ public class QwpReconnectPolicyTests
     }
 
     [Test]
-    public void Jitter_UniformDouble_SpreadsBackoffAcrossFullRange()
+    public void Jitter_Equal_SpreadsBackoffAcrossFullRange()
     {
         var policy = new QwpReconnectPolicy(
             TimeSpan.FromMilliseconds(100),
             TimeSpan.FromSeconds(1),
             TimeSpan.FromSeconds(10),
-            jitter: QwpReconnectPolicy.UniformDoubleJitter);
+            jitter: QwpReconnectPolicy.EqualJitter);
 
         var samples = Enumerable.Range(0, 64).Select(_ => policy.ComputeBackoff(0)).ToArray();
 
@@ -204,13 +204,13 @@ public class QwpReconnectPolicyTests
     }
 
     [Test]
-    public void Jitter_UniformDouble_StillFiresWhenSaturated()
+    public void Jitter_Equal_StillFiresWhenSaturated()
     {
         var policy = new QwpReconnectPolicy(
             TimeSpan.FromMilliseconds(100),
             TimeSpan.FromMilliseconds(100),
             TimeSpan.FromSeconds(10),
-            jitter: QwpReconnectPolicy.UniformDoubleJitter);
+            jitter: QwpReconnectPolicy.EqualJitter);
 
         var samples = Enumerable.Range(0, 64).Select(_ => policy.ComputeBackoff(10)).ToArray();
 
@@ -223,5 +223,25 @@ public class QwpReconnectPolicyTests
 
         Assert.That(samples.Distinct().Count(), Is.GreaterThan(1),
             "jitter must still vary samples once exponential growth saturates at MaxBackoff");
+    }
+
+    [Test]
+    public void Jitter_Full_SpreadsBackoffOverZeroToBase()
+    {
+        var policy = new QwpReconnectPolicy(
+            TimeSpan.FromMilliseconds(100),
+            TimeSpan.FromSeconds(1),
+            TimeSpan.FromSeconds(10),
+            jitter: QwpReconnectPolicy.FullJitter);
+
+        var samples = Enumerable.Range(0, 64).Select(_ => policy.ComputeBackoff(0)).ToArray();
+
+        foreach (var s in samples)
+        {
+            Assert.That(s, Is.GreaterThanOrEqualTo(TimeSpan.Zero));
+            Assert.That(s, Is.LessThanOrEqualTo(TimeSpan.FromMilliseconds(100)));
+        }
+
+        Assert.That(samples.Distinct().Count(), Is.GreaterThan(1));
     }
 }

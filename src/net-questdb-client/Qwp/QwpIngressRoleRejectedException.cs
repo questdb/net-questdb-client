@@ -29,11 +29,10 @@ using QuestDB.Utils;
 namespace QuestDB.Qwp;
 
 /// <summary>
-///     Raised when the server rejects a <c>/write/v4</c> WebSocket upgrade with a
-///     <c>503 Service Unavailable</c> + <c>X-QuestDB-Role</c> header. Carries the role
-///     name so the host-health tracker can classify the endpoint as transiently
-///     unavailable (e.g. <c>PRIMARY_CATCHUP</c>) versus structurally unwritable
-///     (<c>REPLICA</c>).
+///     Raised when the server rejects a <c>/write/v4</c> WebSocket upgrade with
+///     <c>421 Misdirected Request</c> + <c>X-QuestDB-Role</c>. Carries the role so
+///     the host-health tracker can distinguish transient (<c>PRIMARY_CATCHUP</c>) from
+///     structural (<c>REPLICA</c>) topology rejects.
 /// </summary>
 public sealed class QwpIngressRoleRejectedException : IngressError
 {

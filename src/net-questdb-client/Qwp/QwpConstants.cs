@@ -226,7 +226,7 @@ internal static class QwpConstants
     /// <summary>Server → client: negotiated QWP version.</summary>
     public const string HeaderVersion = "X-QWP-Version";
 
-    /// <summary>Server → client: replication role on both 101 (diagnostic) and 503 (role-reject) responses.</summary>
+    /// <summary>Server → client: replication role on 101 (diagnostic) and 421 (role-reject) responses.</summary>
     public const string HeaderQuestDbRole = "X-QuestDB-Role";
 
     public const string RoleStandaloneName = "STANDALONE";

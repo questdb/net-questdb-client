@@ -45,7 +45,7 @@ internal sealed class QwpReconnectPolicy
     /// <param name="maxOutageDuration">Total time budget across all attempts in one outage; engine becomes terminal once exceeded.</param>
     /// <param name="jitter">
     ///     Optional jitter transform applied after exponential growth and max-clamping. Pass
-    ///     <see cref="UniformDoubleJitter" /> to spread backoff uniformly over <c>[base, 2·base)</c>.
+    ///     <see cref="EqualJitter" /> to spread backoff uniformly over <c>[base, 2·base)</c>.
     ///     Default: identity (deterministic — used by tests).
     /// </param>
     public QwpReconnectPolicy(
@@ -85,10 +85,11 @@ internal sealed class QwpReconnectPolicy
     public TimeSpan MaxOutageDuration { get; }
 
     /// <summary>
-    ///     Equal-jitter transform that picks uniformly from <c>[base, 2·base)</c> using
-    ///     <see cref="Random.Shared" />.
+    ///     Equal-jitter transform — uniform in <c>[base, 2·base)</c>. Used by the SF
+    ///     reconnect loop where multiple producers may share a cluster and the lower
+    ///     bound damps reconnect storms.
     /// </summary>
-    public static TimeSpan UniformDoubleJitter(TimeSpan baseBackoff)
+    public static TimeSpan EqualJitter(TimeSpan baseBackoff)
     {
         if (baseBackoff <= TimeSpan.Zero)
         {
@@ -97,6 +98,22 @@ internal sealed class QwpReconnectPolicy
 
         var add = (long)(Random.Shared.NextDouble() * baseBackoff.Ticks);
         return TimeSpan.FromTicks(baseBackoff.Ticks + add);
+    }
+
+    /// <summary>
+    ///     Full-jitter transform — uniform in <c>[0, base]</c>. Used by the egress
+    ///     per-Execute failover loop where a single user benefits from the lowest
+    ///     expected recovery time.
+    /// </summary>
+    public static TimeSpan FullJitter(TimeSpan baseBackoff)
+    {
+        if (baseBackoff <= TimeSpan.Zero)
+        {
+            return baseBackoff;
+        }
+
+        var ticks = (long)(Random.Shared.NextDouble() * (baseBackoff.Ticks + 1));
+        return TimeSpan.FromTicks(ticks);
     }
 
     /// <summary>

@@ -48,11 +48,11 @@ public class QwpMultiHostFailoverTests
     }
 
     [Test]
-    public async Task Transport_503WithRoleHeader_SurfacesAsTypedException()
+    public async Task Transport_421WithRoleHeader_SurfacesAsTypedException()
     {
         await using var server = new DummyQwpServer(new DummyQwpServerOptions
         {
-            RejectUpgradeWith = HttpStatusCode.ServiceUnavailable,
+            RejectUpgradeWith = HttpStatusCode.MisdirectedRequest,
             RejectUpgradeRoleHeader = QwpConstants.RoleReplicaName,
         });
         await server.StartAsync();
@@ -70,11 +70,11 @@ public class QwpMultiHostFailoverTests
     }
 
     [Test]
-    public async Task Transport_503WithCatchupRole_FlaggedTransient()
+    public async Task Transport_421WithCatchupRole_FlaggedTransient()
     {
         await using var server = new DummyQwpServer(new DummyQwpServerOptions
         {
-            RejectUpgradeWith = HttpStatusCode.ServiceUnavailable,
+            RejectUpgradeWith = HttpStatusCode.MisdirectedRequest,
             RejectUpgradeRoleHeader = QwpConstants.RolePrimaryCatchupName,
         });
         await server.StartAsync();
@@ -92,11 +92,11 @@ public class QwpMultiHostFailoverTests
     }
 
     [Test]
-    public async Task Transport_503WithoutRoleHeader_StaysSocketError()
+    public async Task Transport_421WithoutRoleHeader_StaysSocketError()
     {
         await using var server = new DummyQwpServer(new DummyQwpServerOptions
         {
-            RejectUpgradeWith = HttpStatusCode.ServiceUnavailable,
+            RejectUpgradeWith = HttpStatusCode.MisdirectedRequest,
         });
         await server.StartAsync();
 
@@ -116,7 +116,7 @@ public class QwpMultiHostFailoverTests
     {
         await using var replica = new DummyQwpServer(new DummyQwpServerOptions
         {
-            RejectUpgradeWith = HttpStatusCode.ServiceUnavailable,
+            RejectUpgradeWith = HttpStatusCode.MisdirectedRequest,
             RejectUpgradeRoleHeader = QwpConstants.RoleReplicaName,
         });
         await replica.StartAsync();
@@ -137,14 +137,14 @@ public class QwpMultiHostFailoverTests
     {
         await using var a = new DummyQwpServer(new DummyQwpServerOptions
         {
-            RejectUpgradeWith = HttpStatusCode.ServiceUnavailable,
+            RejectUpgradeWith = HttpStatusCode.MisdirectedRequest,
             RejectUpgradeRoleHeader = QwpConstants.RoleReplicaName,
         });
         await a.StartAsync();
 
         await using var b = new DummyQwpServer(new DummyQwpServerOptions
         {
-            RejectUpgradeWith = HttpStatusCode.ServiceUnavailable,
+            RejectUpgradeWith = HttpStatusCode.MisdirectedRequest,
             RejectUpgradeRoleHeader = QwpConstants.RoleReplicaName,
         });
         await b.StartAsync();

@@ -141,10 +141,6 @@ internal sealed class QwpWebSocketTransport : IQwpCursorTransport
         }
         catch (Exception ex)
         {
-            // 401/403/404 are permanent and won't fix on retry; 503 + X-QuestDB-Role is the
-            // ingress role-reject path (REPLICA / PRIMARY_CATCHUP) and surfaces as a typed
-            // exception so the host tracker can classify the endpoint. Everything else
-            // (incl. other 5xx) stays transient for the reconnect loop.
             var status = (int)_client.HttpStatusCode;
             if (status is 401 or 403 or 404)
             {
@@ -152,7 +148,7 @@ internal sealed class QwpWebSocketTransport : IQwpCursorTransport
                     $"WebSocket upgrade rejected with HTTP {status} for {_options.Uri}", ex);
             }
 
-            if (status == 503)
+            if (status == 421)
             {
                 var role = ReadOptionalHeader(QwpConstants.HeaderQuestDbRole);
                 if (!string.IsNullOrEmpty(role))

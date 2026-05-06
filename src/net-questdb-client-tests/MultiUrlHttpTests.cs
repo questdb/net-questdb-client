@@ -45,22 +45,23 @@ public class MultiUrlHttpTests
     {
         // Test parsing multiple addresses from config string
         var options =
-            new SenderOptions("http::addr=localhost:9000;addr=localhost:9001;addr=localhost:9002;auto_flush=off;");
+            new SenderOptions("http::addr=localhost:9001;aDdR=locALhOSt:9002;addr=localhost:9003;auto_flush=off;");
 
+        Assert.That(options.addr, Is.EqualTo("localhost:9001"));
         Assert.That(options.AddressCount, Is.EqualTo(3));
-        Assert.That(options.addresses[0], Is.EqualTo("localhost:9000"));
-        Assert.That(options.addresses[1], Is.EqualTo("localhost:9001"));
-        Assert.That(options.addresses[2], Is.EqualTo("localhost:9002"));
+        Assert.That(options.addresses[0], Is.EqualTo("localhost:9001"));
+        Assert.That(options.addresses[1], Is.EqualTo("locALhOSt:9002"));
+        Assert.That(options.addresses[2], Is.EqualTo("localhost:9003"));
     }
 
     [Test]
     public void ParseMultipleAddresses_DefaultsToSingleAddress()
     {
         // Test that single address is handled correctly
-        var options = new SenderOptions("http::addr=localhost:9000;auto_flush=off;");
+        var options = new SenderOptions("http::addr=localhost:9999;auto_flush=off;");
 
         Assert.That(options.AddressCount, Is.EqualTo(1));
-        Assert.That(options.addresses[0], Is.EqualTo("localhost:9000"));
+        Assert.That(options.addresses[0], Is.EqualTo("localhost:9999"));
     }
 
     [Test]
@@ -69,7 +70,8 @@ public class MultiUrlHttpTests
         // Test that default address is used when none specified
         var options = new SenderOptions("http::auto_flush=off;");
 
-        Assert.That(options.AddressCount, Is.GreaterThan(0));
+        Assert.That(options.addr, Is.EqualTo("localhost:9000"));
+        Assert.That(options.AddressCount, Is.EqualTo(1));
         Assert.That(options.addresses[0], Is.EqualTo("localhost:9000"));
     }
 

@@ -867,17 +867,17 @@ public class QwpQueryClientEndToEndTests
         {
             Path = QwpConstants.ReadPath,
             NegotiatedVersion = "1",
-            FrameHandlerMulti = _ =>
+            FrameHandlerMultiAsync = async _ =>
             {
                 gate.TrySetResult(true);
-                Thread.Sleep(200);
+                await Task.Delay(200);
                 return new[] { batch, end };
             },
         });
         await server.StartAsync();
 
         using var client = QueryClient.New(BuildConnString(server));
-        var first = Task.Run(() => client.Execute("SELECT 1", new RecordingHandler()));
+        var first = client.ExecuteAsync("SELECT 1", new RecordingHandler());
         await gate.Task;
 
         var ex = Assert.Throws<IngressError>(() => client.Execute("SELECT 2", new RecordingHandler()));

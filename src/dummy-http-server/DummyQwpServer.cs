@@ -220,8 +220,16 @@ public sealed class DummyQwpServer : IAsyncDisposable
             Buffer.BlockCopy(receiveBuf, 0, frame, 0, totalRead);
             _received.Enqueue(frame);
 
-            // Multi-frame handler takes precedence so individual tests can switch behaviour.
-            var multi = _options.FrameHandlerMulti?.Invoke(frame);
+            IReadOnlyList<byte[]>? multi = null;
+            if (_options.FrameHandlerMultiAsync is not null)
+            {
+                multi = await _options.FrameHandlerMultiAsync(frame).ConfigureAwait(false);
+            }
+            else
+            {
+                multi = _options.FrameHandlerMulti?.Invoke(frame);
+            }
+
             if (multi is not null)
             {
                 foreach (var response in multi)
@@ -300,6 +308,8 @@ public sealed class DummyQwpServerOptions
     ///     interleaved with the request's <c>OK</c>).
     /// </summary>
     public Func<byte[], IReadOnlyList<byte[]>?>? FrameHandlerMulti { get; init; }
+
+    public Func<byte[], Task<IReadOnlyList<byte[]>?>>? FrameHandlerMultiAsync { get; init; }
 
     /// <summary>Buffer size for reading incoming WebSocket messages.</summary>
     public int ReceiveBufferSize { get; init; } = 64 * 1024;

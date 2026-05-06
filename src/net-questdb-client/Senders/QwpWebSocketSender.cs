@@ -908,6 +908,7 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
 
         _flushBatch.Clear();
         _runningRowCount = 0;
+        _currentTable = null;
         LastFlush = DateTime.UtcNow;
         _lastFlushTickCount = Environment.TickCount64;
     }
@@ -1169,18 +1170,28 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
         {
         }
 
-        var ioJoined = false;
+        var totalBudgetMs = (int)Options.close_flush_timeout_millis.TotalMilliseconds;
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+
         try
         {
             _sendChannel!.Writer.TryComplete();
-            _ioCts!.Cancel();
-            ioJoined = Task.WhenAll(_sendLoopTask!, _receiveLoopTask!).Wait(Options.close_flush_timeout_millis);
+            _sendLoopTask!.Wait(totalBudgetMs);
         }
         catch (Exception)
         {
         }
 
-        FinalizeWsTeardown(ioJoined);
+        var ioJoined = false;
+        try
+        {
+            _ioCts!.Cancel();
+            var remaining = Math.Max(0, totalBudgetMs - (int)sw.ElapsedMilliseconds);
+            ioJoined = Task.WhenAll(_sendLoopTask!, _receiveLoopTask!).Wait(remaining);
+        }
+        catch (Exception)
+        {
+        }
 
         if (ioJoined)
         {
@@ -1192,9 +1203,10 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
             catch (Exception)
             {
             }
+            SfCleanup.Dispose(_transport);
         }
 
-        SfCleanup.Dispose(_transport);
+        FinalizeWsTeardown(ioJoined);
     }
 
     private async ValueTask DisposeWsStackAsync()
@@ -1211,20 +1223,31 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
         {
         }
 
-        var ioJoined = false;
+        var totalBudget = Options.close_flush_timeout_millis;
+        var totalBudgetMs = (int)totalBudget.TotalMilliseconds;
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+
         try
         {
             _sendChannel!.Writer.TryComplete();
-            _ioCts!.Cancel();
-            await Task.WhenAll(_sendLoopTask!, _receiveLoopTask!)
-                .WaitAsync(Options.close_flush_timeout_millis).ConfigureAwait(false);
-            ioJoined = true;
+            await _sendLoopTask!.WaitAsync(totalBudget).ConfigureAwait(false);
         }
         catch (Exception)
         {
         }
 
-        FinalizeWsTeardown(ioJoined);
+        var ioJoined = false;
+        try
+        {
+            _ioCts!.Cancel();
+            var remaining = Math.Max(0, totalBudgetMs - (int)sw.ElapsedMilliseconds);
+            await Task.WhenAll(_sendLoopTask!, _receiveLoopTask!)
+                .WaitAsync(TimeSpan.FromMilliseconds(remaining)).ConfigureAwait(false);
+            ioJoined = true;
+        }
+        catch (Exception)
+        {
+        }
 
         if (ioJoined)
         {
@@ -1236,9 +1259,10 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
             catch (Exception)
             {
             }
+            SfCleanup.Dispose(_transport);
         }
 
-        SfCleanup.Dispose(_transport);
+        FinalizeWsTeardown(ioJoined);
     }
 
     private void FinalizeWsTeardown(bool ioJoined)
@@ -1483,7 +1507,7 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
         }
 
         throw new IngressError(ErrorCode.SocketError,
-            $"WebSocket ingress failed against all {tracker.Count} configured endpoint(s): {lastFailure?.Message}",
+            $"WebSocket ingress failed against all {tracker.Count} configured endpoint(s); auth_timeout is per-host (worst case = auth_timeout × {tracker.Count}): {lastFailure?.Message}",
             lastFailure);
     }
 
@@ -1512,7 +1536,8 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
                 Proxy = proxy,
             };
 
-            return new QwpTrackedCursorTransport(new QwpWebSocketTransport(transportOpts), tracker, idx);
+            return new QwpTrackedCursorTransport(new QwpWebSocketTransport(transportOpts), tracker, idx,
+                options.auth_timeout);
         };
     }
 

@@ -52,6 +52,7 @@ internal sealed class QwpCursorSendEngine : IDisposable
 
     private long _cursorFsn;
     private long _ackedFsn;
+    private long _sentFsnHighWatermark;
     private bool _terminal;
     private Exception? _terminalError;
     private bool _disposed;
@@ -281,9 +282,13 @@ internal sealed class QwpCursorSendEngine : IDisposable
                 var remainingMs = deadlineMs - Environment.TickCount64;
                 if (remainingMs <= 0)
                 {
+                    var svcErr = _segmentManager.LastServiceError;
+                    var suffix = svcErr is not null
+                        ? $"; last segment-manager error: {svcErr.GetType().Name}: {svcErr.Message}"
+                        : string.Empty;
                     throw new IngressError(
                         ErrorCode.ServerFlushError,
-                        $"sf_append_deadline ({_appendDeadline.TotalMilliseconds:F0} ms) expired with the ring full");
+                        $"sf_append_deadline ({_appendDeadline.TotalMilliseconds:F0} ms) expired with the ring full{suffix}");
                 }
 
                 try
@@ -331,9 +336,13 @@ internal sealed class QwpCursorSendEngine : IDisposable
             var remainingMs = deadlineMs - Environment.TickCount64;
             if (remainingMs <= 0)
             {
+                var svcErr = _segmentManager.LastServiceError;
+                var suffix = svcErr is not null
+                    ? $"; last segment-manager error: {svcErr.GetType().Name}: {svcErr.Message}"
+                    : string.Empty;
                 throw new IngressError(
                     ErrorCode.ServerFlushError,
-                    $"sf_append_deadline ({_appendDeadline.TotalMilliseconds:F0} ms) expired with the ring full");
+                    $"sf_append_deadline ({_appendDeadline.TotalMilliseconds:F0} ms) expired with the ring full{suffix}");
             }
 
             var slice = TimeSpan.FromMilliseconds(Math.Min(remainingMs, 200));
@@ -590,6 +599,7 @@ internal sealed class QwpCursorSendEngine : IDisposable
                     // so we never rewind past frames already trimmed off the ring head.
                     _cursorFsn = Math.Max(_ackedFsn, _ring.OldestFsn);
                     fsnAtZero = _cursorFsn;
+                    _sentFsnHighWatermark = _cursorFsn - 1;
                 }
 
                 try
@@ -715,6 +725,13 @@ internal sealed class QwpCursorSendEngine : IDisposable
             }
 
             await transport.SendBinaryAsync(sendBuffer.AsMemory(0, frameLen), ct).ConfigureAwait(false);
+            lock (_stateLock)
+            {
+                if (readFsn > _sentFsnHighWatermark)
+                {
+                    _sentFsnHighWatermark = readFsn;
+                }
+            }
         }
     }
 
@@ -749,9 +766,7 @@ internal sealed class QwpCursorSendEngine : IDisposable
 
             lock (_stateLock)
             {
-                // Clamp against highest wire-seq actually sent on this connection so a malformed
-                // server ack can't trim segments past what's truly safe.
-                var highestSentWireSeq = _cursorFsn - fsnAtZero - 1;
+                var highestSentWireSeq = _sentFsnHighWatermark - fsnAtZero;
                 if (highestSentWireSeq < 0)
                 {
                     continue;

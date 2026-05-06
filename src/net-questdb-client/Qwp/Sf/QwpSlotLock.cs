@@ -128,6 +128,37 @@ internal sealed class QwpSlotLock : IDisposable
         }
     }
 
+    internal static int? TryReadHolderPid(string slotDirectory)
+    {
+        try
+        {
+            var pidPath = Path.Combine(slotDirectory, PidSidecarName);
+            if (!File.Exists(pidPath)) return null;
+            var s = File.ReadAllText(pidPath, Encoding.ASCII).Trim();
+            return int.TryParse(s, System.Globalization.NumberStyles.Integer,
+                System.Globalization.CultureInfo.InvariantCulture, out var pid) ? pid : null;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    internal static bool IsHolderProcessAlive(string slotDirectory)
+    {
+        var pid = TryReadHolderPid(slotDirectory);
+        if (pid is null || pid <= 0) return false;
+        try
+        {
+            using var proc = Process.GetProcessById(pid.Value);
+            return !proc.HasExited;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
     /// <inheritdoc />
     public void Dispose()
     {

@@ -39,22 +39,46 @@ namespace QuestDB.Qwp.Sf;
 /// </summary>
 internal sealed class QwpTrackedCursorTransport : IQwpCursorTransport
 {
+    private readonly TimeSpan _connectTimeout;
     private readonly int _hostIndex;
     private readonly IQwpCursorTransport _inner;
     private readonly QwpHostHealthTracker _tracker;
 
     public QwpTrackedCursorTransport(IQwpCursorTransport inner, QwpHostHealthTracker tracker, int hostIndex)
+        : this(inner, tracker, hostIndex, Timeout.InfiniteTimeSpan)
+    {
+    }
+
+    public QwpTrackedCursorTransport(IQwpCursorTransport inner, QwpHostHealthTracker tracker, int hostIndex,
+        TimeSpan connectTimeout)
     {
         _inner = inner ?? throw new ArgumentNullException(nameof(inner));
         _tracker = tracker ?? throw new ArgumentNullException(nameof(tracker));
         _hostIndex = hostIndex;
+        _connectTimeout = connectTimeout;
     }
 
     public async Task ConnectAsync(CancellationToken cancellationToken)
     {
+        CancellationTokenSource? timeoutCts = null;
+        CancellationToken effectiveCt = cancellationToken;
+        if (_connectTimeout != Timeout.InfiniteTimeSpan && _connectTimeout > TimeSpan.Zero)
+        {
+            timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            timeoutCts.CancelAfter(_connectTimeout);
+            effectiveCt = timeoutCts.Token;
+        }
+
         try
         {
-            await _inner.ConnectAsync(cancellationToken).ConfigureAwait(false);
+            await _inner.ConnectAsync(effectiveCt).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (timeoutCts is not null && timeoutCts.IsCancellationRequested
+                                                                       && !cancellationToken.IsCancellationRequested)
+        {
+            _tracker.RecordTransportError(_hostIndex);
+            throw new IngressError(ErrorCode.SocketError,
+                $"WebSocket upgrade exceeded auth_timeout={_connectTimeout.TotalMilliseconds}ms");
         }
         catch (QwpIngressRoleRejectedException ex)
         {
@@ -69,6 +93,10 @@ internal sealed class QwpTrackedCursorTransport : IQwpCursorTransport
         {
             _tracker.RecordTransportError(_hostIndex);
             throw;
+        }
+        finally
+        {
+            timeoutCts?.Dispose();
         }
 
         _tracker.RecordSuccess(_hostIndex);

@@ -297,12 +297,13 @@ internal sealed class QwpMmapSegment : IDisposable
         ReadSpan(offset, header);
 
         var crc = BinaryPrimitives.ReadUInt32LittleEndian(header.Slice(0, 4));
-        var len = BinaryPrimitives.ReadInt32LittleEndian(header.Slice(4, 4));
-        if (len <= 0)
+        var lenU = BinaryPrimitives.ReadUInt32LittleEndian(header.Slice(4, 4));
+        if (lenU == 0 || lenU > (uint)_maxFrameLength)
         {
             return -1;
         }
 
+        var len = (int)lenU;
         if (destination.Length < len)
         {
             throw new ArgumentException(
@@ -425,23 +426,19 @@ internal sealed class QwpMmapSegment : IDisposable
                 var header = new ReadOnlySpan<byte>(basePtr + offset, EnvelopeHeaderSize);
 
                 var crc = BinaryPrimitives.ReadUInt32LittleEndian(header.Slice(0, 4));
-                var len = BinaryPrimitives.ReadInt32LittleEndian(header.Slice(4, 4));
+                var lenU = BinaryPrimitives.ReadUInt32LittleEndian(header.Slice(4, 4));
 
-                if (len == 0 && crc == 0)
+                if (lenU == 0 && crc == 0)
                 {
                     break;
                 }
 
-                if (len <= 0)
+                if (lenU == 0 || lenU > (uint)maxFrameLength)
                 {
                     break;
                 }
 
-                if (len > maxFrameLength)
-                {
-                    break;
-                }
-
+                var len = (int)lenU;
                 if (offset + EnvelopeHeaderSize + len > capacity)
                 {
                     break;

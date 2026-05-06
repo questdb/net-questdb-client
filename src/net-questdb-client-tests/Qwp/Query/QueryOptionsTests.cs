@@ -41,7 +41,7 @@ public class QueryOptionsTests
         Assert.That(o.addr, Is.EqualTo("localhost:9000"));
         Assert.That(o.path, Is.EqualTo(QwpConstants.ReadPath));
         Assert.That(o.tls_verify, Is.EqualTo(TlsVerifyType.on));
-        Assert.That(o.compression, Is.EqualTo(CompressionType.auto));
+        Assert.That(o.compression, Is.EqualTo(CompressionType.raw));
         Assert.That(o.compression_level, Is.EqualTo(3));
         Assert.That(o.target, Is.EqualTo(TargetType.any));
         Assert.That(o.failover, Is.True);
@@ -280,7 +280,7 @@ public class QueryOptionsTests
     public void Parse_BadCompressionLevel_Rejected(int level)
     {
         Assert.Throws<IngressError>(() => new QueryOptions(
-            $"ws::addr=h:9000;compression_level={level};"));
+            $"ws::addr=h:9000;compression=auto;compression_level={level};"));
     }
 
     [TestCase(1)]
@@ -391,7 +391,7 @@ public class QueryOptionsTests
     [Test]
     public void EnsureValid_Programmatic_BadCompressionLevelCaught()
     {
-        var o = new QueryOptions { compression_level = 0 };
+        var o = new QueryOptions { compression = CompressionType.auto, compression_level = 0 };
         Assert.Throws<IngressError>(() => o.EnsureValid());
     }
 

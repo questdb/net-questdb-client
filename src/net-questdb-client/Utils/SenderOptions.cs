@@ -70,7 +70,9 @@ public record SenderOptions
     private AutoFlushType _autoFlush = AutoFlushType.on;
     private int _autoFlushBytes = int.MaxValue;
     private TimeSpan _autoFlushInterval = TimeSpan.FromMilliseconds(1000);
+    private bool _autoFlushIntervalUserSet;
     private int _autoFlushRows = 75000;
+    private bool _autoFlushRowsUserSet;
     private DbConnectionStringBuilder? _connectionStringBuilder;
     private bool _gzip;
     private int _initBufSize = 65536;
@@ -82,7 +84,7 @@ public record SenderOptions
     private ProtocolType _protocol = ProtocolType.http;
     private ProtocolVersion _protocol_version = ProtocolVersion.Auto;
     private int _requestMinThroughput = 102400;
-    private TimeSpan _requestTimeout = TimeSpan.FromMilliseconds(10000);
+    private TimeSpan _requestTimeout = TimeSpan.FromMilliseconds(30000);
     private TimeSpan _retryTimeout = TimeSpan.FromMilliseconds(10000);
     private string? _tlsRoots;
     private string? _tlsRootsPassword;
@@ -153,8 +155,9 @@ public record SenderOptions
         ParseStringWithDefault(nameof(addr), "localhost:9000", out _addr!);
         ParseAddresses();
         ParseEnumWithDefault(nameof(auto_flush), "on", out _autoFlush);
-        ParseIntThatMayBeOff(nameof(auto_flush_rows), IsHttp() ? "75000" : "600", out _autoFlushRows);
-        ParseIntThatMayBeOff(nameof(auto_flush_bytes), int.MaxValue.ToString(), out _autoFlushBytes);
+        ParseIntThatMayBeOff(nameof(auto_flush_rows), "75000", out _autoFlushRows);
+        ParseIntThatMayBeOff(nameof(auto_flush_bytes),
+            int.MaxValue.ToString(System.Globalization.CultureInfo.InvariantCulture), out _autoFlushBytes);
         ParseMillisecondsThatMayBeOff(nameof(auto_flush_interval), "1000", out _autoFlushInterval);
         ParseBoolWithDefault(nameof(gzip), "false", out _gzip);
         ParseIntWithDefault(nameof(init_buf_size), "65536", out _initBufSize);
@@ -175,7 +178,7 @@ public record SenderOptions
         ParseStringWithDefault(nameof(token), null, out _token);
         ParseIntWithDefault(nameof(request_min_throughput), "102400", out _requestMinThroughput);
         ParseMillisecondsWithDefault(nameof(auth_timeout), "15000", out _authTimeout);
-        ParseMillisecondsWithDefault(nameof(request_timeout), "10000", out _requestTimeout);
+        ParseMillisecondsWithDefault(nameof(request_timeout), "30000", out _requestTimeout);
         ParseMillisecondsWithDefault(nameof(retry_timeout), "10000", out _retryTimeout);
         ParseMillisecondsWithDefault(nameof(pool_timeout), "120000", out _poolTimeout);
         ParseEnumWithDefault(nameof(tls_verify), "on", out _tlsVerify);
@@ -193,12 +196,14 @@ public record SenderOptions
         ParseStringWithDefault(nameof(sf_dir), null, out _sfDir);
         ParseStringWithDefault(nameof(sender_id), "default", out var senderIdRaw);
         SetSenderId(senderIdRaw ?? "default");
-        ParseLongWithDefault(nameof(sf_max_bytes), (4L * 1024 * 1024).ToString(), out _sfMaxBytes);
+        ParseLongWithDefault(nameof(sf_max_bytes),
+            (4L * 1024 * 1024).ToString(System.Globalization.CultureInfo.InvariantCulture), out _sfMaxBytes);
         _sfMaxTotalBytesUserSet = ReadOptionFromBuilder(nameof(sf_max_total_bytes)) is not null;
         var defaultMaxTotal = string.IsNullOrEmpty(_sfDir)
             ? 128L * 1024 * 1024
             : 10L * 1024 * 1024 * 1024;
-        ParseLongWithDefault(nameof(sf_max_total_bytes), defaultMaxTotal.ToString(), out _sfMaxTotalBytes);
+        ParseLongWithDefault(nameof(sf_max_total_bytes),
+            defaultMaxTotal.ToString(System.Globalization.CultureInfo.InvariantCulture), out _sfMaxTotalBytes);
         ParseStringWithDefault(nameof(sf_durability), "memory", out var sfDurabilityRaw);
         _sfDurability = sfDurabilityRaw ?? "memory";
         if (!_sfDurability.Equals("memory", StringComparison.OrdinalIgnoreCase))
@@ -466,9 +471,12 @@ public record SenderOptions
         }
         else if (IsWebSocket())
         {
-            var defaults = new SenderOptions();
-            if (_autoFlushRows == defaults._autoFlushRows) _autoFlushRows = 1000;
-            if (_autoFlushInterval == defaults._autoFlushInterval) _autoFlushInterval = TimeSpan.FromMilliseconds(100);
+            var rowsExplicit = (_connectionStringBuilder is not null && IsKeyExplicit(nameof(auto_flush_rows)))
+                || _autoFlushRowsUserSet;
+            var intervalExplicit = (_connectionStringBuilder is not null && IsKeyExplicit(nameof(auto_flush_interval)))
+                || _autoFlushIntervalUserSet;
+            if (!rowsExplicit) _autoFlushRows = 1000;
+            if (!intervalExplicit) _autoFlushInterval = TimeSpan.FromMilliseconds(100);
         }
     }
 
@@ -579,7 +587,7 @@ public record SenderOptions
     public int auto_flush_rows
     {
         get => _autoFlushRows;
-        set => _autoFlushRows = value;
+        set { _autoFlushRows = value; _autoFlushRowsUserSet = true; }
     }
 
     /// <summary>
@@ -605,7 +613,7 @@ public record SenderOptions
     public TimeSpan auto_flush_interval
     {
         get => _autoFlushInterval;
-        set => _autoFlushInterval = value;
+        set { _autoFlushInterval = value; _autoFlushIntervalUserSet = true; }
     }
 
     /// <summary>
@@ -788,8 +796,9 @@ public record SenderOptions
     }
 
     /// <summary>
-    ///     Path to a PEM-encoded custom CA bundle used to verify the server certificate.
-    ///     Cross-language interop: Java and Go clients also accept PEM here, not PFX.
+    ///     Path to a custom CA bundle used to verify the server certificate. Accepts PEM
+    ///     (.pem / .crt) or PFX/PKCS#12 (.pfx / .p12); the format is selected by file extension.
+    ///     Cross-language interop: Java and Go clients also accept PEM here.
     /// </summary>
     public string? tls_roots
     {
@@ -798,7 +807,8 @@ public record SenderOptions
     }
 
     /// <summary>
-    ///     Optional password protecting the PEM private key in <see cref="tls_roots" />.
+    ///     Optional password for the PFX/PKCS#12 file referenced by <see cref="tls_roots" />.
+    ///     Ignored for PEM bundles (PEM has no password concept here).
     /// </summary>
     [JsonIgnore]
     public string? tls_roots_password
@@ -957,7 +967,7 @@ public record SenderOptions
         set { _reconnectInitialBackoff = value; _reconnectInitialBackoffUserSet = true; }
     }
 
-    /// <summary>Maximum reconnect backoff after exponential growth. Defaults to 30 s.</summary>
+    /// <summary>Maximum reconnect backoff after exponential growth. Defaults to 5 s.</summary>
     public TimeSpan reconnect_max_backoff_millis
     {
         get => _reconnectMaxBackoff;
@@ -1140,7 +1150,9 @@ public record SenderOptions
                     $"malformed bracketed address `{addr}`: expected `:port` after closing bracket");
             }
 
-            if (!int.TryParse(rest.AsSpan(1), out port) || port <= 0 || port > 65535)
+            if (!int.TryParse(rest.AsSpan(1), System.Globalization.NumberStyles.Integer,
+                    System.Globalization.CultureInfo.InvariantCulture, out port)
+                || port <= 0 || port > 65535)
             {
                 throw new IngressError(ErrorCode.ConfigError,
                     $"malformed address `{addr}`: invalid port `{rest.Substring(1)}`");
@@ -1170,7 +1182,9 @@ public record SenderOptions
             throw new IngressError(ErrorCode.ConfigError, $"malformed address `{addr}`: empty host");
         }
         var portStr = addr.Substring(firstColon + 1);
-        if (!int.TryParse(portStr, out port) || port <= 0 || port > 65535)
+        if (!int.TryParse(portStr, System.Globalization.NumberStyles.Integer,
+                System.Globalization.CultureInfo.InvariantCulture, out port)
+            || port <= 0 || port > 65535)
         {
             throw new IngressError(ErrorCode.ConfigError,
                 $"malformed address `{addr}`: invalid port `{portStr}`");
@@ -1188,7 +1202,9 @@ public record SenderOptions
 
     private void ParseIntWithDefault(string name, string defaultValue, out int field)
     {
-        if (!int.TryParse(ReadOptionFromBuilder(name) ?? defaultValue, out field))
+        if (!int.TryParse(ReadOptionFromBuilder(name) ?? defaultValue,
+                System.Globalization.NumberStyles.Integer,
+                System.Globalization.CultureInfo.InvariantCulture, out field))
         {
             throw new IngressError(ErrorCode.ConfigError, $"`{name}` should be convertible to an int.");
         }
@@ -1196,7 +1212,9 @@ public record SenderOptions
 
     private void ParseLongWithDefault(string name, string defaultValue, out long field)
     {
-        if (!long.TryParse(ReadOptionFromBuilder(name) ?? defaultValue, out field))
+        if (!long.TryParse(ReadOptionFromBuilder(name) ?? defaultValue,
+                System.Globalization.NumberStyles.Integer,
+                System.Globalization.CultureInfo.InvariantCulture, out field))
         {
             throw new IngressError(ErrorCode.ConfigError, $"`{name}` should be convertible to a long.");
         }
@@ -1418,6 +1436,12 @@ public record SenderOptions
                 continue;
             }
 
+            // addr is emitted as a single comma-separated entry preserving original order.
+            if (prop.Name == nameof(addr))
+            {
+                continue;
+            }
+
             var isSecret = SecretPropertyNames.Contains(prop.Name);
             if (prop.IsDefined(typeof(JsonIgnoreAttribute), false) && !isSecret)
             {
@@ -1450,7 +1474,13 @@ public record SenderOptions
 
             if (value is TimeSpan span)
             {
-                builder.Add(prop.Name, span.TotalMilliseconds);
+                // Cast to long-millis for round-trip safety; the parser is integer-valued.
+                builder.Add(prop.Name,
+                    ((long)span.TotalMilliseconds).ToString(System.Globalization.CultureInfo.InvariantCulture));
+            }
+            else if (value is IFormattable formattable)
+            {
+                builder.Add(prop.Name, formattable.ToString(null, System.Globalization.CultureInfo.InvariantCulture));
             }
             else if (value is string str && !string.IsNullOrEmpty(str))
             {
@@ -1463,14 +1493,10 @@ public record SenderOptions
         }
 
         var connectionString = builder.ConnectionString;
-        if (_addresses.Count > 1)
+        if (_addresses.Count > 0)
         {
-            var extra = new StringBuilder();
-            for (var i = 1; i < _addresses.Count; i++)
-            {
-                extra.Append("addr=").Append(_addresses[i]).Append(';');
-            }
-            connectionString = extra + connectionString;
+            var addrValue = string.Join(",", _addresses);
+            connectionString = $"addr={addrValue};{connectionString}";
         }
 
         return $"{protocol.ToString()}::{connectionString};";

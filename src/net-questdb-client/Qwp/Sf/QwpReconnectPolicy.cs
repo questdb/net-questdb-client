@@ -45,8 +45,8 @@ internal sealed class QwpReconnectPolicy
     /// <param name="maxOutageDuration">Total time budget across all attempts in one outage; engine becomes terminal once exceeded.</param>
     /// <param name="jitter">
     ///     Optional jitter transform applied after exponential growth and max-clamping. Pass
-    ///     <see cref="UniformDoubleJitter" /> to spread backoff over <c>[base, 2·base)</c>.
-    ///     Default: identity (deterministic — used by tests).
+    ///     <see cref="UniformDoubleJitter" /> to spread backoff uniformly over <c>[0, base]</c>
+    ///     (AWS-style full jitter). Default: identity (deterministic — used by tests).
     /// </param>
     public QwpReconnectPolicy(
         TimeSpan initialBackoff,

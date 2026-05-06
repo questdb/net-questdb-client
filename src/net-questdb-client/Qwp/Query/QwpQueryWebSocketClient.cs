@@ -578,15 +578,15 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient
                 case QwpEgressMsgKind.ResultEnd:
                     var (endRid, endTotal) = DecodeResultEnd(payload);
                     if (endRid != activeRid) continue;
+                    try { handler.OnEnd(endTotal); } catch { MarkTerminal(); throw; }
                     _executeFinishedCleanly = true;
-                    handler.OnEnd(endTotal);
                     return;
 
                 case QwpEgressMsgKind.ExecDone:
                     var (execRid, opType, rowsAffected) = DecodeExecDone(payload);
                     if (execRid != activeRid) continue;
+                    try { handler.OnExecDone(opType, rowsAffected); } catch { MarkTerminal(); throw; }
                     _executeFinishedCleanly = true;
-                    handler.OnExecDone(opType, rowsAffected);
                     return;
 
                 case QwpEgressMsgKind.QueryError:
@@ -597,8 +597,8 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient
                         Interlocked.Exchange(ref _transport, null)?.Dispose();
                         MarkTerminal();
                     }
+                    try { handler.OnError(status, message); } catch { MarkTerminal(); throw; }
                     _executeFinishedCleanly = true;
-                    handler.OnError(status, message);
                     return;
 
                 case QwpEgressMsgKind.CacheReset:
@@ -874,6 +874,7 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient
         await _sendLock.WaitAsync(ct).ConfigureAwait(false);
         try
         {
+            if (Interlocked.Read(ref _currentRequestId) != requestId) return;
             var transport = _transport;
             if (transport is null) return;
             _cancelFrameBuf[0] = QwpConstants.MsgKindCancel;

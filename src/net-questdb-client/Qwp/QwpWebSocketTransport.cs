@@ -229,8 +229,11 @@ internal sealed class QwpWebSocketTransport : IQwpCursorTransport
 
             if (result.MessageType == WebSocketMessageType.Close)
             {
+                var ec = _client.CloseStatus == WebSocketCloseStatus.PolicyViolation
+                    ? ErrorCode.AuthError
+                    : ErrorCode.SocketError;
                 throw new IngressError(
-                    ErrorCode.SocketError,
+                    ec,
                     $"server closed the WebSocket: {_client.CloseStatus} {_client.CloseStatusDescription}");
             }
 
@@ -287,8 +290,11 @@ internal sealed class QwpWebSocketTransport : IQwpCursorTransport
 
             if (result.MessageType == WebSocketMessageType.Close)
             {
+                var ec = _client.CloseStatus == WebSocketCloseStatus.PolicyViolation
+                    ? ErrorCode.AuthError
+                    : ErrorCode.SocketError;
                 throw new IngressError(
-                    ErrorCode.SocketError,
+                    ec,
                     $"server closed the WebSocket: {_client.CloseStatus} {_client.CloseStatusDescription}");
             }
 

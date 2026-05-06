@@ -31,9 +31,9 @@ using QuestDB.Qwp;
 namespace QuestDB.Qwp.Query;
 
 /// <summary>
-///     Column-major view over a single decoded RESULT_BATCH. Lifetime is bounded by the
-///     <c>onBatch</c> handler invocation: spans returned from string accessors are invalidated
-///     when the handler returns.
+///     Column-major view over a single decoded RESULT_BATCH. The instance — and every span
+///     it returns — is reused across batches: do not store a reference past the
+///     <c>onBatch</c> handler invocation, and copy any string / array data you need to keep.
 /// </summary>
 public sealed class QwpColumnBatch
 {

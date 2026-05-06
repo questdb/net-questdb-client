@@ -62,6 +62,7 @@ internal sealed class QwpTableBuffer
     private int _committedSchemaId = -1;
     private QwpColumn.Savepoint[] _rowSavepoints = new QwpColumn.Savepoint[8];
     private QwpColumn.Savepoint? _designatedSavepoint;
+    private bool _designatedCreatedInCurrentRow;
 
     /// <summary>
     ///     Constructs a new empty buffer.
@@ -417,11 +418,16 @@ internal sealed class QwpTableBuffer
 
         SchemaId = _committedSchemaId;
 
-        if (_designatedSavepoint.HasValue && DesignatedTimestampColumn is not null)
+        if (_designatedCreatedInCurrentRow)
+        {
+            DesignatedTimestampColumn = null;
+        }
+        else if (_designatedSavepoint.HasValue && DesignatedTimestampColumn is not null)
         {
             DesignatedTimestampColumn.Restore(_designatedSavepoint.Value);
         }
         _designatedSavepoint = null;
+        _designatedCreatedInCurrentRow = false;
 
         if (_touchedInCurrentRow.Length > 0)
         {
@@ -442,6 +448,7 @@ internal sealed class QwpTableBuffer
         {
             DesignatedTimestampColumn = new QwpColumn(string.Empty, RowCount);
             SchemaId = -1;
+            _designatedCreatedInCurrentRow = true;
         }
 
         return DesignatedTimestampColumn;
@@ -464,6 +471,7 @@ internal sealed class QwpTableBuffer
         _committedColumnCount = _columns.Count;
         _committedSchemaId = SchemaId;
         _designatedSavepoint = null;
+        _designatedCreatedInCurrentRow = false;
     }
 
     private void MarkTouched(int columnIndex)

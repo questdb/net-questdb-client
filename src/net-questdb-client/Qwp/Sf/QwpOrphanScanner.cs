@@ -59,22 +59,22 @@ internal static class QwpOrphanScanner
         ArgumentNullException.ThrowIfNull(sfRoot);
         ArgumentNullException.ThrowIfNull(ourSenderId);
 
-        var claimed = new List<QwpSlotLock>();
-
         if (!Directory.Exists(sfRoot))
         {
-            return claimed;
+            return Array.Empty<QwpSlotLock>();
         }
 
-        IEnumerable<string> slotDirs;
+        List<string> slotDirs;
         try
         {
-            slotDirs = QwpFiles.EnumerateSlotDirectories(sfRoot);
+            slotDirs = QwpFiles.EnumerateSlotDirectories(sfRoot).ToList();
         }
         catch (Exception)
         {
-            return claimed;
+            return Array.Empty<QwpSlotLock>();
         }
+
+        var claimed = new List<QwpSlotLock>(slotDirs.Count);
 
         foreach (var slotDir in slotDirs)
         {
@@ -100,6 +100,11 @@ internal static class QwpOrphanScanner
         }
 
         if (File.Exists(Path.Combine(slotDir, FailedSentinel)))
+        {
+            return;
+        }
+
+        if (QwpSlotLock.IsHolderProcessAlive(slotDir))
         {
             return;
         }

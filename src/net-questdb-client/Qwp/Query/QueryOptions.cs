@@ -122,7 +122,7 @@ public sealed class QueryOptions
     public string? tls_roots_password { get; set; }
 
     /// <summary>Frame-level compression policy applied to query payloads.</summary>
-    public CompressionType compression { get; set; } = CompressionType.auto;
+    public CompressionType compression { get; set; } = CompressionType.raw;
     /// <summary>Per-codec compression level; meaningful when <see cref="compression" /> is not <c>none</c>.</summary>
     public int compression_level { get; set; } = 3;
 
@@ -265,7 +265,7 @@ public sealed class QueryOptions
         tls_roots = ReadString(builder, "tls_roots");
         tls_roots_password = ReadString(builder, "tls_roots_password");
 
-        compression = ReadEnum(builder, "compression", CompressionType.auto);
+        compression = ReadEnum(builder, "compression", CompressionType.raw);
         compression_level = ReadInt(builder, "compression_level", 3);
 
         target = ReadEnum(builder, "target", TargetType.any);

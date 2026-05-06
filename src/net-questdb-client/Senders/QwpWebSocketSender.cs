@@ -858,11 +858,10 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
             {
             }
         }
-        catch
+        finally
         {
             if (ownsSlot) SfCleanup.Run(() => _slot!.Release());
             if (ownsReady) SfCleanup.Run(() => _encoderReady[idx].Release());
-            throw;
         }
 
         if (wrapAsTerminal is not null)

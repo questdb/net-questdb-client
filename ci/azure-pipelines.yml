@@ -85,7 +85,7 @@ steps:
   inputs:
     command: 'test'
     projects: 'src/net-questdb-client-tests/net-questdb-client-tests.csproj'
-    arguments: '--configuration $(buildConfiguration) --framework net8.0 --no-build --verbosity normal --logger trx --filter "FullyQualifiedName!~QuestDbIntegrationTests"'
+    arguments: '--configuration $(buildConfiguration) --framework net8.0 --no-build --verbosity normal --logger trx --results-directory $(Agent.TempDirectory)/TestResults --blame-hang --blame-hang-timeout 120s --blame-hang-dump-type mini --filter "FullyQualifiedName!~QuestDbIntegrationTests"'
     publishTestResults: true
 
 - task: DotNetCoreCLI@2
@@ -93,7 +93,7 @@ steps:
   inputs:
     command: 'test'
     projects: 'src/net-questdb-client-tests/net-questdb-client-tests.csproj'
-    arguments: '--configuration $(buildConfiguration) --framework net9.0 --no-build --verbosity normal --logger trx --collect:"XPlat Code Coverage"'
+    arguments: '--configuration $(buildConfiguration) --framework net9.0 --no-build --verbosity normal --logger trx --results-directory $(Agent.TempDirectory)/TestResults --blame-hang --blame-hang-timeout 120s --blame-hang-dump-type mini --collect:"XPlat Code Coverage"'
     publishTestResults: true
   condition: eq(variables['osName'], 'Linux')
 
@@ -102,7 +102,7 @@ steps:
   inputs:
     command: 'test'
     projects: 'src/net-questdb-client-tests/net-questdb-client-tests.csproj'
-    arguments: '--configuration $(buildConfiguration) --framework net9.0 --no-build --verbosity normal --logger trx --collect:"XPlat Code Coverage" --filter "FullyQualifiedName!~QuestDbIntegrationTests"'
+    arguments: '--configuration $(buildConfiguration) --framework net9.0 --no-build --verbosity normal --logger trx --results-directory $(Agent.TempDirectory)/TestResults --blame-hang --blame-hang-timeout 120s --blame-hang-dump-type mini --collect:"XPlat Code Coverage" --filter "FullyQualifiedName!~QuestDbIntegrationTests"'
     publishTestResults: true
   condition: ne(variables['osName'], 'Linux')
 
@@ -111,8 +111,16 @@ steps:
   inputs:
     command: 'test'
     projects: 'src/net-questdb-client-tests/net-questdb-client-tests.csproj'
-    arguments: '--configuration $(buildConfiguration) --framework net10.0 --no-build --verbosity normal --logger trx --filter "FullyQualifiedName!~QuestDbIntegrationTests"'
+    arguments: '--configuration $(buildConfiguration) --framework net10.0 --no-build --verbosity normal --logger trx --results-directory $(Agent.TempDirectory)/TestResults --blame-hang --blame-hang-timeout 120s --blame-hang-dump-type mini --filter "FullyQualifiedName!~QuestDbIntegrationTests"'
     publishTestResults: true
+
+- task: PublishPipelineArtifact@1
+  displayName: 'Publish hang dumps and trx ($(osName))'
+  condition: always()
+  inputs:
+    targetPath: '$(Agent.TempDirectory)/TestResults'
+    artifact: 'TestResults-$(osName)-$(Build.BuildId)'
+    publishLocation: 'pipeline'
 
 - task: PublishCodeCoverageResults@2
   displayName: 'Publish code coverage'

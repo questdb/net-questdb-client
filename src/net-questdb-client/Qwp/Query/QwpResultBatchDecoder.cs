@@ -23,7 +23,6 @@
  ******************************************************************************/
 
 using System.Buffers.Binary;
-using System.Runtime.InteropServices;
 using System.Text;
 using QuestDB.Enums;
 
@@ -116,6 +115,16 @@ internal sealed class QwpResultBatchDecoder
         {
             throw new QwpDecodeException(
                 $"symbol dict deltaStart={deltaStart} disagrees with client cursor {_state.SymbolDict.Size}");
+        }
+
+        if (deltaCount > QwpConstants.MaxResultBatchWireBytes)
+        {
+            throw new QwpDecodeException($"symbol dict deltaCount out of range: {deltaCount}");
+        }
+        if ((long)deltaStart + deltaCount > int.MaxValue)
+        {
+            throw new QwpDecodeException(
+                $"symbol dict deltaStart+deltaCount overflows: {deltaStart}+{deltaCount}");
         }
 
         for (var i = 0; i < deltaCount; i++)
@@ -361,11 +370,6 @@ internal sealed class QwpResultBatchDecoder
         var rawBytes = nonNull * 8;
         col.ValueBytes = RentScratch(col.ValueBytes, Math.Max(rawBytes, 0));
 
-        var dest = nonNull > 0
-            ? MemoryMarshal.Cast<byte, long>(col.ValueBytes.AsSpan(0, rawBytes))
-            : Span<long>.Empty;
-        var consumed = QwpGorilla.Decode(payload.Slice(p), dest, nonNull);
-
         if (nonNull == 0)
         {
             if (p >= payload.Length)
@@ -380,6 +384,8 @@ internal sealed class QwpResultBatchDecoder
             return;
         }
 
+        // BE-safe: writes LE bytes; the Span<long> overload would byte-swap on big-endian readers.
+        var consumed = QwpGorilla.DecodeToBytes(payload.Slice(p), col.ValueBytes.AsSpan(0, rawBytes), nonNull);
         p += consumed;
     }
 
@@ -402,7 +408,7 @@ internal sealed class QwpResultBatchDecoder
             p += 4;
         }
 
-        if (nonNull > 0 && offsets[0] != 0)
+        if (offsets[0] != 0)
         {
             throw new QwpDecodeException($"varchar offsets[0] must be 0, got {offsets[0]}");
         }

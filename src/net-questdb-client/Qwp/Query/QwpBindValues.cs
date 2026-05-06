@@ -37,6 +37,8 @@ namespace QuestDB.Qwp.Query;
 /// </summary>
 public sealed class QwpBindValues
 {
+    private static readonly UTF8Encoding StrictUtf8 = new(false, throwOnInvalidBytes: true);
+
     private const byte NullFlagOff = 0x00;
     private const byte NullFlagOn = 0x01;
     private const byte NullBitmap = 0x01;
@@ -251,11 +253,11 @@ public sealed class QwpBindValues
 
         Advance(index);
         WriteHeader(QwpTypeCode.Varchar, isNull: false);
-        var byteCount = Encoding.UTF8.GetByteCount(value);
+        var byteCount = StrictUtf8.GetByteCount(value);
         WriteI32(0);
         WriteI32(byteCount);
         EnsureCapacity(byteCount);
-        var written = Encoding.UTF8.GetBytes(value, _buffer.AsSpan(_length, byteCount));
+        var written = StrictUtf8.GetBytes(value, _buffer.AsSpan(_length, byteCount));
         if (written != byteCount)
         {
             throw new InvalidOperationException("UTF-8 byte count mismatch");

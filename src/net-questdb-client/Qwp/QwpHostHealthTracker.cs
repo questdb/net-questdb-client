@@ -63,6 +63,8 @@ internal sealed class QwpHostHealthTracker
         QwpHostState.TopologyReject,
     };
 
+    // Shared between the SF reconnect thread and drainer-pool tasks; guards _states + _attemptedThisRound.
+    private readonly object _lock = new();
     private readonly bool[] _attemptedThisRound;
     private readonly string[] _hosts;
     private readonly QwpHostState[] _states;
@@ -84,48 +86,83 @@ internal sealed class QwpHostHealthTracker
     {
         get
         {
-            for (var i = 0; i < _attemptedThisRound.Length; i++)
+            lock (_lock)
             {
-                if (!_attemptedThisRound[i]) return false;
+                for (var i = 0; i < _attemptedThisRound.Length; i++)
+                {
+                    if (!_attemptedThisRound[i]) return false;
+                }
+                return true;
             }
-            return true;
         }
     }
 
     public string GetHost(int index) => _hosts[index];
 
-    public QwpHostState GetState(int index) => _states[index];
+    public QwpHostState GetState(int index)
+    {
+        lock (_lock) return _states[index];
+    }
 
     /// <summary>Returns the highest-priority host not yet attempted this round, or -1 when exhausted.</summary>
     public int PickNext()
     {
-        foreach (var priority in PriorityOrder)
+        lock (_lock)
         {
-            for (var i = 0; i < _hosts.Length; i++)
+            foreach (var priority in PriorityOrder)
             {
-                if (!_attemptedThisRound[i] && _states[i] == priority) return i;
+                for (var i = 0; i < _hosts.Length; i++)
+                {
+                    if (!_attemptedThisRound[i] && _states[i] == priority) return i;
+                }
             }
-        }
 
-        return -1;
+            return -1;
+        }
     }
 
     public void RecordSuccess(int hostIndex)
     {
-        _states[hostIndex] = QwpHostState.Healthy;
-        _attemptedThisRound[hostIndex] = true;
+        lock (_lock)
+        {
+            _states[hostIndex] = QwpHostState.Healthy;
+            _attemptedThisRound[hostIndex] = true;
+        }
     }
 
     public void RecordRoleReject(int hostIndex, bool transient)
     {
-        _states[hostIndex] = transient ? QwpHostState.TransientReject : QwpHostState.TopologyReject;
-        _attemptedThisRound[hostIndex] = true;
+        lock (_lock)
+        {
+            _states[hostIndex] = transient ? QwpHostState.TransientReject : QwpHostState.TopologyReject;
+            _attemptedThisRound[hostIndex] = true;
+        }
     }
 
     public void RecordTransportError(int hostIndex)
     {
-        _states[hostIndex] = QwpHostState.TransportError;
-        _attemptedThisRound[hostIndex] = true;
+        lock (_lock)
+        {
+            _states[hostIndex] = QwpHostState.TransportError;
+            _attemptedThisRound[hostIndex] = true;
+        }
+    }
+
+    /// <summary>
+    ///     Records that a previously-successful connection failed mid-stream (send or receive). Demotes
+    ///     <see cref="QwpHostState.Healthy" /> to <see cref="QwpHostState.TransportError" /> so the next
+    ///     <see cref="BeginRound" /> with <c>forgetClassifications=true</c> doesn't preserve the dead
+    ///     host as the sticky-priority entry.
+    /// </summary>
+    public void RecordMidStreamFailure(int hostIndex)
+    {
+        lock (_lock)
+        {
+            if (_states[hostIndex] == QwpHostState.Healthy)
+            {
+                _states[hostIndex] = QwpHostState.TransportError;
+            }
+        }
     }
 
     /// <summary>
@@ -136,19 +173,22 @@ internal sealed class QwpHostHealthTracker
     /// </summary>
     public void BeginRound(bool forgetClassifications)
     {
-        var stickyIndex = -1;
-        if (forgetClassifications)
+        lock (_lock)
         {
+            var stickyIndex = -1;
+            if (forgetClassifications)
+            {
+                for (var i = 0; i < _hosts.Length; i++)
+                {
+                    if (_states[i] == QwpHostState.Healthy) stickyIndex = i;
+                }
+            }
+
             for (var i = 0; i < _hosts.Length; i++)
             {
-                if (_states[i] == QwpHostState.Healthy) stickyIndex = i;
+                _attemptedThisRound[i] = false;
+                if (forgetClassifications && i != stickyIndex) _states[i] = QwpHostState.Unknown;
             }
-        }
-
-        for (var i = 0; i < _hosts.Length; i++)
-        {
-            _attemptedThisRound[i] = false;
-            if (forgetClassifications && i != stickyIndex) _states[i] = QwpHostState.Unknown;
         }
     }
 }

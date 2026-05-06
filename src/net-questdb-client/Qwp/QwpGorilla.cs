@@ -147,6 +147,95 @@ internal static class QwpGorilla
         return DecodeGorilla(source, dest, valueCount);
     }
 
+    /// <summary>
+    ///     Decodes into a little-endian <see cref="byte" /> destination — endianness-stable on big-endian
+    ///     platforms unlike the <see cref="Span{T}" /> overload which writes through native-endian
+    ///     <c>long</c> storage. Use this when the caller wants to interpret the result through
+    ///     <c>BinaryPrimitives.ReadInt64LittleEndian</c>.
+    /// </summary>
+    public static int DecodeToBytes(ReadOnlySpan<byte> source, Span<byte> dest, int valueCount)
+    {
+        if (valueCount <= 0)
+        {
+            return 0;
+        }
+
+        if (source.Length < 1)
+        {
+            throw new IngressError(ErrorCode.ProtocolVersionError, "Gorilla source truncated: missing encoding flag");
+        }
+
+        var flag = source[0];
+        if (flag == EncodingUncompressed)
+        {
+            return DecodeUncompressedToBytes(source, dest, valueCount);
+        }
+
+        if (flag != EncodingGorilla)
+        {
+            throw new IngressError(ErrorCode.ProtocolVersionError,
+                $"Gorilla source: unknown encoding flag 0x{flag:X2}");
+        }
+
+        return DecodeGorillaToBytes(source, dest, valueCount);
+    }
+
+    private static int DecodeUncompressedToBytes(ReadOnlySpan<byte> source, Span<byte> dest, int valueCount)
+    {
+        var expected = 1 + valueCount * 8;
+        if (source.Length < expected)
+        {
+            throw new IngressError(ErrorCode.ProtocolVersionError,
+                $"uncompressed timestamp column truncated: need {expected} bytes, have {source.Length}");
+        }
+        if (dest.Length < valueCount * 8)
+        {
+            throw new ArgumentException("dest too small", nameof(dest));
+        }
+        source.Slice(1, valueCount * 8).CopyTo(dest);
+        return expected;
+    }
+
+    private static int DecodeGorillaToBytes(ReadOnlySpan<byte> source, Span<byte> dest, int valueCount)
+    {
+        if (valueCount < 2)
+        {
+            throw new IngressError(ErrorCode.ProtocolVersionError,
+                "Gorilla-encoded column requires at least two timestamps");
+        }
+
+        if (source.Length < 17)
+        {
+            throw new IngressError(ErrorCode.ProtocolVersionError,
+                "Gorilla source truncated: missing first/second timestamps");
+        }
+        if (dest.Length < valueCount * 8)
+        {
+            throw new ArgumentException("dest too small", nameof(dest));
+        }
+
+        var t0 = BinaryPrimitives.ReadInt64LittleEndian(source.Slice(1, 8));
+        var t1 = BinaryPrimitives.ReadInt64LittleEndian(source.Slice(9, 8));
+        BinaryPrimitives.WriteInt64LittleEndian(dest.Slice(0, 8), t0);
+        BinaryPrimitives.WriteInt64LittleEndian(dest.Slice(8, 8), t1);
+
+        var reader = new QwpBitReader(source, 17);
+        var prevDelta = t1 - t0;
+        var prev = t1;
+
+        for (var i = 2; i < valueCount; i++)
+        {
+            var dod = DecodeDoD(ref reader);
+            var delta = prevDelta + dod;
+            var val = prev + delta;
+            BinaryPrimitives.WriteInt64LittleEndian(dest.Slice(i * 8, 8), val);
+            prevDelta = delta;
+            prev = val;
+        }
+
+        return reader.BytePosition;
+    }
+
     private static int EncodeUncompressed(Span<byte> dest, ReadOnlySpan<long> timestamps)
     {
         dest[0] = EncodingUncompressed;

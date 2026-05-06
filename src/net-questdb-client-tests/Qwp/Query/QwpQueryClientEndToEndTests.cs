@@ -25,6 +25,9 @@
 #if NET7_0_OR_GREATER
 
 using System.Buffers.Binary;
+using System.Diagnostics;
+using System.Net;
+using System.Net.Sockets;
 using NUnit.Framework;
 using QuestDB;
 using QuestDB.Enums;
@@ -479,19 +482,36 @@ public class QwpQueryClientEndToEndTests
     }
 
     [Test]
-    public async Task UserCancellation_MarksClientTerminal_NextExecuteThrows()
+    public async Task UserCancellation_LeavesClientUsable_NextExecuteSucceeds()
     {
+        // Cancelled CT aborts the underlying ClientWebSocket; the next Execute hits failover and gets a
+        // fresh rid. Fixture echoes the incoming rid so responses always match the live request.
         var schema = new ResultSchema { SchemaId = 1, Columns = { new SchemaColumn("c", QwpTypeCode.Long) } };
-        var batch = QwpEgressFrameBuilder.BuildResultBatch(
-            1L, 0L, schema,
-            new ResultBatchData { RowCount = 1, Columns = { new FixedColumnData { DenseBytes = LongLe(1L) } } });
-
-        // Server emits one batch but never the terminator → client.ReceiveAsync hangs until cancellation.
+        var queryCount = 0;
         await using var server = new DummyQwpServer(new DummyQwpServerOptions
         {
             Path = QwpConstants.ReadPath,
             NegotiatedVersion = "1",
-            FrameHandlerMulti = _ => new[] { batch },
+            FrameHandlerMulti = frame =>
+            {
+                if (frame[0] != QwpConstants.MsgKindQueryRequest) return null;
+                queryCount++;
+                var rid = BinaryPrimitives.ReadInt64LittleEndian(frame.AsSpan(1, 8));
+                if (queryCount == 1)
+                {
+                    return new[]
+                    {
+                        QwpEgressFrameBuilder.BuildResultBatch(rid, 0L, schema,
+                            new ResultBatchData { RowCount = 1, Columns = { new FixedColumnData { DenseBytes = LongLe(1L) } } }),
+                    };
+                }
+                return new[]
+                {
+                    QwpEgressFrameBuilder.BuildResultBatch(rid, 0L, schema,
+                        new ResultBatchData { RowCount = 1, Columns = { new FixedColumnData { DenseBytes = LongLe(2L) } } }),
+                    QwpEgressFrameBuilder.BuildResultEnd(rid, 0L, 1L),
+                };
+            },
         });
         await server.StartAsync();
 
@@ -500,9 +520,10 @@ public class QwpQueryClientEndToEndTests
         Assert.CatchAsync<OperationCanceledException>(async () =>
             await client.ExecuteAsync("SELECT 1", new RecordingHandler(), cts.Token));
 
-        var ex = Assert.Throws<IngressError>(() => client.Execute("SELECT 2", new RecordingHandler()));
-        Assert.That(ex!.code, Is.EqualTo(ErrorCode.SocketError));
-        StringAssert.Contains("terminal state", ex.Message);
+        var ok = new RecordingHandler();
+        client.Execute("SELECT 2", ok);
+        Assert.That(ok.Ended, Is.True);
+        Assert.That(ok.Batches[0].LongValues, Is.EqualTo(new[] { 2L }));
     }
 
     [Test]
@@ -839,7 +860,7 @@ public class QwpQueryClientEndToEndTests
         Assert.That(handler1.Ended, Is.True);
 
         var ex = Assert.Throws<IngressError>(() => client.Execute("SELECT 1", new RecordingHandler()));
-        Assert.That(ex!.code, Is.EqualTo(ErrorCode.SocketError));
+        Assert.That(ex!.code, Is.EqualTo(ErrorCode.ProtocolVersionError));
     }
 
     [Test]
@@ -1045,6 +1066,142 @@ public class QwpQueryClientEndToEndTests
         Assert.That(ex!.Target, Is.EqualTo(TargetType.primary));
         Assert.That(ex.LastObserved, Is.Not.Null);
         Assert.That(ex.LastObserved!.Role, Is.EqualTo(QwpConstants.RoleReplica));
+    }
+
+    [Test]
+    public void AuthTimeout_BoundsConnectAttemptToBlackholeHost()
+    {
+        var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        var port = ((IPEndPoint)listener.LocalEndpoint).Port;
+        var held = new List<TcpClient>();
+        using var acceptCts = new CancellationTokenSource();
+        var acceptTask = Task.Run(async () =>
+        {
+            try
+            {
+                while (!acceptCts.IsCancellationRequested)
+                {
+                    var c = await listener.AcceptTcpClientAsync(acceptCts.Token);
+                    held.Add(c);
+                }
+            }
+            catch { }
+        });
+
+        try
+        {
+            var conn = $"ws::addr=127.0.0.1:{port};path={QwpConstants.ReadPath};" +
+                       "auth_timeout_ms=300;failover=off;";
+            var sw = Stopwatch.StartNew();
+            var ex = Assert.Throws<IngressError>(() => QueryClient.New(conn));
+            sw.Stop();
+
+            Assert.That(ex!.code, Is.EqualTo(ErrorCode.SocketError));
+            StringAssert.Contains("auth_timeout", ex.Message);
+            Assert.That(sw.ElapsedMilliseconds, Is.LessThan(2000),
+                "auth_timeout=300ms should bound connect well below OS-level TCP timeout");
+        }
+        finally
+        {
+            acceptCts.Cancel();
+            listener.Stop();
+            foreach (var c in held) try { c.Close(); } catch { }
+        }
+    }
+
+    [Test]
+    public async Task FailoverMaxDuration_ShortCircuitsBeforeMaxAttempts()
+    {
+        var serverInfo = QwpEgressFrameBuilder.BuildServerInfo(
+            QwpConstants.RolePrimary, epoch: 1, capabilities: 0, serverWallNs: 0, "c", "node-a");
+
+        await using var server = new DummyQwpServer(new DummyQwpServerOptions
+        {
+            Path = QwpConstants.ReadPath,
+            NegotiatedVersion = "2",
+            InitialServerFrame = serverInfo,
+            CloseAfterFrameCount = 1,
+            CloseStatus = System.Net.WebSockets.WebSocketCloseStatus.InternalServerError,
+            FrameHandler = _ => null,
+        });
+        await server.StartAsync();
+
+        var conn = $"ws::addr={server.Uri.Authority};path={QwpConstants.ReadPath};" +
+                   "target=primary;failover=on;failover_max_attempts=200;failover_max_duration_ms=300;" +
+                   "failover_backoff_initial_ms=20;failover_backoff_max_ms=50;auth_timeout_ms=500;";
+        using var client = QueryClient.New(conn);
+
+        var sw = Stopwatch.StartNew();
+        var ex = Assert.Throws<IngressError>(() => client.Execute("SELECT 1", new RecordingHandler()));
+        sw.Stop();
+
+        Assert.That(ex!.code, Is.EqualTo(ErrorCode.SocketError));
+        Assert.That(sw.ElapsedMilliseconds, Is.LessThan(2000),
+            "200 attempts at 20-50ms backoff is multi-second; max_duration=300ms must short-circuit");
+    }
+
+    [Test]
+    public async Task MidStreamFailure_DemotesActiveHost_NextReconnectPicksOther()
+    {
+        var schema = new ResultSchema { SchemaId = 1, Columns = { new SchemaColumn("c", QwpTypeCode.Long) } };
+        var infoA = QwpEgressFrameBuilder.BuildServerInfo(
+            QwpConstants.RolePrimary, epoch: 1, capabilities: 0, serverWallNs: 0, "c", "node-a");
+        var infoB = QwpEgressFrameBuilder.BuildServerInfo(
+            QwpConstants.RolePrimary, epoch: 2, capabilities: 0, serverWallNs: 0, "c", "node-b");
+
+        await using var serverA = new DummyQwpServer(new DummyQwpServerOptions
+        {
+            Path = QwpConstants.ReadPath,
+            NegotiatedVersion = "2",
+            InitialServerFrame = infoA,
+            CloseAfterFrameCount = 1,
+            CloseStatus = System.Net.WebSockets.WebSocketCloseStatus.InternalServerError,
+            FrameHandler = _ => null,
+        });
+        await serverA.StartAsync();
+
+        var aConnections = 0;
+        var bConnections = 0;
+
+        await using var serverB = new DummyQwpServer(new DummyQwpServerOptions
+        {
+            Path = QwpConstants.ReadPath,
+            NegotiatedVersion = "2",
+            InitialServerFrame = infoB,
+            FrameHandlerMulti = frame =>
+            {
+                if (frame[0] != QwpConstants.MsgKindQueryRequest) return null;
+                bConnections++;
+                var rid = BinaryPrimitives.ReadInt64LittleEndian(frame.AsSpan(1, 8));
+                return new[]
+                {
+                    QwpEgressFrameBuilder.BuildResultBatch(rid, 0L, schema,
+                        new ResultBatchData { RowCount = 1, Columns = { new FixedColumnData { DenseBytes = LongLe(7L) } } }),
+                    QwpEgressFrameBuilder.BuildResultEnd(rid, 0L, 1L),
+                };
+            },
+        });
+        await serverB.StartAsync();
+
+        var conn = $"ws::addr={serverA.Uri.Authority},{serverB.Uri.Authority};path={QwpConstants.ReadPath};" +
+                   "target=primary;failover=on;failover_max_attempts=4;lb_strategy=first;" +
+                   "failover_backoff_initial_ms=10;failover_backoff_max_ms=20;";
+        using var client = QueryClient.New(conn);
+        Assert.That(client.ServerInfo!.NodeId, Is.EqualTo("node-a"));
+        aConnections++;
+
+        var handler = new RecordingHandler();
+        client.Execute("SELECT 7", handler);
+        Assert.That(handler.Ended, Is.True);
+        Assert.That(handler.FailoverResets[^1]?.NodeId, Is.EqualTo("node-b"));
+
+        var handler2 = new RecordingHandler();
+        client.Execute("SELECT 7 again", handler2);
+        Assert.That(handler2.Ended, Is.True);
+        Assert.That(handler2.FailoverResets, Is.Empty,
+            "second Execute on the now-Healthy B should not reconnect — A was demoted by mid-stream failure");
+        Assert.That(bConnections, Is.GreaterThanOrEqualTo(2));
     }
 
     [Test]

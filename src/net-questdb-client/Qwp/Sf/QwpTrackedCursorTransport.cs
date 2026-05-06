@@ -74,11 +74,31 @@ internal sealed class QwpTrackedCursorTransport : IQwpCursorTransport
         _tracker.RecordSuccess(_hostIndex);
     }
 
-    public Task SendBinaryAsync(ReadOnlyMemory<byte> data, CancellationToken cancellationToken)
-        => _inner.SendBinaryAsync(data, cancellationToken);
+    public async Task SendBinaryAsync(ReadOnlyMemory<byte> data, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await _inner.SendBinaryAsync(data, cancellationToken).ConfigureAwait(false);
+        }
+        catch
+        {
+            _tracker.RecordMidStreamFailure(_hostIndex);
+            throw;
+        }
+    }
 
-    public Task<int> ReceiveFrameAsync(Memory<byte> destination, CancellationToken cancellationToken)
-        => _inner.ReceiveFrameAsync(destination, cancellationToken);
+    public async Task<int> ReceiveFrameAsync(Memory<byte> destination, CancellationToken cancellationToken)
+    {
+        try
+        {
+            return await _inner.ReceiveFrameAsync(destination, cancellationToken).ConfigureAwait(false);
+        }
+        catch
+        {
+            _tracker.RecordMidStreamFailure(_hostIndex);
+            throw;
+        }
+    }
 
     public Task CloseAsync(CancellationToken cancellationToken)
         => _inner.CloseAsync(cancellationToken);

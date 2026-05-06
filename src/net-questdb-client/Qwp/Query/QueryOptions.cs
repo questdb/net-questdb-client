@@ -54,6 +54,8 @@ public sealed class QueryOptions
         "compression", "compression_level",
         "target", "failover", "failover_max_attempts",
         "failover_backoff_initial_ms", "failover_backoff_max_ms",
+        "failover_max_duration_ms",
+        "auth_timeout_ms",
         "lb_strategy",
         "max_batch_rows",
         "client_id",
@@ -136,6 +138,10 @@ public sealed class QueryOptions
     public TimeSpan failover_backoff_initial_ms { get; set; } = TimeSpan.FromMilliseconds(50);
     /// <summary>Cap on the failover back-off interval.</summary>
     public TimeSpan failover_backoff_max_ms { get; set; } = TimeSpan.FromMilliseconds(1000);
+    /// <summary>Total wall-clock budget for the failover loop across all attempts; <see cref="TimeSpan.Zero" /> = unbounded. Whichever of <see cref="failover_max_attempts" /> or this fires first ends the loop.</summary>
+    public TimeSpan failover_max_duration_ms { get; set; } = TimeSpan.FromSeconds(30);
+    /// <summary>Per-endpoint timeout applied to the WebSocket upgrade (TCP+TLS+HTTP+SERVER_INFO). Without this, an unreachable address can block on OS-level TCP timeouts (~21s Linux, ~75s macOS).</summary>
+    public TimeSpan auth_timeout_ms { get; set; } = TimeSpan.FromSeconds(15);
 
     /// <summary>Optional cap on rows per decoded batch; <c>0</c> defers to the server's batch size.</summary>
     public int max_batch_rows { get; set; }
@@ -270,6 +276,10 @@ public sealed class QueryOptions
             ReadInt(builder, "failover_backoff_initial_ms", 50));
         failover_backoff_max_ms = TimeSpan.FromMilliseconds(
             ReadInt(builder, "failover_backoff_max_ms", 1000));
+        failover_max_duration_ms = TimeSpan.FromMilliseconds(
+            ReadInt(builder, "failover_max_duration_ms", 30000));
+        auth_timeout_ms = TimeSpan.FromMilliseconds(
+            ReadInt(builder, "auth_timeout_ms", 15000));
 
         max_batch_rows = ReadInt(builder, "max_batch_rows", 0);
     }
@@ -356,6 +366,18 @@ public sealed class QueryOptions
         {
             throw new IngressError(ErrorCode.ConfigError,
                 "`failover_backoff_initial_ms` must be <= `failover_backoff_max_ms`");
+        }
+
+        if (failover_max_duration_ms < TimeSpan.Zero)
+        {
+            throw new IngressError(ErrorCode.ConfigError,
+                "`failover_max_duration_ms` must be non-negative (0 = unbounded)");
+        }
+
+        if (auth_timeout_ms <= TimeSpan.Zero)
+        {
+            throw new IngressError(ErrorCode.ConfigError,
+                "`auth_timeout_ms` must be positive");
         }
 
         if (max_batch_rows < 0)

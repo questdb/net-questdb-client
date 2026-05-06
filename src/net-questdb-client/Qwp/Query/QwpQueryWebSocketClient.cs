@@ -27,6 +27,7 @@
 using System.Buffers.Binary;
 using System.Text;
 using QuestDB.Enums;
+using QuestDB.Qwp.Sf;
 using QuestDB.Senders;
 using QuestDB.Utils;
 
@@ -46,7 +47,8 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient
     private readonly SemaphoreSlim _sendLock = new(1, 1);
 
     private QwpWebSocketTransport? _transport;
-    private int _activeAddressIndex;
+    private readonly QwpHostHealthTracker _hostTracker;
+    private int _activeAddressIndex = -1;
     private byte[] _receiveBuffer = new byte[InitialReceiveBufferBytes];
     private byte[] _decompressBuffer = Array.Empty<byte>();
     private byte[] _queryRequestBuf = Array.Empty<byte>();
@@ -57,6 +59,9 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient
     private long _currentRequestId = -1;
     private int _disposed;
     private int _terminal;
+    // Either flag suppresses MarkTerminal in finally: cleanly = wire-side terminator or user-cancelled;
+    // drainOk = user callback threw but the connection is still recoverable.
+    private bool _executeFinishedCleanly;
     private bool _drainOkAfterHandlerThrow;
     private bool _lastCloseTimedOut;
 
@@ -64,10 +69,16 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient
     {
         _options = options;
         _decoder = new QwpResultBatchDecoder(_connState);
-        if (options.lb_strategy == LoadBalanceStrategy.random && options.AddressCount > 1)
+        var walkOrder = new List<string>(options.addresses);
+        if (options.lb_strategy == LoadBalanceStrategy.random && walkOrder.Count > 1)
         {
-            _activeAddressIndex = Random.Shared.Next(options.AddressCount);
+            for (var i = walkOrder.Count - 1; i > 0; i--)
+            {
+                var j = Random.Shared.Next(i + 1);
+                (walkOrder[i], walkOrder[j]) = (walkOrder[j], walkOrder[i]);
+            }
         }
+        _hostTracker = new QwpHostHealthTracker(walkOrder);
     }
 
     internal static async Task<QwpQueryWebSocketClient> CreateAsync(QueryOptions options, CancellationToken ct)
@@ -140,12 +151,17 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient
                 "Execute is in flight; one query at a time per client");
         }
 
-        var graceful = false;
+        _executeFinishedCleanly = false;
         _drainOkAfterHandlerThrow = false;
+        // Per-Execute fresh evaluation: stale TopologyReject hosts get re-classified.
+        _hostTracker.BeginRound(forgetClassifications: true);
         try
         {
             var attempt = 0;
             var backoffMs = _options.failover_backoff_initial_ms.TotalMilliseconds;
+            var failoverDeadline = _options.failover_max_duration_ms > TimeSpan.Zero
+                ? Environment.TickCount64 + (long)_options.failover_max_duration_ms.TotalMilliseconds
+                : long.MaxValue;
             while (true)
             {
                 var requestId = Interlocked.Increment(ref _nextRequestId);
@@ -155,27 +171,45 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient
                     await SendQueryRequestAsync(requestId, sql, _options.initial_credit, bindBlob, bindCount, ct)
                         .ConfigureAwait(false);
                     await DriveQueryLoopAsync(handler, ct).ConfigureAwait(false);
-                    graceful = true;
+                    _executeFinishedCleanly = true;
                     return;
+                }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested)
+                {
+                    _executeFinishedCleanly = true;
+                    throw;
                 }
                 catch (Exception ex) when (
                     _options.failover
                     && attempt + 1 < _options.failover_max_attempts
+                    && Environment.TickCount64 < failoverDeadline
                     && IsTransportError(ex)
-                    && !ct.IsCancellationRequested)
+                    && !ct.IsCancellationRequested
+                    && Volatile.Read(ref _disposed) == 0)
                 {
                     Interlocked.Exchange(ref _currentRequestId, -1);
-                    await Task.Delay(TimeSpan.FromMilliseconds(backoffMs), ct).ConfigureAwait(false);
+                    if (_activeAddressIndex >= 0) _hostTracker.RecordMidStreamFailure(_activeAddressIndex);
+                    var sleep = QwpReconnectPolicy.UniformDoubleJitter(TimeSpan.FromMilliseconds(backoffMs));
+                    if (sleep > _options.failover_backoff_max_ms) sleep = _options.failover_backoff_max_ms;
+                    await Task.Delay(sleep, ct).ConfigureAwait(false);
                     backoffMs = Math.Min(backoffMs * 2, _options.failover_backoff_max_ms.TotalMilliseconds);
                     attempt++;
                     await ReconnectAsync(attempt, ct).ConfigureAwait(false);
-                    handler.OnFailoverReset(ServerInfo);
+                    try
+                    {
+                        handler.OnFailoverReset(ServerInfo);
+                    }
+                    catch
+                    {
+                        _drainOkAfterHandlerThrow = true;
+                        throw;
+                    }
                 }
             }
         }
         finally
         {
-            if (!graceful && !_drainOkAfterHandlerThrow) MarkTerminal();
+            if (!_executeFinishedCleanly && !_drainOkAfterHandlerThrow) MarkTerminal();
             Interlocked.Exchange(ref _currentRequestId, -1);
             _executeLock.Release();
         }
@@ -197,22 +231,64 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient
 
     private async Task ReconnectAsync(int attempt, CancellationToken ct)
     {
+        if (Volatile.Read(ref _disposed) != 0)
+        {
+            throw new ObjectDisposedException(nameof(QwpQueryWebSocketClient));
+        }
         _transport?.Dispose();
         _transport = null;
+        _hostTracker.BeginRound(forgetClassifications: false);
 
-        var totalAddresses = _options.AddressCount;
-        QwpServerInfo? lastInfo = null;
-        Exception? lastTransportError = null;
-        var anyRoleMismatch = false;
-        for (var step = 1; step <= totalAddresses; step++)
+        var (info, lastError, anyRoleMismatch) = await WalkTrackerAsync(ct).ConfigureAwait(false);
+        if (_transport is not null)
         {
-            var idx = (_activeAddressIndex + step) % totalAddresses;
-            var addr = _options.addresses[idx];
+            ServerInfo = info;
+            _connState.ResetSymbolDict();
+            _connState.ResetSchemas();
+            return;
+        }
+
+        var addrCount = _hostTracker.Count;
+        if (!anyRoleMismatch && lastError is not null)
+        {
+            throw new IngressError(ErrorCode.SocketError,
+                $"failover exhausted after {attempt} attempt(s) across {addrCount} endpoint(s): {lastError.Message}",
+                lastError);
+        }
+
+        throw new QwpRoleMismatchException(_options.target, info,
+            lastError is null
+                ? $"failover exhausted after {attempt} attempt(s) across {addrCount} endpoint(s): no endpoint matched target={_options.target}"
+                : $"failover exhausted after {attempt} attempt(s) across {addrCount} endpoint(s): {lastError.Message}");
+    }
+
+    private async Task<(QwpServerInfo? LastInfo, Exception? LastError, bool AnyRoleMismatch)>
+        WalkTrackerAsync(CancellationToken ct)
+    {
+        QwpServerInfo? lastInfo = null;
+        Exception? lastError = null;
+        var anyRoleMismatch = false;
+        while (true)
+        {
+            var idx = _hostTracker.PickNext();
+            if (idx < 0) return (lastInfo, lastError, anyRoleMismatch);
+
+            var addr = _hostTracker.GetHost(idx);
             QwpWebSocketTransport? candidate = null;
             try
             {
                 candidate = BuildTransport(addr);
-                await candidate.ConnectAsync(ct).ConfigureAwait(false);
+                using var connectCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                connectCts.CancelAfter(_options.auth_timeout_ms);
+                try
+                {
+                    await candidate.ConnectAsync(connectCts.Token).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException) when (connectCts.IsCancellationRequested && !ct.IsCancellationRequested)
+                {
+                    throw new IngressError(ErrorCode.SocketError,
+                        $"WebSocket upgrade to {addr} exceeded auth_timeout={_options.auth_timeout_ms.TotalMilliseconds}ms");
+                }
 
                 QwpServerInfo? info = null;
                 if (candidate.NegotiatedVersion >= 2)
@@ -225,13 +301,12 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient
                 {
                     _transport = candidate;
                     _activeAddressIndex = idx;
-                    ServerInfo = info;
-                    _connState.ResetSymbolDict();
-                    _connState.ResetSchemas();
-                    return;
+                    _hostTracker.RecordSuccess(idx);
+                    return (lastInfo, lastError, anyRoleMismatch);
                 }
 
                 anyRoleMismatch = true;
+                _hostTracker.RecordRoleReject(idx, transient: info?.Role == QwpConstants.RolePrimaryCatchup);
                 candidate.Dispose();
                 candidate = null;
             }
@@ -240,24 +315,21 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient
                 candidate?.Dispose();
                 throw;
             }
+            catch (QwpIngressRoleRejectedException ex)
+            {
+                anyRoleMismatch = true;
+                lastInfo = SynthesiseRoleRejectInfo(ex);
+                lastError = ex;
+                _hostTracker.RecordRoleReject(idx, ex.IsTransient);
+                candidate?.Dispose();
+            }
             catch (Exception ex)
             {
-                lastTransportError = ex;
+                lastError = ex;
+                _hostTracker.RecordTransportError(idx);
                 candidate?.Dispose();
             }
         }
-
-        if (!anyRoleMismatch && lastTransportError is not null)
-        {
-            throw new IngressError(ErrorCode.SocketError,
-                $"failover exhausted after {attempt} attempt(s) across {totalAddresses} endpoint(s): {lastTransportError.Message}",
-                lastTransportError);
-        }
-
-        throw new QwpRoleMismatchException(_options.target, lastInfo,
-            lastTransportError is null
-                ? $"failover exhausted after {attempt} attempt(s) across {totalAddresses} endpoint(s): no endpoint matched target={_options.target}"
-                : $"failover exhausted after {attempt} attempt(s) across {totalAddresses} endpoint(s): {lastTransportError.Message}");
     }
 
     public void Cancel()
@@ -281,17 +353,23 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient
     public void Dispose()
     {
         if (Interlocked.CompareExchange(ref _disposed, 1, 0) != 0) return;
-        _transport?.Dispose();
+        Interlocked.Exchange(ref _transport, null)?.Dispose();
         var locked = _executeLock.Wait(TimeSpan.FromSeconds(5));
         _lastCloseTimedOut = !locked;
-        DisposeDecompressor();
-        if (locked) _executeLock.Release();
+        // Catch any transport the failover loop raced in past the _disposed check.
+        Interlocked.Exchange(ref _transport, null)?.Dispose();
+        if (locked)
+        {
+            DisposeDecompressor();
+            _executeLock.Release();
+        }
+        // !locked → Execute may still be inside zstd Unwrap; finalizer reclaims the native ctx.
     }
 
     public async ValueTask DisposeAsync()
     {
         if (Interlocked.CompareExchange(ref _disposed, 1, 0) != 0) return;
-        _transport?.Dispose();
+        Interlocked.Exchange(ref _transport, null)?.Dispose();
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
         var locked = false;
         try
@@ -301,8 +379,12 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient
         }
         catch (OperationCanceledException) { }
         _lastCloseTimedOut = !locked;
-        DisposeDecompressor();
-        if (locked) _executeLock.Release();
+        Interlocked.Exchange(ref _transport, null)?.Dispose();
+        if (locked)
+        {
+            DisposeDecompressor();
+            _executeLock.Release();
+        }
     }
 
     private void DisposeDecompressor()
@@ -357,64 +439,37 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient
 
     private async Task ConnectInitialAsync(CancellationToken ct)
     {
-        QwpServerInfo? lastInfo = null;
-        Exception? lastTransportError = null;
-        var anyRoleMismatch = false;
-        var totalAddresses = _options.AddressCount;
-        var startOffset = _activeAddressIndex;
-        for (var step = 0; step < totalAddresses; step++)
+        var (info, lastError, anyRoleMismatch) = await WalkTrackerAsync(ct).ConfigureAwait(false);
+        if (_transport is not null)
         {
-            var idx = (startOffset + step) % totalAddresses;
-            var addr = _options.addresses[idx];
-            QwpWebSocketTransport? candidate = null;
-            try
-            {
-                candidate = BuildTransport(addr);
-                await candidate.ConnectAsync(ct).ConfigureAwait(false);
-
-                QwpServerInfo? info = null;
-                if (candidate.NegotiatedVersion >= 2)
-                {
-                    info = await ReadServerInfoFrameAsync(candidate, ct).ConfigureAwait(false);
-                }
-
-                lastInfo = info;
-                if (EndpointMatchesTarget(info))
-                {
-                    _transport = candidate;
-                    _activeAddressIndex = idx;
-                    ServerInfo = info;
-                    return;
-                }
-
-                anyRoleMismatch = true;
-                candidate.Dispose();
-                candidate = null;
-            }
-            catch (IngressError ex) when (ex.code is ErrorCode.ConfigError or ErrorCode.AuthError)
-            {
-                candidate?.Dispose();
-                throw;
-            }
-            catch (Exception ex)
-            {
-                lastTransportError = ex;
-                candidate?.Dispose();
-            }
+            ServerInfo = info;
+            return;
         }
 
-        if (!anyRoleMismatch && lastTransportError is not null)
+        if (!anyRoleMismatch && lastError is not null)
         {
             throw new IngressError(ErrorCode.SocketError,
-                $"connect failed against every endpoint: {lastTransportError.Message}",
-                lastTransportError);
+                $"connect failed against every endpoint: {lastError.Message}",
+                lastError);
         }
 
-        throw new QwpRoleMismatchException(_options.target, lastInfo,
-            lastTransportError is null
-                ? $"no endpoint matched target={_options.target} (last observed role: {lastInfo?.RoleName ?? "<none>"})"
-                : $"connect failed against every endpoint: {lastTransportError.Message}");
+        throw new QwpRoleMismatchException(_options.target, info,
+            lastError is null
+                ? $"no endpoint matched target={_options.target} (last observed role: {info?.RoleName ?? "<none>"})"
+                : $"connect failed against every endpoint: {lastError.Message}");
     }
+
+    private static QwpServerInfo SynthesiseRoleRejectInfo(QwpIngressRoleRejectedException ex) => new()
+    {
+        Role = ex.Role switch
+        {
+            QwpConstants.RoleStandaloneName => QwpConstants.RoleStandalone,
+            QwpConstants.RolePrimaryName => QwpConstants.RolePrimary,
+            QwpConstants.RoleReplicaName => QwpConstants.RoleReplica,
+            QwpConstants.RolePrimaryCatchupName => QwpConstants.RolePrimaryCatchup,
+            _ => byte.MaxValue,
+        },
+    };
 
     // v1 server (no SERVER_INFO) only matches target=any; primary/replica must skip it.
     private bool EndpointMatchesTarget(QwpServerInfo? info)
@@ -437,11 +492,22 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient
 
     private async Task<QwpServerInfo> ReadServerInfoFrameAsync(QwpWebSocketTransport transport, CancellationToken ct)
     {
-        var (read, buffer) = await transport
-            .ReceiveFrameAsync(_receiveBuffer, QwpConstants.MaxResultBatchWireBytes, ct)
-            .ConfigureAwait(false);
-        _receiveBuffer = buffer;
-        var (kind, payload, _) = SliceFrame(buffer, read);
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct, timeout.Token);
+        (int read, byte[] buffer) recv;
+        try
+        {
+            recv = await transport
+                .ReceiveFrameAsync(_receiveBuffer, QwpConstants.MaxResultBatchWireBytes, linked.Token)
+                .ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (timeout.IsCancellationRequested && !ct.IsCancellationRequested)
+        {
+            throw new IngressError(ErrorCode.SocketError,
+                "timed out waiting for SERVER_INFO from v2 server (5s)");
+        }
+        _receiveBuffer = recv.buffer;
+        var (kind, payload, _) = SliceFrame(recv.buffer, recv.read);
         if (kind != QwpEgressMsgKind.ServerInfo)
         {
             throw new IngressError(ErrorCode.ProtocolVersionError,
@@ -467,42 +533,45 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient
                     }
                     catch (QwpDecodeException ex)
                     {
-                        throw new IngressError(ErrorCode.SocketError, ex.Message, ex);
+                        throw new IngressError(ErrorCode.ProtocolVersionError, ex.Message, ex);
                     }
-                    if (_batch.RequestId != activeRid) continue;
-                    var requestIdAtBatch = _batch.RequestId;
+                    var batchRid = _batch.RequestId;
+                    if (_options.initial_credit > 0)
+                    {
+                        await SendCreditAsync(batchRid, batchBytes + QwpConstants.HeaderSize, ct)
+                            .ConfigureAwait(false);
+                    }
+                    if (batchRid != activeRid) continue;
                     try
                     {
                         handler.OnBatch(_batch);
                     }
                     catch
                     {
-                        _drainOkAfterHandlerThrow = await CancelAndDrainAsync(requestIdAtBatch)
+                        _drainOkAfterHandlerThrow = await CancelAndDrainAsync(batchRid)
                             .ConfigureAwait(false);
                         throw;
-                    }
-                    if (_options.initial_credit > 0)
-                    {
-                        await SendCreditAsync(_batch.RequestId, batchBytes + QwpConstants.HeaderSize, ct)
-                            .ConfigureAwait(false);
                     }
                     break;
 
                 case QwpEgressMsgKind.ResultEnd:
                     var (endRid, endTotal) = DecodeResultEnd(payload);
                     if (endRid != activeRid) continue;
+                    _executeFinishedCleanly = true;
                     handler.OnEnd(endTotal);
                     return;
 
                 case QwpEgressMsgKind.ExecDone:
                     var (execRid, opType, rowsAffected) = DecodeExecDone(payload);
                     if (execRid != activeRid) continue;
+                    _executeFinishedCleanly = true;
                     handler.OnExecDone(opType, rowsAffected);
                     return;
 
                 case QwpEgressMsgKind.QueryError:
                     var (errRid, status, message) = DecodeQueryError(payload);
                     if (errRid != activeRid && errRid != QwpConstants.RequestIdWildcard) continue;
+                    _executeFinishedCleanly = true;
                     handler.OnError(status, message);
                     return;
 
@@ -637,17 +706,29 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient
         {
             throw new IngressError(ErrorCode.ProtocolVersionError, "zstd RESULT_BATCH has empty compressed body");
         }
-        // ulong.MaxValue / -1 are zstd's "unknown size" / "error" sentinels — must reject before truncating to int.
         var declaredSize = ZstdSharp.Decompressor.GetDecompressedSize(compressed);
-        if (declaredSize >= unchecked((ulong)-2L)
-            || declaredSize > (ulong)QwpConstants.MaxResultBatchWireBytes)
+        const ulong ContentSizeError = unchecked((ulong)-2L);
+        const ulong ContentSizeUnknown = unchecked((ulong)-1L);
+        int allocateSize;
+        if (declaredSize == ContentSizeError)
+        {
+            throw new IngressError(ErrorCode.ProtocolVersionError, "zstd frame: malformed content-size");
+        }
+        if (declaredSize == ContentSizeUnknown)
+        {
+            allocateSize = QwpConstants.MaxResultBatchWireBytes;
+        }
+        else if (declaredSize > (ulong)QwpConstants.MaxResultBatchWireBytes)
         {
             throw new IngressError(ErrorCode.ProtocolVersionError,
                 $"zstd frame reports decompressed size {declaredSize}, exceeds {QwpConstants.MaxResultBatchWireBytes}");
         }
-        var decompressedSize = (int)declaredSize;
+        else
+        {
+            allocateSize = (int)declaredSize;
+        }
 
-        var needed = preludeLen + decompressedSize;
+        var needed = preludeLen + allocateSize;
         if (_decompressBuffer.Length < needed)
         {
             _decompressBuffer = new byte[needed];
@@ -655,8 +736,8 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient
 
         span.Slice(0, preludeLen).CopyTo(_decompressBuffer);
 
-        _decompressor ??= new ZstdSharp.Decompressor();
-        var written = _decompressor.Unwrap(compressed, _decompressBuffer.AsSpan(preludeLen, decompressedSize));
+        var decompressor = _decompressor ??= new ZstdSharp.Decompressor();
+        var written = decompressor.Unwrap(compressed, _decompressBuffer.AsSpan(preludeLen, allocateSize));
         return _decompressBuffer.AsMemory(0, preludeLen + written);
     }
 
@@ -767,6 +848,11 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient
         {
             throw new IngressError(ErrorCode.ProtocolVersionError, "SERVER_INFO truncated at node_id");
         }
+        if (s.Length != nodeIdStart + nodeIdLen)
+        {
+            throw new IngressError(ErrorCode.ProtocolVersionError,
+                $"SERVER_INFO length mismatch: consumed {nodeIdStart + nodeIdLen}, payload {s.Length}");
+        }
         var nodeId = StrictUtf8.GetString(s.Slice(nodeIdStart, nodeIdLen));
 
         return new QwpServerInfo
@@ -824,11 +910,6 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient
         var requestId = BinaryPrimitives.ReadInt64LittleEndian(s.Slice(1, 8));
         var status = s[9];
         var msgLen = BinaryPrimitives.ReadUInt16LittleEndian(s.Slice(10, 2));
-        if (msgLen > QwpConstants.MaxErrorMessageBytes)
-        {
-            throw new IngressError(ErrorCode.ProtocolVersionError,
-                $"QUERY_ERROR message length {msgLen} exceeds {QwpConstants.MaxErrorMessageBytes}");
-        }
         if (s.Length != 12 + msgLen)
         {
             throw new IngressError(ErrorCode.ProtocolVersionError,
@@ -841,7 +922,11 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient
     private void DecodeCacheReset(ReadOnlyMemory<byte> payload)
     {
         var s = payload.Span;
-        if (s.Length < 2) throw new IngressError(ErrorCode.ProtocolVersionError, "CACHE_RESET too short");
+        if (s.Length != 2)
+        {
+            throw new IngressError(ErrorCode.ProtocolVersionError,
+                $"CACHE_RESET length mismatch: payload={s.Length}, expected 2");
+        }
         var mask = s[1];
         if ((mask & QwpConstants.ResetMaskDict) != 0) _connState.ResetSymbolDict();
         if ((mask & QwpConstants.ResetMaskSchemas) != 0) _connState.ResetSchemas();

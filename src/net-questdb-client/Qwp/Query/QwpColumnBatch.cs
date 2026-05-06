@@ -23,6 +23,7 @@
  ******************************************************************************/
 
 using System.Buffers.Binary;
+using System.Numerics;
 using System.Text;
 using QuestDB.Enums;
 
@@ -165,6 +166,124 @@ public sealed class QwpColumnBatch
         var i = DenseIndex(c, row);
         if (i < 0) return 0L;
         return BinaryPrimitives.ReadInt64LittleEndian(c.ValueBytes.AsSpan(i * 16 + 8, 8));
+    }
+
+    /// <summary>Returns the unscaled int64 of a DECIMAL64 value; <c>0</c> for NULL.</summary>
+    public long GetDecimal64UnscaledValue(int col, int row)
+    {
+        var c = Col(col);
+        if (c.TypeCode != QwpTypeCode.Decimal64)
+        {
+            throw new InvalidOperationException(
+                $"GetDecimal64UnscaledValue requires a DECIMAL64 column, got {c.TypeCode}");
+        }
+        return GetLongValue(col, row);
+    }
+
+    /// <summary>Returns the lower 64 bits of a DECIMAL128 unscaled value; <c>0</c> for NULL.</summary>
+    public long GetDecimal128Lo(int col, int row)
+    {
+        var c = Col(col);
+        if (c.TypeCode != QwpTypeCode.Decimal128)
+        {
+            throw new InvalidOperationException(
+                $"GetDecimal128Lo requires a DECIMAL128 column, got {c.TypeCode}");
+        }
+        var i = DenseIndex(c, row);
+        if (i < 0) return 0L;
+        return BinaryPrimitives.ReadInt64LittleEndian(c.ValueBytes.AsSpan(i * QwpConstants.Decimal128SizeBytes, 8));
+    }
+
+    /// <summary>Returns the upper 64 bits of a DECIMAL128 unscaled value; <c>0</c> for NULL.</summary>
+    public long GetDecimal128Hi(int col, int row)
+    {
+        var c = Col(col);
+        if (c.TypeCode != QwpTypeCode.Decimal128)
+        {
+            throw new InvalidOperationException(
+                $"GetDecimal128Hi requires a DECIMAL128 column, got {c.TypeCode}");
+        }
+        var i = DenseIndex(c, row);
+        if (i < 0) return 0L;
+        return BinaryPrimitives.ReadInt64LittleEndian(c.ValueBytes.AsSpan(i * QwpConstants.Decimal128SizeBytes + 8, 8));
+    }
+
+    /// <summary>Returns the four 64-bit limbs (least to most significant) of a DECIMAL256 unscaled value; all zero for NULL.</summary>
+    public void GetDecimal256(int col, int row, out long ll, out long lh, out long hl, out long hh)
+    {
+        var c = Col(col);
+        if (c.TypeCode != QwpTypeCode.Decimal256)
+        {
+            throw new InvalidOperationException(
+                $"GetDecimal256 requires a DECIMAL256 column, got {c.TypeCode}");
+        }
+        var i = DenseIndex(c, row);
+        if (i < 0)
+        {
+            ll = lh = hl = hh = 0L;
+            return;
+        }
+        var baseOff = i * QwpConstants.Decimal256SizeBytes;
+        var bytes = c.ValueBytes.AsSpan(baseOff, QwpConstants.Decimal256SizeBytes);
+        ll = BinaryPrimitives.ReadInt64LittleEndian(bytes.Slice(0, 8));
+        lh = BinaryPrimitives.ReadInt64LittleEndian(bytes.Slice(8, 8));
+        hl = BinaryPrimitives.ReadInt64LittleEndian(bytes.Slice(16, 8));
+        hh = BinaryPrimitives.ReadInt64LittleEndian(bytes.Slice(24, 8));
+    }
+
+    /// <summary>Returns the four 64-bit limbs of a LONG256 value (least to most significant); all zero for NULL.</summary>
+    public void GetLong256(int col, int row, out long w0, out long w1, out long w2, out long w3)
+    {
+        var c = Col(col);
+        if (c.TypeCode != QwpTypeCode.Long256)
+        {
+            throw new InvalidOperationException(
+                $"GetLong256 requires a LONG256 column, got {c.TypeCode}");
+        }
+        var i = DenseIndex(c, row);
+        if (i < 0)
+        {
+            w0 = w1 = w2 = w3 = 0L;
+            return;
+        }
+        var baseOff = i * QwpConstants.Long256SizeBytes;
+        var bytes = c.ValueBytes.AsSpan(baseOff, QwpConstants.Long256SizeBytes);
+        w0 = BinaryPrimitives.ReadInt64LittleEndian(bytes.Slice(0, 8));
+        w1 = BinaryPrimitives.ReadInt64LittleEndian(bytes.Slice(8, 8));
+        w2 = BinaryPrimitives.ReadInt64LittleEndian(bytes.Slice(16, 8));
+        w3 = BinaryPrimitives.ReadInt64LittleEndian(bytes.Slice(24, 8));
+    }
+
+    /// <summary>Returns a LONG256 value as a non-negative <see cref="BigInteger" />; <see cref="BigInteger.Zero" /> for NULL.</summary>
+    public BigInteger GetLong256(int col, int row)
+    {
+        if (IsNull(col, row)) return BigInteger.Zero;
+        Span<byte> bytes = stackalloc byte[QwpConstants.Long256SizeBytes];
+        var c = Col(col);
+        var i = DenseIndex(c, row);
+        c.ValueBytes.AsSpan(i * QwpConstants.Long256SizeBytes, QwpConstants.Long256SizeBytes).CopyTo(bytes);
+        return new BigInteger(bytes, isUnsigned: true, isBigEndian: false);
+    }
+
+    /// <summary>Returns the GEOHASH bits packed into a long; <c>-1</c> for NULL (matches QuestDB's all-bits-set sentinel).</summary>
+    public long GetGeohashValue(int col, int row)
+    {
+        var c = Col(col);
+        if (c.TypeCode != QwpTypeCode.Geohash)
+        {
+            throw new InvalidOperationException(
+                $"GetGeohashValue requires a GEOHASH column, got {c.TypeCode}");
+        }
+        var i = DenseIndex(c, row);
+        if (i < 0) return -1L;
+        var stride = (c.PrecisionBits + 7) >> 3;
+        var baseOff = i * stride;
+        long v = 0;
+        for (var b = 0; b < stride; b++)
+        {
+            v |= ((long)c.ValueBytes[baseOff + b] & 0xFF) << (b * 8);
+        }
+        return v;
     }
 
     /// <summary>Returns a UUID as <see cref="Guid" />; <see cref="Guid.Empty" /> for NULL. Inverse of <c>QwpBindValues.SetUuid(int, Guid)</c>.</summary>

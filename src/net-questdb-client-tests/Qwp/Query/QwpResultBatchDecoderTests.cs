@@ -308,14 +308,14 @@ public class QwpResultBatchDecoderTests
     }
 
     [Test]
-    public void Decode_GeohashColumn_RoundTripsPrecision()
+    public void Decode_GeohashColumn_RoundTripsPrecisionAndValue()
     {
         var schema = new ResultSchema
         {
             SchemaId = 8,
             Columns = { new SchemaColumn("g", QwpTypeCode.Geohash) },
         };
-        var dense = new byte[] { 0xAB, 0xCD, 0xEF }; // 24 bits = 3 bytes per row
+        var dense = new byte[] { 0xAB, 0xCD, 0xEF }; // 24 bits = 3 bytes per row, little-endian
         var data = new ResultBatchData
         {
             RowCount = 1,
@@ -325,6 +325,26 @@ public class QwpResultBatchDecoderTests
         var (_, batch, _, _) = DecodeOneBatch(schema, data);
 
         Assert.That(batch.GetGeohashPrecisionBits(0), Is.EqualTo(24));
+        Assert.That(batch.GetGeohashValue(0, 0), Is.EqualTo(0x00EFCDABL));
+    }
+
+    [Test]
+    public void Decode_GeohashColumn_NullRow_ReturnsMinusOne()
+    {
+        var schema = new ResultSchema
+        {
+            SchemaId = 81,
+            Columns = { new SchemaColumn("g", QwpTypeCode.Geohash) },
+        };
+        var data = new ResultBatchData
+        {
+            RowCount = 1,
+            Columns = { new GeohashColumnData { PrecisionBits = 24, NullBitmap = new byte[] { 0b01 }, DenseBytes = Array.Empty<byte>() } },
+        };
+
+        var (_, batch, _, _) = DecodeOneBatch(schema, data);
+        Assert.That(batch.IsNull(0, 0), Is.True);
+        Assert.That(batch.GetGeohashValue(0, 0), Is.EqualTo(-1L));
     }
 
     private static (QwpEgressConnState State, QwpColumnBatch Batch, byte HeaderFlags, ReadOnlyMemory<byte> Payload)
@@ -960,6 +980,27 @@ public class QwpResultBatchDecoderTests
 
         var (_, batch, _, _) = DecodeOneBatch(schema, data);
         Assert.That(batch.GetColumnWireType(0), Is.EqualTo(QwpTypeCode.Long256));
+        batch.GetLong256(0, 0, out var w0, out var w1, out var w2, out var w3);
+        Assert.That(w0, Is.EqualTo(0x1111111111111111L));
+        Assert.That(w1, Is.EqualTo(0x2222222222222222L));
+        Assert.That(w2, Is.EqualTo(0x3333333333333333L));
+        Assert.That(w3, Is.EqualTo(0x4444444444444444L));
+    }
+
+    [Test]
+    public void Decode_Long256Column_NullRow_AllZero()
+    {
+        var schema = new ResultSchema { SchemaId = 351, Columns = { new SchemaColumn("l", QwpTypeCode.Long256) } };
+        var data = new ResultBatchData
+        {
+            RowCount = 1,
+            Columns = { new FixedColumnData { NullBitmap = new byte[] { 0b01 }, DenseBytes = Array.Empty<byte>() } },
+        };
+
+        var (_, batch, _, _) = DecodeOneBatch(schema, data);
+        Assert.That(batch.IsNull(0, 0), Is.True);
+        batch.GetLong256(0, 0, out var w0, out var w1, out var w2, out var w3);
+        Assert.That(w0 | w1 | w2 | w3, Is.EqualTo(0L));
     }
 
     [Test]
@@ -977,6 +1018,30 @@ public class QwpResultBatchDecoderTests
 
         var (_, batch, _, _) = DecodeOneBatch(schema, data);
         Assert.That(batch.GetDecimalScale(0), Is.EqualTo((byte)6));
+        Assert.That(batch.GetDecimal128Lo(0, 0), Is.EqualTo(0x0123456789ABCDEFL));
+        Assert.That(batch.GetDecimal128Hi(0, 0), Is.EqualTo(0L));
+    }
+
+    [Test]
+    public void Decode_Decimal128Column_TwoRows_ReadsLoHiPerRow()
+    {
+        var schema = new ResultSchema { SchemaId = 360, Columns = { new SchemaColumn("d", QwpTypeCode.Decimal128) } };
+        var dense = new byte[32];
+        BinaryPrimitives.WriteInt64LittleEndian(dense.AsSpan(0, 8), 0x1111111111111111L);
+        BinaryPrimitives.WriteInt64LittleEndian(dense.AsSpan(8, 8), 0x2222222222222222L);
+        BinaryPrimitives.WriteInt64LittleEndian(dense.AsSpan(16, 8), 0x3333333333333333L);
+        BinaryPrimitives.WriteInt64LittleEndian(dense.AsSpan(24, 8), 0x4444444444444444L);
+        var data = new ResultBatchData
+        {
+            RowCount = 2,
+            Columns = { new DecimalColumnData { Scale = 0, DenseBytes = dense } },
+        };
+
+        var (_, batch, _, _) = DecodeOneBatch(schema, data);
+        Assert.That(batch.GetDecimal128Lo(0, 0), Is.EqualTo(0x1111111111111111L));
+        Assert.That(batch.GetDecimal128Hi(0, 0), Is.EqualTo(0x2222222222222222L));
+        Assert.That(batch.GetDecimal128Lo(0, 1), Is.EqualTo(0x3333333333333333L));
+        Assert.That(batch.GetDecimal128Hi(0, 1), Is.EqualTo(0x4444444444444444L));
     }
 
     [Test]
@@ -992,6 +1057,11 @@ public class QwpResultBatchDecoderTests
 
         var (_, batch, _, _) = DecodeOneBatch(schema, data);
         Assert.That(batch.GetDecimalScale(0), Is.EqualTo((byte)30));
+        batch.GetDecimal256(0, 0, out var ll, out var lh, out var hl, out var hh);
+        Assert.That(ll, Is.EqualTo(1L));
+        Assert.That(lh, Is.EqualTo(2L));
+        Assert.That(hl, Is.EqualTo(3L));
+        Assert.That(hh, Is.EqualTo(4L));
     }
 
     [Test]

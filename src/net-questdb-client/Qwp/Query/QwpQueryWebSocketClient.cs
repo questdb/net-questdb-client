@@ -36,7 +36,9 @@ namespace QuestDB.Qwp.Query;
 internal sealed class QwpQueryWebSocketClient : IQwpQueryClient
 {
     private static readonly UTF8Encoding StrictUtf8 = new(false, throwOnInvalidBytes: true);
+    private static readonly UTF8Encoding LenientUtf8 = new(false, throwOnInvalidBytes: false);
     private const int InitialReceiveBufferBytes = 64 * 1024;
+    private const int InitialDecompressBufferBytes = 256 * 1024;
 
     private readonly QueryOptions _options;
     private readonly QwpEgressConnState _connState = new();
@@ -59,11 +61,12 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient
     private long _currentRequestId = -1;
     private int _disposed;
     private int _terminal;
+    private int _cancelRequested;
     // Either flag suppresses MarkTerminal in finally: cleanly = wire-side terminator or user-cancelled;
     // drainOk = user callback threw but the connection is still recoverable.
     private bool _executeFinishedCleanly;
     private bool _drainOkAfterHandlerThrow;
-    private bool _lastCloseTimedOut;
+    private int _lastCloseTimedOut;
 
     private QwpQueryWebSocketClient(QueryOptions options)
     {
@@ -103,7 +106,7 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient
 
     public string? NegotiatedCompression => _transport?.NegotiatedContentEncoding;
 
-    public bool WasLastCloseTimedOut => _lastCloseTimedOut;
+    public bool WasLastCloseTimedOut => Volatile.Read(ref _lastCloseTimedOut) != 0;
 
     public void Execute(string sql, QwpColumnBatchHandler handler) =>
         Task.Run(() => ExecuteCoreAsync(sql, binds: null, handler, CancellationToken.None))
@@ -128,11 +131,11 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient
         ThrowIfDisposed();
         ThrowIfTerminal();
 
-        var sqlBytes = StrictUtf8.GetByteCount(sql);
-        if (sqlBytes > QwpConstants.MaxSqlLengthBytes)
+        var sqlByteCount = StrictUtf8.GetByteCount(sql);
+        if (sqlByteCount > QwpConstants.MaxSqlLengthBytes)
         {
             throw new IngressError(ErrorCode.InvalidApiCall,
-                $"SQL exceeds {QwpConstants.MaxSqlLengthBytes} byte limit (got {sqlBytes})");
+                $"SQL exceeds {QwpConstants.MaxSqlLengthBytes} byte limit (got {sqlByteCount})");
         }
 
         var bindBlob = ReadOnlyMemory<byte>.Empty;
@@ -153,6 +156,7 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient
 
         _executeFinishedCleanly = false;
         _drainOkAfterHandlerThrow = false;
+        Interlocked.Exchange(ref _cancelRequested, 0);
         // Per-Execute fresh evaluation: stale TopologyReject hosts get re-classified.
         _hostTracker.BeginRound(forgetClassifications: true);
         try
@@ -168,7 +172,7 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient
                 Interlocked.Exchange(ref _currentRequestId, requestId);
                 try
                 {
-                    await SendQueryRequestAsync(requestId, sql, _options.initial_credit, bindBlob, bindCount, ct)
+                    await SendQueryRequestAsync(requestId, sql, sqlByteCount, _options.initial_credit, bindBlob, bindCount, ct)
                         .ConfigureAwait(false);
                     await DriveQueryLoopAsync(handler, ct).ConfigureAwait(false);
                     _executeFinishedCleanly = true;
@@ -176,7 +180,10 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient
                 }
                 catch (OperationCanceledException) when (ct.IsCancellationRequested)
                 {
-                    _executeFinishedCleanly = true;
+                    // ClientWebSocket.ReceiveAsync aborts the socket before throwing on token-cancel,
+                    // so SendCancel is not deliverable. The connection is unrecoverable; finally
+                    // MarkTerminal()s and the caller must build a fresh client. Use Cancel() for
+                    // graceful cancellation that gives the server a CANCEL frame.
                     throw;
                 }
                 catch (Exception ex) when (
@@ -185,16 +192,24 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient
                     && Environment.TickCount64 < failoverDeadline
                     && IsTransportError(ex)
                     && !ct.IsCancellationRequested
+                    && Volatile.Read(ref _cancelRequested) == 0
                     && Volatile.Read(ref _disposed) == 0)
                 {
-                    Interlocked.Exchange(ref _currentRequestId, -1);
                     if (_activeAddressIndex >= 0) _hostTracker.RecordMidStreamFailure(_activeAddressIndex);
                     var sleep = QwpReconnectPolicy.UniformDoubleJitter(TimeSpan.FromMilliseconds(backoffMs));
                     if (sleep > _options.failover_backoff_max_ms) sleep = _options.failover_backoff_max_ms;
                     await Task.Delay(sleep, ct).ConfigureAwait(false);
+                    if (Volatile.Read(ref _cancelRequested) != 0)
+                    {
+                        throw new OperationCanceledException("query cancelled during failover");
+                    }
                     backoffMs = Math.Min(backoffMs * 2, _options.failover_backoff_max_ms.TotalMilliseconds);
                     attempt++;
                     await ReconnectAsync(attempt, ct).ConfigureAwait(false);
+                    if (Volatile.Read(ref _cancelRequested) != 0)
+                    {
+                        throw new OperationCanceledException("query cancelled during failover");
+                    }
                     try
                     {
                         handler.OnFailoverReset(ServerInfo);
@@ -334,6 +349,7 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient
 
     public void Cancel()
     {
+        Interlocked.Exchange(ref _cancelRequested, 1);
         var rid = Interlocked.Read(ref _currentRequestId);
         if (rid < 0) return;
         if (Volatile.Read(ref _disposed) != 0) return;
@@ -355,7 +371,7 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient
         if (Interlocked.CompareExchange(ref _disposed, 1, 0) != 0) return;
         Interlocked.Exchange(ref _transport, null)?.Dispose();
         var locked = _executeLock.Wait(TimeSpan.FromSeconds(5));
-        _lastCloseTimedOut = !locked;
+        Volatile.Write(ref _lastCloseTimedOut, locked ? 0 : 1);
         // Catch any transport the failover loop raced in past the _disposed check.
         Interlocked.Exchange(ref _transport, null)?.Dispose();
         if (locked)
@@ -363,7 +379,8 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient
             DisposeDecompressor();
             _executeLock.Release();
         }
-        // !locked → Execute may still be inside zstd Unwrap; finalizer reclaims the native ctx.
+        // !locked → Execute may still be inside zstd Unwrap; ZstdSharp.Port is fully managed,
+        // so leave the decompressor to GC rather than risk a dispose racing an in-flight Unwrap.
     }
 
     public async ValueTask DisposeAsync()
@@ -378,7 +395,7 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient
             locked = true;
         }
         catch (OperationCanceledException) { }
-        _lastCloseTimedOut = !locked;
+        Volatile.Write(ref _lastCloseTimedOut, locked ? 0 : 1);
         Interlocked.Exchange(ref _transport, null)?.Dispose();
         if (locked)
         {
@@ -536,12 +553,15 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient
                         throw new IngressError(ErrorCode.ProtocolVersionError, ex.Message, ex);
                     }
                     var batchRid = _batch.RequestId;
-                    if (_options.initial_credit > 0)
+                    if (batchRid != activeRid)
                     {
-                        await SendCreditAsync(batchRid, batchBytes + QwpConstants.HeaderSize, ct)
-                            .ConfigureAwait(false);
+                        if (_options.initial_credit > 0)
+                        {
+                            await SendCreditAsync(batchRid, batchBytes + QwpConstants.HeaderSize, ct)
+                                .ConfigureAwait(false);
+                        }
+                        continue;
                     }
-                    if (batchRid != activeRid) continue;
                     try
                     {
                         handler.OnBatch(_batch);
@@ -551,6 +571,13 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient
                         _drainOkAfterHandlerThrow = await CancelAndDrainAsync(batchRid)
                             .ConfigureAwait(false);
                         throw;
+                    }
+                    // Credit replenishes only after the handler returns: matches Java's
+                    // "I'm done with the buffer" semantics for byte-credit flow control.
+                    if (_options.initial_credit > 0)
+                    {
+                        await SendCreditAsync(batchRid, batchBytes + QwpConstants.HeaderSize, ct)
+                            .ConfigureAwait(false);
                     }
                     break;
 
@@ -593,7 +620,7 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient
     private async Task<(QwpEgressMsgKind Kind, ReadOnlyMemory<byte> Payload, byte HeaderFlags)>
         ReadFrameAsync(CancellationToken ct)
     {
-        var transport = _transport ?? throw new InvalidOperationException("transport is not connected");
+        var transport = _transport ?? throw new ObjectDisposedException(nameof(QwpQueryWebSocketClient));
         var (read, buffer) = await transport.ReceiveFrameAsync(_receiveBuffer, QwpConstants.MaxResultBatchWireBytes, ct)
             .ConfigureAwait(false);
         _receiveBuffer = buffer;
@@ -639,10 +666,9 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient
     }
 
     private async Task SendQueryRequestAsync(
-        long requestId, string sql, long initialCredit,
+        long requestId, string sql, int sqlByteCount, long initialCredit,
         ReadOnlyMemory<byte> bindBlob, int bindCount, CancellationToken ct)
     {
-        var sqlByteCount = StrictUtf8.GetByteCount(sql);
         var bindBlobSpan = bindBlob.Span;
         var len = 1 + 8 + QwpVarint.GetByteCount((ulong)sqlByteCount) + sqlByteCount
             + QwpVarint.GetByteCount((ulong)initialCredit)
@@ -675,7 +701,7 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient
         await _sendLock.WaitAsync(ct).ConfigureAwait(false);
         try
         {
-            var transport = _transport ?? throw new InvalidOperationException("transport is not connected");
+            var transport = _transport ?? throw new ObjectDisposedException(nameof(QwpQueryWebSocketClient));
             await transport.SendBinaryAsync(frame, ct).ConfigureAwait(false);
         }
         finally
@@ -694,7 +720,16 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient
             throw new IngressError(ErrorCode.ProtocolVersionError, "compressed RESULT_BATCH missing prelude");
         }
 
-        QwpVarint.Read(span.Slice(9), out var seqBytes);
+        int seqBytes;
+        try
+        {
+            QwpVarint.Read(span.Slice(9), out seqBytes);
+        }
+        catch (Exception ex)
+        {
+            throw new IngressError(ErrorCode.ProtocolVersionError,
+                "compressed RESULT_BATCH: malformed batch_seq varint", ex);
+        }
         var preludeLen = 1 + 8 + seqBytes;
         if (preludeLen > span.Length)
         {
@@ -709,14 +744,17 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient
         var declaredSize = ZstdSharp.Decompressor.GetDecompressedSize(compressed);
         const ulong ContentSizeError = unchecked((ulong)-2L);
         const ulong ContentSizeUnknown = unchecked((ulong)-1L);
-        int allocateSize;
         if (declaredSize == ContentSizeError)
         {
             throw new IngressError(ErrorCode.ProtocolVersionError, "zstd frame: malformed content-size");
         }
+
+        int attemptSize;
+        bool sizeKnown;
         if (declaredSize == ContentSizeUnknown)
         {
-            allocateSize = QwpConstants.MaxResultBatchWireBytes;
+            attemptSize = InitialDecompressBufferBytes;
+            sizeKnown = false;
         }
         else if (declaredSize > (ulong)QwpConstants.MaxResultBatchWireBytes)
         {
@@ -725,20 +763,32 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient
         }
         else
         {
-            allocateSize = (int)declaredSize;
+            attemptSize = (int)declaredSize;
+            sizeKnown = true;
         }
-
-        var needed = preludeLen + allocateSize;
-        if (_decompressBuffer.Length < needed)
-        {
-            _decompressBuffer = new byte[needed];
-        }
-
-        span.Slice(0, preludeLen).CopyTo(_decompressBuffer);
 
         var decompressor = _decompressor ??= new ZstdSharp.Decompressor();
-        var written = decompressor.Unwrap(compressed, _decompressBuffer.AsSpan(preludeLen, allocateSize));
-        return _decompressBuffer.AsMemory(0, preludeLen + written);
+        while (true)
+        {
+            var needed = preludeLen + attemptSize;
+            if (_decompressBuffer.Length < needed)
+            {
+                _decompressBuffer = new byte[needed];
+            }
+            span.Slice(0, preludeLen).CopyTo(_decompressBuffer);
+
+            int written;
+            try
+            {
+                written = decompressor.Unwrap(compressed, _decompressBuffer.AsSpan(preludeLen, attemptSize));
+            }
+            catch (Exception ex) when (!sizeKnown && attemptSize < QwpConstants.MaxResultBatchWireBytes)
+            {
+                attemptSize = (int)Math.Min((long)attemptSize * 2, QwpConstants.MaxResultBatchWireBytes);
+                continue;
+            }
+            return _decompressBuffer.AsMemory(0, preludeLen + written);
+        }
     }
 
     private async Task SendCreditAsync(long requestId, long additionalBytes, CancellationToken ct)
@@ -840,7 +890,7 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient
         {
             throw new IngressError(ErrorCode.ProtocolVersionError, "SERVER_INFO truncated at cluster_id");
         }
-        var clusterId = StrictUtf8.GetString(s.Slice(24, clusterIdLen));
+        var clusterId = LenientUtf8.GetString(s.Slice(24, clusterIdLen));
         var nodeIdLenOffset = 24 + clusterIdLen;
         var nodeIdLen = BinaryPrimitives.ReadUInt16LittleEndian(s.Slice(nodeIdLenOffset, 2));
         var nodeIdStart = nodeIdLenOffset + 2;
@@ -853,7 +903,7 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient
             throw new IngressError(ErrorCode.ProtocolVersionError,
                 $"SERVER_INFO length mismatch: consumed {nodeIdStart + nodeIdLen}, payload {s.Length}");
         }
-        var nodeId = StrictUtf8.GetString(s.Slice(nodeIdStart, nodeIdLen));
+        var nodeId = LenientUtf8.GetString(s.Slice(nodeIdStart, nodeIdLen));
 
         return new QwpServerInfo
         {
@@ -915,7 +965,7 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient
             throw new IngressError(ErrorCode.ProtocolVersionError,
                 $"QUERY_ERROR length mismatch: msgLen={msgLen} payload={s.Length}");
         }
-        var msg = StrictUtf8.GetString(s.Slice(12, msgLen));
+        var msg = LenientUtf8.GetString(s.Slice(12, msgLen));
         return (requestId, status, msg);
     }
 

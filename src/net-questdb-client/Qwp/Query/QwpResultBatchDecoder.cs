@@ -39,7 +39,7 @@ namespace QuestDB.Qwp.Query;
 /// </remarks>
 internal sealed class QwpResultBatchDecoder
 {
-    private static readonly UTF8Encoding StrictUtf8 = new(false, throwOnInvalidBytes: true);
+    private static readonly UTF8Encoding LenientUtf8 = new(false, throwOnInvalidBytes: false);
 
     private readonly QwpEgressConnState _state;
 
@@ -117,10 +117,6 @@ internal sealed class QwpResultBatchDecoder
                 $"symbol dict deltaStart={deltaStart} disagrees with client cursor {_state.SymbolDict.Size}");
         }
 
-        if (deltaCount > QwpConstants.MaxResultBatchWireBytes)
-        {
-            throw new QwpDecodeException($"symbol dict deltaCount out of range: {deltaCount}");
-        }
         if ((long)deltaStart + deltaCount > int.MaxValue)
         {
             throw new QwpDecodeException(
@@ -205,7 +201,7 @@ internal sealed class QwpResultBatchDecoder
                 {
                     throw new QwpDecodeException("truncated column name");
                 }
-                var name = StrictUtf8.GetString(payload.Slice(p, cnLen));
+                var name = LenientUtf8.GetString(payload.Slice(p, cnLen));
                 p += cnLen;
                 if (p >= payload.Length)
                 {
@@ -333,7 +329,7 @@ internal sealed class QwpResultBatchDecoder
                 break;
 
             case QwpTypeCode.Decimal64:
-                DecodeDecimalColumn(payload, ref p, col, nonNull, valueBytes: 8);
+                DecodeDecimalColumn(payload, ref p, col, nonNull, valueBytes: QwpConstants.Decimal64SizeBytes);
                 break;
 
             case QwpTypeCode.Decimal128:
@@ -341,7 +337,7 @@ internal sealed class QwpResultBatchDecoder
                 break;
 
             case QwpTypeCode.Decimal256:
-                DecodeDecimalColumn(payload, ref p, col, nonNull, valueBytes: 32);
+                DecodeDecimalColumn(payload, ref p, col, nonNull, valueBytes: QwpConstants.Decimal256SizeBytes);
                 break;
 
             case QwpTypeCode.Geohash:

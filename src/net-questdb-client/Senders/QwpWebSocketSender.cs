@@ -801,6 +801,7 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
         var ownsReady = false;
         var ownsSlot = false;
         Exception? wrapAsTerminal = null;
+        var drainedSuccessfully = false;
 
         try
         {
@@ -842,6 +843,7 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
                     try
                     {
                         await _inFlightWindow.AwaitEmptyAsync(Options.close_flush_timeout_millis, linkedCt).ConfigureAwait(false);
+                        drainedSuccessfully = true;
                     }
                     catch (OperationCanceledException) when (_terminalError is not null)
                     {
@@ -868,7 +870,10 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
             FailTerminal(wrapAsTerminal);
         }
 
-        ThrowIfTerminal();
+        if (!drainedSuccessfully)
+        {
+            ThrowIfTerminal();
+        }
     }
 
     private void EnqueueSync(CancellationToken ct, bool awaitDrain)

@@ -104,8 +104,14 @@ internal static class QwpConstants
     /// <summary>LONG256 wire size, in bytes.</summary>
     public const int Long256SizeBytes = 32;
 
+    /// <summary>DECIMAL64 unscaled value size on the wire, in bytes.</summary>
+    public const int Decimal64SizeBytes = 8;
+
     /// <summary>DECIMAL128 unscaled value size on the wire, in bytes.</summary>
     public const int Decimal128SizeBytes = 16;
+
+    /// <summary>DECIMAL256 unscaled value size on the wire, in bytes.</summary>
+    public const int Decimal256SizeBytes = 32;
 
     /// <summary>Default port for <c>ws::</c> and <c>wss::</c>; shared with HTTP.</summary>
     public const int DefaultPort = 9000;

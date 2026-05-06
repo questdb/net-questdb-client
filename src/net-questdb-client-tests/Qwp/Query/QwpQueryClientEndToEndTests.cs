@@ -482,12 +482,12 @@ public class QwpQueryClientEndToEndTests
     }
 
     [Test]
-    public async Task UserCancellation_LeavesClientUsable_NextExecuteSucceeds()
+    public async Task UserCancellation_AbortsSocketAndMarksClientTerminal()
     {
-        // Cancelled CT aborts the underlying ClientWebSocket; the next Execute hits failover and gets a
-        // fresh rid. Fixture echoes the incoming rid so responses always match the live request.
+        // ct-cancellation aborts the underlying ClientWebSocket so CANCEL is not deliverable;
+        // the client goes terminal and the user must create a fresh one. Callers that want a
+        // graceful server-side cancel should use Cancel() (see MidQueryCancel_ReturnsQueryErrorCancelled).
         var schema = new ResultSchema { SchemaId = 1, Columns = { new SchemaColumn("c", QwpTypeCode.Long) } };
-        var queryCount = 0;
         await using var server = new DummyQwpServer(new DummyQwpServerOptions
         {
             Path = QwpConstants.ReadPath,
@@ -495,21 +495,11 @@ public class QwpQueryClientEndToEndTests
             FrameHandlerMulti = frame =>
             {
                 if (frame[0] != QwpConstants.MsgKindQueryRequest) return null;
-                queryCount++;
                 var rid = BinaryPrimitives.ReadInt64LittleEndian(frame.AsSpan(1, 8));
-                if (queryCount == 1)
-                {
-                    return new[]
-                    {
-                        QwpEgressFrameBuilder.BuildResultBatch(rid, 0L, schema,
-                            new ResultBatchData { RowCount = 1, Columns = { new FixedColumnData { DenseBytes = LongLe(1L) } } }),
-                    };
-                }
                 return new[]
                 {
                     QwpEgressFrameBuilder.BuildResultBatch(rid, 0L, schema,
-                        new ResultBatchData { RowCount = 1, Columns = { new FixedColumnData { DenseBytes = LongLe(2L) } } }),
-                    QwpEgressFrameBuilder.BuildResultEnd(rid, 0L, 1L),
+                        new ResultBatchData { RowCount = 1, Columns = { new FixedColumnData { DenseBytes = LongLe(1L) } } }),
                 };
             },
         });
@@ -520,10 +510,10 @@ public class QwpQueryClientEndToEndTests
         Assert.CatchAsync<OperationCanceledException>(async () =>
             await client.ExecuteAsync("SELECT 1", new RecordingHandler(), cts.Token));
 
-        var ok = new RecordingHandler();
-        client.Execute("SELECT 2", ok);
-        Assert.That(ok.Ended, Is.True);
-        Assert.That(ok.Batches[0].LongValues, Is.EqualTo(new[] { 2L }));
+        var ex = Assert.Throws<IngressError>(() =>
+            client.Execute("SELECT 2", new RecordingHandler()));
+        Assert.That(ex!.code, Is.EqualTo(ErrorCode.SocketError));
+        Assert.That(ex.Message, Does.Contain("terminal"));
     }
 
     [Test]

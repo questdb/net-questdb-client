@@ -501,6 +501,54 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
         return this;
     }
 
+    /// <summary>Appends a DECIMAL64 value (8-byte signed two's-complement mantissa). First non-null call locks the column scale.</summary>
+    public IQwpWebSocketSender ColumnDecimal64(ReadOnlySpan<char> name, decimal value)
+    {
+        ThrowIfTerminal();
+        EnsureCurrentTable().AppendDecimal64(name, value);
+        return this;
+    }
+
+    /// <summary>Appends a DECIMAL256 value (32-byte signed two's-complement mantissa). First non-null call locks the column scale.</summary>
+    public IQwpWebSocketSender ColumnDecimal256(ReadOnlySpan<char> name, decimal value)
+    {
+        ThrowIfTerminal();
+        EnsureCurrentTable().AppendDecimal256(name, value);
+        return this;
+    }
+
+    /// <summary>Appends a BINARY value (opaque bytes; same wire layout as VARCHAR but no UTF-8 contract).</summary>
+    public IQwpWebSocketSender ColumnBinary(ReadOnlySpan<char> name, ReadOnlySpan<byte> value)
+    {
+        ThrowIfTerminal();
+        EnsureCurrentTable().AppendBinary(name, value);
+        return this;
+    }
+
+    /// <summary>Appends an IPv4 address. Throws if <paramref name="addr" /> is not <see cref="System.Net.Sockets.AddressFamily.InterNetwork" />.</summary>
+    public IQwpWebSocketSender ColumnIPv4(ReadOnlySpan<char> name, System.Net.IPAddress addr)
+    {
+        ArgumentNullException.ThrowIfNull(addr);
+        if (addr.AddressFamily != System.Net.Sockets.AddressFamily.InterNetwork)
+        {
+            throw new IngressError(ErrorCode.InvalidApiCall,
+                $"IPv4 column requires an InterNetwork address, got {addr.AddressFamily} (`{addr}`)");
+        }
+
+        ThrowIfTerminal();
+        Span<byte> octets = stackalloc byte[4];
+        if (!addr.TryWriteBytes(octets, out var written) || written != 4)
+        {
+            throw new IngressError(ErrorCode.InvalidApiCall, $"failed to serialise IPv4 address `{addr}`");
+        }
+
+        // IPAddress.TryWriteBytes writes network-byte-order octets (a.b.c.d → bytes a,b,c,d).
+        // Wire format is uint32 little-endian, where octet `a` is the LSB.
+        var packed = (uint)octets[0] | ((uint)octets[1] << 8) | ((uint)octets[2] << 16) | ((uint)octets[3] << 24);
+        EnsureCurrentTable().AppendIPv4(name, packed);
+        return this;
+    }
+
     private void AppendArrayDispatch<T>(ReadOnlySpan<char> name, ReadOnlySpan<T> values, ReadOnlySpan<int> shape)
         where T : struct
     {

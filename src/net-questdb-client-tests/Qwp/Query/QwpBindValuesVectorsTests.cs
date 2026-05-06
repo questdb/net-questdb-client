@@ -30,10 +30,8 @@ using QuestDB.Qwp.Query;
 namespace net_questdb_client_tests.Qwp.Query;
 
 /// <summary>
-///     Pinned byte-exact bind-payload vectors. Mirrors the Java client's
-///     <c>QwpBindEncoderTest</c> case-for-case: identical input values, identical
-///     hand-rolled little-endian expected bytes. Any drift between this file and
-///     the Java side is a wire-format regression that breaks egress interop.
+///     Pinned byte-exact bind-payload vectors. Hand-rolled little-endian expected bytes per
+///     wire type; any drift here is a wire-format regression that breaks egress interop.
 /// </summary>
 [TestFixture]
 public class QwpBindValuesVectorsTests

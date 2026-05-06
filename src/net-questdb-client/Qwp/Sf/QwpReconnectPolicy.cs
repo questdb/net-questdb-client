@@ -45,8 +45,8 @@ internal sealed class QwpReconnectPolicy
     /// <param name="maxOutageDuration">Total time budget across all attempts in one outage; engine becomes terminal once exceeded.</param>
     /// <param name="jitter">
     ///     Optional jitter transform applied after exponential growth and max-clamping. Pass
-    ///     <see cref="UniformDoubleJitter" /> to spread backoff uniformly over <c>[0, base]</c>
-    ///     (AWS-style full jitter). Default: identity (deterministic — used by tests).
+    ///     <see cref="UniformDoubleJitter" /> to spread backoff uniformly over <c>[base, 2·base)</c>.
+    ///     Default: identity (deterministic — used by tests).
     /// </param>
     public QwpReconnectPolicy(
         TimeSpan initialBackoff,
@@ -84,7 +84,10 @@ internal sealed class QwpReconnectPolicy
     /// <summary>Total wall-clock wait budget across the whole reconnect run.</summary>
     public TimeSpan MaxOutageDuration { get; }
 
-    /// <summary>Full-jitter transform that picks uniformly from <c>[0, base]</c> using <see cref="Random.Shared" />.</summary>
+    /// <summary>
+    ///     Equal-jitter transform that picks uniformly from <c>[base, 2·base)</c> using
+    ///     <see cref="Random.Shared" />.
+    /// </summary>
     public static TimeSpan UniformDoubleJitter(TimeSpan baseBackoff)
     {
         if (baseBackoff <= TimeSpan.Zero)
@@ -92,8 +95,8 @@ internal sealed class QwpReconnectPolicy
             return baseBackoff;
         }
 
-        var ticks = (long)(Random.Shared.NextDouble() * (baseBackoff.Ticks + 1));
-        return TimeSpan.FromTicks(ticks);
+        var add = (long)(Random.Shared.NextDouble() * baseBackoff.Ticks);
+        return TimeSpan.FromTicks(baseBackoff.Ticks + add);
     }
 
     /// <summary>
@@ -122,8 +125,8 @@ internal sealed class QwpReconnectPolicy
         }
 
         var clampedTicks = ticks > maxTicks ? maxTicks : ticks;
-        var jittered = _jitter(TimeSpan.FromTicks(clampedTicks));
-        return jittered > MaxBackoff ? MaxBackoff : jittered;
+        // Cap base before jitter; the post-jitter sleep can land in [base, 2·base).
+        return _jitter(TimeSpan.FromTicks(clampedTicks));
     }
 
     /// <summary>

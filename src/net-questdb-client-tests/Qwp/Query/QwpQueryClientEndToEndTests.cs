@@ -474,7 +474,7 @@ public class QwpQueryClientEndToEndTests
     }
 
     [Test]
-    public async Task FirstRequestId_IsOne_MatchingJavaClient()
+    public async Task FirstRequestId_IsOne()
     {
         var schema = new ResultSchema { SchemaId = 1, Columns = { new SchemaColumn("c", QwpTypeCode.Long) } };
         var data = new ResultBatchData { RowCount = 1, Columns = { new FixedColumnData { DenseBytes = LongLe(0L) } } };

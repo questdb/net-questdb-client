@@ -273,9 +273,9 @@ internal sealed class QwpColumn
         //   bytes 4..5 = field b (int16) little-endian
         //   bytes 6..7 = field c (int16) little-endian
         //   bytes 8..15 = fields d..k (raw)
-        // RFC 4122 / Java UUID writes a/b/c big-endian and d..k unchanged, giving
-        // a 16-byte sequence that splits cleanly into a 64-bit "high" and "low" half.
-        // The QWP wire format wants those two halves stored little-endian, low half first.
+        // RFC 4122 writes a/b/c big-endian and d..k unchanged, giving a 16-byte sequence that
+        // splits cleanly into a 64-bit "high" and "low" half. QWP stores those two halves
+        // little-endian, low half first.
         Span<byte> ms = stackalloc byte[16];
         if (!value.TryWriteBytes(ms))
         {
@@ -461,13 +461,30 @@ internal sealed class QwpColumn
         AdvanceNonNull();
     }
 
+    /// <summary>Appends a DECIMAL64 value. The first non-null call locks the column's scale.</summary>
+    public void AppendDecimal64(decimal value)
+    {
+        AppendDecimalAtSize(QwpTypeCode.Decimal64, value, QwpConstants.Decimal64SizeBytes);
+    }
+
     /// <summary>
     ///     Appends a DECIMAL128 value. The first non-null call locks the column's scale; subsequent
     ///     values must use the same scale or this method throws.
     /// </summary>
     public void AppendDecimal128(decimal value)
     {
-        AssertOrSetType(QwpTypeCode.Decimal128);
+        AppendDecimalAtSize(QwpTypeCode.Decimal128, value, QwpConstants.Decimal128SizeBytes);
+    }
+
+    /// <summary>Appends a DECIMAL256 value. The first non-null call locks the column's scale.</summary>
+    public void AppendDecimal256(decimal value)
+    {
+        AppendDecimalAtSize(QwpTypeCode.Decimal256, value, QwpConstants.Decimal256SizeBytes);
+    }
+
+    private void AppendDecimalAtSize(QwpTypeCode code, decimal value, int sizeBytes)
+    {
+        AssertOrSetType(code);
 
         Span<int> bits = stackalloc int[4];
         decimal.GetBits(value, bits);
@@ -511,24 +528,55 @@ internal sealed class QwpColumn
 
         if (negative) mantissa = -mantissa;
 
-        EnsureFixedCapacity(FixedLen + QwpConstants.Decimal128SizeBytes);
-        var dest = FixedData.AsSpan(FixedLen, QwpConstants.Decimal128SizeBytes);
-        WriteSignedDecimal128(dest, mantissa, value);
-        FixedLen += QwpConstants.Decimal128SizeBytes;
+        EnsureFixedCapacity(FixedLen + sizeBytes);
+        var dest = FixedData.AsSpan(FixedLen, sizeBytes);
+        WriteSignedDecimalAtSize(dest, mantissa, value, sizeBytes);
+        FixedLen += sizeBytes;
         AdvanceNonNull();
     }
 
-    private void WriteSignedDecimal128(Span<byte> dest, BigInteger value, decimal source)
+    private void WriteSignedDecimalAtSize(Span<byte> dest, BigInteger value, decimal source, int sizeBytes)
     {
         var bytes = value.ToByteArray(isUnsigned: false, isBigEndian: false);
-        if (bytes.Length > QwpConstants.Decimal128SizeBytes)
+        if (bytes.Length > sizeBytes)
         {
             throw new IngressError(ErrorCode.InvalidApiCall,
-                $"column '{Name}' decimal value {source} at scale {DecimalScale} overflows Decimal128 range");
+                $"column '{Name}' decimal value {source} at scale {DecimalScale} overflows {sizeBytes * 8}-bit decimal range");
         }
         var fill = value.Sign < 0 ? (byte)0xFF : (byte)0x00;
         dest.Fill(fill);
         bytes.AsSpan().CopyTo(dest);
+    }
+
+    /// <summary>Appends a BINARY value as length-prefixed opaque bytes (same wire layout as VARCHAR).</summary>
+    public void AppendBinary(ReadOnlySpan<byte> value)
+    {
+        AssertOrSetType(QwpTypeCode.Binary);
+
+        if (StrOffsets is null)
+        {
+            StrOffsets = new uint[InitialSymbolCapacity];
+            StrOffsets[0] = 0;
+        }
+
+        EnsureStringCapacity(StrLen + value.Length);
+        value.CopyTo(StrData.AsSpan(StrLen, value.Length));
+        StrLen += value.Length;
+
+        EnsureOffsetCapacity(NonNullCount + 2);
+        StrOffsets[NonNullCount + 1] = (uint)StrLen;
+
+        AdvanceNonNull();
+    }
+
+    /// <summary>Appends an IPv4 address as 4 bytes little-endian (same wire layout as INT).</summary>
+    public void AppendIPv4(uint addr)
+    {
+        AssertOrSetType(QwpTypeCode.IPv4);
+        EnsureFixedCapacity(FixedLen + 4);
+        BinaryPrimitives.WriteUInt32LittleEndian(FixedData.AsSpan(FixedLen, 4), addr);
+        FixedLen += 4;
+        AdvanceNonNull();
     }
 
     /// <summary>

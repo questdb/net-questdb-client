@@ -188,6 +188,43 @@ public class QueryOptionsTests
         Assert.Throws<IngressError>(() => new QueryOptions("ws::addr=a:9000,;"));
     }
 
+    [Test]
+    public void ProgrammaticAddr_CommaSplits_RebuildsAddresses()
+    {
+        var o = new QueryOptions { addr = "a:9000,b:9000,c:9000" };
+        Assert.That(o.addr, Is.EqualTo("a:9000"));
+        Assert.That(o.AddressCount, Is.EqualTo(3));
+        Assert.That(o.addresses, Is.EqualTo(new[] { "a:9000", "b:9000", "c:9000" }));
+    }
+
+    [Test]
+    public void ProgrammaticAddr_SingleEntry_KeepsSingletonAddresses()
+    {
+        var o = new QueryOptions { addr = "host:9000" };
+        Assert.That(o.AddressCount, Is.EqualTo(1));
+        Assert.That(o.addresses, Is.EqualTo(new[] { "host:9000" }));
+    }
+
+    [Test]
+    public void ProgrammaticAddr_EmptyCommaPiece_Rejected()
+    {
+        Assert.Throws<IngressError>(() => new QueryOptions { addr = "a:1,,b:2" });
+    }
+
+    [Test]
+    public void Parse_MaxBatchRowsOutOfRange_Rejected()
+    {
+        Assert.Throws<IngressError>(() => new QueryOptions("ws::addr=h:9000;max_batch_rows=-1;"));
+        Assert.Throws<IngressError>(() => new QueryOptions("ws::addr=h:9000;max_batch_rows=1048577;"));
+    }
+
+    [Test]
+    public void Parse_MaxBatchRowsOmitted_DefaultsToZeroForServerDefault()
+    {
+        var o = new QueryOptions("ws::addr=h:9000;");
+        Assert.That(o.max_batch_rows, Is.EqualTo(0));
+    }
+
     [TestCase("auth=Bearer abc;username=u;password=p;")]
     [TestCase("auth=X;token=t;")]
     [TestCase("username=u;password=p;token=t;")]
@@ -347,10 +384,9 @@ public class QueryOptionsTests
     }
 
     [Test]
-    public void Parse_MaxBatchRowsZero_AcceptedAsServerDefault()
+    public void Parse_MaxBatchRowsZero_Rejected()
     {
-        var o = new QueryOptions("ws::addr=h:9000;max_batch_rows=0;");
-        Assert.That(o.max_batch_rows, Is.EqualTo(0));
+        Assert.Throws<IngressError>(() => new QueryOptions("ws::addr=h:9000;max_batch_rows=0;"));
     }
 
     [Test]

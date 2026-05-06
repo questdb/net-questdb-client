@@ -291,6 +291,7 @@ internal static class QwpEncoder
             case QwpTypeCode.Date:
             case QwpTypeCode.Uuid:
             case QwpTypeCode.Char:
+            case QwpTypeCode.IPv4:
             case QwpTypeCode.Long256:
             case QwpTypeCode.DoubleArray:
             case QwpTypeCode.LongArray:
@@ -300,6 +301,7 @@ internal static class QwpEncoder
                 break;
 
             case QwpTypeCode.Varchar:
+            case QwpTypeCode.Binary:
                 // (n + 1) uint32 LE offsets — bulk-copy on LE hosts, scalar fallback on BE.
                 if (BitConverter.IsLittleEndian)
                 {
@@ -327,8 +329,10 @@ internal static class QwpEncoder
 
                 break;
 
+            case QwpTypeCode.Decimal64:
             case QwpTypeCode.Decimal128:
-                // 1-byte scale prefix + 16 bytes per value LE two's complement.
+            case QwpTypeCode.Decimal256:
+                // 1-byte scale prefix + (8|16|32) bytes per value, LE two's complement.
                 buf.WriteByte(col.DecimalScale);
                 buf.WriteBytes(col.FixedData!.AsSpan(0, col.FixedLen));
                 break;

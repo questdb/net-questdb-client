@@ -175,8 +175,8 @@ internal static class QwpConstants
     public const int MaxSqlLengthBytes = 1024 * 1024;
 
     /// <summary>
-    ///     Server cap is <c>MAX_COLUMNS_PER_TABLE = 2048</c> (the Java client uses the same value);
-    ///     the egress spec doc §16 quotes 1024 but is stale relative to the server.
+    ///     Server cap is <c>MAX_COLUMNS_PER_TABLE = 2048</c>; the egress spec doc §16 quotes 1024
+    ///     but is stale relative to the server.
     /// </summary>
     public const int MaxBindParameters = 2048;
 

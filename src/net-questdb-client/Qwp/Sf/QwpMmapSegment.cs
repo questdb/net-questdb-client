@@ -71,7 +71,8 @@ internal sealed class QwpMmapSegment : IDisposable
     public const int HeaderSize = 24;
     public const uint FileMagic = 0x31304653;
     public const byte FileVersion = 1;
-    public const int DefaultMaxFrameLength = 16 * 1024 * 1024;
+    // Frames are bounded only by their enclosing segment; CRC + length sanity catch torn tails.
+    public const int DefaultMaxFrameLength = int.MaxValue;
 
     private readonly MemoryMappedFile _mmap;
     private readonly MemoryMappedViewAccessor _view;

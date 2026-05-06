@@ -39,7 +39,7 @@ namespace QuestDB.Qwp.Sf;
 ///     intrinsics so behaviour is identical across runtime versions and CPUs.
 ///     <para />
 ///     <b>Validation</b>: matches the standard test vector <c>CRC32C("123456789") == 0xE3069283</c>
-///     and Java's <c>Crc32c.java</c> output byte-for-byte.
+///     bit-for-bit across runtime versions and CPUs.
 /// </remarks>
 internal static class QwpCrc32C
 {

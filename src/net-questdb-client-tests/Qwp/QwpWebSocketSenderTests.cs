@@ -81,7 +81,8 @@ public class QwpWebSocketSenderTests
         // Header sanity.
         Assert.That(BinaryPrimitives.ReadUInt32LittleEndian(frame.AsSpan(0, 4)), Is.EqualTo(QwpConstants.Magic));
         Assert.That(frame[QwpConstants.OffsetVersion], Is.EqualTo(QwpConstants.SupportedIngestVersion));
-        Assert.That(frame[QwpConstants.OffsetFlags], Is.EqualTo(QwpConstants.FlagDeltaSymbolDict));
+        Assert.That(frame[QwpConstants.OffsetFlags],
+            Is.EqualTo((byte)(QwpConstants.FlagDeltaSymbolDict | QwpConstants.FlagGorilla)));
         Assert.That(BinaryPrimitives.ReadUInt16LittleEndian(frame.AsSpan(QwpConstants.OffsetTableCount, 2)),
             Is.EqualTo(1));
 
@@ -832,6 +833,81 @@ public class QwpWebSocketSenderTests
         {
             TryDeleteDirectory(sfRoot);
         }
+    }
+
+    [Test]
+    public async Task ColumnDecimal64_RoundTripsToServer()
+    {
+        await using var server = StartServerWithOkAcks();
+        using var sender = NewSender(server, "auto_flush=off;");
+        var ws = (IQwpWebSocketSender)sender;
+
+        sender.Table("t");
+        ws.ColumnDecimal64("p", 12.34m);
+        sender.At(DateTime.UtcNow);
+        await sender.SendAsync();
+
+        var payload = server.ReceivedFrames.First().AsSpan();
+        Assert.That(payload.IndexOf((byte)QwpTypeCode.Decimal64), Is.GreaterThan(0));
+    }
+
+    [Test]
+    public async Task ColumnDecimal256_RoundTripsToServer()
+    {
+        await using var server = StartServerWithOkAcks();
+        using var sender = NewSender(server, "auto_flush=off;");
+        var ws = (IQwpWebSocketSender)sender;
+
+        sender.Table("t");
+        ws.ColumnDecimal256("p", -1m);
+        sender.At(DateTime.UtcNow);
+        await sender.SendAsync();
+
+        var payload = server.ReceivedFrames.First().AsSpan();
+        Assert.That(payload.IndexOf((byte)QwpTypeCode.Decimal256), Is.GreaterThan(0));
+    }
+
+    [Test]
+    public async Task ColumnBinary_RoundTripsToServer()
+    {
+        await using var server = StartServerWithOkAcks();
+        using var sender = NewSender(server, "auto_flush=off;");
+        var ws = (IQwpWebSocketSender)sender;
+
+        sender.Table("t");
+        ws.ColumnBinary("blob", new byte[] { 0x10, 0x20, 0x30 });
+        sender.At(DateTime.UtcNow);
+        await sender.SendAsync();
+
+        var payload = server.ReceivedFrames.First().AsSpan();
+        Assert.That(payload.IndexOf((byte)QwpTypeCode.Binary), Is.GreaterThan(0));
+    }
+
+    [Test]
+    public async Task ColumnIPv4_RoundTripsToServer()
+    {
+        await using var server = StartServerWithOkAcks();
+        using var sender = NewSender(server, "auto_flush=off;");
+        var ws = (IQwpWebSocketSender)sender;
+
+        sender.Table("t");
+        ws.ColumnIPv4("ip", System.Net.IPAddress.Parse("1.2.3.4"));
+        sender.At(DateTime.UtcNow);
+        await sender.SendAsync();
+
+        var payload = server.ReceivedFrames.First().AsSpan();
+        Assert.That(payload.IndexOf((byte)QwpTypeCode.IPv4), Is.GreaterThan(0));
+    }
+
+    [Test]
+    public async Task ColumnIPv4_RejectsIPv6Address()
+    {
+        await using var server = StartServerWithOkAcks();
+        using var sender = NewSender(server, "auto_flush=off;");
+        var ws = (IQwpWebSocketSender)sender;
+
+        sender.Table("t");
+        Assert.Throws<IngressError>(() => ws.ColumnIPv4("ip", System.Net.IPAddress.Parse("::1")));
     }
 
     private static DummyQwpServer StartServerWithOkAcks()

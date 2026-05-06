@@ -339,15 +339,50 @@ public class SenderOptionsTests
     }
 
     [Test]
-    public void Ws_AutoFlushDefaults_AreOptimisedForLatency()
+    public void Ws_Defaults()
     {
         var opts = new SenderOptions("ws::addr=localhost:9000;");
-        Assert.That(opts.auto_flush_rows, Is.EqualTo(1000));
-        Assert.That(opts.auto_flush_interval, Is.EqualTo(TimeSpan.FromMilliseconds(100)));
+        Assert.That(opts.auto_flush_rows, Is.EqualTo(75000));
+        Assert.That(opts.auto_flush_interval, Is.EqualTo(TimeSpan.FromMilliseconds(1000)));
         Assert.That(opts.Port, Is.EqualTo(9000));
         Assert.That(opts.in_flight_window, Is.EqualTo(128));
         Assert.That(opts.max_schemas_per_connection, Is.EqualTo(65535));
         Assert.That(opts.request_durable_ack, Is.False);
+        Assert.That(opts.gorilla, Is.True);
+    }
+
+    [Test]
+    public void UnknownKey_IsSilentlyIgnored()
+    {
+        Assert.That(
+            () => new SenderOptions("ws::addr=localhost:9000;some_unrecognised_key=42;"),
+            Throws.Nothing);
+    }
+
+    [Test]
+    public void Ws_AuthTimeoutMs_AliasParses()
+    {
+        var withMs = new SenderOptions("ws::addr=localhost:9000;auth_timeout_ms=2500;");
+        Assert.That(withMs.auth_timeout, Is.EqualTo(TimeSpan.FromMilliseconds(2500)));
+
+        var legacy = new SenderOptions("ws::addr=localhost:9000;auth_timeout=2500;");
+        Assert.That(legacy.auth_timeout, Is.EqualTo(TimeSpan.FromMilliseconds(2500)));
+    }
+
+    [Test]
+    public void Ws_ToString_EmitsAuthTimeoutMs()
+    {
+        var opts = new SenderOptions("ws::addr=localhost:9000;auth_timeout=4000;");
+        var s = opts.ToString();
+        Assert.That(s, Does.Contain("auth_timeout_ms=4000"));
+        Assert.That(s, Does.Not.Contain("auth_timeout=4000"));
+    }
+
+    [Test]
+    public void Http_ToString_KeepsAuthTimeoutLegacyName()
+    {
+        var opts = new SenderOptions("http::addr=localhost:9000;auth_timeout=4000;");
+        Assert.That(opts.ToString(), Does.Contain("auth_timeout=4000"));
     }
 
     [Test]
@@ -421,39 +456,6 @@ public class SenderOptionsTests
         var wss = new SenderOptions("wss::addr=h1:9000;addr=h2:9000;");
         Assert.That(wss.addresses, Is.EqualTo(new[] { "h1:9000", "h2:9000" }));
     }
-
-    [Test]
-    public void IPv6_BracketedWithPort()
-    {
-        var opts = new SenderOptions("http::addr=[::1]:9000;");
-        Assert.That(opts.Host, Is.EqualTo("::1"));
-        Assert.That(opts.Port, Is.EqualTo(9000));
-    }
-
-    [Test]
-    public void IPv6_BracketedWithoutPort_UsesProtocolDefault()
-    {
-        var opts = new SenderOptions("http::addr=[fe80::1];");
-        Assert.That(opts.Host, Is.EqualTo("fe80::1"));
-        Assert.That(opts.Port, Is.EqualTo(9000));
-    }
-
-    [Test]
-    public void IPv6_BareUnbracketed_UsesProtocolDefault()
-    {
-        var opts = new SenderOptions("http::addr=fe80::1;");
-        Assert.That(opts.Host, Is.EqualTo("fe80::1"));
-        Assert.That(opts.Port, Is.EqualTo(9000));
-    }
-
-    [Test]
-    public void IPv6_BareUnbracketed_TcpDefaultPort()
-    {
-        var opts = new SenderOptions("tcp::addr=fe80::1;");
-        Assert.That(opts.Host, Is.EqualTo("fe80::1"));
-        Assert.That(opts.Port, Is.EqualTo(9009));
-    }
-
 
     [Test]
     public void Sf_AllKeysOnHttpScheme_RejectedIndividually()

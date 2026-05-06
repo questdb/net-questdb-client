@@ -742,8 +742,8 @@ public class QwpResultBatchDecoderTests
     [Test]
     public void Decode_BooleanWithNullFlagAllZeroBitmap_AcceptedAsNonNullRows()
     {
-        // Spec §11.5: BOOLEAN/BYTE/SHORT/CHAR have no NULL sentinel. The Java reference decoder
-        // tolerates null_flag=1 with an all-zero bitmap; this client must agree for interop.
+        // Spec §11.5: BOOLEAN/BYTE/SHORT/CHAR have no NULL sentinel. null_flag=1 with an
+        // all-zero bitmap means "no nulls" and must be accepted.
         var p = new List<byte> { QwpConstants.MsgKindResultBatch };
         p.AddRange(new byte[8]);
         p.Add(0x00);

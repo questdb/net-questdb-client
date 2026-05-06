@@ -207,10 +207,34 @@ internal sealed class QwpTableBuffer
         try { GetOrCreateColumn(columnName).AppendSymbol(globalId); } catch { CancelCurrentRow(); throw; }
     }
 
+    /// <summary>Append a DECIMAL64 value. The first call locks the column scale.</summary>
+    public void AppendDecimal64(ReadOnlySpan<char> columnName, decimal value)
+    {
+        try { GetOrCreateColumn(columnName).AppendDecimal64(value); } catch { CancelCurrentRow(); throw; }
+    }
+
     /// <summary>Append a DECIMAL128 value. The first call locks the column scale.</summary>
     public void AppendDecimal128(ReadOnlySpan<char> columnName, decimal value)
     {
         try { GetOrCreateColumn(columnName).AppendDecimal128(value); } catch { CancelCurrentRow(); throw; }
+    }
+
+    /// <summary>Append a DECIMAL256 value. The first call locks the column scale.</summary>
+    public void AppendDecimal256(ReadOnlySpan<char> columnName, decimal value)
+    {
+        try { GetOrCreateColumn(columnName).AppendDecimal256(value); } catch { CancelCurrentRow(); throw; }
+    }
+
+    /// <summary>Append a BINARY value as opaque bytes (no UTF-8 contract).</summary>
+    public void AppendBinary(ReadOnlySpan<char> columnName, ReadOnlySpan<byte> value)
+    {
+        try { GetOrCreateColumn(columnName).AppendBinary(value); } catch { CancelCurrentRow(); throw; }
+    }
+
+    /// <summary>Append an IPv4 address as 4 bytes little-endian.</summary>
+    public void AppendIPv4(ReadOnlySpan<char> columnName, uint addr)
+    {
+        try { GetOrCreateColumn(columnName).AppendIPv4(addr); } catch { CancelCurrentRow(); throw; }
     }
 
     /// <summary>Append a non-negative LONG256 value (≤ 256 bits).</summary>

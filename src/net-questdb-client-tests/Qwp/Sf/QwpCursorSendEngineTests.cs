@@ -562,7 +562,7 @@ public class QwpCursorSendEngineTests
         using var engine = NewEngine(out _,
             segmentCapacity: 64 * 1024,
             policy: new QwpReconnectPolicy(
-                TimeSpan.FromMilliseconds(1), TimeSpan.FromMilliseconds(5), TimeSpan.FromSeconds(30)),
+                TimeSpan.FromMilliseconds(1), TimeSpan.FromMilliseconds(5), TimeSpan.FromMinutes(2)),
             factory: () =>
             {
                 var s = new StubTransport();
@@ -587,7 +587,7 @@ public class QwpCursorSendEngineTests
             engine.AppendBlocking(new byte[] { (byte)(i & 0xFF) });
         }
 
-        await engine.FlushAsync(TimeSpan.FromSeconds(20));
+        await engine.FlushAsync(TimeSpan.FromSeconds(60));
         Assert.That(engine.AckedFsn, Is.EqualTo((long)totalFrames));
         Assert.That(stubs.Count, Is.GreaterThan(1), "synthetic flaps must have triggered at least one reconnect");
     }

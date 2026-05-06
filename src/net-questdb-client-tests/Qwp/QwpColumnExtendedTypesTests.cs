@@ -412,6 +412,118 @@ public class QwpColumnExtendedTypesTests
         Assert.Throws<System.Text.EncoderFallbackException>(() => col.AppendVarchar("\uD800"));
     }
 
+    [Test]
+    public void AppendDecimal64_PositiveValue_WritesUnscaledLittleEndian()
+    {
+        var col = new QwpColumn("p", 0);
+        col.AppendDecimal64(12.34m);
+
+        Assert.That(col.TypeCode, Is.EqualTo(QwpTypeCode.Decimal64));
+        Assert.That(col.DecimalScale, Is.EqualTo((byte)2));
+        Assert.That(col.FixedLen, Is.EqualTo(8));
+        Assert.That(BinaryPrimitives.ReadInt64LittleEndian(col.FixedData!.AsSpan(0, 8)), Is.EqualTo(1234L));
+    }
+
+    [Test]
+    public void AppendDecimal64_NegativeValue_IsTwosComplement()
+    {
+        var col = new QwpColumn("p", 0);
+        col.AppendDecimal64(-1.5m);
+
+        Assert.That(BinaryPrimitives.ReadInt64LittleEndian(col.FixedData!.AsSpan(0, 8)), Is.EqualTo(-15L));
+    }
+
+    [Test]
+    public void AppendDecimal64_OverflowsRange_Throws()
+    {
+        var col = new QwpColumn("p", 0);
+        // decimal.MaxValue ~ 7.9e28; 8-byte signed mantissa cap is 2^63-1 ~ 9.2e18.
+        Assert.Throws<IngressError>(() => col.AppendDecimal64(decimal.MaxValue));
+    }
+
+    [Test]
+    public void AppendDecimal256_PositiveValue_WritesUnscaledLittleEndian()
+    {
+        var col = new QwpColumn("p", 0);
+        col.AppendDecimal256(12.34m);
+
+        Assert.That(col.TypeCode, Is.EqualTo(QwpTypeCode.Decimal256));
+        Assert.That(col.DecimalScale, Is.EqualTo((byte)2));
+        Assert.That(col.FixedLen, Is.EqualTo(32));
+
+        var unscaled = new BigInteger(col.FixedData!.AsSpan(0, 32), isUnsigned: false, isBigEndian: false);
+        Assert.That(unscaled, Is.EqualTo(new BigInteger(1234)));
+    }
+
+    [Test]
+    public void AppendDecimal256_NegativeValue_PadsWithFF()
+    {
+        var col = new QwpColumn("p", 0);
+        col.AppendDecimal256(-1m);
+
+        var span = col.FixedData!.AsSpan(0, 32);
+        Assert.That(span[0], Is.EqualTo((byte)0xFF));
+        for (var i = 1; i < 32; i++)
+        {
+            Assert.That(span[i], Is.EqualTo((byte)0xFF), $"byte {i}");
+        }
+    }
+
+    [Test]
+    public void AppendDecimal256_LargestDecimalValue_FitsExactly()
+    {
+        var col = new QwpColumn("p", 0);
+        col.AppendDecimal256(decimal.MaxValue);
+
+        var unscaled = new BigInteger(col.FixedData!.AsSpan(0, 32), isUnsigned: false, isBigEndian: false);
+        Assert.That(unscaled, Is.EqualTo((BigInteger.One << 96) - 1));
+    }
+
+    [Test]
+    public void AppendBinary_StoresBytesAndOffsets()
+    {
+        var col = new QwpColumn("blob", 0);
+        col.AppendBinary(new byte[] { 0x00, 0x01, 0x02 });
+        col.AppendBinary(ReadOnlySpan<byte>.Empty);
+        col.AppendBinary(new byte[] { 0xFF });
+
+        Assert.That(col.TypeCode, Is.EqualTo(QwpTypeCode.Binary));
+        Assert.That(col.NonNullCount, Is.EqualTo(3));
+        Assert.That(col.StrLen, Is.EqualTo(4));
+        Assert.That(col.StrOffsets![0], Is.EqualTo(0u));
+        Assert.That(col.StrOffsets![1], Is.EqualTo(3u));
+        Assert.That(col.StrOffsets![2], Is.EqualTo(3u));
+        Assert.That(col.StrOffsets![3], Is.EqualTo(4u));
+        Assert.That(col.StrData!.AsSpan(0, 4).ToArray(), Is.EqualTo(new byte[] { 0x00, 0x01, 0x02, 0xFF }));
+    }
+
+    [Test]
+    public void AppendBinary_TypeMismatch_Throws()
+    {
+        var col = new QwpColumn("blob", 0);
+        col.AppendVarchar("hello");
+        Assert.Throws<IngressError>(() => col.AppendBinary(new byte[] { 0x00 }));
+    }
+
+    [Test]
+    public void AppendIPv4_WritesFourBytesLittleEndian()
+    {
+        var col = new QwpColumn("ip", 0);
+        col.AppendIPv4(0x04030201u);
+
+        Assert.That(col.TypeCode, Is.EqualTo(QwpTypeCode.IPv4));
+        Assert.That(col.FixedLen, Is.EqualTo(4));
+        Assert.That(col.FixedData!.AsSpan(0, 4).ToArray(), Is.EqualTo(new byte[] { 0x01, 0x02, 0x03, 0x04 }));
+    }
+
+    [Test]
+    public void AppendIPv4_TypeMismatch_Throws()
+    {
+        var col = new QwpColumn("ip", 0);
+        col.AppendInt(42);
+        Assert.Throws<IngressError>(() => col.AppendIPv4(1));
+    }
+
     /// <summary>Reads a 16-byte little-endian two's-complement integer.</summary>
     private static BigInteger ReadInt128(ReadOnlySpan<byte> bytes)
     {

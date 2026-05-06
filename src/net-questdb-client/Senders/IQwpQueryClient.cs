@@ -34,6 +34,15 @@ namespace QuestDB.Senders;
 ///     <see cref="IDisposable.Dispose" /> may block the calling thread up to 5 seconds while the
 ///     in-flight Execute drains; prefer <see cref="IAsyncDisposable.DisposeAsync" /> from async
 ///     contexts (UI threads on WinForms / WPF / Avalonia in particular).
+///     <para />
+///     <b>Authentication errors are terminal</b>: a 401/403 from any failover candidate aborts
+///     the loop without trying remaining hosts. Re-running an unsupported credential against
+///     every host wastes time and floods server logs, so the loop fails fast instead.
+///     <para />
+///     <b>Cancellation via <see cref="CancellationToken" /> is terminal</b>: the receive loop
+///     cannot be safely interrupted mid-frame, so a token cancellation tears the connection down
+///     and the client transitions to a non-recoverable state. Use <see cref="Cancel" /> for
+///     cooperative cancellation that keeps the connection alive.
 /// </remarks>
 public interface IQwpQueryClient : IDisposable, IAsyncDisposable
 {

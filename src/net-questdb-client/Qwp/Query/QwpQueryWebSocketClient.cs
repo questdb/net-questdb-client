@@ -566,8 +566,8 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient
                             .ConfigureAwait(false);
                         throw;
                     }
-                    // Credit replenishes only after the handler returns: matches Java's
-                    // "I'm done with the buffer" semantics for byte-credit flow control.
+                    // Credit replenishes only after the handler returns ("done with this buffer"
+                    // semantics for byte-credit flow control).
                     if (_options.initial_credit > 0)
                     {
                         await SendCreditAsync(batchRid, batchBytes + QwpConstants.HeaderSize, ct)

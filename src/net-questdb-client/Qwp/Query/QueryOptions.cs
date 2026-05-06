@@ -64,6 +64,7 @@ public sealed class QueryOptions
     private List<string> _addresses = new();
     private string[]? _singletonAddrCache;
     private string? _singletonAddrCacheKey;
+    private string _addr = "localhost:9000";
 
     /// <summary>Constructs an instance with default values; mutate properties before passing to <c>QueryClient.New</c>.</summary>
     public QueryOptions()
@@ -81,8 +82,43 @@ public sealed class QueryOptions
     /// <summary>Wire protocol; only <see cref="ProtocolType.ws" /> and <see cref="ProtocolType.wss" /> are accepted on the egress side.</summary>
     public ProtocolType protocol { get; set; } = ProtocolType.ws;
 
-    /// <summary>Default <c>host:port</c> when <see cref="addresses" /> is empty.</summary>
-    public string addr { get; set; } = "localhost:9000";
+    /// <summary>
+    ///     Default <c>host:port</c>, or comma-separated multi-address list. When the value contains
+    ///     a comma the entries are split into <see cref="addresses" /> for failover (matches the
+    ///     <c>addr=h1:p1,h2:p2</c> connstring syntax).
+    /// </summary>
+    public string addr
+    {
+        get => _addr;
+        set => SetAddr(value);
+    }
+
+    private void SetAddr(string value)
+    {
+        ArgumentNullException.ThrowIfNull(value);
+        if (value.IndexOf(',') < 0)
+        {
+            _addr = value;
+            _addresses.Clear();
+            return;
+        }
+
+        var parts = value.Split(',');
+        var list = new List<string>(parts.Length);
+        foreach (var piece in parts)
+        {
+            var trimmed = piece.Trim();
+            if (trimmed.Length == 0)
+            {
+                throw new IngressError(ErrorCode.ConfigError,
+                    $"empty entry in comma-separated `addr={value}`");
+            }
+            list.Add(trimmed);
+        }
+
+        _addresses = list;
+        _addr = list[0];
+    }
 
     /// <summary>Failover address list; falls back to a single-element list of <see cref="addr" /> when no multi-address connstring keys were provided.</summary>
     public IReadOnlyList<string> addresses
@@ -246,12 +282,12 @@ public sealed class QueryOptions
 
         if (_addresses.Count > 0)
         {
-            addr = _addresses[0];
+            _addr = _addresses[0];
         }
         else if (builder.TryGetValue("addr", out var addrVal))
         {
-            addr = (string)addrVal;
-            _addresses.Add(addr);
+            _addr = (string)addrVal;
+            _addresses.Add(_addr);
         }
 
         path = ReadStringOr(builder, "path", QwpConstants.ReadPath)!;
@@ -281,7 +317,16 @@ public sealed class QueryOptions
         auth_timeout_ms = TimeSpan.FromMilliseconds(
             ReadInt(builder, "auth_timeout_ms", 15000));
 
-        max_batch_rows = ReadInt(builder, "max_batch_rows", 0);
+        if (builder.ContainsKey("max_batch_rows"))
+        {
+            var v = ReadInt(builder, "max_batch_rows", 0);
+            if (v < 1 || v > 1_048_576)
+            {
+                throw new IngressError(ErrorCode.ConfigError,
+                    $"`max_batch_rows` must be in [1, 1048576] (omit the key for server default), got {v}");
+            }
+            max_batch_rows = v;
+        }
     }
 
     private void ValidateAddress()

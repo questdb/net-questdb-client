@@ -329,6 +329,93 @@ public class QwpEncoderTests
     }
 
     [Test]
+    public void Encode_CharColumn_WritesTwoBytesLittleEndian()
+    {
+        var t = new QwpTableBuffer("t");
+        t.AppendChar("c", 'A');
+        t.At(0);
+        t.AppendChar("c", '中');
+        t.At(1);
+
+        var bytes = QwpEncoder.Encode(new[] { t }, new QwpSchemaCache(), new QwpSymbolDictionary());
+        var pos = FindFirstColumnDataOffset(bytes, tableNameLen: 1, userColCount: 1, userColDefSize: 1 + 1 + 1);
+
+        Assert.That(bytes[pos++], Is.EqualTo(0x00), "null flag");
+        Assert.That(BinaryPrimitives.ReadUInt16LittleEndian(bytes.AsSpan(pos, 2)), Is.EqualTo((ushort)'A'));
+        Assert.That(BinaryPrimitives.ReadUInt16LittleEndian(bytes.AsSpan(pos + 2, 2)), Is.EqualTo((ushort)'中'));
+    }
+
+    [Test]
+    public void Encode_Decimal64Column_WritesScalePrefixAndEightBytesPerValue()
+    {
+        var t = new QwpTableBuffer("t");
+        t.AppendDecimal64("p", 12.34m);
+        t.At(0);
+
+        var bytes = QwpEncoder.Encode(new[] { t }, new QwpSchemaCache(), new QwpSymbolDictionary());
+        var pos = FindFirstColumnDataOffset(bytes, tableNameLen: 1, userColCount: 1, userColDefSize: 1 + 1 + 1);
+
+        Assert.That(bytes[pos++], Is.EqualTo(0x00), "null flag");
+        Assert.That(bytes[pos++], Is.EqualTo((byte)2), "scale = 2");
+        Assert.That(BinaryPrimitives.ReadInt64LittleEndian(bytes.AsSpan(pos, 8)), Is.EqualTo(1234L));
+    }
+
+    [Test]
+    public void Encode_Decimal256Column_WritesScalePrefixAnd32BytesPerValue()
+    {
+        var t = new QwpTableBuffer("t");
+        t.AppendDecimal256("p", -1m);
+        t.At(0);
+
+        var bytes = QwpEncoder.Encode(new[] { t }, new QwpSchemaCache(), new QwpSymbolDictionary());
+        var pos = FindFirstColumnDataOffset(bytes, tableNameLen: 1, userColCount: 1, userColDefSize: 1 + 1 + 1);
+
+        Assert.That(bytes[pos++], Is.EqualTo(0x00), "null flag");
+        Assert.That(bytes[pos++], Is.EqualTo((byte)0), "scale = 0");
+        for (var i = 0; i < 32; i++)
+        {
+            Assert.That(bytes[pos + i], Is.EqualTo((byte)0xFF), $"-1 LE two's-complement byte {i}");
+        }
+    }
+
+    [Test]
+    public void Encode_BinaryColumn_WritesOffsetsThenBytes()
+    {
+        var t = new QwpTableBuffer("t");
+        t.AppendBinary("blob", new byte[] { 0x10, 0x20 });
+        t.At(0);
+        t.AppendBinary("blob", new byte[] { 0x30 });
+        t.At(1);
+
+        var bytes = QwpEncoder.Encode(new[] { t }, new QwpSchemaCache(), new QwpSymbolDictionary());
+        var pos = FindFirstColumnDataOffset(bytes, tableNameLen: 1, userColCount: 1, userColDefSize: 1 + 4 + 1);
+
+        Assert.That(bytes[pos++], Is.EqualTo(0x00), "null flag");
+        // (n+1)=3 offsets × u32 LE: 0, 2, 3
+        Assert.That(BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(pos, 4)), Is.EqualTo(0u));
+        Assert.That(BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(pos + 4, 4)), Is.EqualTo(2u));
+        Assert.That(BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(pos + 8, 4)), Is.EqualTo(3u));
+        // Then the 3 bytes of payload.
+        Assert.That(bytes[pos + 12], Is.EqualTo(0x10));
+        Assert.That(bytes[pos + 13], Is.EqualTo(0x20));
+        Assert.That(bytes[pos + 14], Is.EqualTo(0x30));
+    }
+
+    [Test]
+    public void Encode_IPv4Column_WritesFourBytesLittleEndian()
+    {
+        var t = new QwpTableBuffer("t");
+        t.AppendIPv4("ip", 0x04030201u);
+        t.At(0);
+
+        var bytes = QwpEncoder.Encode(new[] { t }, new QwpSchemaCache(), new QwpSymbolDictionary());
+        var pos = FindFirstColumnDataOffset(bytes, tableNameLen: 1, userColCount: 1, userColDefSize: 1 + 2 + 1);
+
+        Assert.That(bytes[pos++], Is.EqualTo(0x00), "null flag");
+        Assert.That(BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(pos, 4)), Is.EqualTo(0x04030201u));
+    }
+
+    [Test]
     public void Encode_Long256Column_Writes32BytesPerValue()
     {
         var t = new QwpTableBuffer("t");

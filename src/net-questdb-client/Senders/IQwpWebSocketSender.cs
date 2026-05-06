@@ -33,6 +33,10 @@ namespace QuestDB.Senders;
 ///     <c>seqTxn</c> watermarks. Durable watermarks require <c>request_durable_ack=on</c> on the
 ///     connect string; the committed watermark is always populated once the server has ACKed any
 ///     batch on a connection.
+///     <para />
+///     <b>Authentication errors are terminal</b> on both the initial connect and SF reconnect
+///     loops: a 401/403 against any failover candidate aborts the loop instead of cycling through
+///     the remaining hosts. Retrying a rejected credential floods server logs and rarely recovers.
 /// </remarks>
 public interface IQwpWebSocketSender : ISender
 {
@@ -62,4 +66,16 @@ public interface IQwpWebSocketSender : ISender
 
     /// <inheritdoc cref="Ping" />
     ValueTask PingAsync(CancellationToken ct = default);
+
+    /// <summary>Append a DECIMAL64 value to the named column (8-byte mantissa). First call locks the scale.</summary>
+    IQwpWebSocketSender ColumnDecimal64(ReadOnlySpan<char> name, decimal value);
+
+    /// <summary>Append a DECIMAL256 value to the named column (32-byte mantissa). First call locks the scale.</summary>
+    IQwpWebSocketSender ColumnDecimal256(ReadOnlySpan<char> name, decimal value);
+
+    /// <summary>Append a BINARY value to the named column (opaque bytes; no UTF-8 contract).</summary>
+    IQwpWebSocketSender ColumnBinary(ReadOnlySpan<char> name, ReadOnlySpan<byte> value);
+
+    /// <summary>Append an IPv4 address to the named column.</summary>
+    IQwpWebSocketSender ColumnIPv4(ReadOnlySpan<char> name, System.Net.IPAddress addr);
 }

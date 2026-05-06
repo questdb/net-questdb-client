@@ -54,7 +54,7 @@ public record SenderOptions
         "protocol_version", "addr", "auto_flush", "auto_flush_rows", "auto_flush_bytes",
         "auto_flush_interval", "init_buf_size", "max_buf_size", "max_name_len",
         "username", "user", "password", "pass", "token",
-        "request_min_throughput", "auth_timeout", "request_timeout", "retry_timeout",
+        "request_min_throughput", "auth_timeout", "auth_timeout_ms", "request_timeout", "retry_timeout",
         "pool_timeout", "tls_verify", "tls_roots", "tls_roots_password", "own_socket", "gzip",
         "in_flight_window", "max_schemas_per_connection",
         "gorilla", "request_durable_ack",
@@ -97,7 +97,7 @@ public record SenderOptions
     private int _inFlightWindow = 128;
     private int _maxSchemasPerConnection = 65535;
     private bool _requestDurableAck;
-    private bool _gorilla;
+    private bool _gorilla = true;
 
     private string? _sfDir;
     private string _senderId = "default";
@@ -178,6 +178,10 @@ public record SenderOptions
         ParseStringWithDefault(nameof(token), null, out _token);
         ParseIntWithDefault(nameof(request_min_throughput), "102400", out _requestMinThroughput);
         ParseMillisecondsWithDefault(nameof(auth_timeout), "15000", out _authTimeout);
+        if (ReadOptionFromBuilder("auth_timeout_ms") is not null)
+        {
+            ParseMillisecondsWithDefault("auth_timeout_ms", "15000", out _authTimeout);
+        }
         ParseMillisecondsWithDefault(nameof(request_timeout), "30000", out _requestTimeout);
         ParseMillisecondsWithDefault(nameof(retry_timeout), "10000", out _retryTimeout);
         ParseMillisecondsWithDefault(nameof(pool_timeout), "120000", out _poolTimeout);
@@ -191,7 +195,7 @@ public record SenderOptions
         ParseIntWithDefault(nameof(in_flight_window), "128", out _inFlightWindow);
         ParseIntWithDefault(nameof(max_schemas_per_connection), "65535", out _maxSchemasPerConnection);
         ParseBoolOnOff(nameof(request_durable_ack), "off", out _requestDurableAck);
-        ParseBoolOnOff(nameof(gorilla), "off", out _gorilla);
+        ParseBoolOnOff(nameof(gorilla), "on", out _gorilla);
 
         ParseStringWithDefault(nameof(sf_dir), null, out _sfDir);
         ParseStringWithDefault(nameof(sender_id), "default", out var senderIdRaw);
@@ -222,12 +226,6 @@ public record SenderOptions
         ParseIntWithDefault(nameof(max_background_drainers), "4", out _maxBackgroundDrainers);
         ParseMillisecondsWithDefault(nameof(ping_timeout), "5000", out _pingTimeout);
         ParseStringWithDefault(nameof(proxy), null, out _proxy);
-
-        if (IsWebSocket() && _autoFlush != AutoFlushType.off)
-        {
-            if (!IsKeyExplicit(nameof(auto_flush_rows))) _autoFlushRows = 1000;
-            if (!IsKeyExplicit(nameof(auto_flush_interval))) _autoFlushInterval = TimeSpan.FromMilliseconds(100);
-        }
 
         EnsureValid();
     }
@@ -468,15 +466,6 @@ public record SenderOptions
             _autoFlushRows = -1;
             _autoFlushBytes = -1;
             _autoFlushInterval = TimeSpan.FromMilliseconds(-1);
-        }
-        else if (IsWebSocket())
-        {
-            var rowsExplicit = (_connectionStringBuilder is not null && IsKeyExplicit(nameof(auto_flush_rows)))
-                || _autoFlushRowsUserSet;
-            var intervalExplicit = (_connectionStringBuilder is not null && IsKeyExplicit(nameof(auto_flush_interval)))
-                || _autoFlushIntervalUserSet;
-            if (!rowsExplicit) _autoFlushRows = 1000;
-            if (!intervalExplicit) _autoFlushInterval = TimeSpan.FromMilliseconds(100);
         }
     }
 
@@ -798,7 +787,6 @@ public record SenderOptions
     /// <summary>
     ///     Path to a custom CA bundle used to verify the server certificate. Accepts PEM
     ///     (.pem / .crt) or PFX/PKCS#12 (.pfx / .p12); the format is selected by file extension.
-    ///     Cross-language interop: Java and Go clients also accept PEM here.
     /// </summary>
     public string? tls_roots
     {
@@ -1126,41 +1114,6 @@ public record SenderOptions
 
     private static void SplitHostPort(string addr, out string host, out int port)
     {
-        // Bracketed IPv6: [host] or [host]:port
-        if (addr.StartsWith('['))
-        {
-            var close = addr.IndexOf(']');
-            if (close < 0)
-            {
-                throw new IngressError(ErrorCode.ConfigError,
-                    $"malformed bracketed address `{addr}`: missing closing bracket");
-            }
-
-            host = addr.Substring(1, close - 1);
-            var rest = addr.Substring(close + 1);
-            if (rest.Length == 0)
-            {
-                port = -1;
-                return;
-            }
-
-            if (rest[0] != ':')
-            {
-                throw new IngressError(ErrorCode.ConfigError,
-                    $"malformed bracketed address `{addr}`: expected `:port` after closing bracket");
-            }
-
-            if (!int.TryParse(rest.AsSpan(1), System.Globalization.NumberStyles.Integer,
-                    System.Globalization.CultureInfo.InvariantCulture, out port)
-                || port <= 0 || port > 65535)
-            {
-                throw new IngressError(ErrorCode.ConfigError,
-                    $"malformed address `{addr}`: invalid port `{rest.Substring(1)}`");
-            }
-
-            return;
-        }
-
         var firstColon = addr.IndexOf(':');
         if (firstColon < 0)
         {
@@ -1171,9 +1124,8 @@ public record SenderOptions
 
         if (addr.IndexOf(':', firstColon + 1) >= 0)
         {
-            host = addr;
-            port = -1;
-            return;
+            throw new IngressError(ErrorCode.ConfigError,
+                $"malformed address `{addr}`: too many colons");
         }
 
         host = addr.Substring(0, firstColon);
@@ -1309,8 +1261,8 @@ public record SenderOptions
             throw new IngressError(ErrorCode.ConfigError, "Config string must contain a protocol, separated by `::`");
         }
 
-        var schemeEnd = confStr.IndexOf("::", StringComparison.Ordinal);
-        var paramString = confStr.Substring(schemeEnd + 2);
+        var splits = confStr.Split("::");
+        var paramString = splits[1];
 
         // Parse addresses manually before using DbConnectionStringBuilder
         // because DbConnectionStringBuilder only keeps the last value for duplicate keys
@@ -1354,9 +1306,7 @@ public record SenderOptions
             ConnectionString = paramString,
         };
 
-        VerifyCorrectKeysInConfigString();
-
-        _connectionStringBuilder.Add("protocol", confStr.Substring(0, schemeEnd));
+        _connectionStringBuilder.Add("protocol", splits[0]);
     }
 
     private string? ReadOptionFromBuilder(string name)
@@ -1472,23 +1422,27 @@ public record SenderOptions
                 continue;
             }
 
+            var emitName = (IsWebSocket() && prop.Name == nameof(auth_timeout))
+                ? "auth_timeout_ms"
+                : prop.Name;
+
             if (value is TimeSpan span)
             {
                 // Cast to long-millis for round-trip safety; the parser is integer-valued.
-                builder.Add(prop.Name,
+                builder.Add(emitName,
                     ((long)span.TotalMilliseconds).ToString(System.Globalization.CultureInfo.InvariantCulture));
             }
             else if (value is IFormattable formattable)
             {
-                builder.Add(prop.Name, formattable.ToString(null, System.Globalization.CultureInfo.InvariantCulture));
+                builder.Add(emitName, formattable.ToString(null, System.Globalization.CultureInfo.InvariantCulture));
             }
             else if (value is string str && !string.IsNullOrEmpty(str))
             {
-                builder.Add(prop.Name, value);
+                builder.Add(emitName, value);
             }
             else
             {
-                builder.Add(prop.Name, value);
+                builder.Add(emitName, value);
             }
         }
 
@@ -1532,16 +1486,6 @@ public record SenderOptions
         return !first;
     }
 
-    private void VerifyCorrectKeysInConfigString()
-    {
-        foreach (string key in _connectionStringBuilder!.Keys)
-        {
-            if (!keySet.Contains(key))
-            {
-                throw new IngressError(ErrorCode.ConfigError, $"Invalid property: `{key}`");
-            }
-        }
-    }
 
     private void ParseAddresses()
     {

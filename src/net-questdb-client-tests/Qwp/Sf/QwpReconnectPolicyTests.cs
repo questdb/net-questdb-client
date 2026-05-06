@@ -195,8 +195,8 @@ public class QwpReconnectPolicyTests
 
         foreach (var s in samples)
         {
-            Assert.That(s, Is.GreaterThanOrEqualTo(TimeSpan.Zero));
-            Assert.That(s, Is.LessThanOrEqualTo(TimeSpan.FromMilliseconds(100)));
+            Assert.That(s, Is.GreaterThanOrEqualTo(TimeSpan.FromMilliseconds(100)));
+            Assert.That(s, Is.LessThan(TimeSpan.FromMilliseconds(200)));
         }
 
         Assert.That(samples.Distinct().Count(), Is.GreaterThan(1),
@@ -216,8 +216,9 @@ public class QwpReconnectPolicyTests
 
         foreach (var s in samples)
         {
-            Assert.That(s, Is.GreaterThanOrEqualTo(TimeSpan.Zero));
-            Assert.That(s, Is.LessThanOrEqualTo(TimeSpan.FromMilliseconds(100)));
+            // At saturation (base==max==100ms) jitter spans [100ms, 200ms).
+            Assert.That(s, Is.GreaterThanOrEqualTo(TimeSpan.FromMilliseconds(100)));
+            Assert.That(s, Is.LessThan(TimeSpan.FromMilliseconds(200)));
         }
 
         Assert.That(samples.Distinct().Count(), Is.GreaterThan(1),

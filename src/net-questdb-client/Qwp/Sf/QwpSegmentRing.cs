@@ -23,6 +23,8 @@
  ******************************************************************************/
 
 using System.Globalization;
+using QuestDB.Enums;
+using QuestDB.Utils;
 
 namespace QuestDB.Qwp.Sf;
 
@@ -188,6 +190,21 @@ internal sealed class QwpSegmentRing : IDisposable
                 }
 
                 opened.Sort((a, b) => a.BaseFsn.CompareTo(b.BaseFsn));
+
+                // FSN gap = corruption (deleted mid-segment, partial restore). Fail at startup
+                // rather than letting the cursor walk off the ring later.
+                for (var i = 1; i < opened.Count; i++)
+                {
+                    var prev = opened[i - 1];
+                    var curr = opened[i];
+                    var expected = prev.BaseFsn + prev.EnvelopeCount;
+                    if (curr.BaseFsn != expected)
+                    {
+                        throw new IngressError(ErrorCode.ConfigError,
+                            $"SF segment FSN gap at `{System.IO.Path.GetFileName(curr.Path)}`: " +
+                            $"expected baseFsn={expected}, got {curr.BaseFsn}");
+                    }
+                }
 
                 for (var i = 0; i < opened.Count; i++)
                 {

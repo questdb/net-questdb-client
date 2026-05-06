@@ -26,6 +26,7 @@
 
 using System.Buffers.Binary;
 using System.Globalization;
+using System.Net;
 using System.Net.Security;
 using System.Net.WebSockets;
 using System.Reflection;
@@ -79,9 +80,7 @@ internal sealed class QwpWebSocketTransport : IQwpCursorTransport
         var ws = _client.Options;
         ws.KeepAliveInterval = TimeSpan.Zero;
         ws.CollectHttpResponseDetails = true; // expose response headers for X-QWP-Version negotiation
-        // Disable system proxy: WebSocket ingest is a streaming long-lived connection and most
-        // HTTP proxies break it (502/503 or idle-timeout buffering).
-        ws.Proxy = null;
+        ws.Proxy = options.Proxy;
         ws.SetRequestHeader(QwpConstants.HeaderMaxVersion, options.ClientMaxVersion.ToString());
         ws.SetRequestHeader(QwpConstants.HeaderClientId, options.ClientId ?? DefaultClientId);
 
@@ -461,6 +460,13 @@ internal sealed class QwpWebSocketTransportOptions
 
     /// <summary>Extra HTTP request headers to set on the WebSocket upgrade.</summary>
     public IReadOnlyDictionary<string, string>? ExtraRequestHeaders { get; init; }
+
+    /// <summary>
+    ///     Proxy override for the underlying <see cref="ClientWebSocket" />. <c>null</c> = no proxy
+    ///     (default; long-lived WS rarely survives HTTP proxies). Set to <see cref="WebRequest.DefaultWebProxy" />
+    ///     for system proxy, or a fresh <see cref="WebProxy" /> for an explicit URI.
+    /// </summary>
+    public IWebProxy? Proxy { get; init; }
 }
 
 #endif

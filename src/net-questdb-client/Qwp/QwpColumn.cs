@@ -390,13 +390,56 @@ internal sealed class QwpColumn
     ///     allocations. Intended for reuse across batches by the sender — the schema definition
     ///     stays valid, only the contents are recycled.
     /// </summary>
+    public void TrimToCurrent()
+    {
+        if (FixedData is { Length: > 0 } fixedData && fixedData.Length > FixedLen)
+        {
+            Array.Resize(ref FixedData, FixedLen);
+        }
+        if (StrData is { Length: > 0 } strData && strData.Length > StrLen)
+        {
+            Array.Resize(ref StrData, StrLen);
+        }
+        if (StrOffsets is { Length: > 0 } strOffs)
+        {
+            var needed = NonNullCount + 1;
+            if (strOffs.Length > needed)
+            {
+                Array.Resize(ref StrOffsets, needed);
+            }
+        }
+        if (SymbolIds is { Length: > 0 } symbolIds && symbolIds.Length > NonNullCount)
+        {
+            Array.Resize(ref SymbolIds, NonNullCount);
+        }
+        if (BoolData is { Length: > 0 } boolData)
+        {
+            var needed = (RowCount + 7) >> 3;
+            if (boolData.Length > needed)
+            {
+                Array.Resize(ref BoolData, needed);
+            }
+        }
+        if (NullBitmap is { Length: > 0 } nb)
+        {
+            var needed = (RowCount + 7) >> 3;
+            if (nb.Length > needed)
+            {
+                Array.Resize(ref NullBitmap, needed);
+            }
+        }
+    }
+
     public void Clear()
     {
         RowCount = 0;
         NullCount = 0;
         FixedLen = 0;
         StrLen = 0;
-        NullBitmap = null;
+        if (NullBitmap is not null)
+        {
+            Array.Clear(NullBitmap, 0, NullBitmap.Length);
+        }
         DecimalScaleSet = false;
         DecimalScale = 0;
         GeohashPrecisionSet = false;
@@ -506,22 +549,19 @@ internal sealed class QwpColumn
                 $"column '{Name}' Long256 values must be non-negative");
         }
 
-        // Unsigned LE bytes; available since .NET 5.
-        var magnitude = value.ToByteArray(isUnsigned: true, isBigEndian: false);
-        if (magnitude.Length > QwpConstants.Long256SizeBytes)
-        {
-            throw new IngressError(ErrorCode.InvalidApiCall,
-                $"column '{Name}' Long256 value exceeds 256 bits ({magnitude.Length * 8} bits supplied)");
-        }
-
         EnsureFixedCapacity(FixedLen + QwpConstants.Long256SizeBytes);
         var dest = FixedData.AsSpan(FixedLen, QwpConstants.Long256SizeBytes);
 
-        magnitude.CopyTo(dest);
-        if (magnitude.Length < QwpConstants.Long256SizeBytes)
+        // Write unsigned LE bytes directly into the destination span; no per-row byte[] alloc.
+        if (!value.TryWriteBytes(dest, out var bytesWritten, isUnsigned: true, isBigEndian: false))
         {
-            // Zero-pad the high bytes; FixedData may carry stale values from a prior allocation.
-            dest.Slice(magnitude.Length).Clear();
+            throw new IngressError(ErrorCode.InvalidApiCall,
+                $"column '{Name}' Long256 value exceeds 256 bits ({value.GetByteCount(isUnsigned: true) * 8} bits supplied)");
+        }
+
+        if (bytesWritten < QwpConstants.Long256SizeBytes)
+        {
+            dest.Slice(bytesWritten).Clear();
         }
 
         FixedLen += QwpConstants.Long256SizeBytes;

@@ -83,7 +83,6 @@ internal sealed class QwpMmapSegment : IDisposable
     private readonly unsafe byte* _basePtr;
     private readonly long _viewSize;
     private readonly int _maxFrameLength;
-    private readonly bool _flushOnAppend;
     private bool _disposed;
 
     private unsafe QwpMmapSegment(
@@ -95,8 +94,7 @@ internal sealed class QwpMmapSegment : IDisposable
         long baseFsn,
         long writePosition,
         List<long> offsetTable,
-        int maxFrameLength,
-        bool flushOnAppend)
+        int maxFrameLength)
     {
         Path = path;
         _mmap = mmap;
@@ -105,13 +103,12 @@ internal sealed class QwpMmapSegment : IDisposable
         _handle = view.SafeMemoryMappedViewHandle;
         Capacity = capacity;
         BaseFsn = baseFsn;
-        WritePosition = writePosition;
+        _writePosition = writePosition;
         var initialCapacity = Math.Max(16, offsetTable.Count);
         _offsetTable = new long[initialCapacity];
         for (var i = 0; i < offsetTable.Count; i++) _offsetTable[i] = offsetTable[i];
         _offsetTableCount = offsetTable.Count;
         _maxFrameLength = maxFrameLength;
-        _flushOnAppend = flushOnAppend;
 
         byte* ptr = null;
         _handle.AcquirePointer(ref ptr);
@@ -128,8 +125,10 @@ internal sealed class QwpMmapSegment : IDisposable
     /// <summary>FSN of the first envelope in this segment.</summary>
     public long BaseFsn { get; }
 
+    private long _writePosition;
+
     /// <summary>Byte offset where the next envelope will be written.</summary>
-    public long WritePosition { get; private set; }
+    public long WritePosition => Volatile.Read(ref _writePosition);
 
     /// <summary>FSN of the next envelope (if appended).</summary>
     public long NextFsn => BaseFsn + EnvelopeCount;
@@ -151,8 +150,7 @@ internal sealed class QwpMmapSegment : IDisposable
         string path,
         long capacity,
         long baseFsn,
-        int maxFrameLength = DefaultMaxFrameLength,
-        bool flushOnAppend = false)
+        int maxFrameLength = DefaultMaxFrameLength)
     {
         if (capacity <= HeaderSize + EnvelopeHeaderSize)
         {
@@ -175,7 +173,7 @@ internal sealed class QwpMmapSegment : IDisposable
             var (writePos, offsets) = ScanForLastGoodEnvelope(view, capacity);
             ZeroViewRange(view, writePos, capacity - writePos);
 
-            return new QwpMmapSegment(path, mmap, view, fs, capacity, onDiskBaseFsn, writePos, offsets, maxFrameLength, flushOnAppend);
+            return new QwpMmapSegment(path, mmap, view, fs, capacity, onDiskBaseFsn, writePos, offsets, maxFrameLength);
         }
         catch (Exception)
         {
@@ -190,12 +188,11 @@ internal sealed class QwpMmapSegment : IDisposable
     public static QwpMmapSegment? OpenExisting(
         string path,
         long capacity,
-        int maxFrameLength = DefaultMaxFrameLength,
-        bool flushOnAppend = false)
+        int maxFrameLength = DefaultMaxFrameLength)
     {
         try
         {
-            return Open(path, capacity, baseFsn: -1, maxFrameLength, flushOnAppend);
+            return Open(path, capacity, baseFsn: -1, maxFrameLength);
         }
         catch (EmptySegmentHeaderException)
         {
@@ -251,12 +248,7 @@ internal sealed class QwpMmapSegment : IDisposable
         WriteSpan(envelopeStart, header);
         WriteSpan(envelopeStart + EnvelopeHeaderSize, frame);
 
-        if (_flushOnAppend)
-        {
-            _view.Flush();
-        }
-
-        WritePosition += totalSize;
+        Volatile.Write(ref _writePosition, _writePosition + totalSize);
         AppendOffset(envelopeStart);
         return true;
     }
@@ -275,7 +267,7 @@ internal sealed class QwpMmapSegment : IDisposable
             return;
         }
 
-        table[count] = offset;
+        Volatile.Write(ref table[count], offset);
         Volatile.Write(ref _offsetTableCount, count + 1);
     }
 
@@ -346,7 +338,7 @@ internal sealed class QwpMmapSegment : IDisposable
         }
 
         var table = Volatile.Read(ref _offsetTable);
-        return table[(int)envelopeIndex];
+        return Volatile.Read(ref table[(int)envelopeIndex]);
     }
 
     /// <summary>
@@ -415,51 +407,55 @@ internal sealed class QwpMmapSegment : IDisposable
     ///     Public test seam: replays the entire mmap and returns the last good offset and the table
     ///     of envelope start offsets.
     /// </summary>
-    internal static (long WritePosition, List<long> Offsets) ScanForLastGoodEnvelope(
+    internal static unsafe (long WritePosition, List<long> Offsets) ScanForLastGoodEnvelope(
         MemoryMappedViewAccessor view,
         long capacity)
     {
         long offset = HeaderSize;
         var offsets = new List<long>();
-        Span<byte> header = stackalloc byte[EnvelopeHeaderSize];
-        byte[]? frameScratch = null;
 
-        while (offset + EnvelopeHeaderSize <= capacity)
+        var handle = view.SafeMemoryMappedViewHandle;
+        byte* basePtr = null;
+        handle.AcquirePointer(ref basePtr);
+        try
         {
-            ViewToSpan(view, offset, header);
-
-            var crc = BinaryPrimitives.ReadUInt32LittleEndian(header.Slice(0, 4));
-            var len = BinaryPrimitives.ReadInt32LittleEndian(header.Slice(4, 4));
-
-            if (len == 0 && crc == 0)
+            while (offset + EnvelopeHeaderSize <= capacity)
             {
-                break;
-            }
+                var header = new ReadOnlySpan<byte>(basePtr + offset, EnvelopeHeaderSize);
 
-            if (len <= 0)
-            {
-                break;
-            }
+                var crc = BinaryPrimitives.ReadUInt32LittleEndian(header.Slice(0, 4));
+                var len = BinaryPrimitives.ReadInt32LittleEndian(header.Slice(4, 4));
 
-            if (offset + EnvelopeHeaderSize + len > capacity)
-            {
-                break;
-            }
+                if (len == 0 && crc == 0)
+                {
+                    break;
+                }
 
-            if (frameScratch is null || frameScratch.Length < len)
-            {
-                frameScratch = new byte[Math.Max(len, 4096)];
-            }
-            ViewToSpan(view, offset + EnvelopeHeaderSize, frameScratch.AsSpan(0, len));
-            var crcOverLen = QwpCrc32C.Compute(header.Slice(4, 4));
-            var actual = QwpCrc32C.Compute(frameScratch.AsSpan(0, len), crcOverLen);
-            if (actual != crc)
-            {
-                break;
-            }
+                if (len <= 0)
+                {
+                    break;
+                }
 
-            offsets.Add(offset);
-            offset += EnvelopeHeaderSize + len;
+                if (offset + EnvelopeHeaderSize + len > capacity)
+                {
+                    break;
+                }
+
+                var frame = new ReadOnlySpan<byte>(basePtr + offset + EnvelopeHeaderSize, len);
+                var crcOverLen = QwpCrc32C.Compute(header.Slice(4, 4));
+                var actual = QwpCrc32C.Compute(frame, crcOverLen);
+                if (actual != crc)
+                {
+                    break;
+                }
+
+                offsets.Add(offset);
+                offset += EnvelopeHeaderSize + len;
+            }
+        }
+        finally
+        {
+            handle.ReleasePointer();
         }
 
         return (offset, offsets);

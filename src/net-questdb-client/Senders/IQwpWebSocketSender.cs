@@ -61,5 +61,5 @@ public interface IQwpWebSocketSender : ISender
     void Ping(CancellationToken ct = default);
 
     /// <inheritdoc cref="Ping" />
-    Task PingAsync(CancellationToken ct = default);
+    ValueTask PingAsync(CancellationToken ct = default);
 }

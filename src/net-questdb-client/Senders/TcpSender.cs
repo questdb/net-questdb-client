@@ -38,7 +38,7 @@ namespace QuestDB.Senders;
 /// <summary>
 ///     An implementation of <see cref="ISender" /> for TCP transport.
 /// </summary>
-internal class TcpSender : AbstractSender
+internal sealed class TcpSender : AbstractSender
 {
     private static readonly RemoteCertificateValidationCallback AllowAllCertCallback = (_, _, _, _) => true;
     private bool _authenticated;
@@ -246,7 +246,7 @@ internal class TcpSender : AbstractSender
     }
 
     /// <inheritdoc />
-    public override async Task SendAsync(CancellationToken ct = default)
+    public override async ValueTask SendAsync(CancellationToken ct = default)
     {
         try
         {

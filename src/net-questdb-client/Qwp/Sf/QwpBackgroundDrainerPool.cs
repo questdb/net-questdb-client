@@ -250,11 +250,18 @@ internal sealed class QwpBackgroundDrainerPool : IDisposable
         return false;
     }
 
+    private const int FailedSentinelMaxBytes = 4096;
+
     private static void TryDropFailedSentinel(string slotDirectory, Exception ex)
     {
         try
         {
-            File.WriteAllText(Path.Combine(slotDirectory, FailedSentinel), ex.ToString());
+            var content = ex.ToString();
+            if (content.Length > FailedSentinelMaxBytes)
+            {
+                content = content.Substring(0, FailedSentinelMaxBytes) + "\n... [truncated]";
+            }
+            File.WriteAllText(Path.Combine(slotDirectory, FailedSentinel), content);
         }
         catch (Exception)
         {

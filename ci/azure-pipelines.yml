@@ -81,7 +81,15 @@ steps:
     arguments: '--configuration $(buildConfiguration) --no-restore'
 
 - task: DotNetCoreCLI@2
-  displayName: 'Run all tests on $(osName)'
+  displayName: 'Run all tests on $(osName) (net8.0)'
+  inputs:
+    command: 'test'
+    projects: 'src/net-questdb-client-tests/net-questdb-client-tests.csproj'
+    arguments: '--configuration $(buildConfiguration) --framework net8.0 --no-build --verbosity normal --logger trx --filter "FullyQualifiedName!~QuestDbIntegrationTests"'
+    publishTestResults: true
+
+- task: DotNetCoreCLI@2
+  displayName: 'Run all tests on $(osName) (net9.0, with coverage)'
   inputs:
     command: 'test'
     projects: 'src/net-questdb-client-tests/net-questdb-client-tests.csproj'
@@ -90,13 +98,21 @@ steps:
   condition: eq(variables['osName'], 'Linux')
 
 - task: DotNetCoreCLI@2
-  displayName: 'Run tests on $(osName) (excluding integration tests)'
+  displayName: 'Run tests on $(osName) (net9.0, excluding integration tests)'
   inputs:
     command: 'test'
     projects: 'src/net-questdb-client-tests/net-questdb-client-tests.csproj'
     arguments: '--configuration $(buildConfiguration) --framework net9.0 --no-build --verbosity normal --logger trx --collect:"XPlat Code Coverage" --filter "FullyQualifiedName!~QuestDbIntegrationTests"'
     publishTestResults: true
   condition: ne(variables['osName'], 'Linux')
+
+- task: DotNetCoreCLI@2
+  displayName: 'Run all tests on $(osName) (net10.0)'
+  inputs:
+    command: 'test'
+    projects: 'src/net-questdb-client-tests/net-questdb-client-tests.csproj'
+    arguments: '--configuration $(buildConfiguration) --framework net10.0 --no-build --verbosity normal --logger trx --filter "FullyQualifiedName!~QuestDbIntegrationTests"'
+    publishTestResults: true
 
 - task: PublishCodeCoverageResults@2
   displayName: 'Publish code coverage'

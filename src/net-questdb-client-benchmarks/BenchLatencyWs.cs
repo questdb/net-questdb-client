@@ -39,9 +39,10 @@ using dummy_http_server;
 namespace net_questdb_client_benchmarks;
 
 /// <summary>
-///     Single-batch round-trip latency in sync mode (<c>in_flight_window=1</c>). Each iteration
-///     is one full RTT (send + ack) — IterationCount = sample size for p50/p95/min/max.
-///     Override with <c>--iterationCount N</c> on the CLI when you need fewer/more samples.
+///     Single-batch round-trip latency at the smallest valid pipeline depth (<c>in_flight_window=2</c>;
+///     <c>=1</c> is rejected by the WS sender). Each iteration is one full RTT (send + ack) —
+///     IterationCount = sample size for p50/p95/min/max. Override with <c>--iterationCount N</c>
+///     on the CLI when you need fewer/more samples.
 /// </summary>
 [MemoryDiagnoser]
 [Config(typeof(LatencySamplingConfig))]
@@ -91,7 +92,7 @@ public class BenchLatencyWs
             _wsEndpoint = $"127.0.0.1:{_qwpServer.Uri.Port}";
         }
 
-        _wsSender = Sender.New($"ws::addr={_wsEndpoint};in_flight_window=1;auto_flush=off;");
+        _wsSender = Sender.New($"ws::addr={_wsEndpoint};in_flight_window=2;auto_flush=off;");
         _httpSender = Sender.New($"http::addr={_httpEndpoint};auto_flush=off;");
     }
 

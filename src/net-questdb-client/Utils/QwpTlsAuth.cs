@@ -80,8 +80,9 @@ internal static class QwpTlsAuth
             return null;
         }
 
-        var rootsPath = tlsRoots;
-        var rootsPassword = tlsRootsPassword;
+        // Lazy-load on first handshake so a non-existent path doesn't fail at builder time;
+        // once loaded the cert is cached and every subsequent handshake reuses it.
+        var trustRoot = new Lazy<X509Certificate2>(() => LoadTrustRoot(tlsRoots, tlsRootsPassword));
         return (_, certificate, chain, errors) =>
         {
             if ((errors & ~SslPolicyErrors.RemoteCertificateChainErrors) != 0)
@@ -89,10 +90,12 @@ internal static class QwpTlsAuth
                 return false;
             }
 
-            using var root = LoadTrustRoot(rootsPath, rootsPassword);
             using var serverCert = new X509Certificate2(certificate!);
             chain!.ChainPolicy.TrustMode = X509ChainTrustMode.CustomRootTrust;
-            chain.ChainPolicy.CustomTrustStore.Add(root);
+            if (chain.ChainPolicy.CustomTrustStore.Count == 0)
+            {
+                chain.ChainPolicy.CustomTrustStore.Add(trustRoot.Value);
+            }
             return chain.Build(serverCert);
         };
     }

@@ -54,12 +54,13 @@ internal sealed class QwpTableBuffer
     private readonly Dictionary<string, int>.AlternateLookup<ReadOnlySpan<char>> _columnIndexLookup;
 #endif
     private readonly List<QwpColumn> _columns = new();
+    private readonly int _maxNameLengthBytes;
 
-    private bool[] _touchedInCurrentRow = Array.Empty<bool>();
+    private bool[] _touchedInCurrentRow = new bool[8];
 
     private int _committedColumnCount;
     private int _committedSchemaId = -1;
-    private QwpColumn.Savepoint[] _rowSavepoints = Array.Empty<QwpColumn.Savepoint>();
+    private QwpColumn.Savepoint[] _rowSavepoints = new QwpColumn.Savepoint[8];
     private QwpColumn.Savepoint? _designatedSavepoint;
 
     /// <summary>
@@ -82,6 +83,7 @@ internal sealed class QwpTableBuffer
         }
 
         TableName = tableName;
+        _maxNameLengthBytes = maxNameLengthBytes;
 #if NET9_0_OR_GREATER
         _columnIndexLookup = _columnIndex.GetAlternateLookup<ReadOnlySpan<char>>();
 #endif
@@ -265,6 +267,16 @@ internal sealed class QwpTableBuffer
         }
     }
 
+    public void TrimToCurrent()
+    {
+        for (var i = 0; i < _columns.Count; i++)
+        {
+            _columns[i].TrimToCurrent();
+        }
+
+        DesignatedTimestampColumn?.TrimToCurrent();
+    }
+
     /// <summary>
     ///     Commit the current row with a TIMESTAMP (microseconds-since-epoch) designated value.
     /// </summary>
@@ -348,10 +360,10 @@ internal sealed class QwpTableBuffer
 #endif
 
         var nameByteCount = Encoding.UTF8.GetByteCount(columnName);
-        if (nameByteCount > QwpConstants.MaxNameLengthBytes)
+        if (nameByteCount > _maxNameLengthBytes)
         {
             throw new IngressError(ErrorCode.InvalidName,
-                $"column name exceeds {QwpConstants.MaxNameLengthBytes} UTF-8 bytes (got {nameByteCount})");
+                $"column name exceeds {_maxNameLengthBytes} UTF-8 bytes (got {nameByteCount})");
         }
 
         if (_columns.Count >= QwpConstants.MaxColumnsPerTable)

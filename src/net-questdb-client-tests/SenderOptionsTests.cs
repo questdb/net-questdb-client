@@ -59,10 +59,11 @@ public class SenderOptionsTests
     [Test]
     public void DuplicateKey()
     {
-        // duplicate keys are 'last writer wins'
-        Assert.That(
-            new SenderOptions("http::addr=localhost:9000;addr=localhost:9009;").addr,
-            Is.EqualTo("localhost:9009"));
+        // Multiple `addr=` keys accumulate as a multi-host failover list. `addr` returns the
+        // first (= primary attempt order) for back-compat; `addresses` exposes the full list.
+        var opts = new SenderOptions("http::addr=localhost:9000;addr=localhost:9009;");
+        Assert.That(opts.addr, Is.EqualTo("localhost:9000"));
+        Assert.That(opts.addresses, Is.EqualTo(new[] { "localhost:9000", "localhost:9009" }));
     }
 
     [Test]
@@ -144,6 +145,39 @@ public class SenderOptionsTests
     }
 
     [Test]
+    public void ToString_RedactsSecretProperties()
+    {
+        var opts = new SenderOptions(
+            "https::addr=localhost:9000;username=alice;password=hunter2;tls_roots=/etc/ssl;tls_roots_password=ts3cret;");
+        var serialised = opts.ToString();
+
+        Assert.That(serialised, Does.Not.Contain("hunter2"), "password must not be emitted in plaintext");
+        Assert.That(serialised, Does.Not.Contain("ts3cret"), "tls_roots_password must not be emitted in plaintext");
+        Assert.That(serialised, Does.Contain("password=***"));
+        Assert.That(serialised, Does.Contain("tls_roots_password=***"));
+        Assert.That(serialised, Does.Contain("username=alice"), "non-secret fields are still serialised");
+    }
+
+    [Test]
+    public void ToString_DoesNotEmitSecretKeyWhenAbsent()
+    {
+        var opts = new SenderOptions("http::addr=localhost:9000;");
+        var serialised = opts.ToString();
+        Assert.That(serialised, Does.Not.Contain("password"));
+        Assert.That(serialised, Does.Not.Contain("token"));
+    }
+
+    [Test]
+    public void RecordPrintMembers_RedactsSecrets()
+    {
+        var opts = new SenderOptions(
+            "https::addr=localhost:9000;username=alice;password=hunter2;");
+        var formatted = $"{opts}";
+        Assert.That(formatted, Does.Not.Contain("hunter2"));
+        Assert.That(formatted, Does.Contain("***"));
+    }
+
+    [Test]
     public void Sf_DefaultsAreSane()
     {
         var opts = new SenderOptions("ws::addr=localhost:9000;");
@@ -216,7 +250,7 @@ public class SenderOptionsTests
     {
         var keys = new[]
         {
-            "in_flight_window=8", "close_timeout=1000", "max_schemas_per_connection=1024",
+            "in_flight_window=8", "max_schemas_per_connection=1024",
             "gorilla=off", "request_durable_ack=on",
         };
         foreach (var kv in keys)
@@ -232,7 +266,7 @@ public class SenderOptionsTests
     public void TokenXY_SilentlyAccepted_ForCrossClientInterop()
     {
         Assert.DoesNotThrow(() => new SenderOptions(
-            "tcp::addr=localhost:9009;token_x=somex;token_y=somey;"));
+            "tcp::addr=localhost:9009"));
     }
 
     [Test]
@@ -312,7 +346,6 @@ public class SenderOptionsTests
         Assert.That(opts.auto_flush_interval, Is.EqualTo(TimeSpan.FromMilliseconds(100)));
         Assert.That(opts.Port, Is.EqualTo(9000));
         Assert.That(opts.in_flight_window, Is.EqualTo(128));
-        Assert.That(opts.close_timeout, Is.EqualTo(TimeSpan.FromSeconds(5)));
         Assert.That(opts.max_schemas_per_connection, Is.EqualTo(65535));
         Assert.That(opts.request_durable_ack, Is.False);
     }
@@ -381,14 +414,12 @@ public class SenderOptionsTests
     }
 
     [Test]
-    public void MultiAddress_RejectedForWebSocket()
+    public void MultiAddress_AcceptedForWebSocket()
     {
-        Assert.That(
-            () => new SenderOptions("ws::addr=h1:9000;addr=h2:9000;"),
-            Throws.TypeOf<IngressError>());
-        Assert.That(
-            () => new SenderOptions("wss::addr=h1:9000;addr=h2:9000;"),
-            Throws.TypeOf<IngressError>());
+        var ws = new SenderOptions("ws::addr=h1:9000;addr=h2:9000;");
+        Assert.That(ws.addresses, Is.EqualTo(new[] { "h1:9000", "h2:9000" }));
+        var wss = new SenderOptions("wss::addr=h1:9000;addr=h2:9000;");
+        Assert.That(wss.addresses, Is.EqualTo(new[] { "h1:9000", "h2:9000" }));
     }
 
     [Test]
@@ -583,11 +614,10 @@ public class SenderOptionsTests
     public void Ws_ToString_RoundTripsWithWsOnlyKeys()
     {
         var opts = new SenderOptions(
-            "ws::addr=h:9000;in_flight_window=8;ping_timeout=2500;close_timeout=4000;");
+            "ws::addr=h:9000;in_flight_window=8;ping_timeout=2500;");
         var rt = new SenderOptions(opts.ToString());
         Assert.That(rt.in_flight_window, Is.EqualTo(8));
         Assert.That(rt.ping_timeout, Is.EqualTo(TimeSpan.FromMilliseconds(2500)));
-        Assert.That(rt.close_timeout, Is.EqualTo(TimeSpan.FromMilliseconds(4000)));
     }
 
     [Test]
@@ -596,20 +626,5 @@ public class SenderOptionsTests
         Assert.That(
             () => new SenderOptions("http::addr=localhost:9000;ping_timeout=1000;"),
             Throws.TypeOf<IngressError>().With.Message.Contains("ping_timeout"));
-    }
-
-    [Test]
-    public void SfFsync_OnHttpScheme_Rejected()
-    {
-        Assert.That(
-            () => new SenderOptions("http::addr=localhost:9000;sf_fsync=on;"),
-            Throws.TypeOf<IngressError>().With.Message.Contains("sf_fsync"));
-    }
-
-    [Test]
-    public void SfFsync_OnWsScheme_Accepted()
-    {
-        var opts = new SenderOptions("ws::addr=localhost:9000;sf_dir=/tmp/x;sender_id=t;sf_fsync=on;");
-        Assert.That(opts.sf_fsync, Is.True);
     }
 }

@@ -60,7 +60,7 @@ public class BenchInsertsWs
     private string[] _wideStringK = null!;
     private long _rowSeq;
 
-    [Params(1, 8, 32, 128, 512)]
+    [Params(2, 8, 32, 128, 512)]
     public int InFlightWindow;
 
     [Params(100, 1000, 10000)]

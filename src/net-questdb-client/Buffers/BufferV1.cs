@@ -113,10 +113,15 @@ public class BufferV1 : IBuffer
     /// <inheritdoc />
     public void At(DateTime timestamp)
     {
-        var epoch = timestamp.Ticks - EpochTicks;
+        var utc = NormaliseToUtc(timestamp);
+        var epoch = utc.Ticks - EpochTicks;
         PutAscii(' ').Put(epoch * 100);
         FinishLine();
     }
+
+    private static DateTime NormaliseToUtc(DateTime value) => value.Kind == DateTimeKind.Local
+        ? value.ToUniversalTime()
+        : value;
 
     /// <inheritdoc />
     public void At(DateTimeOffset timestamp)
@@ -354,7 +359,8 @@ public class BufferV1 : IBuffer
             Table(_currentTableName);
         }
 
-        var epoch = timestamp.Ticks - EpochTicks;
+        var utc = NormaliseToUtc(timestamp);
+        var epoch = utc.Ticks - EpochTicks;
         Column(name).Put(epoch * 100).PutAscii('n');
         return this;
     }

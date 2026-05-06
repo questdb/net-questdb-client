@@ -55,7 +55,7 @@ internal abstract class AbstractSender : ISender
     }
 
     /// <inheritdoc />
-    public virtual Task CommitAsync(CancellationToken ct = default)
+    public virtual ValueTask CommitAsync(CancellationToken ct = default)
     {
         throw new IngressError(ErrorCode.InvalidApiCall, $"`{GetType().Name}` does not support transactions.");
     }
@@ -261,7 +261,7 @@ internal abstract class AbstractSender : ISender
     public abstract void Dispose();
 
     /// <inheritdoc />
-    public abstract Task SendAsync(CancellationToken ct = default);
+    public abstract ValueTask SendAsync(CancellationToken ct = default);
 
     /// <inheritdoc />
     public abstract void Send(CancellationToken ct = default);
@@ -324,7 +324,7 @@ internal abstract class AbstractSender : ISender
              || (Options.auto_flush_interval > TimeSpan.Zero &&
                  DateTime.UtcNow - LastFlush >= Options.auto_flush_interval)))
         {
-            return new ValueTask(SendAsync(ct));
+            return SendAsync(ct);
         }
 
         return ValueTask.CompletedTask;

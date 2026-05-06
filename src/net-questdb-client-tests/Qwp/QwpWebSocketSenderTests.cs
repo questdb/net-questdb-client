@@ -348,7 +348,7 @@ public class QwpWebSocketSenderTests
         using var sender = NewSender(server, "auto_flush=off;in_flight_window=2;");
         sender.Table("t").Column("v", 1L).At(DateTime.UtcNow);
 
-        var pending = sender.SendAsync();
+        var pending = sender.SendAsync().AsTask();
         Assert.That(pending.IsCompleted, Is.False, "SendAsync must not complete while the server holds the ACK");
 
         ackGate.Release();
@@ -374,9 +374,9 @@ public class QwpWebSocketSenderTests
 
         using var sender = NewSender(server, "auto_flush=off;in_flight_window=4;");
         sender.Table("t").Column("v", 1L).At(DateTime.UtcNow);
-        var firstSend = sender.SendAsync();
+        var firstSend = sender.SendAsync().AsTask();
         // Frame is enqueued and on the wire; server's FrameHandler is parked on ackGate.Wait().
-        var pending = ((QuestDB.Senders.IQwpWebSocketSender)sender).PingAsync();
+        var pending = ((QuestDB.Senders.IQwpWebSocketSender)sender).PingAsync().AsTask();
         Assert.That(pending.IsCompleted, Is.False, "PingAsync must not complete while a frame is unacked");
 
         ackGate.Release();

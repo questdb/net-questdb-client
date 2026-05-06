@@ -46,7 +46,7 @@ public class BenchSfThroughput
     private ISender _wsNoSf = null!;
     private ISender _wsWithSf = null!;
 
-    [Params(1, 8, 32, 128)]
+    [Params(2, 8, 32, 128)]
     public int InFlightWindow;
 
     [Params(10_000, 100_000)]

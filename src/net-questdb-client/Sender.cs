@@ -64,13 +64,9 @@ public static class Sender
     /// <param name="options"></param>
     /// <returns></returns>
     /// <exception cref="NotSupportedException"></exception>
-    public static ISender New(SenderOptions? options = null)
+    public static ISender New(SenderOptions options)
     {
-        if (options is null)
-        {
-            return new HttpSender("http::addr=localhost:9000;");
-        }
-
+        ArgumentNullException.ThrowIfNull(options);
         options.EnsureValid();
 
         switch (options.protocol)

@@ -300,10 +300,19 @@ internal static class QwpEncoder
                 break;
 
             case QwpTypeCode.Varchar:
-                // (n + 1) uint32 LE offsets, then concatenated UTF-8 bytes.
-                for (var i = 0; i <= n; i++)
+                // (n + 1) uint32 LE offsets — bulk-copy on LE hosts, scalar fallback on BE.
+                if (BitConverter.IsLittleEndian)
                 {
-                    buf.WriteUInt32LittleEndian(col.StrOffsets![i]);
+                    var offsetsBytes = System.Runtime.InteropServices.MemoryMarshal.AsBytes(
+                        col.StrOffsets.AsSpan(0, n + 1));
+                    buf.WriteBytes(offsetsBytes);
+                }
+                else
+                {
+                    for (var i = 0; i <= n; i++)
+                    {
+                        buf.WriteUInt32LittleEndian(col.StrOffsets![i]);
+                    }
                 }
 
                 buf.WriteBytes(col.StrData!.AsSpan(0, col.StrLen));
@@ -379,15 +388,33 @@ internal static class QwpEncoder
 
     private static void WriteString(FrameBuilder buf, string value)
     {
-        var byteCount = Encoding.UTF8.GetByteCount(value);
-        buf.WriteVarint((ulong)byteCount);
-        if (byteCount == 0)
+        if (value.Length == 0)
         {
+            buf.WriteVarint(0);
             return;
         }
 
-        var dest = buf.Allocate(byteCount);
-        Encoding.UTF8.GetBytes(value, dest);
+        var maxBytes = Encoding.UTF8.GetMaxByteCount(value.Length);
+        if (maxBytes <= 256)
+        {
+            Span<byte> scratch = stackalloc byte[256];
+            var written = Encoding.UTF8.GetBytes(value, scratch);
+            buf.WriteVarint((ulong)written);
+            buf.WriteBytes(scratch.Slice(0, written));
+            return;
+        }
+
+        var rented = ArrayPool<byte>.Shared.Rent(maxBytes);
+        try
+        {
+            var written = Encoding.UTF8.GetBytes(value, rented);
+            buf.WriteVarint((ulong)written);
+            buf.WriteBytes(rented.AsSpan(0, written));
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(rented);
+        }
     }
 
     /// <summary>

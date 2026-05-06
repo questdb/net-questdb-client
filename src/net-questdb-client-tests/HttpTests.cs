@@ -1406,8 +1406,8 @@ public class HttpTests
         await sender.Transaction("tableName").Symbol("foo", "bah").AtAsync(86400000000000);
         await sender.Column("foo", 123).AtAsync(86400000000000);
         await sender.Column("foo", 123d).AtAsync(86400000000000);
-        await sender.Column("foo", new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc)).AtAsync(86400000000000);
-        await sender.Column("foo", new DateTimeOffset(new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc)))
+        await sender.Column("foo", new DateTime(1970, 1, 1)).AtAsync(86400000000000);
+        await sender.Column("foo", new DateTimeOffset(new DateTime(1970, 1, 1)))
                     .AtAsync(86400000000000);
         await sender.Column("foo", false).AtAsync(86400000000000);
 
@@ -1801,7 +1801,7 @@ public class HttpTests
                         .Column("при вед", "медвед")
                         .AtAsync(DateTime.UtcNow);
 
-            var request = sender.SendAsync();
+            var request = sender.SendAsync().AsTask();
 
             while (request.Status == TaskStatus.WaitingToRun)
             {

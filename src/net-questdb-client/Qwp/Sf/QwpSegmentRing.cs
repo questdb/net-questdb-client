@@ -43,7 +43,6 @@ internal sealed class QwpSegmentRing : IDisposable
     private readonly string _directory;
     private readonly long _segmentCapacity;
     private readonly int _maxFrameLength;
-    private readonly bool _flushOnAppend;
     private readonly long _highWaterTrigger;
     private readonly object _lock = new();
     private readonly List<QwpMmapSegment> _sealedSegments = new();
@@ -58,12 +57,11 @@ internal sealed class QwpSegmentRing : IDisposable
     private bool _wakeRequestedForActive;
     private volatile bool _closed;
 
-    private QwpSegmentRing(string directory, long segmentCapacity, int maxFrameLength, bool flushOnAppend)
+    private QwpSegmentRing(string directory, long segmentCapacity, int maxFrameLength)
     {
         _directory = directory;
         _segmentCapacity = segmentCapacity;
         _maxFrameLength = maxFrameLength;
-        _flushOnAppend = flushOnAppend;
         // 75%: leaves a quarter-segment of producer runway for the manager to provision a spare.
         _highWaterTrigger = (segmentCapacity >> 2) * 3;
         _publishedFsn = -1L;
@@ -160,11 +158,10 @@ internal sealed class QwpSegmentRing : IDisposable
     public static QwpSegmentRing Open(
         string directory,
         long segmentCapacity = 64L * 1024 * 1024,
-        int maxFrameLength = QwpMmapSegment.DefaultMaxFrameLength,
-        bool flushOnAppend = false)
+        int maxFrameLength = QwpMmapSegment.DefaultMaxFrameLength)
     {
         QwpFiles.EnsureDirectory(directory);
-        var ring = new QwpSegmentRing(directory, segmentCapacity, maxFrameLength, flushOnAppend);
+        var ring = new QwpSegmentRing(directory, segmentCapacity, maxFrameLength);
 
         try
         {
@@ -181,7 +178,7 @@ internal sealed class QwpSegmentRing : IDisposable
                         continue;
                     }
 
-                    var seg = QwpMmapSegment.OpenExisting(path, segmentCapacity, maxFrameLength, flushOnAppend);
+                    var seg = QwpMmapSegment.OpenExisting(path, segmentCapacity, maxFrameLength);
                     if (seg is null)
                     {
                         SfCleanup.DeleteFile(path);
@@ -481,7 +478,7 @@ internal sealed class QwpSegmentRing : IDisposable
         QwpMmapSegment? seg = null;
         try
         {
-            seg = QwpMmapSegment.Open(realPath, _segmentCapacity, baseFsn, _maxFrameLength, _flushOnAppend);
+            seg = QwpMmapSegment.Open(realPath, _segmentCapacity, baseFsn, _maxFrameLength);
             if (!PublishActive(seg, ref seg))
             {
                 return false;
@@ -518,7 +515,7 @@ internal sealed class QwpSegmentRing : IDisposable
         {
             if (!File.Exists(sparePath)) return false;
             File.Move(sparePath, realPath);
-            seg = QwpMmapSegment.Open(realPath, _segmentCapacity, baseFsn, _maxFrameLength, _flushOnAppend);
+            seg = QwpMmapSegment.Open(realPath, _segmentCapacity, baseFsn, _maxFrameLength);
             return PublishActive(seg, ref seg);
         }
         catch (Exception)

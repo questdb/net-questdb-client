@@ -130,6 +130,9 @@ internal class HttpSender : AbstractSender
             }
             else
             {
+                var trustRoot = Options.tls_roots is not null
+                    ? new Lazy<X509Certificate2>(() => QwpTlsAuth.LoadTrustRoot(Options.tls_roots!, Options.tls_roots_password))
+                    : null;
                 handler.SslOptions.RemoteCertificateValidationCallback =
                     (_, certificate, chain, errors) =>
                     {
@@ -138,11 +141,13 @@ internal class HttpSender : AbstractSender
                             return false;
                         }
 
-                        if (Options.tls_roots != null)
+                        if (trustRoot is not null)
                         {
                             chain!.ChainPolicy.TrustMode = X509ChainTrustMode.CustomRootTrust;
-                            chain.ChainPolicy.CustomTrustStore.Add(
-                                QwpTlsAuth.LoadTrustRoot(Options.tls_roots, Options.tls_roots_password));
+                            if (chain.ChainPolicy.CustomTrustStore.Count == 0)
+                            {
+                                chain.ChainPolicy.CustomTrustStore.Add(trustRoot.Value);
+                            }
                         }
 
                         return chain!.Build(new X509Certificate2(certificate!));
@@ -411,7 +416,7 @@ internal class HttpSender : AbstractSender
     }
 
     /// <inheritdoc />
-    public override async Task CommitAsync(CancellationToken ct = default)
+    public override async ValueTask CommitAsync(CancellationToken ct = default)
     {
         try
         {
@@ -658,7 +663,7 @@ internal class HttpSender : AbstractSender
     }
 
     /// <inheritdoc />
-    public override async Task SendAsync(CancellationToken ct = default)
+    public override async ValueTask SendAsync(CancellationToken ct = default)
     {
         if (WithinTransaction && !CommittingTransaction)
         {

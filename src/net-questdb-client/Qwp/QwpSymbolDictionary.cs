@@ -49,19 +49,16 @@ internal sealed class QwpSymbolDictionary
 {
     private readonly Dictionary<string, int> _ids = new(StringComparer.Ordinal);
     private readonly List<string> _values = new();
-    private readonly int _maxSymbols;
 #if NET9_0_OR_GREATER
     private readonly Dictionary<string, int>.AlternateLookup<ReadOnlySpan<char>> _idsLookup;
 
-    public QwpSymbolDictionary(int maxSymbols = int.MaxValue)
+    public QwpSymbolDictionary()
     {
-        _maxSymbols = maxSymbols;
         _idsLookup = _ids.GetAlternateLookup<ReadOnlySpan<char>>();
     }
 #else
-    public QwpSymbolDictionary(int maxSymbols = int.MaxValue)
+    public QwpSymbolDictionary()
     {
-        _maxSymbols = maxSymbols;
     }
 #endif
 
@@ -84,6 +81,10 @@ internal sealed class QwpSymbolDictionary
     /// </summary>
     public int Add(ReadOnlySpan<char> value)
     {
+        if (value.IsEmpty)
+        {
+            throw new IngressError(ErrorCode.InvalidApiCall, "symbol value must not be empty");
+        }
         int id;
 #if NET9_0_OR_GREATER
         if (_idsLookup.TryGetValue(value, out id))
@@ -98,12 +99,6 @@ internal sealed class QwpSymbolDictionary
         }
 #endif
 
-        if (_values.Count >= _maxSymbols)
-        {
-            throw new IngressError(ErrorCode.ConfigError,
-                $"symbol dictionary cardinality {_maxSymbols} exceeded; raise `max_symbols_per_connection`");
-        }
-
         var stored = value.ToString();
         id = _values.Count;
         _values.Add(stored);
@@ -114,6 +109,11 @@ internal sealed class QwpSymbolDictionary
     /// <summary>Returns the symbol value at the given global id.</summary>
     public string GetSymbol(int id)
     {
+        if (id < 0 || id >= _values.Count)
+        {
+            throw new IngressError(ErrorCode.InvalidApiCall,
+                $"symbol id {id} out of range [0, {_values.Count})");
+        }
         return _values[id];
     }
 

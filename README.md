@@ -87,7 +87,7 @@ the sender is disposed.
 using var sender = Sender.New("http::addr=localhost:9000;auto_flush=on;auto_flush_rows=1000;");
 ```
 
-#### Flush every 5000 rows
+#### Flush every 1000 rows (no time-based trigger)
 
 ```csharp
 using var sender = Sender.New("http::addr=localhost:9000;auto_flush=on;auto_flush_rows=1000;auto_flush_interval=off;");
@@ -110,13 +110,13 @@ using var sender = Sender.New("http::addr=localhost:9000;auto_flush=on;auto_flus
 #### HTTP Authentication (Basic)
 
 ```csharp
-using var sender = Sender.New("https::addr=localhost:9009;tls_verify=unsafe_off;username=admin;password=quest;");
+using var sender = Sender.New("https::addr=localhost:9000;tls_verify=unsafe_off;username=admin;password=quest;");
 ```
 
 #### HTTP Authentication (Token)
 
 ```csharp
-using var sender = Sender.New("https::addr=localhost:9009;tls_verify=unsafe_off;username=admin;token=<bearer token>");
+using var sender = Sender.New("https::addr=localhost:9000;tls_verify=unsafe_off;username=admin;token=<bearer token>");
 ```
 
 #### TCP Authentication
@@ -254,8 +254,8 @@ SF caveats:
 #### Caveats
 
 - **`ws::` / `wss::` requires .NET 7 or later.** HTTP and TCP transports keep working on net6.0.
-- The transport disables system HTTP proxies by default; long-lived WebSocket connections rarely survive HTTP proxies. Pass an explicit `IWebProxy` to override if you have a WebSocket-aware proxy.
-- Multi-address `addr=h1,h2` is **not** supported on the WebSocket transport.
+- The transport disables HTTP proxies by default; long-lived WebSocket connections rarely survive them. Override with `proxy=system` to use the system proxy or `proxy=http://host:port` for an explicit URI.
+- Multi-address `addr=h1,h2,...` is supported with role-aware failover (see "Multi-address failover" above).
 - **Use long-lived senders.** WebSocket upgrade is significantly more expensive than an HTTP POST; create the sender once at startup and keep it alive for the process lifetime, rather than per request.
 - **Connect-string quoting differs from Java/Go.** This client parses connect strings via `System.Data.Common.DbConnectionStringBuilder`, which uses ADO.NET-style `'`/`"` quoting with internal doubling. Java and Go implement `;;` → `;` escaping. A connect string with a literal semicolon in a value (rare; mostly passwords or paths) parses differently across clients — quote the value or escape per the local parser.
 
@@ -292,14 +292,11 @@ The config string format is:
 | `username`               |                            | The username for authentication. Used for Basic Authentication and TCP JWK Authentication.                                                                                                                                    |
 | `password`               |                            | The password for authentication. Used for Basic Authentication.                                                                                                                                                               |
 | `token`                  |                            | The token for authentication. Used for Token Authentication and TCP JWK Authentication.                                                                                                                                       |
-| `token_x`                |                            | Un-used.                                                                                                                                                                                                                      |
-| `token_y`                |                            | Un-used.                                                                                                                                                                                                                      |
 | `tls_verify`             | `on`                       | Denotes whether TLS certificates should or should not be verified. Options are on/unsafe_off.                                                                                                                                  |
-| `tls_ca`                 |                            | Un-used.                                                                                                                                                                                                                      |
 | `tls_roots`              |                            | Used to specify the filepath for a custom .pem certificate.                                                                                                                                                                   |
 | `tls_roots_password`     |                            | Used to specify the filepath for the private key/password corresponding to the `tls_roots` certificate.                                                                                                                       |
 | `auth_timeout`           | `15000`                    | The time period to wait for authenticating requests, in milliseconds.                                                                                                                                                         |
-| `request_timeout`        | `10000`                    | Base timeout for HTTP requests before any additional time is added.                                                                                                                                                           |
+| `request_timeout`        | `30000`                    | Base timeout for HTTP requests before any additional time is added.                                                                                                                                                           |
 | `request_min_throughput` | `102400`                   | Expected minimum throughput of requests in bytes per second. Used to add additional time to `request_timeout` to prevent large requests timing out prematurely.                                                               |
 | `retry_timeout`          | `10000`                    | The time period during which retries will be attempted, in milliseconds.                                                                                                                                                      |
 | `max_name_len`           | `127`                      | The maximum allowed bytes, in UTF-8 format, for column and table names.                                                                                                                                                       |
@@ -321,7 +318,7 @@ The config string format is:
 | `sf_durability`                   | `memory`     | Durability mode. Only `memory` is supported in v1.                                                       |
 | `sf_append_deadline_millis`       | `30000`      | Max wait when the disk cap is hit before `Send` throws.                                                  |
 | `reconnect_initial_backoff_millis`| `100`        | Starting backoff for reconnect attempts.                                                                 |
-| `reconnect_max_backoff_millis`    | `30000`      | Cap on per-attempt backoff.                                                                              |
+| `reconnect_max_backoff_millis`    | `5000`       | Cap on per-attempt backoff.                                                                              |
 | `reconnect_max_duration_millis`   | `300000`     | Total per-outage budget; sender becomes terminal if exceeded.                                            |
 | `initial_connect_retry`           | `off`        | `on` makes the first connect honour the same backoff loop. Default is "fail fast on first connect".      |
 | `close_flush_timeout_millis`      | `5000`       | Max wait at `Dispose` for the SF engine to drain. `0` or `-1` for fast close.                            |
@@ -400,7 +397,7 @@ Come visit the [QuestDB community Slack](https://slack.questdb.io).
 We welcome contributors to the project. Before you begin, a couple notes...
 
 - Prior to opening a pull request, please create an issue
-  to [discuss the scope of your proposal](https://github.com/questdb/c-questdb-client/issues).
+  to [discuss the scope of your proposal](https://github.com/questdb/net-questdb-client/issues).
 
 - Please write simple code and concise documentation, when appropriate.
 

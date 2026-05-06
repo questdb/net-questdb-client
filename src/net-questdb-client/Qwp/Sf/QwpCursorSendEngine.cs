@@ -586,10 +586,10 @@ internal sealed class QwpCursorSendEngine : IDisposable
                 long fsnAtZero;
                 lock (_stateLock)
                 {
-                    // Rewind cursor to first un-acked: anything past _ackedFsn was in flight on the
-                    // dropped connection and may not have actually reached the server.
-                    _cursorFsn = _ackedFsn;
-                    fsnAtZero = _ackedFsn;
+                    // Rewind cursor to first un-acked, clamped to the ring's oldest available FSN
+                    // so we never rewind past frames already trimmed off the ring head.
+                    _cursorFsn = Math.Max(_ackedFsn, _ring.OldestFsn);
+                    fsnAtZero = _cursorFsn;
                 }
 
                 try
@@ -830,18 +830,23 @@ internal sealed class QwpCursorSendEngine : IDisposable
         }
     }
 
+    private static readonly Action<object?> FireSignalCallback =
+        static state => ((TaskCompletionSource<bool>)state!).TrySetResult(true);
+
     private void FireAppendSignalLocked()
     {
         var prev = _appendSignal;
         _appendSignal = NewSignal();
-        _ = Task.Run(() => prev.TrySetResult(true));
+        _ = Task.Factory.StartNew(FireSignalCallback, prev,
+            CancellationToken.None, TaskCreationOptions.DenyChildAttach, TaskScheduler.Default);
     }
 
     private void FireAckSignalLocked()
     {
         var prev = _ackSignal;
         _ackSignal = NewSignal();
-        _ = Task.Run(() => prev.TrySetResult(true));
+        _ = Task.Factory.StartNew(FireSignalCallback, prev,
+            CancellationToken.None, TaskCreationOptions.DenyChildAttach, TaskScheduler.Default);
     }
 
     /// <remarks>

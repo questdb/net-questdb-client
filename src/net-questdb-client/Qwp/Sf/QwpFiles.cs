@@ -90,6 +90,8 @@ internal static class QwpFiles
 
         // POSIX surfaces FileShare.None without a recognisable HResult; the type check above
         // already excludes specific subclasses, so plain IOException is the residual signal.
+        // Errno-based narrowing is unreliable cross-platform (EAGAIN/EWOULDBLOCK = 11 on Linux,
+        // 35 on BSD/macOS) — keep the broad fallback.
         return ex.GetType() == typeof(IOException);
     }
 

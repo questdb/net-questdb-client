@@ -56,13 +56,12 @@ public record SenderOptions
         "username", "user", "password", "pass", "token",
         "request_min_throughput", "auth_timeout", "request_timeout", "retry_timeout",
         "pool_timeout", "tls_verify", "tls_roots", "tls_roots_password", "own_socket", "gzip",
-        "in_flight_window", "close_timeout", "max_schemas_per_connection", "max_symbols_per_connection",
+        "in_flight_window", "max_schemas_per_connection",
         "gorilla", "request_durable_ack",
-        "sf_dir", "sender_id", "sf_max_bytes", "sf_max_total_bytes", "sf_durability", "sf_fsync",
+        "sf_dir", "sender_id", "sf_max_bytes", "sf_max_total_bytes", "sf_durability",
         "sf_append_deadline_millis", "reconnect_max_duration_millis", "reconnect_initial_backoff_millis",
         "reconnect_max_backoff_millis", "initial_connect_retry", "close_flush_timeout_millis",
-        "drain_orphans", "max_background_drainers", "ping_timeout",
-        "token_x", "token_y",
+        "drain_orphans", "max_background_drainers", "ping_timeout", "proxy",
     };
 
     private string _addr = "localhost:9000";
@@ -85,21 +84,16 @@ public record SenderOptions
     private int _requestMinThroughput = 102400;
     private TimeSpan _requestTimeout = TimeSpan.FromMilliseconds(30000);
     private TimeSpan _retryTimeout = TimeSpan.FromMilliseconds(10000);
-    private string? _tlsCa;
     private string? _tlsRoots;
     private string? _tlsRootsPassword;
     private TlsVerifyType _tlsVerify = TlsVerifyType.on;
     private string? _token;
-    private string? _tokenX;
-    private string? _tokenY;
     private string? _username;
     private X509Certificate2? _clientCert;
 
     // WebSocket / QWP knobs.
     private int _inFlightWindow = 128;
-    private TimeSpan _closeTimeout = TimeSpan.FromMilliseconds(5000);
     private int _maxSchemasPerConnection = 65535;
-    private int _maxSymbolsPerConnection = 1_000_000;
     private bool _requestDurableAck;
     private bool _gorilla;
 
@@ -117,12 +111,10 @@ public record SenderOptions
     private bool _drainOrphans;
     private int _maxBackgroundDrainers = 4;
     private TimeSpan _pingTimeout = TimeSpan.FromMilliseconds(5000);
-    private bool _sfFsync;
+    private string? _proxy;
 
     private bool _inFlightWindowUserSet;
-    private bool _closeTimeoutUserSet;
     private bool _maxSchemasPerConnectionUserSet;
-    private bool _maxSymbolsPerConnectionUserSet;
     private bool _requestDurableAckUserSet;
     private bool _gorillaUserSet;
     private bool _sfDirUserSet;
@@ -139,7 +131,6 @@ public record SenderOptions
     private bool _drainOrphansUserSet;
     private bool _maxBackgroundDrainersUserSet;
     private bool _pingTimeoutUserSet;
-    private bool _sfFsyncUserSet;
 
     /// <summary>
     ///     Construct a <see cref="SenderOptions" /> object with default values.
@@ -181,8 +172,6 @@ public record SenderOptions
         }
 
         ParseStringWithDefault(nameof(token), null, out _token);
-        ParseStringWithDefault("token_x", null, out _tokenX);
-        ParseStringWithDefault("token_y", null, out _tokenY);
         ParseIntWithDefault(nameof(request_min_throughput), "102400", out _requestMinThroughput);
         ParseMillisecondsWithDefault(nameof(auth_timeout), "15000", out _authTimeout);
         ParseMillisecondsWithDefault(nameof(request_timeout), "30000", out _requestTimeout);
@@ -196,9 +185,7 @@ public record SenderOptions
         // WebSocket / QWP knobs. Parsed unconditionally; ValidateWebSocketKeys throws if any
         // appear with a non-WebSocket scheme.
         ParseIntWithDefault(nameof(in_flight_window), "128", out _inFlightWindow);
-        ParseMillisecondsWithDefault(nameof(close_timeout), "5000", out _closeTimeout);
         ParseIntWithDefault(nameof(max_schemas_per_connection), "65535", out _maxSchemasPerConnection);
-        ParseIntWithDefault(nameof(max_symbols_per_connection), "1000000", out _maxSymbolsPerConnection);
         ParseBoolOnOff(nameof(request_durable_ack), "off", out _requestDurableAck);
         ParseBoolOnOff(nameof(gorilla), "off", out _gorilla);
 
@@ -228,12 +215,14 @@ public record SenderOptions
         ParseBoolOnOff(nameof(drain_orphans), "off", out _drainOrphans);
         ParseIntWithDefault(nameof(max_background_drainers), "4", out _maxBackgroundDrainers);
         ParseMillisecondsWithDefault(nameof(ping_timeout), "5000", out _pingTimeout);
-        ParseBoolOnOff(nameof(sf_fsync), "off", out _sfFsync);
+        ParseStringWithDefault(nameof(proxy), null, out _proxy);
 
         ValidateWebSocketKeys();
         ValidateAuthCombination();
         ValidateTlsCombination();
         ValidateGzipForWebSocket();
+        ValidateAutoFlushBytesForWebSocket();
+        ValidateTimeouts();
 
         if (_autoFlush == AutoFlushType.off)
         {
@@ -316,6 +305,18 @@ public record SenderOptions
         }
     }
 
+    private void ValidateAutoFlushBytesForWebSocket()
+    {
+        if (!IsWebSocket()) return;
+        if (_autoFlushBytes <= 0 || _autoFlushBytes == int.MaxValue) return;
+        const int wsMaxAutoFlushBytes = Qwp.QwpConstants.MaxBatchBytes / 2;
+        if (_autoFlushBytes > wsMaxAutoFlushBytes)
+        {
+            throw new IngressError(ErrorCode.ConfigError,
+                $"`auto_flush_bytes` for ws/wss must be ≤ {wsMaxAutoFlushBytes} (half of MaxBatchBytes); got {_autoFlushBytes}");
+        }
+    }
+
     private void ParseBoolOnOff(string name, string defaultValue, out bool field)
     {
         var raw = ReadOptionFromBuilder(name) ?? defaultValue;
@@ -348,12 +349,44 @@ public record SenderOptions
         }
     }
 
+    private void ValidateTimeouts()
+    {
+        if (_authTimeout <= TimeSpan.Zero)
+            throw new IngressError(ErrorCode.ConfigError, $"`auth_timeout` must be > 0; got {_authTimeout.TotalMilliseconds}ms");
+        if (_requestTimeout <= TimeSpan.Zero)
+            throw new IngressError(ErrorCode.ConfigError, $"`request_timeout` must be > 0; got {_requestTimeout.TotalMilliseconds}ms");
+        if (_retryTimeout < TimeSpan.Zero)
+            throw new IngressError(ErrorCode.ConfigError, $"`retry_timeout` must be ≥ 0; got {_retryTimeout.TotalMilliseconds}ms");
+        if (_poolTimeout <= TimeSpan.Zero)
+            throw new IngressError(ErrorCode.ConfigError, $"`pool_timeout` must be > 0; got {_poolTimeout.TotalMilliseconds}ms");
+        if (IsWebSocket())
+        {
+            if (_sfAppendDeadline <= TimeSpan.Zero)
+                throw new IngressError(ErrorCode.ConfigError, $"`sf_append_deadline_millis` must be > 0; got {_sfAppendDeadline.TotalMilliseconds}ms");
+            if (_reconnectMaxDuration <= TimeSpan.Zero)
+                throw new IngressError(ErrorCode.ConfigError, $"`reconnect_max_duration_millis` must be > 0; got {_reconnectMaxDuration.TotalMilliseconds}ms");
+            if (_reconnectInitialBackoff <= TimeSpan.Zero)
+                throw new IngressError(ErrorCode.ConfigError, $"`reconnect_initial_backoff_millis` must be > 0; got {_reconnectInitialBackoff.TotalMilliseconds}ms");
+            if (_reconnectMaxBackoff <= TimeSpan.Zero)
+                throw new IngressError(ErrorCode.ConfigError, $"`reconnect_max_backoff_millis` must be > 0; got {_reconnectMaxBackoff.TotalMilliseconds}ms");
+            if (_reconnectInitialBackoff > _reconnectMaxBackoff)
+                throw new IngressError(ErrorCode.ConfigError,
+                    $"`reconnect_initial_backoff_millis` ({_reconnectInitialBackoff.TotalMilliseconds}ms) must be ≤ `reconnect_max_backoff_millis` ({_reconnectMaxBackoff.TotalMilliseconds}ms)");
+            if (_pingTimeout <= TimeSpan.Zero)
+                throw new IngressError(ErrorCode.ConfigError, $"`ping_timeout` must be > 0; got {_pingTimeout.TotalMilliseconds}ms");
+            if (_closeFlushTimeout <= TimeSpan.Zero)
+                throw new IngressError(ErrorCode.ConfigError, $"`close_flush_timeout_millis` must be > 0; got {_closeFlushTimeout.TotalMilliseconds}ms");
+        }
+    }
+
     internal void EnsureValid()
     {
         ValidateAuthCombination();
         ValidateTlsCombination();
         ValidateStoreAndForwardOptions();
         ValidateGzipForWebSocket();
+        ValidateAutoFlushBytesForWebSocket();
+        ValidateTimeouts();
         ValidateWebSocketKeys();
         ValidateWebSocketKeysAgainstDefaults();
         ApplyAutoFlushNormalisation();
@@ -384,9 +417,7 @@ public record SenderOptions
         }
 
         if (_inFlightWindowUserSet) Throw(nameof(in_flight_window));
-        if (_closeTimeoutUserSet) Throw(nameof(close_timeout));
         if (_maxSchemasPerConnectionUserSet) Throw(nameof(max_schemas_per_connection));
-        if (_maxSymbolsPerConnectionUserSet) Throw(nameof(max_symbols_per_connection));
         if (_gorillaUserSet) Throw(nameof(gorilla));
         if (_requestDurableAckUserSet) Throw(nameof(request_durable_ack));
         if (_sfDirUserSet) Throw(nameof(sf_dir));
@@ -403,7 +434,6 @@ public record SenderOptions
         if (_drainOrphansUserSet) Throw(nameof(drain_orphans));
         if (_maxBackgroundDrainersUserSet) Throw(nameof(max_background_drainers));
         if (_pingTimeoutUserSet) Throw(nameof(ping_timeout));
-        if (_sfFsyncUserSet) Throw(nameof(sf_fsync));
 
         static void Throw(string key) =>
             throw new IngressError(ErrorCode.ConfigError,
@@ -433,12 +463,12 @@ public record SenderOptions
 
     private static readonly string[] WebSocketOnlyKeys =
     {
-        "in_flight_window", "close_timeout", "max_schemas_per_connection", "max_symbols_per_connection",
+        "in_flight_window", "max_schemas_per_connection",
         "gorilla", "request_durable_ack",
-        "sf_dir", "sender_id", "sf_max_bytes", "sf_max_total_bytes", "sf_durability", "sf_fsync",
+        "sf_dir", "sender_id", "sf_max_bytes", "sf_max_total_bytes", "sf_durability",
         "sf_append_deadline_millis", "reconnect_max_duration_millis", "reconnect_initial_backoff_millis",
         "reconnect_max_backoff_millis", "initial_connect_retry", "close_flush_timeout_millis",
-        "drain_orphans", "max_background_drainers", "ping_timeout",
+        "drain_orphans", "max_background_drainers", "ping_timeout", "proxy",
     };
 
     /// <summary>
@@ -650,27 +680,6 @@ public record SenderOptions
         set => _token = value;
     }
 
-    /// <summary>
-    ///     Used in other ILP clients for authentication.
-    /// </summary>
-    [Obsolete]
-    [JsonIgnore]
-    public string? token_x
-    {
-        get => _tokenX;
-        set => _tokenX = value;
-    }
-
-    /// <summary>
-    ///     Used in other ILP clients for authentication.
-    /// </summary>
-    [Obsolete]
-    [JsonIgnore]
-    public string? token_y
-    {
-        get => _tokenY;
-        set => _tokenY = value;
-    }
 
     /// <summary>
     ///     Timeout for authentication requests.
@@ -747,16 +756,6 @@ public record SenderOptions
     }
 
     /// <summary>
-    ///     Not in use
-    /// </summary>
-    [Obsolete]
-    public string? tls_ca
-    {
-        get => _tlsCa;
-        set => _tlsCa = value;
-    }
-
-    /// <summary>
     ///     Path to a PEM-encoded custom CA bundle used to verify the server certificate.
     ///     Cross-language interop: Java and Go clients also accept PEM here, not PFX.
     /// </summary>
@@ -807,16 +806,6 @@ public record SenderOptions
     }
 
     /// <summary>
-    ///     Maximum time to wait for in-flight batches to drain on close. Defaults to 5 s.
-    ///     Only meaningful for WebSocket transports.
-    /// </summary>
-    public TimeSpan close_timeout
-    {
-        get => _closeTimeout;
-        set { _closeTimeout = value; _closeTimeoutUserSet = true; }
-    }
-
-    /// <summary>
     ///     Hard cap on the number of distinct schemas (column-set permutations) registered on a
     ///     single WebSocket connection. Defaults to <c>65535</c>, matching the wire schema-id range.
     /// </summary>
@@ -824,16 +813,6 @@ public record SenderOptions
     {
         get => _maxSchemasPerConnection;
         set { _maxSchemasPerConnection = value; _maxSchemasPerConnectionUserSet = true; }
-    }
-
-    /// <summary>
-    ///     Hard cap on the number of distinct symbol values registered on a single WebSocket
-    ///     connection. Default is <c>1_000_000</c>; raise for high-cardinality symbol columns.
-    /// </summary>
-    public int max_symbols_per_connection
-    {
-        get => _maxSymbolsPerConnection;
-        set { _maxSymbolsPerConnection = value; _maxSymbolsPerConnectionUserSet = true; }
     }
 
     /// <summary>
@@ -994,8 +973,7 @@ public record SenderOptions
 
     /// <summary>
     ///     Maximum time a single <c>Ping</c> / <c>PingAsync</c> call will wait for in-flight ACKs to
-    ///     drain. Independent from <see cref="close_timeout" /> so users can tune dispose drains
-    ///     without coupling to liveness probe latency. Defaults to 5 s.
+    ///     drain. Defaults to 5 s.
     /// </summary>
     public TimeSpan ping_timeout
     {
@@ -1004,14 +982,15 @@ public record SenderOptions
     }
 
     /// <summary>
-    ///     If <c>true</c>, every successful SF append <c>msync</c>s the dirty pages before reporting
-    ///     success. Off by default: process-crash safe (mmap pages survive); kernel/host crashes can
-    ///     lose recent appends. Turn on for kernel-crash safety at the cost of one msync per append.
+    ///     Proxy override for the WebSocket transport. Accepts <c>disable</c> (no proxy, the default —
+    ///     long-lived WS connections rarely survive HTTP proxies), <c>system</c> (use the system
+    ///     default proxy), or an explicit proxy URI like <c>http://proxy.local:3128</c>. Ignored on
+    ///     non-WS transports.
     /// </summary>
-    public bool sf_fsync
+    public string? proxy
     {
-        get => _sfFsync;
-        set { _sfFsync = value; _sfFsyncUserSet = true; }
+        get => _proxy;
+        set => _proxy = value;
     }
 
     /// <summary>
@@ -1060,7 +1039,7 @@ public record SenderOptions
     private static void RejectControlChars(string name, string? value)
     {
         if (string.IsNullOrEmpty(value)) return;
-        foreach (var c in value!)
+        foreach (var c in value)
         {
             if (c < 0x20 || c == 0x7F)
             {
@@ -1125,7 +1104,7 @@ public record SenderOptions
                     $"malformed bracketed address `{addr}`: expected `:port` after closing bracket");
             }
 
-            if (!int.TryParse(rest.AsSpan(1), out port) || port < 0 || port > 65535)
+            if (!int.TryParse(rest.AsSpan(1), out port) || port <= 0 || port > 65535)
             {
                 throw new IngressError(ErrorCode.ConfigError,
                     $"malformed address `{addr}`: invalid port `{rest.Substring(1)}`");
@@ -1150,8 +1129,12 @@ public record SenderOptions
         }
 
         host = addr.Substring(0, firstColon);
+        if (string.IsNullOrWhiteSpace(host))
+        {
+            throw new IngressError(ErrorCode.ConfigError, $"malformed address `{addr}`: empty host");
+        }
         var portStr = addr.Substring(firstColon + 1);
-        if (!int.TryParse(portStr, out port) || port < 0 || port > 65535)
+        if (!int.TryParse(portStr, out port) || port <= 0 || port > 65535)
         {
             throw new IngressError(ErrorCode.ConfigError,
                 $"malformed address `{addr}`: invalid port `{portStr}`");
@@ -1367,6 +1350,20 @@ public record SenderOptions
     /// <summary>
     ///     Serialises the <see cref="SenderOptions" /> object into a config string, minus secrets.
     /// </summary>
+    private static readonly HashSet<string> SecretPropertyNames = new(StringComparer.Ordinal)
+    {
+        nameof(password),
+        nameof(token),
+        nameof(tls_roots_password),
+    };
+
+    private const string SecretRedaction = "***";
+
+    /// <summary>
+    ///     Renders the options as a connection string. Round-trips through
+    ///     <see cref="SenderOptions(string)" />. Secrets (<c>password</c>, <c>token</c>,
+    ///     <c>tls_roots_password</c>) are redacted with <c>***</c>.
+    /// </summary>
     public override string ToString()
     {
         var builder = new DbConnectionStringBuilder();
@@ -1385,7 +1382,8 @@ public record SenderOptions
                 continue;
             }
 
-            if (prop.IsDefined(typeof(JsonIgnoreAttribute), false))
+            var isSecret = SecretPropertyNames.Contains(prop.Name);
+            if (prop.IsDefined(typeof(JsonIgnoreAttribute), false) && !isSecret)
             {
                 continue;
             }
@@ -1400,20 +1398,31 @@ public record SenderOptions
                 continue;
             }
 
-            if (value != null)
+            if (value is null)
             {
-                if (value is TimeSpan span)
+                continue;
+            }
+
+            if (isSecret)
+            {
+                if (value is string s && !string.IsNullOrEmpty(s))
                 {
-                    builder.Add(prop.Name, span.TotalMilliseconds);
+                    builder.Add(prop.Name, SecretRedaction);
                 }
-                else if (value is string str && !string.IsNullOrEmpty(str))
-                {
-                    builder.Add(prop.Name, value);
-                }
-                else
-                {
-                    builder.Add(prop.Name, value);
-                }
+                continue;
+            }
+
+            if (value is TimeSpan span)
+            {
+                builder.Add(prop.Name, span.TotalMilliseconds);
+            }
+            else if (value is string str && !string.IsNullOrEmpty(str))
+            {
+                builder.Add(prop.Name, value);
+            }
+            else
+            {
+                builder.Add(prop.Name, value);
             }
         }
 
@@ -1425,10 +1434,40 @@ public record SenderOptions
             {
                 extra.Append("addr=").Append(_addresses[i]).Append(';');
             }
-            connectionString = extra.ToString() + connectionString;
+            connectionString = extra + connectionString;
         }
 
         return $"{protocol.ToString()}::{connectionString};";
+    }
+
+    /// <summary>
+    ///     Record-synthesised member printer override; redacts the same secrets
+    ///     <see cref="ToString" /> redacts so debugger / logging output never leaks them.
+    /// </summary>
+    protected virtual bool PrintMembers(StringBuilder sb)
+    {
+        var props = GetType().GetProperties(BindingFlags.Instance | BindingFlags.Public).OrderBy(p => p.Name);
+        var first = true;
+        foreach (var prop in props)
+        {
+            if (prop.IsDefined(typeof(CompilerGeneratedAttribute), false)) continue;
+            var isSecret = SecretPropertyNames.Contains(prop.Name);
+            if (prop.IsDefined(typeof(JsonIgnoreAttribute), false) && !isSecret) continue;
+            object? value;
+            try { value = prop.GetValue(this); } catch { continue; }
+            if (!first) sb.Append(", ");
+            first = false;
+            sb.Append(prop.Name).Append(" = ");
+            if (isSecret)
+            {
+                sb.Append(value is null ? "null" : SecretRedaction);
+            }
+            else
+            {
+                sb.Append(value ?? "null");
+            }
+        }
+        return !first;
     }
 
     private void VerifyCorrectKeysInConfigString()

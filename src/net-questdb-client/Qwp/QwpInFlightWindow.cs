@@ -49,39 +49,22 @@ namespace QuestDB.Qwp;
 internal sealed class QwpInFlightWindow
 {
     /// <summary>Polling quantum used to keep <c>AwaitEmpty</c> responsive to cancellation.</summary>
-    private const int CancellationPollMs = 100;
+    private const int CancellationPollMs = 20;
 
     private readonly object _lock = new();
     private long _ackedSequence = -1L;
     private long _highestSentSequence = -1L;
     private Exception? _failure;
 
-    private TaskCompletionSource<bool> _changeSignal =
-        new(TaskCreationOptions.RunContinuationsAsynchronously);
+    // Allocated lazily on the first AwaitEmptyAsync call; consumed (set to null) by the next
+    // signal fire so a steady-state pipeline with no awaiter pays zero TCS allocations.
+    private TaskCompletionSource<bool>? _changeSignal;
 
     /// <summary>Highest sequence the server has acknowledged. Starts at <c>-1</c>.</summary>
-    public long AckedSequence
-    {
-        get
-        {
-            lock (_lock)
-            {
-                return _ackedSequence;
-            }
-        }
-    }
+    public long AckedSequence => Volatile.Read(ref _ackedSequence);
 
     /// <summary>Highest sequence the client has sent. Starts at <c>-1</c>.</summary>
-    public long HighestSentSequence
-    {
-        get
-        {
-            lock (_lock)
-            {
-                return _highestSentSequence;
-            }
-        }
-    }
+    public long HighestSentSequence => Volatile.Read(ref _highestSentSequence);
 
     /// <summary>True when no batches are in flight (every sent sequence has been acked).</summary>
     public bool IsEmpty
@@ -108,16 +91,7 @@ internal sealed class QwpInFlightWindow
     }
 
     /// <summary>True iff <see cref="FailAll" /> has been called.</summary>
-    public bool HasFailure
-    {
-        get
-        {
-            lock (_lock)
-            {
-                return _failure is not null;
-            }
-        }
-    }
+    public bool HasFailure => Volatile.Read(ref _failure) is not null;
 
     /// <summary>
     ///     Records that the batch with sequence <paramref name="sequence" /> has been transmitted.
@@ -125,7 +99,7 @@ internal sealed class QwpInFlightWindow
     /// </summary>
     public void Add(long sequence)
     {
-        TaskCompletionSource<bool> wakeup;
+        TaskCompletionSource<bool>? wakeup;
         lock (_lock)
         {
             if (_failure is not null)
@@ -141,9 +115,9 @@ internal sealed class QwpInFlightWindow
 
             _highestSentSequence = sequence;
             Monitor.PulseAll(_lock);
-            wakeup = ReplaceChangeSignalLocked();
+            wakeup = ConsumeChangeSignalLocked();
         }
-        wakeup.TrySetResult(true);
+        wakeup?.TrySetResult(true);
     }
 
     /// <summary>
@@ -176,9 +150,9 @@ internal sealed class QwpInFlightWindow
 
             _ackedSequence = sequence;
             Monitor.PulseAll(_lock);
-            wakeup = ReplaceChangeSignalLocked();
+            wakeup = ConsumeChangeSignalLocked();
         }
-        wakeup.TrySetResult(true);
+        wakeup?.TrySetResult(true);
     }
 
     /// <summary>
@@ -188,14 +162,14 @@ internal sealed class QwpInFlightWindow
     public void FailAll(Exception failure)
     {
         ArgumentNullException.ThrowIfNull(failure);
-        TaskCompletionSource<bool> wakeup;
+        TaskCompletionSource<bool>? wakeup;
         lock (_lock)
         {
             _failure ??= failure;
             Monitor.PulseAll(_lock);
-            wakeup = ReplaceChangeSignalLocked();
+            wakeup = ConsumeChangeSignalLocked();
         }
-        wakeup.TrySetResult(true);
+        wakeup?.TrySetResult(true);
     }
 
     /// <summary>
@@ -260,7 +234,10 @@ internal sealed class QwpInFlightWindow
     public async Task AwaitEmptyAsync(TimeSpan timeout, CancellationToken ct = default)
     {
         var hasDeadline = timeout >= TimeSpan.Zero;
-        var deadline = hasDeadline ? DateTime.UtcNow + timeout : DateTime.MaxValue;
+        var totalMs = hasDeadline
+            ? (long)Math.Min(timeout.TotalMilliseconds, long.MaxValue)
+            : -1L;
+        var sw = hasDeadline ? Stopwatch.StartNew() : null;
 
         while (true)
         {
@@ -278,23 +255,22 @@ internal sealed class QwpInFlightWindow
                 }
 
                 ct.ThrowIfCancellationRequested();
+                _changeSignal ??= new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
                 waitTask = _changeSignal.Task;
             }
 
             if (hasDeadline)
             {
-                var remaining = deadline - DateTime.UtcNow;
-                if (remaining <= TimeSpan.Zero)
+                var remainingMs = totalMs - sw!.ElapsedMilliseconds;
+                if (remainingMs <= 0)
                 {
                     throw new TimeoutException(
                         $"in-flight window did not drain within {timeout.TotalMilliseconds:F0} ms");
                 }
 
-                // WaitAsync rejects timeouts > int.MaxValue ms. Slice into a polling quantum.
-                var sliceMs = (long)remaining.TotalMilliseconds;
-                var slice = sliceMs > int.MaxValue
+                var slice = remainingMs > int.MaxValue
                     ? TimeSpan.FromMilliseconds(int.MaxValue)
-                    : remaining;
+                    : TimeSpan.FromMilliseconds(remainingMs);
 
                 try
                 {
@@ -305,7 +281,6 @@ internal sealed class QwpInFlightWindow
                 }
                 catch (OperationCanceledException)
                 {
-                    // Drain may have raced cancellation; re-loop so drain takes priority.
                 }
             }
             else
@@ -321,10 +296,10 @@ internal sealed class QwpInFlightWindow
         }
     }
 
-    private TaskCompletionSource<bool> ReplaceChangeSignalLocked()
+    private TaskCompletionSource<bool>? ConsumeChangeSignalLocked()
     {
         var prev = _changeSignal;
-        _changeSignal = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        _changeSignal = null;
         return prev;
     }
 }

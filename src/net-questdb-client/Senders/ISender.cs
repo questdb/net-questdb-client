@@ -55,7 +55,10 @@ public interface ISender : IDisposable, IAsyncDisposable
     }
 
     /// <summary>
-    ///     Represents the current length of the buffer in UTF-8 bytes.
+    ///     Approximate buffer size in bytes. For HTTP/TCP (ILP text) this is the exact UTF-8
+    ///     byte count of the pending payload. For WS/WSS (QWP columnar) this is an estimated
+    ///     footprint of the per-column buffers — close to but not identical to the wire size,
+    ///     because schema/symbol-dictionary deltas are added at flush time.
     /// </summary>
     public int Length { get; }
 
@@ -100,7 +103,7 @@ public interface ISender : IDisposable, IAsyncDisposable
     /// </summary>
     /// <returns></returns>
     /// <exception cref="IngressError">Thrown by <see cref="SendAsync" />, or when transactions are unsupported.</exception>
-    public Task CommitAsync(CancellationToken ct = default);
+    public ValueTask CommitAsync(CancellationToken ct = default);
 
     /// <inheritdoc cref="CommitAsync" />
     public void Commit(CancellationToken ct = default);
@@ -110,13 +113,9 @@ public interface ISender : IDisposable, IAsyncDisposable
     /// </summary>
     /// <remarks>
     ///     Only usable outside of a transaction. If there are no pending rows, then this is a no-op.
-    ///     <br />
-    ///     If the <see cref="SenderOptions.protocol" /> is HTTP, this will return request and response information.
-    ///     <br />
-    ///     If the <see cref="SenderOptions.protocol" /> is TCP, this will return nulls.
     /// </remarks>
     /// <exception cref="IngressError">When the request fails.</exception>
-    public Task SendAsync(CancellationToken ct = default);
+    public ValueTask SendAsync(CancellationToken ct = default);
 
     /// <inheritdoc cref="SendAsync" />
     public void Send(CancellationToken ct = default);

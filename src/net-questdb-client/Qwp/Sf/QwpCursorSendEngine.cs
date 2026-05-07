@@ -44,8 +44,12 @@ internal sealed class QwpCursorSendEngine : IDisposable
     private readonly Func<IQwpCursorTransport> _transportFactory;
     private readonly QwpReconnectPolicy _reconnectPolicy;
     private readonly TimeSpan _appendDeadline;
-    private readonly bool _initialConnectRetry;
+    private readonly InitialConnectMode _initialConnectMode;
+    private readonly TaskCompletionSource<bool> _firstConnectGate =
+        new(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly Func<bool>? _skipBackoffPredicate;
+    private readonly QwpSenderErrorDispatcher? _errorDispatcher;
+    private readonly SenderErrorPolicyResolver? _policyResolver;
     private readonly object _stateLock = new();
     private readonly byte[] _sendBuffer;
     private readonly byte[] _ackBuffer;
@@ -55,6 +59,7 @@ internal sealed class QwpCursorSendEngine : IDisposable
     private long _sentFsnHighWatermark;
     private bool _terminal;
     private Exception? _terminalError;
+    private bool _seenFirstConnect;
     private bool _disposed;
     private bool _started;
 
@@ -74,15 +79,19 @@ internal sealed class QwpCursorSendEngine : IDisposable
     /// <param name="transportFactory">Factory that produces a fresh transport on each (re)connect.</param>
     /// <param name="reconnectPolicy">Backoff policy applied between transient wire failures.</param>
     /// <param name="appendDeadline">Max time <see cref="AppendBlocking" /> will wait when the disk cap is hit.</param>
-    /// <param name="initialConnectRetry">
-    ///     If <c>true</c>, the first connect honours the reconnect backoff loop; if <c>false</c>,
-    ///     a failed initial connect immediately marks the engine terminal.
-    /// </param>
+    /// <param name="initialConnectMode">First-connect retry policy. See <see cref="InitialConnectMode" />.</param>
     /// <param name="maxTotalBytes">Disk cap forwarded to the engine's <see cref="QwpSegmentManager" />.</param>
     /// <param name="skipBackoffPredicate">
     ///     When non-null and returns <c>true</c> after a connect failure, the engine retries
     ///     immediately instead of waiting the reconnect backoff. Lets multi-host failover walk
     ///     the full address list before paying the backoff cost.
+    /// </param>
+    /// <param name="errorDispatcher">
+    ///     Optional dispatcher that delivers <see cref="SenderError" /> notifications off the
+    ///     I/O thread. The engine never invokes user code directly.
+    /// </param>
+    /// <param name="policyResolver">
+    ///     Optional override for the per-<see cref="SenderErrorCategory" /> default policy.
     /// </param>
     public QwpCursorSendEngine(
         QwpSlotLock? slotLock,
@@ -90,9 +99,11 @@ internal sealed class QwpCursorSendEngine : IDisposable
         Func<IQwpCursorTransport> transportFactory,
         QwpReconnectPolicy reconnectPolicy,
         TimeSpan appendDeadline,
-        bool initialConnectRetry,
+        InitialConnectMode initialConnectMode,
         long maxTotalBytes = long.MaxValue,
-        Func<bool>? skipBackoffPredicate = null)
+        Func<bool>? skipBackoffPredicate = null,
+        QwpSenderErrorDispatcher? errorDispatcher = null,
+        SenderErrorPolicyResolver? policyResolver = null)
     {
         ArgumentNullException.ThrowIfNull(ring);
         ArgumentNullException.ThrowIfNull(transportFactory);
@@ -107,8 +118,10 @@ internal sealed class QwpCursorSendEngine : IDisposable
         _transportFactory = transportFactory;
         _reconnectPolicy = reconnectPolicy;
         _appendDeadline = appendDeadline;
-        _initialConnectRetry = initialConnectRetry;
+        _initialConnectMode = initialConnectMode;
         _skipBackoffPredicate = skipBackoffPredicate;
+        _errorDispatcher = errorDispatcher;
+        _policyResolver = policyResolver;
         _cursorFsn = ring.OldestFsn;
         _ackedFsn = ring.OldestFsn;
         _segmentManager = new QwpSegmentManager(ring, maxTotalBytes);
@@ -512,12 +525,18 @@ internal sealed class QwpCursorSendEngine : IDisposable
         {
             SetTerminal(ex);
         }
+        finally
+        {
+            // Loop exited without firing the gate (typical: cancellation during construction
+            // or a disposed engine). Unblock any constructor waiter on FirstConnectTask.
+            _firstConnectGate.TrySetException(
+                new IngressError(ErrorCode.SocketError, "SF engine loop exited before first connect"));
+        }
     }
 
     private async Task RunLoopBodyAsync(CancellationToken ct)
     {
         var backoff = new BackoffState();
-        var seenFirstConnect = false;
 
         while (!ct.IsCancellationRequested)
         {
@@ -549,13 +568,19 @@ internal sealed class QwpCursorSendEngine : IDisposable
                     SetTerminal(ex);
                     return;
                 }
-                catch (QwpIngressRoleRejectedException)
+                catch (QwpIngressRoleRejectedException ex)
                 {
                     // Role-reject retries indefinitely; don't accumulate elapsed against the give-up budget.
                     backoff.Reset();
                     if (_skipBackoffPredicate?.Invoke() == true)
                     {
                         continue;
+                    }
+
+                    if (!_seenFirstConnect && _initialConnectMode == InitialConnectMode.off)
+                    {
+                        SetTerminal(ex);
+                        return;
                     }
 
                     try
@@ -570,15 +595,15 @@ internal sealed class QwpCursorSendEngine : IDisposable
                 }
                 catch (Exception ex)
                 {
-                    if (!seenFirstConnect && !_initialConnectRetry)
-                    {
-                        SetTerminal(ex);
-                        return;
-                    }
-
                     if (_skipBackoffPredicate?.Invoke() == true)
                     {
                         continue;
+                    }
+
+                    if (!_seenFirstConnect && _initialConnectMode == InitialConnectMode.off)
+                    {
+                        SetTerminal(ex);
+                        return;
                     }
 
                     if (!await BackoffOrGiveUpAsync(ex, backoff, ct).ConfigureAwait(false))
@@ -589,8 +614,9 @@ internal sealed class QwpCursorSendEngine : IDisposable
                     continue;
                 }
 
-                seenFirstConnect = true;
+                _seenFirstConnect = true;
                 backoff.Reset();
+                _firstConnectGate.TrySetResult(true);
 
                 long fsnAtZero;
                 lock (_stateLock)
@@ -609,6 +635,11 @@ internal sealed class QwpCursorSendEngine : IDisposable
                 }
                 catch (OperationCanceledException)
                 {
+                    return;
+                }
+                catch (HaltCarrier hc)
+                {
+                    SetTerminal(hc.Wire, hc.SenderError);
                     return;
                 }
                 catch (Exception ex) when (IsTerminalServerError(ex))
@@ -746,7 +777,8 @@ internal sealed class QwpCursorSendEngine : IDisposable
 
             if (!response.IsOk && !response.IsDurableAck)
             {
-                throw response.ToException();
+                HandleServerRejection(response, fsnAtZero);
+                continue;
             }
 
             DispatchTableEntries(response);
@@ -790,6 +822,67 @@ internal sealed class QwpCursorSendEngine : IDisposable
         }
     }
 
+    private void HandleServerRejection(in QwpResponse response, long fsnAtZero)
+    {
+        var category = QwpErrorClassifier.Classify(response.Status);
+        var policy = QwpErrorClassifier.ResolvePolicy(category, _policyResolver);
+
+        var wireSeq = response.Sequence;
+        long fromFsn, toFsn;
+        long highestSentWireSeq;
+        lock (_stateLock)
+        {
+            highestSentWireSeq = _sentFsnHighWatermark - fsnAtZero;
+        }
+
+        if (highestSentWireSeq < 0)
+        {
+            // Pre-send reject (server hit us before any frame went out on this connection):
+            // the wire seq doesn't map to a real FSN, so skip the watermark advance.
+            fromFsn = -1L;
+            toFsn = -1L;
+        }
+        else
+        {
+            var capped = Math.Max(0L, Math.Min(wireSeq, highestSentWireSeq));
+            fromFsn = checked(fsnAtZero + capped);
+            toFsn = fromFsn;
+        }
+
+        var tableName = response.TableEntries.Count == 1 ? response.TableEntries[0].TableName : null;
+        var senderError = new SenderError(
+            category,
+            policy,
+            (byte)response.Status,
+            response.Message,
+            wireSeq,
+            fromFsn,
+            toFsn,
+            tableName,
+            DateTime.UtcNow);
+
+        if (policy == SenderErrorPolicy.Halt)
+        {
+            throw new HaltCarrier(senderError, new LineSenderServerException(senderError));
+        }
+
+        if (fromFsn >= 0L)
+        {
+            lock (_stateLock)
+            {
+                var newAcked = checked(fromFsn + 1L);
+                if (newAcked > _ackedFsn)
+                {
+                    _ackedFsn = newAcked;
+                    _ring.Acknowledge(_ackedFsn - 1);
+                    FireAckSignalLocked();
+                }
+            }
+        }
+
+        _errorDispatcher?.Offer(senderError);
+    }
+
     private void DispatchTableEntries(in QwpResponse response)
     {
         var handler = Volatile.Read(ref _tableEntryHandler);
@@ -829,8 +922,9 @@ internal sealed class QwpCursorSendEngine : IDisposable
         return true;
     }
 
-    private void SetTerminal(Exception error)
+    private void SetTerminal(Exception error, SenderError? senderError = null)
     {
+        bool isInitialConnect;
         lock (_stateLock)
         {
             if (_terminal)
@@ -840,10 +934,36 @@ internal sealed class QwpCursorSendEngine : IDisposable
 
             _terminal = true;
             _terminalError = error;
+            isInitialConnect = !_seenFirstConnect;
             FireAckSignalLocked();
             FireAppendSignalLocked();
         }
+        _firstConnectGate.TrySetException(error);
+        if (_errorDispatcher is null) return;
+        _errorDispatcher.Offer(senderError ?? BuildEngineError(error, isInitialConnect));
     }
+
+    private static SenderError BuildEngineError(Exception error, bool isInitialConnect) =>
+        new(
+            category: SenderErrorCategory.Unknown,
+            appliedPolicy: SenderErrorPolicy.Halt,
+            serverStatusByte: SenderError.NoStatusByte,
+            serverMessage: error.Message,
+            messageSequence: SenderError.NoMessageSequence,
+            fromFsn: -1L,
+            toFsn: -1L,
+            tableName: null,
+            detectedAtUtc: DateTime.UtcNow,
+            exception: error,
+            isInitialConnect: isInitialConnect);
+
+    /// <summary>
+    ///     Completes when the engine has either successfully established its first connection or
+    ///     reached a terminal state. Used by SF mode <see cref="InitialConnectMode.off" /> and
+    ///     <see cref="InitialConnectMode.on" /> to gate the user-facing constructor on first
+    ///     connect; <see cref="InitialConnectMode.async" /> simply doesn't await it.
+    /// </summary>
+    public Task FirstConnectTask => _firstConnectGate.Task;
 
     private static readonly Action<object?> FireSignalCallback =
         static state => ((TaskCompletionSource<bool>)state!).TrySetResult(true);
@@ -886,6 +1006,7 @@ internal sealed class QwpCursorSendEngine : IDisposable
     private IngressError WrapTerminalForProducer()
     {
         var inner = _terminalError;
+        if (inner is LineSenderServerException lse) return lse;
         var code = inner is IngressError ie ? ie.code : ErrorCode.ServerFlushError;
         var message = inner?.Message ?? "QWP cursor engine has terminally failed";
         return inner is null
@@ -898,6 +1019,20 @@ internal sealed class QwpCursorSendEngine : IDisposable
     private static bool IsTerminalServerError(Exception ex)
     {
         return ex is QwpException
+            || ex is HaltCarrier
             || (ex is IngressError ie && ie.code is ErrorCode.AuthError or ErrorCode.ProtocolVersionError);
+    }
+
+    private sealed class HaltCarrier : Exception
+    {
+        public HaltCarrier(SenderError err, LineSenderServerException wire)
+            : base(wire.Message, wire)
+        {
+            SenderError = err;
+            Wire = wire;
+        }
+
+        public SenderError SenderError { get; }
+        public LineSenderServerException Wire { get; }
     }
 }

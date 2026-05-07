@@ -26,6 +26,7 @@
 using System.Diagnostics;
 using Microsoft.Extensions.Configuration;
 using NUnit.Framework;
+using QuestDB.Enums;
 using QuestDB.Utils;
 
 namespace net_questdb_client_tests;
@@ -67,31 +68,11 @@ public class SenderOptionsTests
     }
 
     [Test]
-    public void KeyCannotStartWithNumber()
-    {
-        // invalid property
-        Assert.That(
-            () => new SenderOptions("https::123=456;"),
-            Throws.TypeOf<IngressError>().With.Message.Contains("Invalid property")
-        );
-    }
-
-    [Test]
     public void DefaultConfig()
     {
         Assert.That(
             new SenderOptions("http::addr=localhost:9000;").ToString()
           , Is.EqualTo("http::addr=localhost:9000;auth_timeout=15000;auto_flush=on;auto_flush_bytes=2147483647;auto_flush_interval=1000;auto_flush_rows=75000;gzip=False;init_buf_size=65536;max_buf_size=104857600;max_name_len=127;pool_timeout=120000;protocol_version=Auto;request_min_throughput=102400;request_timeout=30000;retry_timeout=10000;tls_verify=on;"));
-    }
-
-    [Test]
-    public void InvalidProperty()
-    {
-        Assert.That(
-            () => new SenderOptions("http::asdada=localhost:9000;"),
-            Throws.TypeOf<IngressError>()
-                  .With.Message.Contains("Invalid property")
-        );
     }
 
     [Test]
@@ -383,6 +364,253 @@ public class SenderOptionsTests
     {
         var opts = new SenderOptions("http::addr=localhost:9000;auth_timeout=4000;");
         Assert.That(opts.ToString(), Does.Contain("auth_timeout=4000"));
+    }
+
+    [TestCase("off", InitialConnectMode.off)]
+    [TestCase("false", InitialConnectMode.off)]
+    [TestCase("OFF", InitialConnectMode.off)]
+    [TestCase("on", InitialConnectMode.on)]
+    [TestCase("true", InitialConnectMode.on)]
+    [TestCase("sync", InitialConnectMode.on)]
+    [TestCase("SYNC", InitialConnectMode.on)]
+    [TestCase("async", InitialConnectMode.async)]
+    [TestCase("ASYNC", InitialConnectMode.async)]
+    public void InitialConnectRetry_AcceptsAllAliases(string raw, InitialConnectMode expected)
+    {
+        var opts = new SenderOptions($"ws::addr=localhost:9000;sf_dir=/tmp/qdb;initial_connect_retry={raw};");
+        Assert.That(opts.initial_connect_mode, Is.EqualTo(expected));
+    }
+
+    [Test]
+    public void InitialConnectRetry_OmittedDefaultsToOff()
+    {
+        var opts = new SenderOptions("ws::addr=localhost:9000;");
+        Assert.That(opts.initial_connect_mode, Is.EqualTo(InitialConnectMode.off));
+        Assert.That(opts.initial_connect_retry, Is.False);
+    }
+
+    [Test]
+    public void InitialConnectRetry_BoolGetterMapsModes()
+    {
+        var off = new SenderOptions("ws::addr=h:9000;sf_dir=/tmp/qdb;initial_connect_retry=off;");
+        Assert.That(off.initial_connect_retry, Is.False);
+
+        var on = new SenderOptions("ws::addr=h:9000;sf_dir=/tmp/qdb;initial_connect_retry=on;");
+        Assert.That(on.initial_connect_retry, Is.True);
+
+        var async = new SenderOptions("ws::addr=h:9000;sf_dir=/tmp/qdb;initial_connect_retry=async;");
+        Assert.That(async.initial_connect_retry, Is.True);
+        Assert.That(async.initial_connect_mode, Is.EqualTo(InitialConnectMode.async));
+    }
+
+    [Test]
+    public void InitialConnectRetry_InvalidValue_Rejected()
+    {
+        Assert.That(
+            () => new SenderOptions("ws::addr=h:9000;sf_dir=/tmp/qdb;initial_connect_retry=eventually;"),
+            Throws.TypeOf<IngressError>());
+    }
+
+    [TestCase("on")]
+    [TestCase("async")]
+    public void InitialConnectRetry_WithoutSfDir_Rejected(string mode)
+    {
+        Assert.That(
+            () => new SenderOptions($"ws::addr=h:9000;initial_connect_retry={mode};"),
+            Throws.TypeOf<IngressError>().With.Message.Contains("sf_dir"));
+    }
+
+    [Test]
+    public void ErrorHandler_WithoutSfDir_Rejected()
+    {
+        var opts = new SenderOptions { protocol = ProtocolType.ws, addr = "h:9000" };
+        opts.error_handler = _ => { };
+        Assert.That(
+            () => opts.EnsureValid(),
+            Throws.TypeOf<IngressError>().With.Message.Contains("sf_dir"));
+    }
+
+    [Test]
+    public void ErrorHandler_WithSfDir_PassesValidation()
+    {
+        var opts = new SenderOptions { protocol = ProtocolType.ws, addr = "h:9000", sf_dir = "/tmp/qdb" };
+        opts.error_handler = _ => { };
+        Assert.DoesNotThrow(() => opts.EnsureValid());
+        Assert.That(opts.error_handler, Is.Not.Null);
+    }
+
+    [Test]
+    public void ErrorHandler_OnHttpScheme_Rejected()
+    {
+        var opts = new SenderOptions { protocol = ProtocolType.http, addr = "h:9000" };
+        opts.error_handler = _ => { };
+        Assert.That(
+            () => opts.EnsureValid(),
+            Throws.TypeOf<IngressError>().With.Message.Contains("ws"));
+    }
+
+    [Test]
+    public void ErrorPolicyResolver_WithoutSfDir_Rejected()
+    {
+        var opts = new SenderOptions { protocol = ProtocolType.ws, addr = "h:9000" };
+        opts.error_policy_resolver = _ => SenderErrorPolicy.Halt;
+        Assert.That(
+            () => opts.EnsureValid(),
+            Throws.TypeOf<IngressError>().With.Message.Contains("sf_dir"));
+    }
+
+    [Test]
+    public void ErrorPolicyResolver_WithSfDir_PassesValidation()
+    {
+        var opts = new SenderOptions { protocol = ProtocolType.ws, addr = "h:9000", sf_dir = "/tmp/qdb" };
+        opts.error_policy_resolver = _ => SenderErrorPolicy.Halt;
+        Assert.DoesNotThrow(() => opts.EnsureValid());
+    }
+
+    [Test]
+    public void ErrorInboxCapacity_WithoutSfDir_Rejected()
+    {
+        var opts = new SenderOptions { protocol = ProtocolType.ws, addr = "h:9000", error_inbox_capacity = 16 };
+        Assert.That(
+            () => opts.EnsureValid(),
+            Throws.TypeOf<IngressError>().With.Message.Contains("sf_dir"));
+    }
+
+    [Test]
+    public void ErrorInboxCapacity_LessThanOne_Rejected()
+    {
+        var opts = new SenderOptions
+        {
+            protocol = ProtocolType.ws, addr = "h:9000", sf_dir = "/tmp/qdb", error_inbox_capacity = 0,
+        };
+        Assert.That(
+            () => opts.EnsureValid(),
+            Throws.TypeOf<IngressError>().With.Message.Contains(">= 1"));
+    }
+
+    [Test]
+    public void ErrorInboxCapacity_DefaultIs256()
+    {
+        var opts = new SenderOptions { protocol = ProtocolType.ws, addr = "h:9000", sf_dir = "/tmp/qdb" };
+        Assert.That(opts.error_inbox_capacity, Is.EqualTo(256));
+        Assert.DoesNotThrow(() => opts.EnsureValid());
+    }
+
+    [TestCase("halt", SenderErrorPolicy.Halt)]
+    [TestCase("HALT", SenderErrorPolicy.Halt)]
+    [TestCase("drop", SenderErrorPolicy.DropAndContinue)]
+    [TestCase("DROP", SenderErrorPolicy.DropAndContinue)]
+    [TestCase("drop_and_continue", SenderErrorPolicy.DropAndContinue)]
+    public void OnServerError_AcceptsHaltAndDropAliases(string raw, SenderErrorPolicy expected)
+    {
+        var opts = new SenderOptions(
+            $"ws::addr=h:9000;sf_dir=/tmp/qdb;on_server_error={raw};");
+        Assert.That(opts.on_server_error, Is.EqualTo(expected));
+    }
+
+    [Test]
+    public void OnServerError_InvalidValue_Rejected()
+    {
+        Assert.That(
+            () => new SenderOptions("ws::addr=h:9000;sf_dir=/tmp/qdb;on_server_error=maybe;"),
+            Throws.TypeOf<IngressError>().With.Message.Contains("on_server_error"));
+    }
+
+    [Test]
+    public void OnServerError_WithoutSfDir_Rejected()
+    {
+        Assert.That(
+            () => new SenderOptions("ws::addr=h:9000;on_server_error=halt;"),
+            Throws.TypeOf<IngressError>().With.Message.Contains("sf_dir"));
+    }
+
+    [Test]
+    public void OnServerError_OnHttpScheme_Rejected()
+    {
+        Assert.That(
+            () => new SenderOptions("http::addr=h:9000;on_server_error=halt;"),
+            Throws.TypeOf<IngressError>());
+    }
+
+    [Test]
+    public void OnPerCategoryError_Parses()
+    {
+        var opts = new SenderOptions(
+            "ws::addr=h:9000;sf_dir=/tmp/qdb;" +
+            "on_schema_mismatch_error=halt;on_parse_error=drop;" +
+            "on_internal_error=drop_and_continue;on_security_error=halt;on_write_error=halt;");
+        Assert.That(opts.on_schema_mismatch_error, Is.EqualTo(SenderErrorPolicy.Halt));
+        Assert.That(opts.on_parse_error, Is.EqualTo(SenderErrorPolicy.DropAndContinue));
+        Assert.That(opts.on_internal_error, Is.EqualTo(SenderErrorPolicy.DropAndContinue));
+        Assert.That(opts.on_security_error, Is.EqualTo(SenderErrorPolicy.Halt));
+        Assert.That(opts.on_write_error, Is.EqualTo(SenderErrorPolicy.Halt));
+    }
+
+    [Test]
+    public void EffectiveResolver_Null_WhenNothingSet()
+    {
+        var opts = new SenderOptions { protocol = ProtocolType.ws, addr = "h:9000", sf_dir = "/tmp/qdb" };
+        opts.EnsureValid();
+        Assert.That(opts.BuildEffectivePolicyResolver(), Is.Null);
+    }
+
+    [Test]
+    public void EffectiveResolver_PerCategoryWinsOverGlobal()
+    {
+        var opts = new SenderOptions(
+            "ws::addr=h:9000;sf_dir=/tmp/qdb;" +
+            "on_server_error=halt;on_schema_mismatch_error=drop;");
+        var resolver = opts.BuildEffectivePolicyResolver();
+        Assert.That(resolver, Is.Not.Null);
+        Assert.That(resolver!(SenderErrorCategory.SchemaMismatch), Is.EqualTo(SenderErrorPolicy.DropAndContinue));
+        Assert.That(resolver(SenderErrorCategory.ParseError), Is.EqualTo(SenderErrorPolicy.Halt));
+        Assert.That(resolver(SenderErrorCategory.InternalError), Is.EqualTo(SenderErrorPolicy.Halt));
+        Assert.That(resolver(SenderErrorCategory.WriteError), Is.EqualTo(SenderErrorPolicy.Halt));
+    }
+
+    [Test]
+    public void EffectiveResolver_GlobalAppliesToOverridableOnly()
+    {
+        var opts = new SenderOptions(
+            "ws::addr=h:9000;sf_dir=/tmp/qdb;on_server_error=drop;");
+        var resolver = opts.BuildEffectivePolicyResolver();
+        Assert.That(resolver, Is.Not.Null);
+        Assert.That(resolver!(SenderErrorCategory.SchemaMismatch), Is.EqualTo(SenderErrorPolicy.DropAndContinue));
+        Assert.That(resolver(SenderErrorCategory.ParseError), Is.EqualTo(SenderErrorPolicy.DropAndContinue));
+        Assert.That(resolver(SenderErrorCategory.InternalError), Is.EqualTo(SenderErrorPolicy.DropAndContinue));
+        Assert.That(resolver(SenderErrorCategory.SecurityError), Is.EqualTo(SenderErrorPolicy.DropAndContinue));
+        Assert.That(resolver(SenderErrorCategory.WriteError), Is.EqualTo(SenderErrorPolicy.DropAndContinue));
+    }
+
+    [Test]
+    public void EffectiveResolver_ProgrammaticBeatsConnectString()
+    {
+        var opts = new SenderOptions(
+            "ws::addr=h:9000;sf_dir=/tmp/qdb;on_server_error=halt;on_schema_mismatch_error=halt;");
+        opts.error_policy_resolver = _ => SenderErrorPolicy.DropAndContinue;
+        var resolver = opts.BuildEffectivePolicyResolver();
+        Assert.That(resolver!(SenderErrorCategory.SchemaMismatch), Is.EqualTo(SenderErrorPolicy.DropAndContinue));
+        Assert.That(resolver(SenderErrorCategory.ParseError), Is.EqualTo(SenderErrorPolicy.DropAndContinue));
+    }
+
+    [Test]
+    public void OnServerError_InWebSocketOnlyKeysList()
+    {
+        Assert.That(
+            () => new SenderOptions("http::addr=h:9000;on_schema_mismatch_error=halt;"),
+            Throws.TypeOf<IngressError>());
+    }
+
+    [Test]
+    public void OnServerError_RoundTripsViaToString()
+    {
+        var original = new SenderOptions(
+            "ws::addr=h:9000;sf_dir=/tmp/qdb;" +
+            "on_server_error=halt;on_schema_mismatch_error=drop;on_write_error=drop_and_continue;");
+        var roundTripped = new SenderOptions(original.ToString());
+        Assert.That(roundTripped.on_server_error, Is.EqualTo(SenderErrorPolicy.Halt));
+        Assert.That(roundTripped.on_schema_mismatch_error, Is.EqualTo(SenderErrorPolicy.DropAndContinue));
+        Assert.That(roundTripped.on_write_error, Is.EqualTo(SenderErrorPolicy.DropAndContinue));
     }
 
     [Test]

@@ -32,6 +32,7 @@ using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using System.Text.Json.Serialization;
 using QuestDB.Enums;
+using QuestDB.Qwp.Sf;
 using QuestDB.Senders;
 
 // ReSharper disable InconsistentNaming
@@ -108,12 +109,21 @@ public record SenderOptions
     private TimeSpan _reconnectMaxDuration = TimeSpan.FromMilliseconds(300000);
     private TimeSpan _reconnectInitialBackoff = TimeSpan.FromMilliseconds(100);
     private TimeSpan _reconnectMaxBackoff = TimeSpan.FromMilliseconds(5000);
-    private bool _initialConnectRetry;
+    private InitialConnectMode _initialConnectMode = InitialConnectMode.off;
     private TimeSpan _closeFlushTimeout = TimeSpan.FromMilliseconds(5000);
     private bool _drainOrphans;
     private int _maxBackgroundDrainers = 4;
     private TimeSpan _pingTimeout = TimeSpan.FromMilliseconds(5000);
     private string? _proxy;
+    private SenderErrorHandler? _errorHandler;
+    private SenderErrorPolicyResolver? _errorPolicyResolver;
+    private int _errorInboxCapacity = 256;
+    private SenderErrorPolicy? _onServerError;
+    private SenderErrorPolicy? _onSchemaMismatchError;
+    private SenderErrorPolicy? _onParseError;
+    private SenderErrorPolicy? _onInternalError;
+    private SenderErrorPolicy? _onSecurityError;
+    private SenderErrorPolicy? _onWriteError;
 
     private bool _inFlightWindowUserSet;
     private bool _maxSchemasPerConnectionUserSet;
@@ -128,12 +138,21 @@ public record SenderOptions
     private bool _reconnectMaxDurationUserSet;
     private bool _reconnectInitialBackoffUserSet;
     private bool _reconnectMaxBackoffUserSet;
-    private bool _initialConnectRetryUserSet;
+    private bool _initialConnectModeUserSet;
     private bool _closeFlushTimeoutUserSet;
     private bool _drainOrphansUserSet;
     private bool _maxBackgroundDrainersUserSet;
     private bool _pingTimeoutUserSet;
     private bool _proxyUserSet;
+    private bool _errorHandlerUserSet;
+    private bool _errorPolicyResolverUserSet;
+    private bool _errorInboxCapacityUserSet;
+    private bool _onServerErrorUserSet;
+    private bool _onSchemaMismatchErrorUserSet;
+    private bool _onParseErrorUserSet;
+    private bool _onInternalErrorUserSet;
+    private bool _onSecurityErrorUserSet;
+    private bool _onWriteErrorUserSet;
 
     /// <summary>
     ///     Construct a <see cref="SenderOptions" /> object with default values.
@@ -220,12 +239,20 @@ public record SenderOptions
         ParseMillisecondsWithDefault(nameof(reconnect_max_duration_millis), "300000", out _reconnectMaxDuration);
         ParseMillisecondsWithDefault(nameof(reconnect_initial_backoff_millis), "100", out _reconnectInitialBackoff);
         ParseMillisecondsWithDefault(nameof(reconnect_max_backoff_millis), "5000", out _reconnectMaxBackoff);
-        ParseBoolOnOff(nameof(initial_connect_retry), "off", out _initialConnectRetry);
+        _initialConnectMode = ParseInitialConnectMode(
+            ReadOptionFromBuilder(nameof(initial_connect_retry)));
         ParseMillisecondsWithDefault(nameof(close_flush_timeout_millis), "5000", out _closeFlushTimeout);
         ParseBoolOnOff(nameof(drain_orphans), "off", out _drainOrphans);
         ParseIntWithDefault(nameof(max_background_drainers), "4", out _maxBackgroundDrainers);
         ParseMillisecondsWithDefault(nameof(ping_timeout), "5000", out _pingTimeout);
         ParseStringWithDefault(nameof(proxy), null, out _proxy);
+
+        _onServerError = ParsePolicyKey(nameof(on_server_error));
+        _onSchemaMismatchError = ParsePolicyKey(nameof(on_schema_mismatch_error));
+        _onParseError = ParsePolicyKey(nameof(on_parse_error));
+        _onInternalError = ParsePolicyKey(nameof(on_internal_error));
+        _onSecurityError = ParsePolicyKey(nameof(on_security_error));
+        _onWriteError = ParsePolicyKey(nameof(on_write_error));
 
         EnsureValid();
     }
@@ -319,6 +346,46 @@ public record SenderOptions
         }
     }
 
+    private SenderErrorPolicy? ParsePolicyKey(string name)
+    {
+        var raw = ReadOptionFromBuilder(name);
+        if (raw is null) return null;
+        if (string.Equals(raw, "halt", StringComparison.OrdinalIgnoreCase))
+        {
+            return SenderErrorPolicy.Halt;
+        }
+        if (string.Equals(raw, "drop", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(raw, "drop_and_continue", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(raw, nameof(SenderErrorPolicy.DropAndContinue), StringComparison.OrdinalIgnoreCase))
+        {
+            return SenderErrorPolicy.DropAndContinue;
+        }
+        throw new IngressError(ErrorCode.ConfigError,
+            $"`{name}` must be one of [halt, drop, drop_and_continue], got `{raw}`");
+    }
+
+    private static InitialConnectMode ParseInitialConnectMode(string? raw)
+    {
+        if (string.IsNullOrEmpty(raw)) return InitialConnectMode.off;
+        if (string.Equals(raw, "off", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(raw, "false", StringComparison.OrdinalIgnoreCase))
+        {
+            return InitialConnectMode.off;
+        }
+        if (string.Equals(raw, "on", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(raw, "true", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(raw, "sync", StringComparison.OrdinalIgnoreCase))
+        {
+            return InitialConnectMode.on;
+        }
+        if (string.Equals(raw, "async", StringComparison.OrdinalIgnoreCase))
+        {
+            return InitialConnectMode.async;
+        }
+        throw new IngressError(ErrorCode.ConfigError,
+            $"`initial_connect_retry` must be one of [off, on, async] (also accepts [false, true, sync]), got `{raw}`");
+    }
+
     private bool IsKeyExplicit(string name)
     {
         return _connectionStringBuilder!.ContainsKey(name);
@@ -382,7 +449,80 @@ public record SenderOptions
         ValidateTimeouts();
         ValidateWebSocketKeys();
         ValidateWebSocketKeysAgainstDefaults();
+        ValidateInitialConnectModeRequiresSf();
         ApplyAutoFlushNormalisation();
+    }
+
+    private void ValidateInitialConnectModeRequiresSf()
+    {
+        // The non-SF WS path connects synchronously in the constructor and never consults SF-engine
+        // knobs — accepting them without sf_dir would silently no-op.
+        if (string.IsNullOrEmpty(_sfDir))
+        {
+            if (_initialConnectMode != InitialConnectMode.off)
+            {
+                throw new IngressError(ErrorCode.ConfigError,
+                    "`initial_connect_retry` requires `sf_dir` to be set (only the SF cursor engine implements first-connect retry).");
+            }
+            if (_errorHandler != null)
+            {
+                throw new IngressError(ErrorCode.ConfigError,
+                    "`error_handler` requires `sf_dir` to be set (only the SF cursor engine emits async error notifications).");
+            }
+            if (_errorPolicyResolver != null)
+            {
+                throw new IngressError(ErrorCode.ConfigError,
+                    "`error_policy_resolver` requires `sf_dir` to be set.");
+            }
+            if (_errorInboxCapacityUserSet)
+            {
+                throw new IngressError(ErrorCode.ConfigError,
+                    "`error_inbox_capacity` requires `sf_dir` to be set.");
+            }
+            if (HasAnyPolicyKeySet())
+            {
+                throw new IngressError(ErrorCode.ConfigError,
+                    "`on_server_error` / `on_*_error` keys require `sf_dir` to be set.");
+            }
+        }
+        if (_errorInboxCapacity < 1)
+        {
+            throw new IngressError(ErrorCode.ConfigError,
+                $"`error_inbox_capacity` must be >= 1; got {_errorInboxCapacity}");
+        }
+    }
+
+    private bool HasAnyPolicyKeySet() =>
+        _onServerError.HasValue || _onSchemaMismatchError.HasValue || _onParseError.HasValue
+        || _onInternalError.HasValue || _onSecurityError.HasValue || _onWriteError.HasValue;
+
+    /// <summary>
+    ///     Build the effective resolver per the precedence chain:
+    ///     <see cref="error_policy_resolver" /> → per-category override
+    ///     (<see cref="on_schema_mismatch_error" /> etc.) → <see cref="on_server_error" /> →
+    ///     spec defaults. Returns null when no override is configured (engine then falls through
+    ///     to spec defaults). <see cref="SenderErrorCategory.ProtocolViolation" /> and
+    ///     <see cref="SenderErrorCategory.Unknown" /> are forced halt by the engine, so a
+    ///     resolver returning anything else for them is ignored.
+    /// </summary>
+    internal SenderErrorPolicyResolver? BuildEffectivePolicyResolver()
+    {
+        if (_errorPolicyResolver != null) return _errorPolicyResolver;
+        if (!HasAnyPolicyKeySet()) return null;
+        var schema = _onSchemaMismatchError ?? _onServerError;
+        var parse = _onParseError ?? _onServerError;
+        var internalErr = _onInternalError ?? _onServerError;
+        var security = _onSecurityError ?? _onServerError;
+        var write = _onWriteError ?? _onServerError;
+        return category => category switch
+        {
+            SenderErrorCategory.SchemaMismatch => schema ?? QwpErrorClassifier.DefaultPolicy(category),
+            SenderErrorCategory.ParseError => parse ?? QwpErrorClassifier.DefaultPolicy(category),
+            SenderErrorCategory.InternalError => internalErr ?? QwpErrorClassifier.DefaultPolicy(category),
+            SenderErrorCategory.SecurityError => security ?? QwpErrorClassifier.DefaultPolicy(category),
+            SenderErrorCategory.WriteError => write ?? QwpErrorClassifier.DefaultPolicy(category),
+            _ => QwpErrorClassifier.DefaultPolicy(category),
+        };
     }
 
     private void ValidateMultiAddressForTcp()
@@ -447,12 +587,21 @@ public record SenderOptions
         if (_reconnectMaxDurationUserSet) Throw(nameof(reconnect_max_duration_millis));
         if (_reconnectInitialBackoffUserSet) Throw(nameof(reconnect_initial_backoff_millis));
         if (_reconnectMaxBackoffUserSet) Throw(nameof(reconnect_max_backoff_millis));
-        if (_initialConnectRetryUserSet) Throw(nameof(initial_connect_retry));
+        if (_initialConnectModeUserSet) Throw(nameof(initial_connect_retry));
         if (_closeFlushTimeoutUserSet) Throw(nameof(close_flush_timeout_millis));
         if (_drainOrphansUserSet) Throw(nameof(drain_orphans));
         if (_maxBackgroundDrainersUserSet) Throw(nameof(max_background_drainers));
         if (_pingTimeoutUserSet) Throw(nameof(ping_timeout));
         if (_proxyUserSet) Throw(nameof(proxy));
+        if (_errorHandlerUserSet) Throw(nameof(error_handler));
+        if (_errorPolicyResolverUserSet) Throw(nameof(error_policy_resolver));
+        if (_errorInboxCapacityUserSet) Throw(nameof(error_inbox_capacity));
+        if (_onServerErrorUserSet) Throw(nameof(on_server_error));
+        if (_onSchemaMismatchErrorUserSet) Throw(nameof(on_schema_mismatch_error));
+        if (_onParseErrorUserSet) Throw(nameof(on_parse_error));
+        if (_onInternalErrorUserSet) Throw(nameof(on_internal_error));
+        if (_onSecurityErrorUserSet) Throw(nameof(on_security_error));
+        if (_onWriteErrorUserSet) Throw(nameof(on_write_error));
 
         static void Throw(string key) =>
             throw new IngressError(ErrorCode.ConfigError,
@@ -475,8 +624,11 @@ public record SenderOptions
         "gorilla", "request_durable_ack",
         "sf_dir", "sender_id", "sf_max_bytes", "sf_max_total_bytes", "sf_durability",
         "sf_append_deadline_millis", "reconnect_max_duration_millis", "reconnect_initial_backoff_millis",
-        "reconnect_max_backoff_millis", "initial_connect_retry", "close_flush_timeout_millis",
-        "drain_orphans", "max_background_drainers", "ping_timeout", "proxy",
+        "reconnect_max_backoff_millis", "initial_connect_retry", "initial_connect_mode",
+        "close_flush_timeout_millis", "drain_orphans", "max_background_drainers", "ping_timeout", "proxy",
+        "error_handler", "error_policy_resolver", "error_inbox_capacity",
+        "on_server_error", "on_schema_mismatch_error", "on_parse_error", "on_internal_error",
+        "on_security_error", "on_write_error",
     };
 
     /// <summary>
@@ -963,14 +1115,113 @@ public record SenderOptions
     }
 
     /// <summary>
-    ///     If <c>true</c>, the very first connection attempt also enters the reconnect-with-backoff
-    ///     loop. By default initial-connect failures are terminal — the user usually wants to know
-    ///     "couldn't reach server" immediately.
+    ///     Legacy bool view of <see cref="initial_connect_mode" />. <c>false</c> maps to
+    ///     <see cref="InitialConnectMode.off" />; <c>true</c> maps to <see cref="InitialConnectMode.on" />.
+    ///     The <see cref="InitialConnectMode.async" /> value is only reachable via
+    ///     <see cref="initial_connect_mode" /> or the connect-string key <c>initial_connect_retry=async</c>.
     /// </summary>
     public bool initial_connect_retry
     {
-        get => _initialConnectRetry;
-        set { _initialConnectRetry = value; _initialConnectRetryUserSet = true; }
+        get => _initialConnectMode != InitialConnectMode.off;
+        set
+        {
+            _initialConnectMode = value ? InitialConnectMode.on : InitialConnectMode.off;
+            _initialConnectModeUserSet = true;
+        }
+    }
+
+    /// <summary>
+    ///     First-connect retry policy. See <see cref="InitialConnectMode" /> for value semantics.
+    ///     The connect-string key is <c>initial_connect_retry</c> for cross-client compatibility;
+    ///     it accepts <c>off</c>/<c>false</c>, <c>on</c>/<c>true</c>/<c>sync</c>, and <c>async</c>.
+    /// </summary>
+    public InitialConnectMode initial_connect_mode
+    {
+        get => _initialConnectMode;
+        set { _initialConnectMode = value; _initialConnectModeUserSet = true; }
+    }
+
+    /// <summary>
+    ///     Optional callback invoked when the SF cursor engine observes a server-side rejection
+    ///     or reaches a terminal state. Fires for both <see cref="SenderErrorPolicy.DropAndContinue" />
+    ///     and <see cref="SenderErrorPolicy.Halt" /> outcomes. Programmatic-only.
+    ///     When unset, the engine logs notifications via <see cref="System.Diagnostics.Trace" />
+    ///     so failures aren't silently lost.
+    /// </summary>
+    [JsonIgnore]
+    public SenderErrorHandler? error_handler
+    {
+        get => _errorHandler;
+        set { _errorHandler = value; _errorHandlerUserSet = true; }
+    }
+
+    /// <summary>
+    ///     Optional resolver overriding the per-<see cref="SenderErrorCategory" /> default policy.
+    ///     <see cref="SenderErrorCategory.ProtocolViolation" /> and
+    ///     <see cref="SenderErrorCategory.Unknown" /> are always <see cref="SenderErrorPolicy.Halt" />
+    ///     regardless of the resolver. Programmatic-only.
+    /// </summary>
+    [JsonIgnore]
+    public SenderErrorPolicyResolver? error_policy_resolver
+    {
+        get => _errorPolicyResolver;
+        set { _errorPolicyResolver = value; _errorPolicyResolverUserSet = true; }
+    }
+
+    /// <summary>
+    ///     Bounded inbox capacity for the async error dispatcher. When the inbox fills, surplus
+    ///     notifications are dropped and counted (visible via the sender's
+    ///     <c>DroppedErrorNotifications</c> accessor). Defaults to 256.
+    /// </summary>
+    public int error_inbox_capacity
+    {
+        get => _errorInboxCapacity;
+        set { _errorInboxCapacity = value; _errorInboxCapacityUserSet = true; }
+    }
+
+    /// <summary>
+    ///     Default policy for any overridable category that has no per-category override.
+    ///     Connect-string accepts <c>halt</c>, <c>drop</c>, <c>drop_and_continue</c>.
+    /// </summary>
+    public SenderErrorPolicy? on_server_error
+    {
+        get => _onServerError;
+        set { _onServerError = value; _onServerErrorUserSet = true; }
+    }
+
+    /// <summary>Override for <see cref="SenderErrorCategory.SchemaMismatch" />. Default: drop_and_continue.</summary>
+    public SenderErrorPolicy? on_schema_mismatch_error
+    {
+        get => _onSchemaMismatchError;
+        set { _onSchemaMismatchError = value; _onSchemaMismatchErrorUserSet = true; }
+    }
+
+    /// <summary>Override for <see cref="SenderErrorCategory.ParseError" />. Default: halt.</summary>
+    public SenderErrorPolicy? on_parse_error
+    {
+        get => _onParseError;
+        set { _onParseError = value; _onParseErrorUserSet = true; }
+    }
+
+    /// <summary>Override for <see cref="SenderErrorCategory.InternalError" />. Default: halt.</summary>
+    public SenderErrorPolicy? on_internal_error
+    {
+        get => _onInternalError;
+        set { _onInternalError = value; _onInternalErrorUserSet = true; }
+    }
+
+    /// <summary>Override for <see cref="SenderErrorCategory.SecurityError" />. Default: halt.</summary>
+    public SenderErrorPolicy? on_security_error
+    {
+        get => _onSecurityError;
+        set { _onSecurityError = value; _onSecurityErrorUserSet = true; }
+    }
+
+    /// <summary>Override for <see cref="SenderErrorCategory.WriteError" />. Default: drop_and_continue.</summary>
+    public SenderErrorPolicy? on_write_error
+    {
+        get => _onWriteError;
+        set { _onWriteError = value; _onWriteErrorUserSet = true; }
     }
 
     /// <summary>

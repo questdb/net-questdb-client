@@ -78,6 +78,7 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
     private readonly bool _sfMode;
     private readonly QwpCursorSendEngine? _sfEngine;
     private readonly QwpBackgroundDrainerPool? _sfDrainerPool;
+    private readonly QwpSenderErrorDispatcher? _sfErrorDispatcher;
 
     // Per-table seqTxn watermarks. Accessed by both the producer thread (read via Get*) and the
     // receive loop (write on ACK frames); guarded by _seqTxnLock.
@@ -131,7 +132,7 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
 
         if (_sfMode)
         {
-            (_sfEngine, _sfDrainerPool) = BuildSfStack(options);
+            (_sfEngine, _sfDrainerPool, _sfErrorDispatcher) = BuildSfStack(options);
             _sfEngine.SetTableEntryHandler(UpdateSeqTxnFromAck);
             return;
         }
@@ -173,7 +174,7 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
         _receiveLoopTask = Task.Run(() => ReceiveLoop(_ioCts.Token));
     }
 
-    private static (QwpCursorSendEngine engine, QwpBackgroundDrainerPool? pool) BuildSfStack(SenderOptions options)
+    private static (QwpCursorSendEngine engine, QwpBackgroundDrainerPool? pool, QwpSenderErrorDispatcher? dispatcher) BuildSfStack(SenderOptions options)
     {
         var sfRoot = options.sf_dir!;
         var slotDir = Path.Combine(sfRoot, options.sender_id);
@@ -181,6 +182,7 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
         QwpSegmentRing? ring = null;
         QwpCursorSendEngine? engine = null;
         QwpBackgroundDrainerPool? pool = null;
+        QwpSenderErrorDispatcher? dispatcher = null;
 
         try
         {
@@ -199,17 +201,34 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
                 options.reconnect_max_duration_millis,
                 jitter: QwpReconnectPolicy.EqualJitter);
 
+            dispatcher = new QwpSenderErrorDispatcher(options.error_handler, options.error_inbox_capacity);
+
             engine = new QwpCursorSendEngine(
                 slotLock,
                 ring,
                 transportFactory,
                 policy,
                 options.sf_append_deadline_millis,
-                options.initial_connect_retry,
+                options.initial_connect_mode,
                 maxTotalBytes: options.sf_max_total_bytes,
-                skipBackoffPredicate: () => !tracker.IsRoundExhausted);
+                skipBackoffPredicate: () => !tracker.IsRoundExhausted,
+                errorDispatcher: dispatcher,
+                policyResolver: options.BuildEffectivePolicyResolver());
 
             engine.Start();
+
+            if (options.initial_connect_mode != InitialConnectMode.async)
+            {
+                try
+                {
+                    engine.FirstConnectTask.GetAwaiter().GetResult();
+                }
+                catch (Exception ex)
+                {
+                    throw new IngressError(ErrorCode.SocketError,
+                        $"SF first connect failed: {ex.Message}", ex);
+                }
+            }
 
             if (options.drain_orphans)
             {
@@ -242,12 +261,13 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
                 }
             }
 
-            return (engine, pool);
+            return (engine, pool, dispatcher);
         }
         catch (Exception)
         {
             SfCleanup.Dispose(pool);
             SfCleanup.Dispose(engine);
+            SfCleanup.Dispose(dispatcher);
             SfCleanup.Dispose(ring);
             SfCleanup.Dispose(slotLock);
             throw;
@@ -1111,6 +1131,12 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
         }
     }
 
+    /// <inheritdoc />
+    public long DroppedErrorNotifications => _sfErrorDispatcher?.DroppedNotifications ?? 0L;
+
+    /// <inheritdoc />
+    public long TotalErrorNotificationsDelivered => _sfErrorDispatcher?.TotalDelivered ?? 0L;
+
     private void UpdateSeqTxnFromAck(QwpTableEntry entry, bool isDurable)
     {
         lock (_seqTxnLock)
@@ -1342,6 +1368,7 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
 
         SfCleanup.Dispose(_sfDrainerPool);
         SfCleanup.Dispose(_sfEngine);
+        SfCleanup.Dispose(_sfErrorDispatcher);
 
         foreach (var sem in _encoderReady)
         {
@@ -1365,6 +1392,7 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
 
         SfCleanup.Dispose(_sfDrainerPool);
         SfCleanup.Dispose(_sfEngine);
+        SfCleanup.Dispose(_sfErrorDispatcher);
 
         foreach (var sem in _encoderReady)
         {

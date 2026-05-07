@@ -65,13 +65,13 @@ public class QwpCursorSendEngineTests
 
             // slotLock=null is permitted (drain mode — pool owns the lock externally).
             Assert.Throws<ArgumentNullException>(() =>
-                new QwpCursorSendEngine(slotLock, null!, () => null!, policy, TimeSpan.FromSeconds(5), false));
+                new QwpCursorSendEngine(slotLock, null!, () => null!, policy, TimeSpan.FromSeconds(5), InitialConnectMode.off));
             Assert.Throws<ArgumentNullException>(() =>
-                new QwpCursorSendEngine(slotLock, ring, null!, policy, TimeSpan.FromSeconds(5), false));
+                new QwpCursorSendEngine(slotLock, ring, null!, policy, TimeSpan.FromSeconds(5), InitialConnectMode.off));
             Assert.Throws<ArgumentNullException>(() =>
-                new QwpCursorSendEngine(slotLock, ring, () => null!, null!, TimeSpan.FromSeconds(5), false));
+                new QwpCursorSendEngine(slotLock, ring, () => null!, null!, TimeSpan.FromSeconds(5), InitialConnectMode.off));
             Assert.Throws<ArgumentOutOfRangeException>(() =>
-                new QwpCursorSendEngine(slotLock, ring, () => null!, policy, TimeSpan.Zero, false));
+                new QwpCursorSendEngine(slotLock, ring, () => null!, policy, TimeSpan.Zero, InitialConnectMode.off));
 
             ring.Dispose();
         }
@@ -267,7 +267,7 @@ public class QwpCursorSendEngineTests
         using var engine = NewEngine(out _, factory: () => new StubTransport
         {
             OnConnect = _ => throw new IngressError(ErrorCode.SocketError, "connection refused")
-        }, initialConnectRetry: false);
+        }, initialConnectMode: InitialConnectMode.off);
         engine.Start();
 
         AssertEventually(() => engine.IsTerminallyFailed, "engine never marked terminal after initial connect failure");
@@ -287,7 +287,7 @@ public class QwpCursorSendEngineTests
                     ? throw new IngressError(ErrorCode.SocketError, $"attempt {attempts} refused")
                     : Task.CompletedTask
             };
-        }, initialConnectRetry: true);
+        }, initialConnectMode: InitialConnectMode.on);
         engine.Start();
 
         engine.AppendBlocking(new byte[] { 7 });
@@ -352,7 +352,7 @@ public class QwpCursorSendEngineTests
                 OnConnect = _ => throw new IngressError(ErrorCode.SocketError, "always refused")
             },
             policy: policy,
-            initialConnectRetry: true);
+            initialConnectMode: InitialConnectMode.on);
         engine.Start();
 
         AssertEventually(() => engine.IsTerminallyFailed, "budget never exhausted", timeoutMs: 2000);
@@ -360,17 +360,207 @@ public class QwpCursorSendEngineTests
     }
 
     [Test]
-    public void ServerErrorResponse_Terminal()
+    public void ErrorHandler_FiresOnInitialConnectExhaustion()
+    {
+        var policy = new QwpReconnectPolicy(
+            TimeSpan.FromMilliseconds(20),
+            TimeSpan.FromMilliseconds(40),
+            TimeSpan.FromMilliseconds(150));
+        SenderError? captured = null;
+        var fired = new ManualResetEventSlim();
+        using var engine = NewEngine(out _,
+            factory: () => new StubTransport
+            {
+                OnConnect = _ => throw new IngressError(ErrorCode.SocketError, "always refused")
+            },
+            policy: policy,
+            initialConnectMode: InitialConnectMode.async,
+            errorHandler: e => { captured = e; fired.Set(); });
+        engine.Start();
+
+        Assert.That(fired.Wait(TimeSpan.FromSeconds(2)), Is.True, "error_handler never fired");
+        Assert.That(captured, Is.Not.Null);
+        Assert.That(captured!.IsInitialConnect, Is.True);
+        Assert.That(captured.Exception, Is.InstanceOf<IngressError>());
+    }
+
+    [Test]
+    public void ErrorHandler_FiresOnceForServerReject_AfterConnect()
+    {
+        var fireCount = 0;
+        var fired = new ManualResetEventSlim();
+        SenderError? captured = null;
+        using var engine = NewEngine(out _,
+            factory: () => new StubTransport
+            {
+                OnSend = _ => ErrorResponse(QwpStatusCode.InternalError, sequence: 0, "boom")
+            },
+            errorHandler: e =>
+            {
+                Interlocked.Increment(ref fireCount);
+                captured = e;
+                fired.Set();
+            });
+        engine.Start();
+        engine.AppendBlocking(new byte[] { 9 });
+
+        Assert.That(fired.Wait(TimeSpan.FromSeconds(2)), Is.True, "error_handler never fired");
+        AssertEventually(() => engine.IsTerminallyFailed, "engine should mark terminal");
+        Thread.Sleep(100);
+        Assert.That(fireCount, Is.EqualTo(1));
+        Assert.That(captured!.Category, Is.EqualTo(SenderErrorCategory.InternalError));
+        Assert.That(captured.AppliedPolicy, Is.EqualTo(SenderErrorPolicy.Halt));
+        Assert.That(captured.IsInitialConnect, Is.False);
+    }
+
+    [Test]
+    public void ErrorHandler_ThrowsAreSwallowed()
     {
         using var engine = NewEngine(out _, factory: () => new StubTransport
         {
-            OnSend = _ => ErrorResponse(QwpStatusCode.SchemaMismatch, sequence: 0, "bad schema")
+            OnSend = _ => ErrorResponse(QwpStatusCode.InternalError, sequence: 0, "boom")
+        }, errorHandler: _ => throw new InvalidOperationException("user bug"));
+        engine.Start();
+        engine.AppendBlocking(new byte[] { 1 });
+
+        AssertEventually(() => engine.IsTerminallyFailed, "engine should mark terminal");
+        Assert.That(engine.TerminalError, Is.InstanceOf<LineSenderServerException>());
+    }
+
+    [Test]
+    public void DropAndContinue_SchemaMismatch_AdvancesAckAndKeepsRunning()
+    {
+        var sendCount = 0;
+        var fired = new ManualResetEventSlim();
+        SenderError? captured = null;
+        using var engine = NewEngine(out _, factory: () => new StubTransport
+        {
+            OnSend = _ =>
+            {
+                var seq = sendCount++;
+                return seq == 0
+                    ? ErrorResponse(QwpStatusCode.SchemaMismatch, sequence: 0, "schema mismatch")
+                    : OkResponse(seq);
+            }
+        }, errorHandler: e => { captured = e; fired.Set(); });
+        engine.Start();
+
+        engine.AppendBlocking(new byte[] { 1 });
+        engine.AppendBlocking(new byte[] { 2 });
+
+        Assert.That(fired.Wait(TimeSpan.FromSeconds(2)), Is.True, "error_handler never fired");
+        Assert.That(captured!.Category, Is.EqualTo(SenderErrorCategory.SchemaMismatch));
+        Assert.That(captured.AppliedPolicy, Is.EqualTo(SenderErrorPolicy.DropAndContinue));
+        AssertEventually(() => engine.AckedFsn >= 2L, "ack watermark should advance past dropped + ok'd batches");
+        Assert.That(engine.IsTerminallyFailed, Is.False, "drop-and-continue must not mark engine terminal");
+    }
+
+    [Test]
+    public void PolicyResolver_OverrideMakesDropableHalt()
+    {
+        SenderError? captured = null;
+        var fired = new ManualResetEventSlim();
+        using var engine = NewEngine(out _, factory: () => new StubTransport
+        {
+            OnSend = _ => ErrorResponse(QwpStatusCode.SchemaMismatch, sequence: 0, "schema mismatch")
+        }, errorHandler: e => { captured = e; fired.Set(); },
+           policyResolver: _ => SenderErrorPolicy.Halt);
+        engine.Start();
+        engine.AppendBlocking(new byte[] { 1 });
+
+        Assert.That(fired.Wait(TimeSpan.FromSeconds(2)), Is.True);
+        Assert.That(captured!.AppliedPolicy, Is.EqualTo(SenderErrorPolicy.Halt));
+        AssertEventually(() => engine.IsTerminallyFailed, "halt override must make engine terminal");
+        Assert.That(engine.TerminalError, Is.InstanceOf<LineSenderServerException>());
+    }
+
+    [Test]
+    public void PolicyResolver_CannotOverrideUnknownToDrop()
+    {
+        // Resolver returns DropAndContinue, but UNKNOWN must be forced HALT regardless.
+        using var engine = NewEngine(out _, factory: () => new StubTransport
+        {
+            OnSend = _ => ErrorResponse((QwpStatusCode)0xFE, sequence: 0, "what")
+        }, errorHandler: _ => { },
+           policyResolver: _ => SenderErrorPolicy.DropAndContinue);
+        engine.Start();
+        engine.AppendBlocking(new byte[] { 1 });
+
+        AssertEventually(() => engine.IsTerminallyFailed, "Unknown category must always halt");
+    }
+
+    [Test]
+    public void Senderror_Fields_PopulatedFromResponse()
+    {
+        SenderError? captured = null;
+        var fired = new ManualResetEventSlim();
+        using var engine = NewEngine(out _, factory: () => new StubTransport
+        {
+            OnSend = _ => ErrorResponse(QwpStatusCode.InternalError, sequence: 7, "boom")
+        }, errorHandler: e => { captured = e; fired.Set(); });
+        engine.Start();
+        engine.AppendBlocking(new byte[] { 1 });
+
+        Assert.That(fired.Wait(TimeSpan.FromSeconds(2)), Is.True);
+        Assert.That(captured!.ServerStatusByte, Is.EqualTo((int)QwpStatusCode.InternalError));
+        Assert.That(captured.ServerMessage, Is.EqualTo("boom"));
+        Assert.That(captured.MessageSequence, Is.EqualTo(7));
+        Assert.That(captured.FromFsn, Is.EqualTo(0L));
+        Assert.That(captured.ToFsn, Is.EqualTo(0L));
+    }
+
+    [Test]
+    public void ErrorInbox_Overflow_BumpsDroppedCounter()
+    {
+        var release = new ManualResetEventSlim();
+        var seen = 0;
+        var sendCount = 0;
+        var slotDir = Path.Combine(_root, "sender-" + Guid.NewGuid().ToString("N"));
+        var slotLock = QwpSlotLock.Acquire(slotDir);
+        var ring = QwpSegmentRing.Open(slotDir, segmentCapacity: 4096);
+        var policy = new QwpReconnectPolicy(
+            TimeSpan.FromMilliseconds(10), TimeSpan.FromMilliseconds(40), TimeSpan.FromSeconds(2));
+        using var dispatcher = new QwpSenderErrorDispatcher(_ =>
+        {
+            Interlocked.Increment(ref seen);
+            release.Wait();
+        }, capacity: 1);
+        using var engine = new QwpCursorSendEngine(
+            slotLock, ring,
+            () => new StubTransport
+            {
+                OnSend = _ => ErrorResponse(QwpStatusCode.SchemaMismatch, sequence: sendCount++, "drop")
+            },
+            policy,
+            TimeSpan.FromSeconds(5),
+            InitialConnectMode.off,
+            errorDispatcher: dispatcher);
+        engine.Start();
+        for (var i = 0; i < 64; i++)
+        {
+            engine.AppendBlocking(new byte[] { (byte)i });
+        }
+        AssertEventually(() => Volatile.Read(ref seen) >= 1, "first notification never delivered");
+        AssertEventually(() => dispatcher.DroppedNotifications > 0,
+            "no dropped notifications recorded despite the parked handler");
+        release.Set();
+    }
+
+    [Test]
+    public void ServerErrorResponse_Terminal_OnHaltCategory()
+    {
+        using var engine = NewEngine(out _, factory: () => new StubTransport
+        {
+            OnSend = _ => ErrorResponse(QwpStatusCode.InternalError, sequence: 0, "boom")
         });
         engine.Start();
 
         engine.AppendBlocking(new byte[] { 9 });
-        AssertEventually(() => engine.IsTerminallyFailed, "engine should mark terminal on server reject");
-        Assert.That(engine.TerminalError, Is.InstanceOf<QwpException>());
+        AssertEventually(() => engine.IsTerminallyFailed, "engine should mark terminal on Halt-policy reject");
+        Assert.That(engine.TerminalError, Is.InstanceOf<LineSenderServerException>());
+        var lse = (LineSenderServerException)engine.TerminalError!;
+        Assert.That(lse.Error.Category, Is.EqualTo(SenderErrorCategory.InternalError));
+        Assert.That(lse.Error.AppliedPolicy, Is.EqualTo(SenderErrorPolicy.Halt));
     }
 
     [Test]
@@ -598,10 +788,13 @@ public class QwpCursorSendEngineTests
         Func<IQwpCursorTransport>? factory = null,
         QwpReconnectPolicy? policy = null,
         TimeSpan? appendDeadline = null,
-        bool initialConnectRetry = false,
+        InitialConnectMode initialConnectMode = InitialConnectMode.off,
         long segmentCapacity = 4096,
         long maxTotalBytes = long.MaxValue,
-        string? slotDirectoryOverride = null)
+        string? slotDirectoryOverride = null,
+        SenderErrorHandler? errorHandler = null,
+        SenderErrorPolicyResolver? policyResolver = null,
+        int errorInboxCapacity = 256)
     {
         slotDir = slotDirectoryOverride ?? Path.Combine(_root, "sender-" + Guid.NewGuid().ToString("N"));
         var slotLock = QwpSlotLock.Acquire(slotDir);
@@ -611,11 +804,16 @@ public class QwpCursorSendEngineTests
             TimeSpan.FromMilliseconds(40),
             TimeSpan.FromSeconds(2));
         factory ??= () => new StubTransport();
+        var dispatcher = errorHandler is null && policyResolver is null
+            ? null
+            : new QwpSenderErrorDispatcher(errorHandler, errorInboxCapacity);
         return new QwpCursorSendEngine(
             slotLock, ring, factory, policy,
             appendDeadline ?? TimeSpan.FromSeconds(5),
-            initialConnectRetry,
-            maxTotalBytes: maxTotalBytes);
+            initialConnectMode,
+            maxTotalBytes: maxTotalBytes,
+            errorDispatcher: dispatcher,
+            policyResolver: policyResolver);
     }
 
     private static byte[] OkResponse(long sequence)

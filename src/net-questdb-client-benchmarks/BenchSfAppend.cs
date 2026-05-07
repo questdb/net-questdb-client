@@ -34,8 +34,8 @@ namespace net_questdb_client_benchmarks;
 
 /// <summary>
 ///     Per-row append latency for the SF cursor engine wired through the public sender API.
-///     Mirrors the Java <c>CursorEngineAppendLatencyBenchmark</c>: warm WebSocket connection +
-///     fast-acking server, measure the time to publish a single row + flush.
+///     Warm WebSocket connection + fast-acking server, measure the time to publish a single
+///     row + flush.
 /// </summary>
 public class BenchSfAppend
 {

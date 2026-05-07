@@ -78,4 +78,17 @@ public interface IQwpWebSocketSender : ISender
 
     /// <summary>Append an IPv4 address to the named column.</summary>
     IQwpWebSocketSender ColumnIPv4(ReadOnlySpan<char> name, System.Net.IPAddress addr);
+
+    /// <summary>
+    ///     Number of <see cref="QuestDB.Utils.SenderError" /> notifications dropped because the
+    ///     async error inbox was full. Non-zero indicates the user-supplied error_handler can't
+    ///     keep up with the error rate. SF mode only; <c>0</c> otherwise.
+    /// </summary>
+    long DroppedErrorNotifications { get; }
+
+    /// <summary>
+    ///     Total <see cref="QuestDB.Utils.SenderError" /> notifications delivered to the
+    ///     user-supplied (or default) error_handler. SF mode only; <c>0</c> otherwise.
+    /// </summary>
+    long TotalErrorNotificationsDelivered { get; }
 }

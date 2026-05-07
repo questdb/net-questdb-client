@@ -92,7 +92,7 @@ public class QwpCursorSendEngineMultiHostTests
         using var engine = new QwpCursorSendEngine(
             slotLock, ring, factory, policy,
             appendDeadline: TimeSpan.FromSeconds(5),
-            initialConnectRetry: true,
+            initialConnectMode: InitialConnectMode.async,
             skipBackoffPredicate: () => !tracker.IsRoundExhausted);
 
         engine.Start();
@@ -143,7 +143,7 @@ public class QwpCursorSendEngineMultiHostTests
         using var engine = new QwpCursorSendEngine(
             slotLock, ring, factory, policy,
             appendDeadline: TimeSpan.FromSeconds(5),
-            initialConnectRetry: true,
+            initialConnectMode: InitialConnectMode.async,
             skipBackoffPredicate: () => !tracker.IsRoundExhausted);
 
         engine.Start();
@@ -187,7 +187,7 @@ public class QwpCursorSendEngineMultiHostTests
         using var engine = new QwpCursorSendEngine(
             slotLock, ring, factory, policy,
             appendDeadline: TimeSpan.FromSeconds(5),
-            initialConnectRetry: true,
+            initialConnectMode: InitialConnectMode.async,
             skipBackoffPredicate: () => !tracker.IsRoundExhausted);
 
         engine.Start();

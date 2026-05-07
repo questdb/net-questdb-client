@@ -22,6 +22,8 @@
  *
  ******************************************************************************/
 
+using QuestDB.Enums;
+
 namespace QuestDB.Qwp.Sf;
 
 /// <summary>
@@ -93,7 +95,7 @@ internal sealed class QwpBackgroundDrainer : IQwpSlotDrainer
                 _transportFactory,
                 _reconnectPolicy,
                 appendDeadline: TimeSpan.FromSeconds(30),
-                initialConnectRetry: false,
+                initialConnectMode: InitialConnectMode.off,
                 skipBackoffPredicate: _skipBackoffPredicate);
 
             if (ring.NextFsn > ring.OldestFsn)

@@ -99,7 +99,7 @@ internal sealed class PrintingHandler : QwpColumnBatchHandler
     public override void OnEnd(long totalRows) => Console.WriteLine($"-- end (totalRows={totalRows}) --");
     public override void OnError(byte status, string message) =>
         Console.Error.WriteLine($"-- error 0x{status:X2}: {message} --");
-    public override void OnExecDone(byte opType, long rowsAffected) =>
+    public override void OnExecDone(short opType, long rowsAffected) =>
         Console.WriteLine($"-- exec_done op={opType} rows={rowsAffected} --");
     public override void OnFailoverReset(QwpServerInfo? newNode) =>
         Console.WriteLine($"-- failover reset (new node: {newNode?.NodeId ?? "<unknown>"}) --");

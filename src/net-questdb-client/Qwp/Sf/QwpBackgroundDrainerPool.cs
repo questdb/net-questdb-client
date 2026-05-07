@@ -58,14 +58,22 @@ internal sealed class QwpBackgroundDrainerPool : IDisposable
 
     public QwpBackgroundDrainerPool(int maxConcurrent, IQwpSlotDrainer drainer, TimeSpan? shutdownWait = null)
     {
-        if (maxConcurrent <= 0)
+        try
         {
-            throw new ArgumentOutOfRangeException(nameof(maxConcurrent), "must be ≥ 1");
-        }
+            if (maxConcurrent <= 0)
+            {
+                throw new ArgumentOutOfRangeException(nameof(maxConcurrent), "must be ≥ 1");
+            }
 
-        _drainer = drainer ?? throw new ArgumentNullException(nameof(drainer));
-        _slots = new SemaphoreSlim(maxConcurrent, maxConcurrent);
-        _shutdownWait = shutdownWait ?? TimeSpan.FromSeconds(5);
+            _drainer = drainer ?? throw new ArgumentNullException(nameof(drainer));
+            _slots = new SemaphoreSlim(maxConcurrent, maxConcurrent);
+            _shutdownWait = shutdownWait ?? TimeSpan.FromSeconds(5);
+        }
+        catch
+        {
+            _shutdownCts.Dispose();
+            throw;
+        }
     }
 
     /// <summary>Submits a drain. Lock ownership transfers to the pool.</summary>

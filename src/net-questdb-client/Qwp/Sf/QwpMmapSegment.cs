@@ -113,8 +113,16 @@ internal sealed class QwpMmapSegment : IDisposable
 
         byte* ptr = null;
         _handle.AcquirePointer(ref ptr);
-        _basePtr = ptr + view.PointerOffset;
-        _viewSize = checked((long)_handle.ByteLength);
+        try
+        {
+            _basePtr = ptr + view.PointerOffset;
+            _viewSize = checked((long)_handle.ByteLength);
+        }
+        catch
+        {
+            _handle.ReleasePointer();
+            throw;
+        }
     }
 
     /// <summary>Filesystem path of the segment file.</summary>

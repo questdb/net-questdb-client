@@ -59,6 +59,7 @@ public sealed class QueryOptions
         "lb_strategy",
         "max_batch_rows",
         "client_id",
+        "buffer_pool_size",
     };
 
     private List<string> _addresses = new();
@@ -417,12 +418,6 @@ public sealed class QueryOptions
         {
             throw new IngressError(ErrorCode.ConfigError,
                 "`failover_max_duration_ms` must be non-negative (0 = unbounded)");
-        }
-
-        if (failover_max_duration_ms > TimeSpan.FromDays(1))
-        {
-            throw new IngressError(ErrorCode.ConfigError,
-                "`failover_max_duration_ms` must be <= 86_400_000 ms (1 day)");
         }
 
         if (auth_timeout_ms <= TimeSpan.Zero)

@@ -58,6 +58,21 @@ internal static class SfCleanup
         }
     }
 
+    /// <summary>Quarantine a corrupt SF segment so the next open skips it without losing the bytes.</summary>
+    public static void RenameFileToCorrupt(string path)
+    {
+        try
+        {
+            if (!File.Exists(path)) return;
+            var dest = path + ".corrupt";
+            if (File.Exists(dest)) File.Delete(dest);
+            File.Move(path, dest);
+        }
+        catch (Exception ex) when (IsExpectedCleanupError(ex))
+        {
+        }
+    }
+
     /// <summary>Run <paramref name="action" /> swallowing only expected cleanup exceptions.</summary>
     public static void Run(Action action)
     {

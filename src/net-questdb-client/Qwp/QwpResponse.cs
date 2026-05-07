@@ -140,24 +140,17 @@ internal readonly struct QwpResponse
 
     private static QwpResponse ParseOk(ReadOnlySpan<byte> frame)
     {
-        // Legacy form: status (1) + sequence (8) = 9 bytes, no per-table entries.
-        if (frame.Length == QwpConstants.OkAckMinSize)
-        {
-            var seqOnly = BinaryPrimitives.ReadInt64LittleEndian(frame.Slice(1, 8));
-            return new QwpResponse(QwpStatusCode.Ok, seqOnly, string.Empty, EmptyEntries);
-        }
-
-        // Extended form: status (1) + sequence (8) + tableCount (2) + entries.
-        const int extendedHeaderSize = QwpConstants.OkAckMinSize + 2;
-        if (frame.Length < extendedHeaderSize)
+        // Spec: status (1) + sequence (8) + tableCount (2) + entries. Minimum 11 bytes; matches Java.
+        const int headerSize = QwpConstants.OkAckMinSize + 2;
+        if (frame.Length < headerSize)
         {
             throw new IngressError(ErrorCode.ProtocolVersionError,
-                $"QWP OK response has invalid size {frame.Length}; must be {QwpConstants.OkAckMinSize} (legacy) or ≥ {extendedHeaderSize} (with per-table entries)");
+                $"QWP OK response has invalid size {frame.Length}; must be ≥ {headerSize}");
         }
 
         var sequence = BinaryPrimitives.ReadInt64LittleEndian(frame.Slice(1, 8));
         var tableCount = BinaryPrimitives.ReadUInt16LittleEndian(frame.Slice(QwpConstants.OkAckMinSize, 2));
-        var entries = ParseTableEntries(frame.Slice(extendedHeaderSize), tableCount);
+        var entries = ParseTableEntries(frame.Slice(headerSize), tableCount);
         return new QwpResponse(QwpStatusCode.Ok, sequence, string.Empty, entries);
     }
 
@@ -200,18 +193,10 @@ internal readonly struct QwpResponse
                 $"QWP error response size mismatch: header+message expects {expectedTotal} bytes, got {frame.Length}");
         }
 
-        string message;
-        try
-        {
-            message = msgLen == 0
-                ? string.Empty
-                : StrictUtf8.GetString(frame.Slice(QwpConstants.ErrorAckHeaderSize, msgLen));
-        }
-        catch (DecoderFallbackException ex)
-        {
-            throw new IngressError(ErrorCode.InvalidUtf8,
-                "QWP error response contains invalid UTF-8", ex);
-        }
+        // Lenient on the user-visible error string so a buggy server can't crash the client mid-error.
+        var message = msgLen == 0
+            ? string.Empty
+            : Encoding.UTF8.GetString(frame.Slice(QwpConstants.ErrorAckHeaderSize, msgLen));
 
         return new QwpResponse(status, seq, message, EmptyEntries);
     }

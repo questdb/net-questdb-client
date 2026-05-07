@@ -311,7 +311,6 @@ public class QueryOptionsTests
 
     [TestCase(0)]
     [TestCase(-1)]
-    [TestCase(10)]
     [TestCase(23)]
     [TestCase(100)]
     public void Parse_BadCompressionLevel_Rejected(int level)

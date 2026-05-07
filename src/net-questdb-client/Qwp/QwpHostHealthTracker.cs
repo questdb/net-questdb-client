@@ -68,6 +68,8 @@ internal sealed class QwpHostHealthTracker
     private readonly bool[] _attemptedThisRound;
     private readonly string[] _hosts;
     private readonly QwpHostState[] _states;
+    private readonly long[] _lastSuccessEpoch;
+    private long _successCounter;
 
     public QwpHostHealthTracker(IReadOnlyList<string> hosts)
     {
@@ -77,6 +79,7 @@ internal sealed class QwpHostHealthTracker
         for (var i = 0; i < hosts.Count; i++) _hosts[i] = hosts[i];
         _states = new QwpHostState[_hosts.Length];
         _attemptedThisRound = new bool[_hosts.Length];
+        _lastSuccessEpoch = new long[_hosts.Length];
     }
 
     public int Count => _hosts.Length;
@@ -127,6 +130,7 @@ internal sealed class QwpHostHealthTracker
         {
             _states[hostIndex] = QwpHostState.Healthy;
             _attemptedThisRound[hostIndex] = true;
+            _lastSuccessEpoch[hostIndex] = ++_successCounter;
         }
     }
 
@@ -178,9 +182,14 @@ internal sealed class QwpHostHealthTracker
             var stickyIndex = -1;
             if (forgetClassifications)
             {
+                var bestEpoch = 0L;
                 for (var i = 0; i < _hosts.Length; i++)
                 {
-                    if (_states[i] == QwpHostState.Healthy) stickyIndex = i;
+                    if (_states[i] == QwpHostState.Healthy && _lastSuccessEpoch[i] > bestEpoch)
+                    {
+                        bestEpoch = _lastSuccessEpoch[i];
+                        stickyIndex = i;
+                    }
                 }
             }
 

@@ -180,7 +180,16 @@ internal sealed class QwpSegmentRing : IDisposable
                         continue;
                     }
 
-                    var seg = QwpMmapSegment.OpenExisting(path, segmentCapacity, maxFrameLength);
+                    QwpMmapSegment? seg;
+                    try
+                    {
+                        seg = QwpMmapSegment.OpenExisting(path, segmentCapacity, maxFrameLength);
+                    }
+                    catch (InvalidDataException)
+                    {
+                        SfCleanup.RenameFileToCorrupt(path);
+                        continue;
+                    }
                     if (seg is null)
                     {
                         SfCleanup.DeleteFile(path);

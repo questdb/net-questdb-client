@@ -25,6 +25,7 @@
 #if NET7_0_OR_GREATER
 
 using System.Buffers.Binary;
+using System.Net.WebSockets;
 using System.Text;
 using QuestDB.Enums;
 using QuestDB.Qwp.Sf;
@@ -92,8 +93,7 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient
         }
         catch (Exception)
         {
-            // Connect failed; release the half-built transport before rethrowing.
-            client._transport?.Dispose();
+            await client.DisposeAsync().ConfigureAwait(false);
             throw;
         }
         return client;
@@ -378,11 +378,10 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient
     public void Dispose()
     {
         if (Interlocked.CompareExchange(ref _disposed, 1, 0) != 0) return;
-        Interlocked.Exchange(ref _transport, null)?.Dispose();
+        CloseAndDisposeTransport(Interlocked.Exchange(ref _transport, null));
         var locked = _executeLock.Wait(TimeSpan.FromSeconds(5));
         Volatile.Write(ref _lastCloseTimedOut, locked ? 0 : 1);
-        // Catch any transport the failover loop raced in past the _disposed check.
-        Interlocked.Exchange(ref _transport, null)?.Dispose();
+        CloseAndDisposeTransport(Interlocked.Exchange(ref _transport, null));
         if (locked)
         {
             DisposeDecompressor();
@@ -390,12 +389,15 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient
         }
         // !locked → Execute may still be inside zstd Unwrap; ZstdSharp.Port is fully managed,
         // so leave the decompressor to GC rather than risk a dispose racing an in-flight Unwrap.
+        try { _executeLock.Dispose(); } catch { }
+        try { _sendLock.Dispose(); } catch { }
     }
 
     public async ValueTask DisposeAsync()
     {
         if (Interlocked.CompareExchange(ref _disposed, 1, 0) != 0) return;
-        Interlocked.Exchange(ref _transport, null)?.Dispose();
+        await CloseAndDisposeTransportAsync(Interlocked.Exchange(ref _transport, null))
+            .ConfigureAwait(false);
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
         var locked = false;
         try
@@ -405,12 +407,41 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient
         }
         catch (OperationCanceledException) { }
         Volatile.Write(ref _lastCloseTimedOut, locked ? 0 : 1);
-        Interlocked.Exchange(ref _transport, null)?.Dispose();
+        await CloseAndDisposeTransportAsync(Interlocked.Exchange(ref _transport, null))
+            .ConfigureAwait(false);
         if (locked)
         {
             DisposeDecompressor();
             _executeLock.Release();
         }
+        try { _executeLock.Dispose(); } catch { }
+        try { _sendLock.Dispose(); } catch { }
+    }
+
+    private static void CloseAndDisposeTransport(QwpWebSocketTransport? transport)
+    {
+        if (transport is null) return;
+        try
+        {
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            transport.CloseAsync(WebSocketCloseStatus.NormalClosure, null, cts.Token)
+                .GetAwaiter().GetResult();
+        }
+        catch { }
+        transport.Dispose();
+    }
+
+    private static async Task CloseAndDisposeTransportAsync(QwpWebSocketTransport? transport)
+    {
+        if (transport is null) return;
+        try
+        {
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            await transport.CloseAsync(WebSocketCloseStatus.NormalClosure, null, cts.Token)
+                .ConfigureAwait(false);
+        }
+        catch { }
+        transport.Dispose();
     }
 
     private void DisposeDecompressor()
@@ -457,7 +488,7 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient
         return options.compression switch
         {
             CompressionType.raw => null,
-            CompressionType.zstd => $"zstd;level={options.compression_level}",
+            CompressionType.zstd => $"zstd;level={options.compression_level},raw",
             CompressionType.auto => $"zstd;level={options.compression_level},raw",
             _ => throw new InvalidOperationException(
                 $"unknown CompressionType {options.compression}"),
@@ -956,12 +987,12 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient
         return (requestId, totalRows);
     }
 
-    private static (long RequestId, byte OpType, long RowsAffected) DecodeExecDone(ReadOnlyMemory<byte> payload)
+    private static (long RequestId, short OpType, long RowsAffected) DecodeExecDone(ReadOnlyMemory<byte> payload)
     {
         var s = payload.Span;
         if (s.Length < 1 + 8 + 1 + 1) throw new IngressError(ErrorCode.ProtocolVersionError, "EXEC_DONE too short");
         var requestId = BinaryPrimitives.ReadInt64LittleEndian(s.Slice(1, 8));
-        var opType = s[9];
+        short opType = s[9];
         var rowsAffected = (long)QwpVarint.Read(s.Slice(10), out var consumed);
         var p = 10 + consumed;
         if (p != s.Length)

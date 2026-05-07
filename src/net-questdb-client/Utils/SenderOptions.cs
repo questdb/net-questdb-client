@@ -50,26 +50,12 @@ public record SenderOptions
     /// </summary>
     public const int ARRAY_MAX_DIMENSIONS = 32;
 
-    private static readonly HashSet<string> keySet = new()
-    {
-        "protocol_version", "addr", "auto_flush", "auto_flush_rows", "auto_flush_bytes",
-        "auto_flush_interval", "init_buf_size", "max_buf_size", "max_name_len",
-        "username", "user", "password", "pass", "token",
-        "request_min_throughput", "auth_timeout", "auth_timeout_ms", "request_timeout", "retry_timeout",
-        "pool_timeout", "tls_verify", "tls_roots", "tls_roots_password", "own_socket", "gzip",
-        "in_flight_window", "max_schemas_per_connection",
-        "gorilla", "request_durable_ack",
-        "sf_dir", "sender_id", "sf_max_bytes", "sf_max_total_bytes", "sf_durability",
-        "sf_append_deadline_millis", "reconnect_max_duration_millis", "reconnect_initial_backoff_millis",
-        "reconnect_max_backoff_millis", "initial_connect_retry", "close_flush_timeout_millis",
-        "drain_orphans", "max_background_drainers", "ping_timeout", "proxy",
-    };
-
     private string _addr = "localhost:9000";
     private List<string> _addresses = new();
     private TimeSpan _authTimeout = TimeSpan.FromMilliseconds(15000);
     private AutoFlushType _autoFlush = AutoFlushType.on;
     private int _autoFlushBytes = int.MaxValue;
+    private bool _autoFlushBytesUserSet;
     private TimeSpan _autoFlushInterval = TimeSpan.FromMilliseconds(1000);
     private bool _autoFlushIntervalUserSet;
     private int _autoFlushRows = 75000;
@@ -174,10 +160,17 @@ public record SenderOptions
         ParseStringWithDefault(nameof(addr), "localhost:9000", out _addr!);
         ParseAddresses();
         ParseEnumWithDefault(nameof(auto_flush), "on", out _autoFlush);
-        ParseIntThatMayBeOff(nameof(auto_flush_rows), "75000", out _autoFlushRows);
-        ParseIntThatMayBeOff(nameof(auto_flush_bytes),
-            int.MaxValue.ToString(System.Globalization.CultureInfo.InvariantCulture), out _autoFlushBytes);
-        ParseMillisecondsThatMayBeOff(nameof(auto_flush_interval), "1000", out _autoFlushInterval);
+        var isWs = IsWebSocket();
+        var defaultAutoFlushRows = isWs ? "1000" : "75000";
+        var defaultAutoFlushBytes = isWs
+            ? "0"
+            : int.MaxValue.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        var defaultAutoFlushIntervalMs = isWs ? "100" : "1000";
+        ParseIntThatMayBeOff(nameof(auto_flush_rows), defaultAutoFlushRows, out _autoFlushRows,
+            rejectLiteralZero: true);
+        ParseIntThatMayBeOff(nameof(auto_flush_bytes), defaultAutoFlushBytes, out _autoFlushBytes);
+        ParseMillisecondsThatMayBeOff(nameof(auto_flush_interval), defaultAutoFlushIntervalMs,
+            out _autoFlushInterval, rejectLiteralZero: true);
         ParseBoolWithDefault(nameof(gzip), "false", out _gzip);
         ParseIntWithDefault(nameof(init_buf_size), "65536", out _initBufSize);
         ParseIntWithDefault(nameof(max_buf_size), "104857600", out _maxBufSize);
@@ -199,6 +192,11 @@ public record SenderOptions
         ParseMillisecondsWithDefault(nameof(auth_timeout), "15000", out _authTimeout);
         if (ReadOptionFromBuilder("auth_timeout_ms") is not null)
         {
+            if (!IsWebSocket())
+            {
+                throw new IngressError(ErrorCode.ConfigError,
+                    "`auth_timeout_ms` is only supported for WebSocket transport");
+            }
             ParseMillisecondsWithDefault("auth_timeout_ms", "15000", out _authTimeout);
         }
         ParseMillisecondsWithDefault(nameof(request_timeout), "30000", out _requestTimeout);
@@ -610,6 +608,13 @@ public record SenderOptions
 
     private void ApplyAutoFlushNormalisation()
     {
+        if (IsWebSocket())
+        {
+            if (!_autoFlushRowsUserSet && _autoFlushRows == 75000) _autoFlushRows = 1000;
+            if (!_autoFlushBytesUserSet && _autoFlushBytes == int.MaxValue) _autoFlushBytes = 0;
+            if (!_autoFlushIntervalUserSet && _autoFlushInterval == TimeSpan.FromMilliseconds(1000))
+                _autoFlushInterval = TimeSpan.FromMilliseconds(100);
+        }
         if (_autoFlush == AutoFlushType.off)
         {
             _autoFlushRows = -1;
@@ -738,7 +743,7 @@ public record SenderOptions
     public int auto_flush_bytes
     {
         get => _autoFlushBytes;
-        set => _autoFlushBytes = value;
+        set { _autoFlushBytes = value; _autoFlushBytesUserSet = true; }
     }
 
     /// <summary>
@@ -1473,9 +1478,10 @@ public record SenderOptions
         field = ReadOptionFromBuilder(name) ?? defaultValue;
     }
 
-    private void ParseIntThatMayBeOff(string name, string? defaultValue, out int field)
+    private void ParseIntThatMayBeOff(string name, string? defaultValue, out int field, bool rejectLiteralZero = false)
     {
-        var option = ReadOptionFromBuilder(name) ?? defaultValue;
+        var rawOption = ReadOptionFromBuilder(name);
+        var option = rawOption ?? defaultValue;
         if (option is "off")
         {
             field = -1;
@@ -1485,13 +1491,18 @@ public record SenderOptions
         ParseIntWithDefault(name, defaultValue!, out field);
         if (field == 0)
         {
+            if (rejectLiteralZero && rawOption is not null)
+            {
+                throw new IngressError(ErrorCode.ConfigError, $"invalid `{name}`: must be > 0 or `off`");
+            }
             field = -1;
         }
     }
 
-    private void ParseMillisecondsThatMayBeOff(string name, string? defaultValue, out TimeSpan field)
+    private void ParseMillisecondsThatMayBeOff(string name, string? defaultValue, out TimeSpan field, bool rejectLiteralZero = false)
     {
-        var option = ReadOptionFromBuilder(name) ?? defaultValue;
+        var rawOption = ReadOptionFromBuilder(name);
+        var option = rawOption ?? defaultValue;
         if (option is "off")
         {
             field = TimeSpan.FromMilliseconds(-1);
@@ -1501,6 +1512,10 @@ public record SenderOptions
         ParseMillisecondsWithDefault(name, defaultValue!, out field);
         if (field == TimeSpan.Zero)
         {
+            if (rejectLiteralZero && rawOption is not null)
+            {
+                throw new IngressError(ErrorCode.ConfigError, $"invalid `{name}`: must be > 0 or `off`");
+            }
             field = TimeSpan.FromMilliseconds(-1);
         }
     }
@@ -1616,8 +1631,9 @@ public record SenderOptions
 
     /// <summary>
     ///     Renders the options as a connection string. Round-trips through
-    ///     <see cref="SenderOptions(string)" />. Secrets (<c>password</c>, <c>token</c>,
-    ///     <c>tls_roots_password</c>) are redacted with <c>***</c>.
+    ///     <see cref="SenderOptions(string)" />. Secret fields (<c>password</c>, <c>token</c>,
+    ///     <c>tls_roots_password</c>) are omitted entirely; logging this output never leaks secrets,
+    ///     and re-parsing is loss-y for those fields by design.
     /// </summary>
     public override string ToString()
     {
@@ -1643,8 +1659,12 @@ public record SenderOptions
                 continue;
             }
 
-            var isSecret = SecretPropertyNames.Contains(prop.Name);
-            if (prop.IsDefined(typeof(JsonIgnoreAttribute), false) && !isSecret)
+            if (SecretPropertyNames.Contains(prop.Name))
+            {
+                continue;
+            }
+
+            if (prop.IsDefined(typeof(JsonIgnoreAttribute), false))
             {
                 continue;
             }
@@ -1661,15 +1681,6 @@ public record SenderOptions
 
             if (value is null)
             {
-                continue;
-            }
-
-            if (isSecret)
-            {
-                if (value is string s && !string.IsNullOrEmpty(s))
-                {
-                    builder.Add(prop.Name, SecretRedaction);
-                }
                 continue;
             }
 

@@ -229,9 +229,10 @@ public class QwpCursorSendEngineMultiHostTests
         public async Task SendBinaryAsync(ReadOnlyMemory<byte> data, CancellationToken cancellationToken)
         {
             Sent.Add(data.ToArray());
-            var ack = new byte[9];
+            var ack = new byte[11];
             ack[0] = (byte)QwpStatusCode.Ok;
             BinaryPrimitives.WriteInt64LittleEndian(ack.AsSpan(1, 8), Interlocked.Increment(ref _autoSeq) - 1);
+            BinaryPrimitives.WriteUInt16LittleEndian(ack.AsSpan(9, 2), 0);
             await _acks.Writer.WriteAsync(ack, cancellationToken).ConfigureAwait(false);
         }
 

@@ -280,9 +280,10 @@ public class QwpResponseTests
 
     private static byte[] BuildOk(long sequence)
     {
-        var bytes = new byte[QwpConstants.OkAckMinSize];
+        var bytes = new byte[QwpConstants.OkAckMinSize + 2];
         bytes[0] = (byte)QwpStatusCode.Ok;
         BinaryPrimitives.WriteInt64LittleEndian(bytes.AsSpan(1, 8), sequence);
+        BinaryPrimitives.WriteUInt16LittleEndian(bytes.AsSpan(9, 2), 0);
         return bytes;
     }
 
@@ -344,9 +345,9 @@ public class QwpResponseTests
     }
 
     [Test]
-    public void Parse_ErrorResponse_InvalidUtf8Message_Throws()
+    public void Parse_ErrorResponse_InvalidUtf8Message_DecodedLeniently()
     {
-        // 0xC3 0x28 is a malformed two-byte sequence; strict UTF-8 must reject.
+        // 0xC3 0x28 is a malformed two-byte sequence; replaced with U+FFFD.
         var msgBytes = new byte[] { 0xC3, 0x28 };
         var frame = new byte[QwpConstants.ErrorAckHeaderSize + msgBytes.Length];
         frame[0] = (byte)QwpStatusCode.WriteError;
@@ -354,7 +355,8 @@ public class QwpResponseTests
         BinaryPrimitives.WriteUInt16LittleEndian(frame.AsSpan(9, 2), (ushort)msgBytes.Length);
         msgBytes.CopyTo(frame, QwpConstants.ErrorAckHeaderSize);
 
-        Assert.Throws<IngressError>(() => QwpResponse.Parse(frame));
+        var resp = QwpResponse.Parse(frame);
+        Assert.That(resp.Message, Does.Contain("�"));
     }
 
     [Test]

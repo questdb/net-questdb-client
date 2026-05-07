@@ -48,15 +48,24 @@ internal sealed class QwpSegmentManager : IDisposable
 
     public QwpSegmentManager(QwpSegmentRing ring, long maxTotalBytes, TimeSpan? shutdownWait = null)
     {
-        _ring = ring ?? throw new ArgumentNullException(nameof(ring));
-        if (maxTotalBytes <= 0)
+        try
         {
-            throw new ArgumentOutOfRangeException(nameof(maxTotalBytes), "must be > 0");
-        }
+            _ring = ring ?? throw new ArgumentNullException(nameof(ring));
+            if (maxTotalBytes <= 0)
+            {
+                throw new ArgumentOutOfRangeException(nameof(maxTotalBytes), "must be > 0");
+            }
 
-        _maxTotalBytes = maxTotalBytes;
-        _shutdownWait = shutdownWait ?? DefaultShutdownWait;
-        _committedBytes = ring.TotalCapacityBytes;
+            _maxTotalBytes = maxTotalBytes;
+            _shutdownWait = shutdownWait ?? DefaultShutdownWait;
+            _committedBytes = ring.TotalCapacityBytes;
+        }
+        catch
+        {
+            _wakeup.Dispose();
+            _cts.Dispose();
+            throw;
+        }
     }
 
     public long CommittedBytes => Volatile.Read(ref _committedBytes);
@@ -77,10 +86,9 @@ internal sealed class QwpSegmentManager : IDisposable
         }
 
         _ring.SetManagerWakeup(Wake);
-        // Producer signals here when File.Move on a spare path failed; the spare's bytes are gone
-        // from disk but our committed-bytes accounting still includes them. Wake the worker so it
-        // reconciles on the next tick.
-        _ring.SetSpareAdoptionFailedCallback(Wake);
+        // Adoption failure means the spare's bytes are gone from disk; decrement explicitly so the
+        // next provisioning gate doesn't see a phantom commit and refuse a replacement.
+        _ring.SetSpareAdoptionFailedCallback(OnSpareAdoptionFailed);
         _workerTask = Task.Run(() => RunAsync(_cts.Token));
     }
 
@@ -97,6 +105,12 @@ internal sealed class QwpSegmentManager : IDisposable
         {
             // Ring callbacks aren't unregistered on Dispose; ignoring late wakes is safe.
         }
+    }
+
+    private void OnSpareAdoptionFailed()
+    {
+        Interlocked.Add(ref _committedBytes, -_ring.SegmentCapacity);
+        Wake();
     }
 
     internal Task? WorkerTask => _workerTask;
@@ -168,15 +182,19 @@ internal sealed class QwpSegmentManager : IDisposable
 
     private void ServiceRing()
     {
-        // Atomic snapshot: reading capacity and HasHotSpare separately races producer adoption
-        // and can briefly let us breach _maxTotalBytes by one segment.
+        // Snapshot under-counts during the producer's adopt window (hotSparePath cleared before
+        // active is published); never let it shrink committed, otherwise the gate below would
+        // re-provision and breach maxTotalBytes. Decrements come from explicit trim and
+        // OnSpareAdoptionFailed.
         var (capacity, hasSpare) = _ring.SnapshotCapacity();
-        var actual = capacity + (hasSpare ? _ring.SegmentCapacity : 0);
-        Volatile.Write(ref _committedBytes, actual);
+        var snapshot = capacity + (hasSpare ? _ring.SegmentCapacity : 0);
+        var prev = Volatile.Read(ref _committedBytes);
+        var committed = snapshot > prev ? snapshot : prev;
+        Volatile.Write(ref _committedBytes, committed);
 
         if (_ring.NeedsHotSpare())
         {
-            if (actual + _ring.SegmentCapacity <= _maxTotalBytes)
+            if (committed + _ring.SegmentCapacity <= _maxTotalBytes)
             {
                 ProvisionHotSpare();
             }

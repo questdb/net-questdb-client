@@ -200,9 +200,10 @@ public class QwpBackgroundDrainerTests
 
     private static byte[] DefaultOk(long seq)
     {
-        var buf = new byte[9];
+        var buf = new byte[11];
         buf[0] = (byte)QwpStatusCode.Ok;
         BinaryPrimitives.WriteInt64LittleEndian(buf.AsSpan(1, 8), seq);
+        BinaryPrimitives.WriteUInt16LittleEndian(buf.AsSpan(9, 2), 0);
         return buf;
     }
 

@@ -934,9 +934,10 @@ public class QwpWebSocketSenderTests
 
     private static byte[] BuildOkAck(long sequence)
     {
-        var bytes = new byte[QwpConstants.OkAckMinSize];
+        var bytes = new byte[QwpConstants.OkAckMinSize + 2];
         bytes[0] = (byte)QwpStatusCode.Ok;
         BinaryPrimitives.WriteInt64LittleEndian(bytes.AsSpan(1, 8), sequence);
+        BinaryPrimitives.WriteUInt16LittleEndian(bytes.AsSpan(9, 2), 0);
         return bytes;
     }
 

@@ -184,6 +184,10 @@ internal sealed class QwpResultBatchDecoder
         }
         var schemaMode = payload[p++];
         var schemaId = ReadVarint(payload, ref p);
+        if (schemaId >= (ulong)QwpConstants.MaxSchemasPerConnection)
+        {
+            throw new QwpDecodeException($"schema_id {schemaId} exceeds {QwpConstants.MaxSchemasPerConnection}");
+        }
 
         EgressSchema schema;
         if (schemaMode == QwpConstants.SchemaModeFull)

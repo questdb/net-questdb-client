@@ -892,9 +892,10 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
                     _inFlightWindow.Add(seq);
                     if (!_sendChannel!.Writer.TryWrite(new AsyncBatch(idx, frame)))
                     {
-                        wrapAsTerminal = new IngressError(
-                            ErrorCode.ServerFlushError,
-                            "internal: in-flight channel was full after reserving a slot");
+                        wrapAsTerminal = _sendChannel.Reader.Completion.IsCompleted
+                            ? new IngressError(ErrorCode.SocketError, "sender disposed during flush")
+                            : new IngressError(ErrorCode.ServerFlushError,
+                                "internal: in-flight channel was full after reserving a slot");
                     }
                     else
                     {

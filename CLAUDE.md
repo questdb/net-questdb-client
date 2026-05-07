@@ -127,8 +127,10 @@ own framing, codecs, and server handshake. Everything QWP lives in
 `src/net-questdb-client/Qwp/`:
 
 - `QwpConstants.cs` — magic (`"QWP1"`), header flags (Gorilla, delta
-  symbol dictionary, self-sufficient), type codes, ACK status codes,
-  schema-mode bytes (`SchemaModeFull` / `SchemaModeReference`).
+  symbol dictionary), type codes, ACK status codes, schema-mode bytes
+  (`SchemaModeFull` / `SchemaModeReference`). Self-sufficient framing is
+  a client-side mode (full schema + full symbol dict per frame), not a
+  wire flag.
 - `QwpVarint.cs` / `QwpBitWriter.cs` — wire primitives. Unsigned LEB128
   varints capped at 10 bytes (`MaxBytes`) with strict overflow rejection.
   `QwpBitWriter` / `QwpBitReader` are LSB-first bit-packers with upfront
@@ -244,8 +246,8 @@ client buffer.
   `[u32 crc32c][u32 frame_len][frame bytes]`. Replays on open via
   `ScanForLastGoodEnvelope` to find the last good write position;
   truncates torn tails. `TryAppend` rejects frames larger than
-  `_maxFrameLength` (16 MB default) to prevent the next reopen from
-  silently treating them as torn.
+  `_maxFrameLength` (defaults to `int.MaxValue`) to prevent the next
+  reopen from silently treating them as torn.
 - `QwpSegmentRing.cs` — ring of active + sealed segments + hot-spare
   slot. Hot path is lock-free (`Volatile`/`Interlocked`); the manager
   thread provisions spares ahead of time so the producer never blocks
@@ -301,9 +303,10 @@ behaviours:
   `ValidateWebSocketKeysAgainstDefaults` (programmatic-init path,
   default-comparison heuristic).
 - `auto_flush=off` zeros `auto_flush_rows` / `auto_flush_bytes` /
-  `auto_flush_interval` to `-1`. The WS auto-flush defaulting
-  (`auto_flush_rows=1000`, `auto_flush_interval=100ms`) only applies
-  when `auto_flush != off` — `auto_flush=off` is honoured even for ws.
+  `auto_flush_interval` to `-1`. WS-specific defaults
+  (`auto_flush_rows=1000`, `auto_flush_bytes=0`, `auto_flush_interval=100ms`,
+  matching Java `DEFAULT_WS_AUTO_FLUSH_*`) only apply when
+  `auto_flush != off` — `auto_flush=off` is honoured even for ws.
 - `tls_verify=unsafe_off` accepts any server cert (dev / self-signed
   only — never ship to prod).
 - `tls_roots`, `tls_roots_password`: PFX path + optional password for

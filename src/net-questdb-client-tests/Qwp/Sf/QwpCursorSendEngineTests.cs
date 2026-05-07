@@ -818,9 +818,10 @@ public class QwpCursorSendEngineTests
 
     private static byte[] OkResponse(long sequence)
     {
-        var buf = new byte[9];
+        var buf = new byte[11];
         buf[0] = (byte)QwpStatusCode.Ok;
         BinaryPrimitives.WriteInt64LittleEndian(buf.AsSpan(1, 8), sequence);
+        BinaryPrimitives.WriteUInt16LittleEndian(buf.AsSpan(9, 2), 0);
         return buf;
     }
 
@@ -909,9 +910,10 @@ public class QwpCursorSendEngineTests
 
         private static byte[] DefaultOk(int seq)
         {
-            var buf = new byte[9];
+            var buf = new byte[11];
             buf[0] = (byte)QwpStatusCode.Ok;
             BinaryPrimitives.WriteInt64LittleEndian(buf.AsSpan(1, 8), seq);
+            BinaryPrimitives.WriteUInt16LittleEndian(buf.AsSpan(9, 2), 0);
             return buf;
         }
     }

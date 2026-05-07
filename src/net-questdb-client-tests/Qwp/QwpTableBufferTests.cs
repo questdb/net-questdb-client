@@ -200,13 +200,16 @@ public class QwpTableBufferTests
     }
 
     [Test]
-    public void AppendSameColumnTwice_InOneRow_Throws()
+    public void AppendSameColumnTwice_InOneRow_FirstValueWins()
     {
         var t = new QwpTableBuffer("t");
         t.AppendLong("x", 1);
-        var ex = Assert.Throws<IngressError>(() => t.AppendLong("x", 2));
-        Assert.That(ex!.code, Is.EqualTo(ErrorCode.InvalidApiCall));
-        Assert.That(ex.Message, Does.Contain("already written"));
+        Assert.DoesNotThrow(() => t.AppendLong("x", 2));
+        t.At(0);
+        var x = t.Columns[0];
+        Assert.That(x.RowCount, Is.EqualTo(1));
+        Assert.That(System.Buffers.Binary.BinaryPrimitives.ReadInt64LittleEndian(x.FixedData!.AsSpan(0, 8)),
+            Is.EqualTo(1L));
     }
 
     [Test]
@@ -219,27 +222,28 @@ public class QwpTableBufferTests
     }
 
     [Test]
-    public void DoubleAppend_ThenAt_RollsBackEntireRow()
+    public void DoubleAppend_InOneRow_FirstValueWins()
     {
         var t = new QwpTableBuffer("t");
         t.AppendLong("a", 10);
         t.At(1_000);
-        Assert.That(t.RowCount, Is.EqualTo(1));
 
         t.AppendLong("a", 20);
         t.AppendLong("b", 30);
-        Assert.Throws<IngressError>(() => t.AppendLong("a", 999));
-
-        Assert.That(t.RowCount, Is.EqualTo(1), "double-write must cancel only the in-flight row");
-        Assert.That(t.HasPendingRow, Is.False);
-
-        t.AppendLong("a", 40);
+        Assert.DoesNotThrow(() => t.AppendLong("a", 999));
         t.At(2_000);
+
         Assert.That(t.RowCount, Is.EqualTo(2));
+        var aRow1 = System.Buffers.Binary.BinaryPrimitives.ReadInt64LittleEndian(
+            t.Columns[0].FixedData!.AsSpan(0, 8));
+        var aRow2 = System.Buffers.Binary.BinaryPrimitives.ReadInt64LittleEndian(
+            t.Columns[0].FixedData!.AsSpan(8, 8));
+        Assert.That(aRow1, Is.EqualTo(10L));
+        Assert.That(aRow2, Is.EqualTo(20L));
     }
 
     [Test]
-    public void DoubleAppend_OnFreshlyAddedColumn_PopsThatColumn()
+    public void DoubleAppend_OnFreshlyAddedColumn_KeepsFirstValue()
     {
         var t = new QwpTableBuffer("t");
         t.AppendLong("base", 1);
@@ -247,10 +251,15 @@ public class QwpTableBufferTests
 
         t.AppendLong("base", 2);
         t.AppendLong("fresh", 5);
-        Assert.Throws<IngressError>(() => t.AppendLong("fresh", 6));
+        Assert.DoesNotThrow(() => t.AppendLong("fresh", 6));
+        t.At(2_000);
 
-        Assert.That(t.Columns.Count, Is.EqualTo(1), "the freshly-added column must be removed on cancel");
-        Assert.That(t.Columns[0].Name, Is.EqualTo("base"));
+        Assert.That(t.Columns.Count, Is.EqualTo(2));
+        var fresh = t.Columns[1];
+        Assert.That(fresh.Name, Is.EqualTo("fresh"));
+        Assert.That(fresh.NonNullCount, Is.EqualTo(1));
+        Assert.That(System.Buffers.Binary.BinaryPrimitives.ReadInt64LittleEndian(
+            fresh.FixedData!.AsSpan(0, 8)), Is.EqualTo(5L));
     }
 
     [Test]
@@ -310,24 +319,19 @@ public class QwpTableBufferTests
     [TestCase("geohash")]
     [TestCase("doublearray")]
     [TestCase("longarray")]
-    public void DoubleAppend_PerType_RollsBackEntireRow(string kind)
+    public void DoubleAppend_PerType_FirstValueWins(string kind)
     {
         var t = new QwpTableBuffer("t");
-        // Commit one row to anchor _committedColumnCount, then double-append the same column.
         Append(t, "c", kind);
         t.At(1_000);
         Assert.That(t.RowCount, Is.EqualTo(1));
 
         Append(t, "c", kind);
-        Assert.Throws<IngressError>(() => Append(t, "c", kind));
-
-        Assert.That(t.RowCount, Is.EqualTo(1));
-        Assert.That(t.HasPendingRow, Is.False);
-
-        // Subsequent row commits cleanly with the same value.
-        Append(t, "c", kind);
+        Assert.DoesNotThrow(() => Append(t, "c", kind));
         t.At(2_000);
+
         Assert.That(t.RowCount, Is.EqualTo(2));
+        Assert.That(t.HasPendingRow, Is.False);
     }
 
     private static void Append(QwpTableBuffer t, string col, string kind)

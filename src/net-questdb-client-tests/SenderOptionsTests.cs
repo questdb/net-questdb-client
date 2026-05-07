@@ -260,13 +260,24 @@ public class SenderOptionsTests
     }
 
     [Test]
-    public void AutoFlushZero_SameAsOff()
+    public void AutoFlushRowsZero_Rejected()
     {
-        var opts = new SenderOptions(
-            "http::addr=localhost:9000;auto_flush=on;auto_flush_rows=0;auto_flush_bytes=0;auto_flush_interval=0;");
-        Assert.That(opts.auto_flush_rows, Is.EqualTo(-1));
+        Assert.Throws<IngressError>(() =>
+            new SenderOptions("http::addr=localhost:9000;auto_flush_rows=0;"));
+    }
+
+    [Test]
+    public void AutoFlushIntervalZero_Rejected()
+    {
+        Assert.Throws<IngressError>(() =>
+            new SenderOptions("http::addr=localhost:9000;auto_flush_interval=0;"));
+    }
+
+    [Test]
+    public void AutoFlushBytesZero_Accepted()
+    {
+        var opts = new SenderOptions("http::addr=localhost:9000;auto_flush_bytes=0;");
         Assert.That(opts.auto_flush_bytes, Is.EqualTo(-1));
-        Assert.That(opts.auto_flush_interval, Is.EqualTo(TimeSpan.FromMilliseconds(-1)));
     }
 
     [Test]

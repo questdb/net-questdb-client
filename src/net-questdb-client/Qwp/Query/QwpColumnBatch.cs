@@ -626,7 +626,17 @@ internal sealed class QwpEgressSymbolDict
 
     public void AppendEntry(ReadOnlySpan<byte> utf8)
     {
+        if (Size >= QwpConstants.MaxConnSymbolDictEntries)
+        {
+            throw new QwpDecodeException(
+                $"symbol dict entry count exceeds {QwpConstants.MaxConnSymbolDictEntries}");
+        }
         var needed = _heapLen + utf8.Length;
+        if (needed > QwpConstants.MaxConnSymbolDictHeapBytes)
+        {
+            throw new QwpDecodeException(
+                $"symbol dict heap exceeds {QwpConstants.MaxConnSymbolDictHeapBytes} bytes");
+        }
         if (needed > _heap.Length)
         {
             var grown = new byte[Math.Max(needed, Math.Max(64, _heap.Length * 2))];

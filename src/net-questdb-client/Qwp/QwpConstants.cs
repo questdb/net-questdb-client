@@ -187,9 +187,14 @@ internal static class QwpConstants
     public const int SymbolDictHeapBytesSoftCap = 8 * 1024 * 1024;
     public const int SchemaRegistrySoftCap = 4096;
 
+    /// <summary>Client-side hard caps to bound resource use against a hostile or buggy server.</summary>
+    public const int MaxConnSymbolDictEntries = 8 * 1024 * 1024;
+    public const int MaxConnSymbolDictHeapBytes = 256 * 1024 * 1024;
+    public const int MaxSchemasPerConnection = 65_535;
+
     /// <summary>Server-side zstd level clamp. Client may send any level; server rounds.</summary>
     public const int ZstdLevelMin = 1;
-    public const int ZstdLevelMax = 9;
+    public const int ZstdLevelMax = 22;
 
     /// <summary>Egress upgrade headers.</summary>
     public const string HeaderAcceptEncoding = "X-QWP-Accept-Encoding";

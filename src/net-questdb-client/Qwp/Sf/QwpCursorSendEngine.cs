@@ -463,18 +463,20 @@ internal sealed class QwpCursorSendEngine : IDisposable
             .Cast<Task>()
             .ToArray();
         var allJoined = pending.Length == 0 || SafeWaitAll(pending, TimeSpan.FromSeconds(5));
-        SfCleanup.Dispose(cts);
 
         if (!allJoined)
         {
+            // Pumps still alive; leak _loopCts rather than risk ObjectDisposedException on a late
+            // token read. The continuation disposes it once both pumps actually exit.
             Task.WhenAll(pending).ContinueWith(
-                _ => ReleaseSharedResources(fullyDrained, slotDir),
+                _ => { ReleaseSharedResources(fullyDrained, slotDir); SfCleanup.Dispose(cts); },
                 CancellationToken.None,
                 TaskContinuationOptions.ExecuteSynchronously,
                 TaskScheduler.Default);
             return;
         }
 
+        SfCleanup.Dispose(cts);
         ReleaseSharedResources(fullyDrained, slotDir);
     }
 
@@ -527,9 +529,7 @@ internal sealed class QwpCursorSendEngine : IDisposable
         }
         finally
         {
-            // Loop exited without firing the gate (typical: cancellation during construction
-            // or a disposed engine). Unblock any constructor waiter on FirstConnectTask.
-            _firstConnectGate.TrySetException(
+            FireFirstConnectFailed(
                 new IngressError(ErrorCode.SocketError, "SF engine loop exited before first connect"));
         }
     }
@@ -616,7 +616,7 @@ internal sealed class QwpCursorSendEngine : IDisposable
 
                 _seenFirstConnect = true;
                 backoff.Reset();
-                _firstConnectGate.TrySetResult(true);
+                FireFirstConnectSucceeded();
 
                 long fsnAtZero;
                 lock (_stateLock)
@@ -938,7 +938,7 @@ internal sealed class QwpCursorSendEngine : IDisposable
             FireAckSignalLocked();
             FireAppendSignalLocked();
         }
-        _firstConnectGate.TrySetException(error);
+        FireFirstConnectFailed(error);
         if (_errorDispatcher is null) return;
         _errorDispatcher.Offer(senderError ?? BuildEngineError(error, isInitialConnect));
     }
@@ -982,6 +982,25 @@ internal sealed class QwpCursorSendEngine : IDisposable
         _ackSignal = NewSignal();
         _ = Task.Factory.StartNew(FireSignalCallback, prev,
             CancellationToken.None, TaskCreationOptions.DenyChildAttach, TaskScheduler.Default);
+    }
+
+    private void FireFirstConnectSucceeded()
+    {
+        var gate = _firstConnectGate;
+        _ = Task.Factory.StartNew(static s => ((TaskCompletionSource<bool>)s!).TrySetResult(true),
+            gate, CancellationToken.None, TaskCreationOptions.DenyChildAttach, TaskScheduler.Default);
+    }
+
+    private void FireFirstConnectFailed(Exception error)
+    {
+        var gate = _firstConnectGate;
+        var captured = error;
+        _ = Task.Factory.StartNew(static s =>
+            {
+                var (g, e) = ((TaskCompletionSource<bool>, Exception))s!;
+                g.TrySetException(e);
+            },
+            (gate, captured), CancellationToken.None, TaskCreationOptions.DenyChildAttach, TaskScheduler.Default);
     }
 
     /// <remarks>

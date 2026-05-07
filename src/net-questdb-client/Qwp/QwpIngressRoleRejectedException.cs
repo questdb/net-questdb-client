@@ -56,11 +56,13 @@ public sealed class QwpIngressRoleRejectedException : IngressError
     ///     (<c>PRIMARY_CATCHUP</c>); the same endpoint is likely to accept writes once
     ///     the catchup completes.
     /// </summary>
-    public bool IsTransient => Role == QwpConstants.RolePrimaryCatchupName;
+    public bool IsTransient =>
+        string.Equals(Role, QwpConstants.RolePrimaryCatchupName, StringComparison.OrdinalIgnoreCase);
 
     /// <summary>
     ///     <c>true</c> when the role is structurally unable to accept writes (<c>REPLICA</c>);
     ///     retrying the same endpoint will not help until topology changes.
     /// </summary>
-    public bool IsTopological => Role == QwpConstants.RoleReplicaName;
+    public bool IsTopological =>
+        string.Equals(Role, QwpConstants.RoleReplicaName, StringComparison.OrdinalIgnoreCase);
 }

@@ -233,11 +233,18 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
             if (options.drain_orphans)
             {
                 var drainer = new QwpBackgroundDrainer(
-                    transportFactory,
+                    contextBuilder: () =>
+                    {
+                        var drainerTracker = new QwpHostHealthTracker(options.addresses);
+                        var drainerFactory = BuildHostRotatingFactory(
+                            options, drainerTracker, authHeader, certValidator);
+                        return new Qwp.Sf.DrainContext(
+                            drainerFactory,
+                            () => !drainerTracker.IsRoundExhausted);
+                    },
                     policy,
                     segmentCapacity: options.sf_max_bytes,
-                    drainTimeout: options.reconnect_max_duration_millis,
-                    skipBackoffPredicate: () => !tracker.IsRoundExhausted);
+                    drainTimeout: options.reconnect_max_duration_millis);
                 pool = new QwpBackgroundDrainerPool(
                     options.max_background_drainers,
                     drainer,
@@ -315,7 +322,7 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
     }
 
     /// <inheritdoc />
-    public ValueTask CommitAsync(CancellationToken ct = default)
+    public Task CommitAsync(CancellationToken ct = default)
     {
         throw new IngressError(ErrorCode.InvalidApiCall, "transactions are not supported on the WebSocket transport");
     }
@@ -670,16 +677,16 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
     }
 
     /// <inheritdoc />
-    public ValueTask SendAsync(CancellationToken ct = default)
+    public Task SendAsync(CancellationToken ct = default)
     {
         ThrowIfTerminal();
         EnsureNoRowInProgress();
         if (_sfMode)
         {
-            return FlushToSfEngineAsyncCore(ct);
+            return FlushToSfEngineAsyncCore(ct).AsTask();
         }
 
-        return EnqueueAsyncCore(ct, awaitDrain: true);
+        return EnqueueAsyncCore(ct, awaitDrain: true).AsTask();
     }
 
     /// <inheritdoc />
@@ -1564,7 +1571,8 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
                 tracker.RecordSuccess(idx);
                 return candidate;
             }
-            catch (IngressError ex) when (ex.code == ErrorCode.AuthError)
+            catch (IngressError ex) when (ex.code == ErrorCode.AuthError ||
+                                          ex.code == ErrorCode.ProtocolVersionError)
             {
                 candidate?.Dispose();
                 throw;

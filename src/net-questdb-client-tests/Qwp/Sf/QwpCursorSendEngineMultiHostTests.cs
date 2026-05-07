@@ -34,6 +34,7 @@ using NUnit.Framework;
 using QuestDB.Enums;
 using QuestDB.Qwp;
 using QuestDB.Qwp.Sf;
+using QuestDB.Utils;
 
 namespace net_questdb_client_tests.Qwp.Sf;
 
@@ -157,7 +158,7 @@ public class QwpCursorSendEngineMultiHostTests
     }
 
     [Test]
-    public async Task AllHostsReplica_RetriesEveryRound_NoTerminalState()
+    public async Task AllHostsReplica_ExhaustsOutageBudgetThenTerminal()
     {
         var hosts = new[] { "r1:9000", "r2:9000" };
         var tracker = new QwpHostHealthTracker(hosts);
@@ -179,7 +180,8 @@ public class QwpCursorSendEngineMultiHostTests
         var slotDir = Path.Combine(_root, "slot");
         var slotLock = QwpSlotLock.Acquire(slotDir);
         var ring = QwpSegmentRing.Open(slotDir, segmentCapacity: 4096);
-        // Budget tight so the loop gives up within the test window.
+        // Tight budget; role-rejects must consume the wall-clock outage budget so a permanent
+        // REPLICA topology eventually surfaces as terminal rather than blocking forever.
         var policy = new QwpReconnectPolicy(
             TimeSpan.FromMilliseconds(5),
             TimeSpan.FromMilliseconds(20),
@@ -193,13 +195,13 @@ public class QwpCursorSendEngineMultiHostTests
         engine.Start();
         engine.AppendBlocking(new byte[] { 1 });
 
-        Assert.ThrowsAsync<TimeoutException>(async () =>
-            await engine.FlushAsync(TimeSpan.FromMilliseconds(700)));
+        Assert.ThrowsAsync<IngressError>(async () =>
+            await engine.FlushAsync(TimeSpan.FromSeconds(2)));
 
         Assert.That(attempts, Is.GreaterThanOrEqualTo(hosts.Length),
             "must rotate through every host at least once before giving up");
-        Assert.That(engine.IsTerminallyFailed, Is.False,
-            "transport-level rejections leave the engine retryable, not terminal");
+        Assert.That(engine.IsTerminallyFailed, Is.True,
+            "role-rejects consume the outage budget; a permanent REPLICA topology must terminate");
     }
 
     private sealed class MhStubTransport : IQwpCursorTransport

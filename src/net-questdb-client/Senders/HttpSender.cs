@@ -402,7 +402,7 @@ internal class HttpSender : AbstractSender
     }
 
     /// <inheritdoc />
-    public override async ValueTask CommitAsync(CancellationToken ct = default)
+    public override async Task CommitAsync(CancellationToken ct = default)
     {
         try
         {
@@ -649,7 +649,7 @@ internal class HttpSender : AbstractSender
     }
 
     /// <inheritdoc />
-    public override async ValueTask SendAsync(CancellationToken ct = default)
+    public override async Task SendAsync(CancellationToken ct = default)
     {
         if (WithinTransaction && !CommittingTransaction)
         {

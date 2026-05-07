@@ -39,6 +39,7 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient
     private static readonly UTF8Encoding StrictUtf8 = QwpConstants.StrictUtf8;
     private const int InitialReceiveBufferBytes = 64 * 1024;
     private const int InitialDecompressBufferBytes = 256 * 1024;
+    private static readonly TimeSpan ServerInfoReadTimeout = TimeSpan.FromSeconds(5);
 
     private readonly QueryOptions _options;
     private readonly QwpEgressConnState _connState = new();
@@ -156,8 +157,7 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient
         _executeFinishedCleanly = false;
         _drainOkAfterHandlerThrow = false;
         Interlocked.Exchange(ref _cancelRequested, 0);
-        // Per-Execute fresh evaluation: stale TopologyReject hosts get re-classified.
-        _hostTracker.BeginRound(forgetClassifications: true);
+        _hostTracker.BeginRound(forgetClassifications: false);
         try
         {
             var attempt = 0;
@@ -197,6 +197,10 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient
                     if (_activeAddressIndex >= 0) _hostTracker.RecordMidStreamFailure(_activeAddressIndex);
                     var sleep = QwpReconnectPolicy.FullJitter(TimeSpan.FromMilliseconds(backoffMs));
                     if (sleep > _options.failover_backoff_max_ms) sleep = _options.failover_backoff_max_ms;
+                    var remainingMs = failoverDeadline - Environment.TickCount64;
+                    if (remainingMs <= 0) throw;
+                    if (sleep.TotalMilliseconds > remainingMs)
+                        sleep = TimeSpan.FromMilliseconds(remainingMs);
                     await Task.Delay(sleep, ct).ConfigureAwait(false);
                     if (Volatile.Read(ref _cancelRequested) != 0)
                     {
@@ -281,31 +285,59 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient
         QwpServerInfo? lastInfo = null;
         Exception? lastError = null;
         var anyRoleMismatch = false;
+        var retriedAfterReset = false;
         while (true)
         {
             var idx = _hostTracker.PickNext();
-            if (idx < 0) return (lastInfo, lastError, anyRoleMismatch);
+            if (idx < 0)
+            {
+                if (!retriedAfterReset)
+                {
+                    _hostTracker.BeginRound(forgetClassifications: true);
+                    retriedAfterReset = true;
+                    continue;
+                }
+                return (lastInfo, lastError, anyRoleMismatch);
+            }
 
             var addr = _hostTracker.GetHost(idx);
             QwpWebSocketTransport? candidate = null;
             try
             {
                 candidate = BuildTransport(addr);
-                using var connectCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-                connectCts.CancelAfter(_options.auth_timeout_ms);
 
                 QwpServerInfo? info;
-                try
+                using (var upgradeCts = CancellationTokenSource.CreateLinkedTokenSource(ct))
                 {
-                    await candidate.ConnectAsync(connectCts.Token).ConfigureAwait(false);
-                    info = candidate.NegotiatedVersion >= 2
-                        ? await ReadServerInfoFrameAsync(candidate, connectCts.Token).ConfigureAwait(false)
-                        : null;
+                    upgradeCts.CancelAfter(_options.auth_timeout_ms);
+                    try
+                    {
+                        await candidate.ConnectAsync(upgradeCts.Token).ConfigureAwait(false);
+                    }
+                    catch (OperationCanceledException) when (upgradeCts.IsCancellationRequested && !ct.IsCancellationRequested)
+                    {
+                        throw new IngressError(ErrorCode.SocketError,
+                            $"WebSocket upgrade for {addr} exceeded auth_timeout={_options.auth_timeout_ms.TotalMilliseconds}ms");
+                    }
                 }
-                catch (OperationCanceledException) when (connectCts.IsCancellationRequested && !ct.IsCancellationRequested)
+
+                if (candidate.NegotiatedVersion >= 2)
                 {
-                    throw new IngressError(ErrorCode.SocketError,
-                        $"WebSocket upgrade or SERVER_INFO read for {addr} exceeded auth_timeout={_options.auth_timeout_ms.TotalMilliseconds}ms");
+                    using var serverInfoCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                    serverInfoCts.CancelAfter(ServerInfoReadTimeout);
+                    try
+                    {
+                        info = await ReadServerInfoFrameAsync(candidate, serverInfoCts.Token).ConfigureAwait(false);
+                    }
+                    catch (OperationCanceledException) when (serverInfoCts.IsCancellationRequested && !ct.IsCancellationRequested)
+                    {
+                        throw new IngressError(ErrorCode.SocketError,
+                            $"SERVER_INFO read for {addr} exceeded {ServerInfoReadTimeout.TotalMilliseconds}ms");
+                    }
+                }
+                else
+                {
+                    info = null;
                 }
 
                 lastInfo = info;
@@ -386,11 +418,11 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient
         {
             DisposeDecompressor();
             _executeLock.Release();
+            // !locked path leaks _executeLock/_sendLock so a foreign in-flight Execute thread
+            // doesn't hit ObjectDisposedException on its finally Release.
+            try { _executeLock.Dispose(); } catch { }
+            try { _sendLock.Dispose(); } catch { }
         }
-        // !locked → Execute may still be inside zstd Unwrap; ZstdSharp.Port is fully managed,
-        // so leave the decompressor to GC rather than risk a dispose racing an in-flight Unwrap.
-        try { _executeLock.Dispose(); } catch { }
-        try { _sendLock.Dispose(); } catch { }
     }
 
     public async ValueTask DisposeAsync()
@@ -413,9 +445,9 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient
         {
             DisposeDecompressor();
             _executeLock.Release();
+            try { _executeLock.Dispose(); } catch { }
+            try { _sendLock.Dispose(); } catch { }
         }
-        try { _executeLock.Dispose(); } catch { }
-        try { _sendLock.Dispose(); } catch { }
     }
 
     private static void CloseAndDisposeTransport(QwpWebSocketTransport? transport)

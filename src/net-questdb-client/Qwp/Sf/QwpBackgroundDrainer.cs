@@ -48,20 +48,21 @@ namespace QuestDB.Qwp.Sf;
 /// </remarks>
 internal sealed class QwpBackgroundDrainer : IQwpSlotDrainer
 {
-    private readonly Func<IQwpCursorTransport> _transportFactory;
+    private readonly Func<DrainContext> _contextBuilder;
     private readonly QwpReconnectPolicy _reconnectPolicy;
     private readonly long _segmentCapacity;
     private readonly TimeSpan _drainTimeout;
-    private readonly Func<bool>? _skipBackoffPredicate;
 
+    // Per-drain context isolates host-health state across concurrent drains; the foreground engine
+    // and each pooled drainer task get their own tracker so a BeginRound by one does not clear the
+    // round-attempted flags of another.
     public QwpBackgroundDrainer(
-        Func<IQwpCursorTransport> transportFactory,
+        Func<DrainContext> contextBuilder,
         QwpReconnectPolicy reconnectPolicy,
         long segmentCapacity,
-        TimeSpan drainTimeout,
-        Func<bool>? skipBackoffPredicate = null)
+        TimeSpan drainTimeout)
     {
-        ArgumentNullException.ThrowIfNull(transportFactory);
+        ArgumentNullException.ThrowIfNull(contextBuilder);
         ArgumentNullException.ThrowIfNull(reconnectPolicy);
         if (segmentCapacity <= 0)
         {
@@ -73,15 +74,30 @@ internal sealed class QwpBackgroundDrainer : IQwpSlotDrainer
             throw new ArgumentOutOfRangeException(nameof(drainTimeout), "must be positive");
         }
 
-        _transportFactory = transportFactory;
+        _contextBuilder = contextBuilder;
         _reconnectPolicy = reconnectPolicy;
         _segmentCapacity = segmentCapacity;
         _drainTimeout = drainTimeout;
-        _skipBackoffPredicate = skipBackoffPredicate;
+    }
+
+    public QwpBackgroundDrainer(
+        Func<IQwpCursorTransport> transportFactory,
+        QwpReconnectPolicy reconnectPolicy,
+        long segmentCapacity,
+        TimeSpan drainTimeout,
+        Func<bool>? skipBackoffPredicate = null)
+        : this(
+            () => new DrainContext(transportFactory, skipBackoffPredicate),
+            reconnectPolicy,
+            segmentCapacity,
+            drainTimeout)
+    {
+        ArgumentNullException.ThrowIfNull(transportFactory);
     }
 
     public async Task DrainAsync(string slotDirectory, CancellationToken cancellationToken)
     {
+        var ctx = _contextBuilder();
         var ring = QwpSegmentRing.Open(slotDirectory, segmentCapacity: _segmentCapacity);
         QwpCursorSendEngine? engine = null;
         try
@@ -92,11 +108,11 @@ internal sealed class QwpBackgroundDrainer : IQwpSlotDrainer
             engine = new QwpCursorSendEngine(
                 slotLock: null,
                 ring,
-                _transportFactory,
+                ctx.TransportFactory,
                 _reconnectPolicy,
                 appendDeadline: TimeSpan.FromSeconds(30),
                 initialConnectMode: InitialConnectMode.off,
-                skipBackoffPredicate: _skipBackoffPredicate);
+                skipBackoffPredicate: ctx.SkipBackoffPredicate);
 
             if (ring.NextFsn > ring.OldestFsn)
             {
@@ -117,3 +133,7 @@ internal sealed class QwpBackgroundDrainer : IQwpSlotDrainer
         }
     }
 }
+
+internal readonly record struct DrainContext(
+    Func<IQwpCursorTransport> TransportFactory,
+    Func<bool>? SkipBackoffPredicate);

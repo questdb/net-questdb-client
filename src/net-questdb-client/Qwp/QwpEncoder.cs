@@ -257,9 +257,28 @@ internal static class QwpEncoder
             return;
         }
 
+        // Several types carry per-column metadata (offset table for VARCHAR/BINARY, scale byte for
+        // DECIMAL*, precision varint for GEOHASH) that the wire format requires regardless of
+        // value count. Skip the early-return for those.
         if (n == 0)
         {
-            return;
+            switch (col.TypeCode)
+            {
+                case QwpTypeCode.Varchar:
+                case QwpTypeCode.Binary:
+                    buf.WriteUInt32LittleEndian(0);
+                    return;
+                case QwpTypeCode.Decimal64:
+                case QwpTypeCode.Decimal128:
+                case QwpTypeCode.Decimal256:
+                    buf.WriteByte(col.DecimalScale);
+                    return;
+                case QwpTypeCode.Geohash:
+                    buf.WriteVarint((ulong)col.GeohashPrecisionBits);
+                    return;
+                default:
+                    return;
+            }
         }
 
         switch (col.TypeCode)

@@ -570,25 +570,39 @@ internal sealed class QwpCursorSendEngine : IDisposable
                 }
                 catch (QwpIngressRoleRejectedException ex)
                 {
-                    // Role-reject retries indefinitely; don't accumulate elapsed against the give-up budget.
-                    backoff.Reset();
-                    if (_skipBackoffPredicate?.Invoke() == true)
-                    {
-                        continue;
-                    }
-
-                    if (!_seenFirstConnect && _initialConnectMode == InitialConnectMode.off)
+                    backoff.ResetAttempt();
+                    backoff.OutageStartTickMs ??= Environment.TickCount64;
+                    var elapsed = TimeSpan.FromMilliseconds(
+                        Environment.TickCount64 - backoff.OutageStartTickMs.Value);
+                    if (elapsed >= _reconnectPolicy.MaxOutageDuration)
                     {
                         SetTerminal(ex);
                         return;
                     }
 
+                    if (_skipBackoffPredicate?.Invoke() == true)
+                    {
+                        continue;
+                    }
+
+                    var remaining = _reconnectPolicy.MaxOutageDuration - elapsed;
+                    var sleep = remaining < _reconnectPolicy.InitialBackoff
+                        ? remaining
+                        : _reconnectPolicy.InitialBackoff;
                     try
                     {
-                        await Task.Delay(_reconnectPolicy.InitialBackoff, ct).ConfigureAwait(false);
+                        await Task.Delay(sleep, ct).ConfigureAwait(false);
                     }
                     catch (OperationCanceledException)
                     {
+                        return;
+                    }
+
+                    elapsed = TimeSpan.FromMilliseconds(
+                        Environment.TickCount64 - backoff.OutageStartTickMs.Value);
+                    if (elapsed >= _reconnectPolicy.MaxOutageDuration)
+                    {
+                        SetTerminal(ex);
                         return;
                     }
                     continue;
@@ -671,6 +685,13 @@ internal sealed class QwpCursorSendEngine : IDisposable
         {
             Attempt = 0;
             OutageStartTickMs = null;
+        }
+
+        // Role-reject path resets attempt counter but preserves the outage clock so the
+        // wall-clock budget still bounds a stuck PRIMARY_CATCHUP topology.
+        public void ResetAttempt()
+        {
+            Attempt = 0;
         }
     }
 

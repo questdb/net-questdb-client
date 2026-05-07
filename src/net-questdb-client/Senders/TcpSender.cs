@@ -246,7 +246,7 @@ internal sealed class TcpSender : AbstractSender
     }
 
     /// <inheritdoc />
-    public override async ValueTask SendAsync(CancellationToken ct = default)
+    public override async Task SendAsync(CancellationToken ct = default)
     {
         try
         {

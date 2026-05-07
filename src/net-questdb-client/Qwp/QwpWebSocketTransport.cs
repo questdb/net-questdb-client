@@ -142,7 +142,7 @@ internal sealed class QwpWebSocketTransport : IQwpCursorTransport
         catch (Exception ex)
         {
             var status = (int)_client.HttpStatusCode;
-            if (status is 401 or 403 or 404)
+            if (status is 401 or 403)
             {
                 throw new IngressError(ErrorCode.AuthError,
                     $"WebSocket upgrade rejected with HTTP {status} for {_options.Uri}", ex);

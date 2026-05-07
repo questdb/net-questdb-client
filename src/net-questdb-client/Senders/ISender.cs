@@ -88,7 +88,7 @@ public interface ISender : IDisposable, IAsyncDisposable
     /// </summary>
     /// <returns></returns>
     /// <exception cref="IngressError">Thrown by <see cref="SendAsync" />, or when transactions are unsupported.</exception>
-    public ValueTask CommitAsync(CancellationToken ct = default);
+    public Task CommitAsync(CancellationToken ct = default);
 
     /// <inheritdoc cref="CommitAsync" />
     public void Commit(CancellationToken ct = default);
@@ -100,7 +100,7 @@ public interface ISender : IDisposable, IAsyncDisposable
     ///     Only usable outside of a transaction. If there are no pending rows, then this is a no-op.
     /// </remarks>
     /// <exception cref="IngressError">When the request fails.</exception>
-    public ValueTask SendAsync(CancellationToken ct = default);
+    public Task SendAsync(CancellationToken ct = default);
 
     /// <inheritdoc cref="SendAsync" />
     public void Send(CancellationToken ct = default);

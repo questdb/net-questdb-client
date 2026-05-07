@@ -224,7 +224,7 @@ if (sender is IQwpWebSocketSender ws)
 | `auto_flush_interval`         | 100 ms            | 1000 ms                         |
 | `auto_flush_bytes`            | `int.MaxValue`    | `int.MaxValue`                  |
 | `in_flight_window`            | 128               | n/a                             |
-| `close_timeout`               | 5000 ms           | n/a                             |
+| `close_flush_timeout_millis`  | 5000 ms           | n/a                             |
 | `max_schemas_per_connection`  | 65535             | n/a                             |
 | `request_durable_ack`         | `off`             | n/a                             |
 | `gorilla`                     | `off`             | n/a                             |
@@ -307,7 +307,6 @@ The config string format is:
 | Name                              | Default      | Description                                                                                              |
 | --------------------------------- | ------------ | -------------------------------------------------------------------------------------------------------- |
 | `in_flight_window`                | `128`        | Max pipelined batches awaiting ACK. Minimum is `2` — `in_flight_window=1` is rejected.                   |
-| `close_timeout`                   | `5000` ms    | Per-flush ACK-drain timeout, applied to `Send` and `Dispose`.                                            |
 | `max_schemas_per_connection`      | `65535`      | Per-connection cap on distinct schema IDs. Hitting it requires recreating the sender.                    |
 | `gorilla`                         | `off`        | `on` / `off` — enables Gorilla DoD compression on timestamp columns.                                     |
 | `request_durable_ack`             | `off`        | `on` / `off` — opts into per-table object-store ACK watermarks (cast to `IQwpWebSocketSender`).         |

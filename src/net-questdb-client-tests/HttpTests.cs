@@ -1801,7 +1801,7 @@ public class HttpTests
                         .Column("при вед", "медвед")
                         .AtAsync(DateTime.UtcNow);
 
-            var request = sender.SendAsync().AsTask();
+            var request = sender.SendAsync();
 
             while (request.Status == TaskStatus.WaitingToRun)
             {

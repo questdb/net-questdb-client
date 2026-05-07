@@ -126,17 +126,17 @@ public class SenderOptionsTests
     }
 
     [Test]
-    public void ToString_RedactsSecretProperties()
+    public void ToString_OmitsSecretProperties()
     {
         var opts = new SenderOptions(
             "https::addr=localhost:9000;username=alice;password=hunter2;tls_roots=/etc/ssl;tls_roots_password=ts3cret;");
         var serialised = opts.ToString();
 
-        Assert.That(serialised, Does.Not.Contain("hunter2"), "password must not be emitted in plaintext");
-        Assert.That(serialised, Does.Not.Contain("ts3cret"), "tls_roots_password must not be emitted in plaintext");
-        Assert.That(serialised, Does.Contain("password=***"));
-        Assert.That(serialised, Does.Contain("tls_roots_password=***"));
-        Assert.That(serialised, Does.Contain("username=alice"), "non-secret fields are still serialised");
+        Assert.That(serialised, Does.Not.Contain("hunter2"));
+        Assert.That(serialised, Does.Not.Contain("ts3cret"));
+        Assert.That(serialised, Does.Not.Contain("password"));
+        Assert.That(serialised, Does.Not.Contain("tls_roots_password"));
+        Assert.That(serialised, Does.Contain("username=alice"));
     }
 
     [Test]
@@ -149,13 +149,13 @@ public class SenderOptionsTests
     }
 
     [Test]
-    public void RecordPrintMembers_RedactsSecrets()
+    public void Format_OmitsSecrets()
     {
         var opts = new SenderOptions(
             "https::addr=localhost:9000;username=alice;password=hunter2;");
         var formatted = $"{opts}";
         Assert.That(formatted, Does.Not.Contain("hunter2"));
-        Assert.That(formatted, Does.Contain("***"));
+        Assert.That(formatted, Does.Not.Contain("password"));
     }
 
     [Test]
@@ -334,8 +334,9 @@ public class SenderOptionsTests
     public void Ws_Defaults()
     {
         var opts = new SenderOptions("ws::addr=localhost:9000;");
-        Assert.That(opts.auto_flush_rows, Is.EqualTo(75000));
-        Assert.That(opts.auto_flush_interval, Is.EqualTo(TimeSpan.FromMilliseconds(1000)));
+        Assert.That(opts.auto_flush_rows, Is.EqualTo(1000));
+        Assert.That(opts.auto_flush_bytes, Is.EqualTo(0));
+        Assert.That(opts.auto_flush_interval, Is.EqualTo(TimeSpan.FromMilliseconds(100)));
         Assert.That(opts.Port, Is.EqualTo(9000));
         Assert.That(opts.in_flight_window, Is.EqualTo(128));
         Assert.That(opts.max_schemas_per_connection, Is.EqualTo(65535));

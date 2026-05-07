@@ -168,7 +168,9 @@ public record SenderOptions
         var defaultAutoFlushIntervalMs = isWs ? "100" : "1000";
         ParseIntThatMayBeOff(nameof(auto_flush_rows), defaultAutoFlushRows, out _autoFlushRows,
             rejectLiteralZero: true);
+        var bytesProvided = ReadOptionFromBuilder(nameof(auto_flush_bytes)) is not null;
         ParseIntThatMayBeOff(nameof(auto_flush_bytes), defaultAutoFlushBytes, out _autoFlushBytes);
+        if (isWs && !bytesProvided) _autoFlushBytes = 0;
         ParseMillisecondsThatMayBeOff(nameof(auto_flush_interval), defaultAutoFlushIntervalMs,
             out _autoFlushInterval, rejectLiteralZero: true);
         ParseBoolWithDefault(nameof(gzip), "false", out _gzip);

@@ -704,6 +704,32 @@ public class QwpResultBatchDecoderTests
     }
 
     [Test]
+    public void Decode_RejectsArrayShapeAccumulatingOverflow()
+    {
+        var p = new List<byte> { QwpConstants.MsgKindResultBatch };
+        p.AddRange(new byte[8]);
+        p.Add(0x00);
+        p.Add(0x00);
+        p.Add(0x01);
+        p.Add(0x01);
+        p.Add(QwpConstants.SchemaModeFull);
+        p.Add(0x00);
+        p.Add(0x01); p.Add((byte)'a');
+        p.Add((byte)QwpTypeCode.DoubleArray);
+        p.Add(0x00);
+        p.Add(0x05); // nDims = 5; each dim individually fits, product overflows
+        WriteI32(p, 1024);
+        WriteI32(p, 1024);
+        WriteI32(p, 1024);
+        WriteI32(p, 1024);
+        WriteI32(p, 1024);
+
+        var decoder = new QwpResultBatchDecoder(new QwpEgressConnState());
+        var ex = Assert.Throws<QwpDecodeException>(() => decoder.Decode(p.ToArray(), 0, new QwpColumnBatch()));
+        StringAssert.Contains("array shape exceeds remaining payload", ex!.Message);
+    }
+
+    [Test]
     public void Decode_RejectsVarcharHeapLenOverflow()
     {
         var p = new List<byte> { QwpConstants.MsgKindResultBatch };

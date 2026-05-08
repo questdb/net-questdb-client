@@ -149,7 +149,8 @@ public class QwpMultiHostFailoverTests
         });
         await b.StartAsync();
 
-        var connstr = $"ws::addr={a.Uri.Authority},{b.Uri.Authority};auto_flush=off;";
+        var connstr = $"ws::addr={a.Uri.Authority},{b.Uri.Authority};auto_flush=off;" +
+                      "reconnect_initial_backoff_millis=10;reconnect_max_backoff_millis=50;reconnect_max_duration_millis=500;";
         var ex = Assert.Throws<IngressError>(() => Sender.New(connstr));
         Assert.That(ex!.code, Is.EqualTo(ErrorCode.SocketError));
         Assert.That(ex.Message, Does.Contain("all 2 configured endpoint(s)"));

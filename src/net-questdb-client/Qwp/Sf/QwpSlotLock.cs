@@ -46,9 +46,12 @@ internal sealed class QwpSlotLock : IDisposable
 {
     private const string LockFileName = ".lock";
     private const string PidSidecarName = ".lock.pid";
+    private const string HeartbeatFileName = ".heartbeat";
+    public static readonly TimeSpan HeartbeatStaleAfter = TimeSpan.FromMinutes(5);
 
     private readonly FileStream _file;
     private readonly string _pidSidecarPath;
+    private readonly string _heartbeatPath;
     private bool _disposed;
 
     private QwpSlotLock(string slotDirectory, string lockFilePath, string pidSidecarPath, FileStream file)
@@ -56,7 +59,22 @@ internal sealed class QwpSlotLock : IDisposable
         SlotDirectory = slotDirectory;
         LockFilePath = lockFilePath;
         _pidSidecarPath = pidSidecarPath;
+        _heartbeatPath = Path.Combine(slotDirectory, HeartbeatFileName);
         _file = file;
+        RefreshHeartbeat();
+    }
+
+    /// <summary>Updates the slot's heartbeat file mtime. Best-effort.</summary>
+    public void RefreshHeartbeat()
+    {
+        try
+        {
+            using var fs = new FileStream(_heartbeatPath, FileMode.OpenOrCreate, FileAccess.Write, FileShare.Read);
+            fs.SetLength(0);
+        }
+        catch
+        {
+        }
     }
 
     /// <summary>The slot directory we hold the lock for.</summary>
@@ -68,10 +86,12 @@ internal sealed class QwpSlotLock : IDisposable
     /// <summary>
     ///     Acquires the lock on the given slot. Creates the slot directory if it doesn't exist.
     /// </summary>
-    /// <exception cref="IngressError">If another process or thread is already holding the lock.</exception>
+    /// <exception cref="IngressError">If another process or thread is already holding the lock,
+    ///     or the slot directory is on a networked filesystem.</exception>
     public static QwpSlotLock Acquire(string slotDirectory)
     {
         ArgumentNullException.ThrowIfNull(slotDirectory);
+        RejectIfNetworkPath(slotDirectory);
         QwpFiles.EnsureDirectory(slotDirectory);
 
         var path = Path.Combine(slotDirectory, LockFileName);
@@ -92,6 +112,7 @@ internal sealed class QwpSlotLock : IDisposable
     public static QwpSlotLock? TryAcquire(string slotDirectory)
     {
         ArgumentNullException.ThrowIfNull(slotDirectory);
+        RejectIfNetworkPath(slotDirectory);
         QwpFiles.EnsureDirectory(slotDirectory);
 
         var path = Path.Combine(slotDirectory, LockFileName);
@@ -101,6 +122,18 @@ internal sealed class QwpSlotLock : IDisposable
 
         WritePidSidecar(pidPath);
         return new QwpSlotLock(slotDirectory, path, pidPath, fs);
+    }
+
+    private static void RejectIfNetworkPath(string slotDirectory)
+    {
+        if (QwpFiles.LooksLikeNetworkPath(slotDirectory))
+        {
+            throw new IngressError(
+                ErrorCode.ConfigError,
+                $"sf_dir `{slotDirectory}` looks like a networked filesystem (UNC / NFS-style mount); " +
+                "FileShare.None advisory locking is unreliable across hosts on NFS/SMB. " +
+                "Use a local-FS path for sf_dir.");
+        }
     }
 
     private static void WritePidSidecar(string pidPath)
@@ -159,6 +192,26 @@ internal sealed class QwpSlotLock : IDisposable
         }
     }
 
+    /// <summary>
+    ///     True when the slot has a heartbeat file whose mtime is within
+    ///     <see cref="HeartbeatStaleAfter" />. PID-reuse safe: even if the original sender's PID
+    ///     was recycled into an unrelated process, a stale mtime makes the slot adoptable.
+    /// </summary>
+    internal static bool IsHolderHeartbeatFresh(string slotDirectory)
+    {
+        try
+        {
+            var path = Path.Combine(slotDirectory, HeartbeatFileName);
+            if (!File.Exists(path)) return false;
+            var mtime = File.GetLastWriteTimeUtc(path);
+            return DateTime.UtcNow - mtime < HeartbeatStaleAfter;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
     /// <inheritdoc />
     public void Dispose()
     {
@@ -179,6 +232,14 @@ internal sealed class QwpSlotLock : IDisposable
         try
         {
             if (File.Exists(_pidSidecarPath)) File.Delete(_pidSidecarPath);
+        }
+        catch
+        {
+        }
+
+        try
+        {
+            if (File.Exists(_heartbeatPath)) File.Delete(_heartbeatPath);
         }
         catch
         {

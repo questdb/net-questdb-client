@@ -47,6 +47,19 @@ internal static class QwpCrc32C
 
     private static readonly uint[][] Tables = BuildSliceBy8Tables();
 
+    static QwpCrc32C()
+    {
+        // Standard test vector — fail-fast on table-build / runtime regressions before any peer
+        // verification depends on bit-identical output.
+        ReadOnlySpan<byte> probe = "123456789"u8;
+        var actual = Compute(probe);
+        if (actual != 0xE3069283u)
+        {
+            throw new InvalidOperationException(
+                $"QwpCrc32C self-test failed: expected 0xE3069283, got 0x{actual:X8}");
+        }
+    }
+
     /// <summary>Computes the CRC32C of <paramref name="data" />.</summary>
     public static uint Compute(ReadOnlySpan<byte> data)
     {

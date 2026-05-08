@@ -42,15 +42,16 @@ internal sealed class QwpSegmentRing : IDisposable
     internal const string SparePrefix = "sf-spare-";
     internal const string SpareSuffix = ".tmp";
 
-    private readonly string _directory;
+    private readonly string? _directory;
     private readonly long _segmentCapacity;
     private readonly int _maxFrameLength;
     private readonly long _highWaterTrigger;
     private readonly object _lock = new();
-    private readonly List<QwpMmapSegment> _sealedSegments = new();
+    private readonly List<IQwpSegment> _sealedSegments = new();
 
-    private QwpMmapSegment? _active;
+    private IQwpSegment? _active;
     private string? _hotSparePath;
+    private long _maxTotalBytes = long.MaxValue;
     private long _publishedFsn;
     private long _ackedFsn;
     private Action? _managerWakeup;
@@ -59,7 +60,7 @@ internal sealed class QwpSegmentRing : IDisposable
     private bool _wakeRequestedForActive;
     private volatile bool _closed;
 
-    private QwpSegmentRing(string directory, long segmentCapacity, int maxFrameLength)
+    private QwpSegmentRing(string? directory, long segmentCapacity, int maxFrameLength)
     {
         _directory = directory;
         _segmentCapacity = segmentCapacity;
@@ -68,6 +69,22 @@ internal sealed class QwpSegmentRing : IDisposable
         _highWaterTrigger = (segmentCapacity >> 2) * 3;
         _publishedFsn = -1L;
         _ackedFsn = -1L;
+    }
+
+    public bool IsMemoryBacked => _directory is null;
+
+    /// <summary>
+    ///     Memory-mode cap: producer's TryAppend returns false when allocating another segment
+    ///     would exceed this. File-mode rings ignore this hint (the segment manager enforces the
+    ///     cap via its hot-spare gate). Must be called before <see cref="TryAppend" />.
+    /// </summary>
+    public void SetMaxTotalBytes(long maxTotalBytes)
+    {
+        if (maxTotalBytes <= 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(maxTotalBytes));
+        }
+        Volatile.Write(ref _maxTotalBytes, maxTotalBytes);
     }
 
     public long PublishedFsn => Volatile.Read(ref _publishedFsn);
@@ -92,7 +109,7 @@ internal sealed class QwpSegmentRing : IDisposable
 
     public long SegmentCapacity => _segmentCapacity;
     public int MaxFrameLength => _maxFrameLength;
-    public string Directory => _directory;
+    public string? Directory => _directory;
 
     public int SegmentCount
     {
@@ -128,6 +145,7 @@ internal sealed class QwpSegmentRing : IDisposable
 
     public bool NeedsHotSpare()
     {
+        if (IsMemoryBacked) return false;
         if (Volatile.Read(ref _hotSparePath) is not null) return false;
         var active = Volatile.Read(ref _active);
         if (active is null) return true;
@@ -135,7 +153,7 @@ internal sealed class QwpSegmentRing : IDisposable
         return active.WritePosition >= _highWaterTrigger;
     }
 
-    /// <summary>True iff a hot-spare path is currently installed and not yet adopted.</summary>
+    /// <summary>True iff a hot-spare path is installed and not yet adopted (file mode only).</summary>
     public bool HasHotSpare => Volatile.Read(ref _hotSparePath) is not null;
 
     /// <summary>Atomic read of (TotalCapacityBytes, HasHotSpare) — both under the same lock.</summary>
@@ -250,6 +268,18 @@ internal sealed class QwpSegmentRing : IDisposable
         }
     }
 
+    /// <summary>
+    ///     Opens a memory-backed ring (sf_dir == null). No persistence, no recovery, no slot lock.
+    ///     Segments are allocated lazily by the producer; the manager still manages the total-bytes
+    ///     cap and trims acked segments by freeing their native memory.
+    /// </summary>
+    public static QwpSegmentRing OpenMemoryBacked(
+        long segmentCapacity = 4L * 1024 * 1024,
+        int maxFrameLength = QwpMmapSegment.DefaultMaxFrameLength)
+    {
+        return new QwpSegmentRing(null, segmentCapacity, maxFrameLength);
+    }
+
     public void SetManagerWakeup(Action wakeup)
     {
         Volatile.Write(ref _managerWakeup, wakeup);
@@ -320,7 +350,7 @@ internal sealed class QwpSegmentRing : IDisposable
 
     public int TryReadFrame(long fsn, Span<byte> destination)
     {
-        QwpMmapSegment? seg;
+        IQwpSegment? seg;
         lock (_lock)
         {
             if (_closed) return -1;
@@ -359,10 +389,10 @@ internal sealed class QwpSegmentRing : IDisposable
     ///     Caller (manager) takes ownership of returned segments and is responsible for Dispose +
     ///     file unlink. Returns null when nothing is eligible (no list allocation on no-op).
     /// </summary>
-    public List<QwpMmapSegment>? DrainTrimmable()
+    public List<IQwpSegment>? DrainTrimmable()
     {
         var acked = Volatile.Read(ref _ackedFsn);
-        List<QwpMmapSegment>? drained = null;
+        List<IQwpSegment>? drained = null;
         lock (_lock)
         {
             while (_sealedSegments.Count > 0)
@@ -374,7 +404,7 @@ internal sealed class QwpSegmentRing : IDisposable
                     break;
                 }
 
-                drained ??= new List<QwpMmapSegment>(_sealedSegments.Count);
+                drained ??= new List<IQwpSegment>(_sealedSegments.Count);
                 drained.Add(oldest);
                 _sealedSegments.RemoveAt(0);
             }
@@ -409,7 +439,7 @@ internal sealed class QwpSegmentRing : IDisposable
         }
     }
 
-    public QwpMmapSegment? FindSegmentContaining(long fsn)
+    public IQwpSegment? FindSegmentContaining(long fsn)
     {
         lock (_lock)
         {
@@ -417,11 +447,18 @@ internal sealed class QwpSegmentRing : IDisposable
         }
     }
 
+    public void FlushActive()
+    {
+        if (_closed) return;
+        try { Volatile.Read(ref _active)?.Flush(); }
+        catch (Exception) { }
+    }
+
     /// <inheritdoc />
     public void Dispose()
     {
-        QwpMmapSegment? active;
-        List<QwpMmapSegment> sealedSnapshot;
+        IQwpSegment? active;
+        List<IQwpSegment> sealedSnapshot;
         string? sparePath;
         lock (_lock)
         {
@@ -435,7 +472,7 @@ internal sealed class QwpSegmentRing : IDisposable
             Volatile.Write(ref _active, null);
             sparePath = _hotSparePath;
             _hotSparePath = null;
-            sealedSnapshot = new List<QwpMmapSegment>(_sealedSegments);
+            sealedSnapshot = new List<IQwpSegment>(_sealedSegments);
             _sealedSegments.Clear();
         }
 
@@ -465,7 +502,7 @@ internal sealed class QwpSegmentRing : IDisposable
         Interlocked.Increment(ref _publishedFsn);
     }
 
-    private void CheckHighWaterAndWakeManager(QwpMmapSegment active)
+    private void CheckHighWaterAndWakeManager(IQwpSegment active)
     {
         if (_wakeRequestedForActive) return;
         if (Volatile.Read(ref _hotSparePath) is not null) return;
@@ -477,7 +514,13 @@ internal sealed class QwpSegmentRing : IDisposable
     private bool TryAllocateNewActive()
     {
         var baseFsn = Volatile.Read(ref _publishedFsn) + 1;
-        var realPath = Path.Combine(_directory, BuildFileName(baseFsn));
+
+        if (IsMemoryBacked)
+        {
+            return TryAllocateNewActiveMemory(baseFsn);
+        }
+
+        var realPath = Path.Combine(_directory!, BuildFileName(baseFsn));
 
         var sparePath = Interlocked.Exchange(ref _hotSparePath, null);
         if (sparePath is not null && TryAdoptSpare(sparePath, realPath, baseFsn))
@@ -505,14 +548,55 @@ internal sealed class QwpSegmentRing : IDisposable
         try
         {
             seg = QwpMmapSegment.Open(realPath, _segmentCapacity, baseFsn, _maxFrameLength);
-            if (!PublishActive(seg, ref seg))
+            if (!PublishActive(seg))
             {
+                SfCleanup.Dispose(seg);
                 return false;
             }
             _wakeRequestedForActive = false;
             return true;
         }
         catch (Exception)
+        {
+            if (seg is not null) SfCleanup.Dispose(seg);
+            return false;
+        }
+    }
+
+    private bool TryAllocateNewActiveMemory(long baseFsn)
+    {
+        long currentTotal;
+        lock (_lock)
+        {
+            currentTotal = 0;
+            for (var i = 0; i < _sealedSegments.Count; i++)
+            {
+                currentTotal += _sealedSegments[i].Capacity;
+            }
+            // _active was nulled by SealAndAddCurrentToSealed before we got here.
+        }
+
+        var maxTotal = Volatile.Read(ref _maxTotalBytes);
+        if (currentTotal + _segmentCapacity > maxTotal)
+        {
+            // Wake the manager so it trims acked segments; producer waits in AppendBlockingSlow.
+            Volatile.Read(ref _managerWakeup)?.Invoke();
+            return false;
+        }
+
+        QwpMemorySegment? seg = null;
+        try
+        {
+            seg = QwpMemorySegment.Allocate(_segmentCapacity, baseFsn, _maxFrameLength);
+            if (!PublishActive(seg))
+            {
+                SfCleanup.Dispose(seg);
+                return false;
+            }
+            _wakeRequestedForActive = false;
+            return true;
+        }
+        catch
         {
             if (seg is not null) SfCleanup.Dispose(seg);
             return false;
@@ -542,7 +626,12 @@ internal sealed class QwpSegmentRing : IDisposable
             if (!File.Exists(sparePath)) return false;
             File.Move(sparePath, realPath);
             seg = QwpMmapSegment.Open(realPath, _segmentCapacity, baseFsn, _maxFrameLength);
-            return PublishActive(seg, ref seg);
+            if (!PublishActive(seg))
+            {
+                SfCleanup.Dispose(seg);
+                return false;
+            }
+            return true;
         }
         catch (Exception)
         {
@@ -552,7 +641,7 @@ internal sealed class QwpSegmentRing : IDisposable
         }
     }
 
-    private bool PublishActive(QwpMmapSegment seg, ref QwpMmapSegment? handoff)
+    private bool PublishActive(IQwpSegment seg)
     {
         lock (_lock)
         {
@@ -562,12 +651,11 @@ internal sealed class QwpSegmentRing : IDisposable
             }
 
             Volatile.Write(ref _active, seg);
-            handoff = null;
             return true;
         }
     }
 
-    private QwpMmapSegment? FindSegmentLocked(long fsn)
+    private IQwpSegment? FindSegmentLocked(long fsn)
     {
         for (var i = 0; i < _sealedSegments.Count; i++)
         {

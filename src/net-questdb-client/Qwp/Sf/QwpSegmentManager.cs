@@ -45,6 +45,7 @@ internal sealed class QwpSegmentManager : IDisposable
     private long _committedBytes;
     private bool _disposed;
     private Exception? _lastServiceError;
+    private Action? _heartbeatCallback;
 
     public QwpSegmentManager(QwpSegmentRing ring, long maxTotalBytes, TimeSpan? shutdownWait = null)
     {
@@ -59,6 +60,7 @@ internal sealed class QwpSegmentManager : IDisposable
             _maxTotalBytes = maxTotalBytes;
             _shutdownWait = shutdownWait ?? DefaultShutdownWait;
             _committedBytes = ring.TotalCapacityBytes;
+            ring.SetMaxTotalBytes(maxTotalBytes);
         }
         catch
         {
@@ -70,6 +72,11 @@ internal sealed class QwpSegmentManager : IDisposable
 
     public long CommittedBytes => Volatile.Read(ref _committedBytes);
     public long MaxTotalBytes => _maxTotalBytes;
+
+    public void SetHeartbeatCallback(Action? callback)
+    {
+        Volatile.Write(ref _heartbeatCallback, callback);
+    }
     internal long TrimCycles { get; private set; }
     internal long SparesInstalled { get; private set; }
 
@@ -201,12 +208,17 @@ internal sealed class QwpSegmentManager : IDisposable
         }
 
         DrainAndDisposeTrimmable();
+        _ring.FlushActive();
+        try { Volatile.Read(ref _heartbeatCallback)?.Invoke(); }
+        catch (Exception ex) { Volatile.Write(ref _lastServiceError, ex); }
     }
 
     private void ProvisionHotSpare()
     {
+        var directory = _ring.Directory;
+        if (directory is null) return;
         var sparePath = Path.Combine(
-            _ring.Directory,
+            directory,
             QwpSegmentRing.SparePrefix + Guid.NewGuid().ToString("N") + QwpSegmentRing.SpareSuffix);
         var capacity = _ring.SegmentCapacity;
 
@@ -263,6 +275,7 @@ internal sealed class QwpSegmentManager : IDisposable
             return;
         }
 
+        var memoryBacked = _ring.IsMemoryBacked;
         long freed = 0;
         for (var i = 0; i < trim.Count; i++)
         {
@@ -270,8 +283,11 @@ internal sealed class QwpSegmentManager : IDisposable
             var path = seg.Path;
             var size = seg.Capacity;
             SfCleanup.Dispose(seg);
-            // If the unlink fails the file persists; next sender startup picks it up via recovery.
-            SfCleanup.DeleteFile(path);
+            if (!memoryBacked)
+            {
+                // File-mode: unlink failure leaves the file for next sender startup recovery.
+                SfCleanup.DeleteFile(path);
+            }
             freed += size;
         }
 

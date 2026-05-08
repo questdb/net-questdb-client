@@ -518,7 +518,12 @@ internal sealed class QwpResultBatchDecoder
     {
         if (existing.Length >= needed) return existing;
         var cap = Math.Max(needed, Math.Max(64, existing.Length * 2));
-        return new byte[cap];
+        var fresh = System.Buffers.ArrayPool<byte>.Shared.Rent(cap);
+        if (existing.Length > 0)
+        {
+            System.Buffers.ArrayPool<byte>.Shared.Return(existing);
+        }
+        return fresh;
     }
 
     private static int BuildNonNullIndex(ReadOnlySpan<byte> bitmap, int rowCount, int[] index)

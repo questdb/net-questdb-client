@@ -9,7 +9,6 @@ using QuestDB.Senders;
 //   addr                 host:port (default port 9000, shared with HTTP)
 //   auto_flush_rows      rows before an automatic flush is triggered (default 1000 for ws)
 //   auto_flush_interval  milliseconds before an automatic flush (default 100 for ws)
-//   in_flight_window     pipelined batches in flight (default 128; set to 1 for sync send-and-wait)
 //   close_timeout        ms to wait for in-flight ACKs on Dispose / Ping (default 5000)
 //   request_durable_ack  on/off — opt in to per-table durable seqTxn watermarks
 //   username/password    Basic auth, or

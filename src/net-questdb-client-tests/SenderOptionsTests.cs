@@ -231,7 +231,7 @@ public class SenderOptionsTests
     {
         var keys = new[]
         {
-            "in_flight_window=8", "max_schemas_per_connection=1024",
+            "max_schemas_per_connection=1024",
             "gorilla=off", "request_durable_ack=on",
         };
         foreach (var kv in keys)
@@ -338,7 +338,6 @@ public class SenderOptionsTests
         Assert.That(opts.auto_flush_bytes, Is.EqualTo(0));
         Assert.That(opts.auto_flush_interval, Is.EqualTo(TimeSpan.FromMilliseconds(100)));
         Assert.That(opts.Port, Is.EqualTo(9000));
-        Assert.That(opts.in_flight_window, Is.EqualTo(128));
         Assert.That(opts.max_schemas_per_connection, Is.EqualTo(65535));
         Assert.That(opts.request_durable_ack, Is.False);
         Assert.That(opts.gorilla, Is.True);
@@ -425,21 +424,19 @@ public class SenderOptionsTests
 
     [TestCase("on")]
     [TestCase("async")]
-    public void InitialConnectRetry_WithoutSfDir_Rejected(string mode)
+    public void InitialConnectRetry_WithoutSfDir_AcceptedAfterCursorEngineUnification(string mode)
     {
-        Assert.That(
-            () => new SenderOptions($"ws::addr=h:9000;initial_connect_retry={mode};"),
-            Throws.TypeOf<IngressError>().With.Message.Contains("sf_dir"));
+        var opts = new SenderOptions($"ws::addr=h:9000;initial_connect_retry={mode};");
+        Assert.That(opts.initial_connect_retry, Is.True);
     }
 
     [Test]
-    public void ErrorHandler_WithoutSfDir_Rejected()
+    public void ErrorHandler_WithoutSfDir_AcceptedAfterCursorEngineUnification()
     {
         var opts = new SenderOptions { protocol = ProtocolType.ws, addr = "h:9000" };
         opts.error_handler = _ => { };
-        Assert.That(
-            () => opts.EnsureValid(),
-            Throws.TypeOf<IngressError>().With.Message.Contains("sf_dir"));
+        Assert.DoesNotThrow(() => opts.EnsureValid());
+        Assert.That(opts.error_handler, Is.Not.Null);
     }
 
     [Test]
@@ -462,13 +459,11 @@ public class SenderOptionsTests
     }
 
     [Test]
-    public void ErrorPolicyResolver_WithoutSfDir_Rejected()
+    public void ErrorPolicyResolver_WithoutSfDir_AcceptedAfterCursorEngineUnification()
     {
         var opts = new SenderOptions { protocol = ProtocolType.ws, addr = "h:9000" };
         opts.error_policy_resolver = _ => SenderErrorPolicy.Halt;
-        Assert.That(
-            () => opts.EnsureValid(),
-            Throws.TypeOf<IngressError>().With.Message.Contains("sf_dir"));
+        Assert.DoesNotThrow(() => opts.EnsureValid());
     }
 
     [Test]
@@ -480,12 +475,10 @@ public class SenderOptionsTests
     }
 
     [Test]
-    public void ErrorInboxCapacity_WithoutSfDir_Rejected()
+    public void ErrorInboxCapacity_WithoutSfDir_AcceptedAfterCursorEngineUnification()
     {
         var opts = new SenderOptions { protocol = ProtocolType.ws, addr = "h:9000", error_inbox_capacity = 16 };
-        Assert.That(
-            () => opts.EnsureValid(),
-            Throws.TypeOf<IngressError>().With.Message.Contains("sf_dir"));
+        Assert.DoesNotThrow(() => opts.EnsureValid());
     }
 
     [Test]
@@ -529,11 +522,10 @@ public class SenderOptionsTests
     }
 
     [Test]
-    public void OnServerError_WithoutSfDir_Rejected()
+    public void OnServerError_WithoutSfDir_AcceptedAfterCursorEngineUnification()
     {
-        Assert.That(
-            () => new SenderOptions("ws::addr=h:9000;on_server_error=halt;"),
-            Throws.TypeOf<IngressError>().With.Message.Contains("sf_dir"));
+        var opts = new SenderOptions("ws::addr=h:9000;on_server_error=halt;");
+        Assert.That(opts.on_server_error, Is.EqualTo(SenderErrorPolicy.Halt));
     }
 
     [Test]
@@ -720,12 +712,12 @@ public class SenderOptionsTests
     [Test]
     public void RecordWith_FlippingWsToHttp_StillRejectsWsOnlyKeys()
     {
-        var ws = new SenderOptions("ws::addr=localhost:9000;in_flight_window=8;");
+        var ws = new SenderOptions("ws::addr=localhost:9000;max_schemas_per_connection=1024;");
         var flipped = ws with { protocol = QuestDB.Enums.ProtocolType.http };
 
         Assert.That(
             () => QuestDB.Sender.New(flipped),
-            Throws.TypeOf<IngressError>().With.Message.Contains("in_flight_window"));
+            Throws.TypeOf<IngressError>().With.Message.Contains("max_schemas_per_connection"));
     }
 
     [Test]
@@ -735,12 +727,12 @@ public class SenderOptionsTests
         {
             protocol = QuestDB.Enums.ProtocolType.http,
             addr     = "localhost:9000",
-            in_flight_window = 256,
+            max_schemas_per_connection = 1024,
         };
 
         Assert.That(
             () => QuestDB.Sender.New(opts),
-            Throws.TypeOf<IngressError>().With.Message.Contains("in_flight_window"));
+            Throws.TypeOf<IngressError>().With.Message.Contains("max_schemas_per_connection"));
     }
 
     [TestCase("on", true)]
@@ -806,11 +798,11 @@ public class SenderOptionsTests
     public void RecordWith_MutatingWsKeyAfterFlip_StillRejected()
     {
         var ws = new SenderOptions("ws::addr=localhost:9000;");
-        var flipped = ws with { protocol = QuestDB.Enums.ProtocolType.http, in_flight_window = 256 };
+        var flipped = ws with { protocol = QuestDB.Enums.ProtocolType.http, max_schemas_per_connection = 1024 };
 
         Assert.That(
             () => QuestDB.Sender.New(flipped),
-            Throws.TypeOf<IngressError>().With.Message.Contains("in_flight_window"));
+            Throws.TypeOf<IngressError>().With.Message.Contains("max_schemas_per_connection"));
     }
 
     [Test]
@@ -856,12 +848,12 @@ public class SenderOptionsTests
         {
             protocol = QuestDB.Enums.ProtocolType.http,
             addr     = "localhost:9000",
-            in_flight_window = 128,
+            max_schemas_per_connection = 65535,
         };
 
         Assert.That(
             () => QuestDB.Sender.New(opts),
-            Throws.TypeOf<IngressError>().With.Message.Contains("in_flight_window"));
+            Throws.TypeOf<IngressError>().With.Message.Contains("max_schemas_per_connection"));
     }
 
     [Test]
@@ -889,9 +881,9 @@ public class SenderOptionsTests
     public void Ws_ToString_RoundTripsWithWsOnlyKeys()
     {
         var opts = new SenderOptions(
-            "ws::addr=h:9000;in_flight_window=8;ping_timeout=2500;");
+            "ws::addr=h:9000;max_schemas_per_connection=1024;ping_timeout=2500;");
         var rt = new SenderOptions(opts.ToString());
-        Assert.That(rt.in_flight_window, Is.EqualTo(8));
+        Assert.That(rt.max_schemas_per_connection, Is.EqualTo(1024));
         Assert.That(rt.ping_timeout, Is.EqualTo(TimeSpan.FromMilliseconds(2500)));
     }
 
@@ -965,7 +957,6 @@ public class SenderOptionsTests
             Throws.TypeOf<IngressError>().With.Message.Contains("tcp"));
     }
 
-    [TestCase("http", "in_flight_window=4")]
     [TestCase("http", "max_schemas_per_connection=10")]
     [TestCase("http", "gorilla=on")]
     [TestCase("http", "request_durable_ack=on")]
@@ -973,15 +964,12 @@ public class SenderOptionsTests
     [TestCase("http", "sender_id=foo")]
     [TestCase("http", "ping_timeout=1000")]
     [TestCase("http", "proxy=http://p:8080")]
-    [TestCase("https", "in_flight_window=4")]
     [TestCase("https", "gorilla=on")]
     [TestCase("https", "ping_timeout=1000")]
     [TestCase("https", "proxy=http://p:8080")]
-    [TestCase("tcp", "in_flight_window=4")]
     [TestCase("tcp", "gorilla=on")]
     [TestCase("tcp", "ping_timeout=1000")]
     [TestCase("tcp", "proxy=http://p:8080")]
-    [TestCase("tcps", "in_flight_window=4")]
     [TestCase("tcps", "gorilla=on")]
     [TestCase("tcps", "ping_timeout=1000")]
     [TestCase("tcps", "proxy=http://p:8080")]

@@ -206,6 +206,10 @@ internal sealed class QwpCursorSendEngine : IDisposable
             _loopCts = new CancellationTokenSource();
         }
 
+        if (_slotLock is not null)
+        {
+            _segmentManager.SetHeartbeatCallback(_slotLock.RefreshHeartbeat);
+        }
         _segmentManager.Start();
         _loopTask = Task.Run(() => RunLoopAsync(_loopCts!.Token));
     }
@@ -434,7 +438,7 @@ internal sealed class QwpCursorSendEngine : IDisposable
         CancellationTokenSource? cts;
         Task? loop;
         bool fullyDrained;
-        string slotDir;
+        string? slotDir;
         lock (_stateLock)
         {
             if (_disposed)
@@ -486,12 +490,12 @@ internal sealed class QwpCursorSendEngine : IDisposable
         catch { return true; }
     }
 
-    private void ReleaseSharedResources(bool fullyDrained, string slotDir)
+    private void ReleaseSharedResources(bool fullyDrained, string? slotDir)
     {
         SfCleanup.Dispose(_segmentManager);
         SfCleanup.Dispose(_ring);
 
-        if (fullyDrained)
+        if (fullyDrained && slotDir is not null)
         {
             UnlinkSegmentFiles(slotDir);
         }
@@ -762,11 +766,12 @@ internal sealed class QwpCursorSendEngine : IDisposable
                                 $"internal: cursor at FSN {readFsn} fell out of segment range");
                         }
 
-                        // Advance the cursor before the await so the receiver's clamp
-                        // (`_cursorFsn - fsnAtZero - 1`) reflects the in-flight frame. Failure
-                        // tears down the connection and the reconnect path rewinds via
-                        // `_cursorFsn = _ackedFsn`, so optimistic advance is safe.
+                        // Optimistic advance under lock: receive pump's ack-clamp must not lag.
                         _cursorFsn = readFsn + 1;
+                        if (readFsn > _sentFsnHighWatermark)
+                        {
+                            _sentFsnHighWatermark = readFsn;
+                        }
                         break;
                     }
 
@@ -777,13 +782,6 @@ internal sealed class QwpCursorSendEngine : IDisposable
             }
 
             await transport.SendBinaryAsync(sendBuffer.AsMemory(0, frameLen), ct).ConfigureAwait(false);
-            lock (_stateLock)
-            {
-                if (readFsn > _sentFsnHighWatermark)
-                {
-                    _sentFsnHighWatermark = readFsn;
-                }
-            }
         }
     }
 

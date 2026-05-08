@@ -24,9 +24,6 @@
 
 #if NET7_0_OR_GREATER
 
-using System.Net.WebSockets;
-using System.Text;
-using System.Threading.Channels;
 using QuestDB.Enums;
 using QuestDB.Qwp;
 using QuestDB.Qwp.Sf;
@@ -38,16 +35,16 @@ namespace QuestDB.Senders;
 ///     ISender implementation backed by the WebSocket transport and QWP v1 columnar binary protocol.
 /// </summary>
 /// <remarks>
-///     Pipelined async I/O: producer encodes into a double buffer, a send-loop drains the channel,
-///     and a receive-loop matches ACKs against an in-flight window of size <c>in_flight_window</c>.
-///     <para />
-///     <b>Terminal-failure model:</b> any wire error, server error frame, or ACK timeout sets a
-///     sticky <c>_terminalError</c> that subsequent calls re-throw. Recovery is to dispose the
-///     sender and create a new one — there is no automatic reconnect.
+///     The sender always routes frames through <see cref="QwpCursorSendEngine" /> regardless of
+///     whether <c>sf_dir</c> is set. With <c>sf_dir</c>, segments are mmap'd files and survive
+///     restarts; without, segments are RAM only. Both modes pipeline async I/O, replay un-acked
+///     frames on transient WS failures, and only terminate on permanent errors (auth, upgrade
+///     reject, protocol violation, or reconnect-budget exhaustion).
 /// </remarks>
 internal sealed class QwpWebSocketSender : IQwpWebSocketSender
 {
     private const long TicksPerMicrosecond = 10L;
+    private const int EncoderInitialCapacity = 1 << 16;
 
     private readonly Dictionary<string, QwpTableBuffer> _tables = new(StringComparer.Ordinal);
 #if NET9_0_OR_GREATER
@@ -55,44 +52,21 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
 #endif
     private readonly QwpSchemaCache _schemaCache;
     private readonly QwpSymbolDictionary _symbolDictionary;
-    private readonly QwpInFlightWindow _inFlightWindow = new();
-    private readonly QwpWebSocketTransport? _transport;
-    private byte[] _receiveBuffer;
-    private const int MaxReceiveBufferBytes = 16 * 1024 * 1024;
     private readonly List<QwpTableBuffer> _flushBatch = new();
+    private readonly QwpEncoder.FrameBuilder _encoderBuffer;
 
-    private readonly SemaphoreSlim? _slot;
-    private readonly Channel<AsyncBatch>? _sendChannel;
-    private readonly Task? _sendLoopTask;
-    private readonly Task? _receiveLoopTask;
-    private readonly CancellationTokenSource? _ioCts;
+    private readonly QwpSlotLock? _slotLock;
+    private readonly QwpCursorSendEngine _engine;
+    private readonly QwpBackgroundDrainerPool? _drainerPool;
+    private readonly QwpSenderErrorDispatcher? _errorDispatcher;
 
-    // Double-buffered encoder: producer encodes into one buffer while SendLoop is sending the
-    // other; ready signals gate buffer reuse. Sync/SF take the index-0 fast path.
-    private readonly QwpEncoder.FrameBuilder[] _encoderBuffers;
-    private readonly SemaphoreSlim[] _encoderReady;
-    private int _encoderIndex;
-    private const int EncoderInitialCapacity = 1 << 16;
-
-    // Store-and-forward — populated only when sf_dir is set on Options.
-    private readonly bool _sfMode;
-    private readonly QwpCursorSendEngine? _sfEngine;
-    private readonly QwpBackgroundDrainerPool? _sfDrainerPool;
-    private readonly QwpSenderErrorDispatcher? _sfErrorDispatcher;
-
-    // Per-table seqTxn watermarks. Accessed by both the producer thread (read via Get*) and the
-    // receive loop (write on ACK frames); guarded by _seqTxnLock.
     private readonly Dictionary<string, long> _committedSeqTxn = new(StringComparer.Ordinal);
     private readonly Dictionary<string, long> _durableSeqTxn = new(StringComparer.Ordinal);
     private readonly object _seqTxnLock = new();
 
     private QwpTableBuffer? _currentTable;
-    private long _nextSequence;
-    private IngressError? _terminalError;
     private int _disposed;
     private int _runningRowCount;
-
-    private readonly record struct AsyncBatch(int BufferIndex, ReadOnlyMemory<byte> Frame);
 
     public QwpWebSocketSender(SenderOptions options)
     {
@@ -103,82 +77,22 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
                 $"protocol must be ws or wss for {nameof(QwpWebSocketSender)}, got {options.protocol}");
         }
 
-        if (options.in_flight_window < 2)
-        {
-            throw new IngressError(ErrorCode.ConfigError,
-                $"WebSocket transport requires in_flight_window > 1, got {options.in_flight_window}");
-        }
-
         _schemaCache = new QwpSchemaCache(options.max_schemas_per_connection);
         _symbolDictionary = new QwpSymbolDictionary();
-        _receiveBuffer = new byte[QwpConstants.ErrorAckHeaderSize + QwpConstants.MaxErrorMessageBytes];
-        _sfMode = !string.IsNullOrEmpty(options.sf_dir);
 #if NET9_0_OR_GREATER
         _tablesLookup = _tables.GetAlternateLookup<ReadOnlySpan<char>>();
 #endif
+        _encoderBuffer = new QwpEncoder.FrameBuilder(EncoderInitialCapacity);
 
-        // Two encoder buffers + two ready signals (one per buffer). Async mode toggles between 0/1
-        // while pipelined batches are in flight; sync and SF only use index 0.
-        _encoderBuffers = new[]
-        {
-            new QwpEncoder.FrameBuilder(EncoderInitialCapacity),
-            new QwpEncoder.FrameBuilder(EncoderInitialCapacity),
-        };
-        _encoderReady = new[]
-        {
-            new SemaphoreSlim(1, 1),
-            new SemaphoreSlim(1, 1),
-        };
-
-        if (_sfMode)
-        {
-            (_sfEngine, _sfDrainerPool, _sfErrorDispatcher) = BuildSfStack(options);
-            _sfEngine.SetTableEntryHandler(UpdateSeqTxnFromAck);
-            return;
-        }
-
-        var authHeader = BuildAuthHeader(options);
-        var certValidator = BuildCertificateValidator(options);
-        var tracker = new QwpHostHealthTracker(options.addresses);
-
-        QwpWebSocketTransport? transport = null;
-        SemaphoreSlim? slot = null;
-        Channel<AsyncBatch>? sendChannel;
-        CancellationTokenSource? ioCts = null;
-        try
-        {
-            transport = ConnectInitialTransport(options, tracker, authHeader, certValidator);
-
-            slot = new SemaphoreSlim(options.in_flight_window, options.in_flight_window);
-            sendChannel = Channel.CreateBounded<AsyncBatch>(new BoundedChannelOptions(options.in_flight_window)
-            {
-                SingleReader = true,
-                SingleWriter = true,
-                FullMode = BoundedChannelFullMode.Wait,
-            });
-            ioCts = new CancellationTokenSource();
-        }
-        catch
-        {
-            ioCts?.Dispose();
-            slot?.Dispose();
-            transport?.Dispose();
-            throw;
-        }
-
-        _transport = transport;
-        _slot = slot;
-        _sendChannel = sendChannel;
-        _ioCts = ioCts;
-        _sendLoopTask = Task.Run(() => SendLoop(_ioCts.Token));
-        _receiveLoopTask = Task.Run(() => ReceiveLoop(_ioCts.Token));
+        (_slotLock, _engine, _drainerPool, _errorDispatcher) = BuildEngineStack(options);
+        _engine.SetTableEntryHandler(UpdateSeqTxnFromAck);
     }
 
-    private static (QwpCursorSendEngine engine, QwpBackgroundDrainerPool? pool, QwpSenderErrorDispatcher? dispatcher) BuildSfStack(SenderOptions options)
+    private static (QwpSlotLock? slotLock, QwpCursorSendEngine engine, QwpBackgroundDrainerPool? pool, QwpSenderErrorDispatcher? dispatcher)
+        BuildEngineStack(SenderOptions options)
     {
-        var sfRoot = options.sf_dir!;
-        var slotDir = Path.Combine(sfRoot, options.sender_id);
-        var slotLock = QwpSlotLock.Acquire(slotDir);
+        var sfMode = !string.IsNullOrEmpty(options.sf_dir);
+        QwpSlotLock? slotLock = null;
         QwpSegmentRing? ring = null;
         QwpCursorSendEngine? engine = null;
         QwpBackgroundDrainerPool? pool = null;
@@ -186,9 +100,17 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
 
         try
         {
-            ring = QwpSegmentRing.Open(
-                slotDir,
-                segmentCapacity: options.sf_max_bytes);
+            if (sfMode)
+            {
+                var sfRoot = options.sf_dir!;
+                var slotDir = Path.Combine(sfRoot, options.sender_id);
+                slotLock = QwpSlotLock.Acquire(slotDir);
+                ring = QwpSegmentRing.Open(slotDir, segmentCapacity: options.sf_max_bytes);
+            }
+            else
+            {
+                ring = QwpSegmentRing.OpenMemoryBacked(segmentCapacity: options.sf_max_bytes);
+            }
 
             var authHeader = BuildAuthHeader(options);
             var certValidator = BuildCertificateValidator(options);
@@ -226,11 +148,11 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
                 catch (Exception ex)
                 {
                     throw new IngressError(ErrorCode.SocketError,
-                        $"SF first connect failed: {ex.Message}", ex);
+                        $"first connect failed against all {options.AddressCount} configured endpoint(s): {ex.Message}", ex);
                 }
             }
 
-            if (options.drain_orphans)
+            if (sfMode && options.drain_orphans)
             {
                 var drainer = new QwpBackgroundDrainer(
                     contextBuilder: () =>
@@ -249,7 +171,7 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
                     options.max_background_drainers,
                     drainer,
                     shutdownWait: options.close_flush_timeout_millis);
-                var orphans = QwpOrphanScanner.ClaimOrphans(sfRoot, options.sender_id);
+                var orphans = QwpOrphanScanner.ClaimOrphans(options.sf_dir!, options.sender_id);
                 var enqueued = 0;
                 try
                 {
@@ -268,7 +190,7 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
                 }
             }
 
-            return (engine, pool, dispatcher);
+            return (slotLock, engine, pool, dispatcher);
         }
         catch (Exception)
         {
@@ -681,12 +603,7 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
     {
         ThrowIfTerminal();
         EnsureNoRowInProgress();
-        if (_sfMode)
-        {
-            return FlushToSfEngineAsyncCore(ct).AsTask();
-        }
-
-        return EnqueueAsyncCore(ct, awaitDrain: true).AsTask();
+        return FlushAsyncCore(ct).AsTask();
     }
 
     /// <inheritdoc />
@@ -694,13 +611,7 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
     {
         ThrowIfTerminal();
         EnsureNoRowInProgress();
-        if (_sfMode)
-        {
-            FlushToSfEngineSync(ct);
-            return;
-        }
-
-        EnqueueSync(ct, awaitDrain: true);
+        FlushSync(ct);
     }
 
     private void EnsureNoRowInProgress()
@@ -715,7 +626,7 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
         }
     }
 
-    private int EncodeSfBatch()
+    private int EncodeBatch()
     {
         _flushBatch.Clear();
         foreach (var t in _tables.Values)
@@ -731,254 +642,34 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
             return 0;
         }
 
-        try
-        {
-            return QwpEncoder.EncodeInto(
-                _encoderBuffers[0], _flushBatch, _schemaCache, _symbolDictionary,
-                selfSufficient: true,
-                gorillaEnabled: Options.gorilla);
-        }
-        catch (Exception ex) when (ex is not OperationCanceledException)
-        {
-            FailTerminal(ex);
-            throw LoadTerminal()!;
-        }
+        return QwpEncoder.EncodeInto(
+            _encoderBuffer, _flushBatch, _schemaCache, _symbolDictionary,
+            selfSufficient: true,
+            gorillaEnabled: Options.gorilla);
     }
 
-    private void FlushToSfEngineSync(CancellationToken ct)
+    private void FlushSync(CancellationToken ct)
     {
-        var len = EncodeSfBatch();
+        var len = EncodeBatch();
         if (len == 0) return;
-
-        try
-        {
-            _sfEngine!.AppendBlocking(_encoderBuffers[0].AsSpan(0, len), ct);
-        }
-        catch (IngressError)
-        {
-            throw;
-        }
-        catch (Exception ex) when (ex is not OperationCanceledException)
-        {
-            FailTerminal(ex);
-            throw LoadTerminal()!;
-        }
-
+        _engine.AppendBlocking(_encoderBuffer.AsSpan(0, len), ct);
         OnFlushSucceeded();
     }
 
-    private async ValueTask FlushToSfEngineAsyncCore(CancellationToken ct)
+    private async ValueTask FlushAsyncCore(CancellationToken ct)
     {
-        var len = EncodeSfBatch();
+        var len = EncodeBatch();
         if (len == 0) return;
-
-        try
-        {
-            await _sfEngine!.AppendAsync(_encoderBuffers[0].WrittenMemory, ct).ConfigureAwait(false);
-        }
-        catch (IngressError)
-        {
-            throw;
-        }
-        catch (Exception ex) when (ex is not OperationCanceledException)
-        {
-            FailTerminal(ex);
-            throw LoadTerminal()!;
-        }
-
+        await _engine.AppendAsync(_encoderBuffer.WrittenMemory, ct).ConfigureAwait(false);
         OnFlushSucceeded();
-    }
-
-    /// <summary>
-    ///     Encodes the current pending tables into <paramref name="bufferIndex" />'s shared
-    ///     encoder buffer. Returns the encoded length, or 0 if there were no pending rows.
-    /// </summary>
-    private int EncodeFrameInto(int bufferIndex)
-    {
-        _flushBatch.Clear();
-        foreach (var t in _tables.Values)
-        {
-            if (t.RowCount > 0)
-            {
-                _flushBatch.Add(t);
-            }
-        }
-
-        if (_flushBatch.Count == 0)
-        {
-            return 0;
-        }
-
-        try
-        {
-            return QwpEncoder.EncodeInto(
-                _encoderBuffers[bufferIndex], _flushBatch, _schemaCache, _symbolDictionary,
-                gorillaEnabled: Options.gorilla);
-        }
-        catch (Exception ex) when (ex is not OperationCanceledException)
-        {
-            FailTerminal(ex);
-            throw LoadTerminal()!;
-        }
-    }
-
-    private void ProcessTableEntries(IReadOnlyList<QwpTableEntry> entries, bool isDurable)
-    {
-        if (entries.Count == 0)
-        {
-            return;
-        }
-
-        var target = isDurable ? _durableSeqTxn : _committedSeqTxn;
-        lock (_seqTxnLock)
-        {
-            for (var i = 0; i < entries.Count; i++)
-            {
-                var entry = entries[i];
-                if (target.TryGetValue(entry.TableName, out var existing))
-                {
-                    if (entry.SeqTxn > existing)
-                    {
-                        target[entry.TableName] = entry.SeqTxn;
-                    }
-                }
-                else
-                {
-                    target[entry.TableName] = entry.SeqTxn;
-                }
-            }
-        }
-    }
-
-    /// <summary>
-    ///     Encodes the pending tables, hands the resulting frame to the send loop, and (if requested)
-    ///     waits for the in-flight window to drain. Truly async: every wait uses <c>WaitAsync</c>.
-    /// </summary>
-    private ValueTask EnqueueAsyncCore(CancellationToken ct, bool awaitDrain)
-        => EnqueueAsyncCore(ct, awaitDrain, drainTimeout: Timeout.InfiniteTimeSpan);
-
-    private async ValueTask EnqueueAsyncCore(CancellationToken ct, bool awaitDrain, TimeSpan drainTimeout)
-    {
-        var linked = ct.CanBeCanceled
-            ? CancellationTokenSource.CreateLinkedTokenSource(_ioCts!.Token, ct)
-            : null;
-        try
-        {
-            await EnqueueAsyncBody(linked?.Token ?? _ioCts!.Token, awaitDrain, drainTimeout).ConfigureAwait(false);
-        }
-        finally
-        {
-            linked?.Dispose();
-        }
-    }
-
-    private async ValueTask EnqueueAsyncBody(CancellationToken linkedCt, bool awaitDrain, TimeSpan drainTimeout)
-    {
-        var idx = _encoderIndex;
-        _encoderIndex = (idx + 1) & 1;
-        var ownsReady = false;
-        var ownsSlot = false;
-        Exception? wrapAsTerminal = null;
-        var drainedSuccessfully = false;
-
-        try
-        {
-            try
-            {
-                await _encoderReady[idx].WaitAsync(linkedCt).ConfigureAwait(false);
-                ownsReady = true;
-
-                var len = EncodeFrameInto(idx);
-                if (len > 0)
-                {
-                    await _slot!.WaitAsync(linkedCt).ConfigureAwait(false);
-                    ownsSlot = true;
-
-                    var seq = _nextSequence++;
-                    var frame = _encoderBuffers[idx].WrittenMemory;
-                    _inFlightWindow.Add(seq);
-                    if (!_sendChannel!.Writer.TryWrite(new AsyncBatch(idx, frame)))
-                    {
-                        wrapAsTerminal = _sendChannel.Reader.Completion.IsCompleted
-                            ? new IngressError(ErrorCode.SocketError, "sender disposed during flush")
-                            : new IngressError(ErrorCode.ServerFlushError,
-                                "internal: in-flight channel was full after reserving a slot");
-                    }
-                    else
-                    {
-                        ownsSlot = false;
-                        ownsReady = false;
-                        OnFlushSucceeded();
-                    }
-                }
-                else
-                {
-                    _encoderReady[idx].Release();
-                    ownsReady = false;
-                }
-
-                if (wrapAsTerminal is null && awaitDrain)
-                {
-                    try
-                    {
-                        await _inFlightWindow.AwaitEmptyAsync(drainTimeout, linkedCt).ConfigureAwait(false);
-                        drainedSuccessfully = true;
-                    }
-                    catch (OperationCanceledException) when (LoadTerminal() is not null)
-                    {
-                    }
-                    catch (Exception ex) when (ex is not OperationCanceledException && ex is not IngressError)
-                    {
-                        wrapAsTerminal = ex;
-                    }
-                }
-            }
-            catch (OperationCanceledException) when (LoadTerminal() is not null)
-            {
-            }
-        }
-        finally
-        {
-            if (ownsSlot) SfCleanup.Run(() => _slot!.Release());
-            if (ownsReady) SfCleanup.Run(() => _encoderReady[idx].Release());
-        }
-
-        if (wrapAsTerminal is not null)
-        {
-            FailTerminal(wrapAsTerminal);
-        }
-
-        if (!drainedSuccessfully)
-        {
-            ThrowIfTerminal();
-        }
-    }
-
-    private void EnqueueSync(CancellationToken ct, bool awaitDrain)
-    {
-        EnqueueAsyncCore(ct, awaitDrain, drainTimeout: Timeout.InfiniteTimeSpan).GetAwaiter().GetResult();
-    }
-
-    private void EnqueueSync(CancellationToken ct, bool awaitDrain, TimeSpan drainTimeout)
-    {
-        EnqueueAsyncCore(ct, awaitDrain, drainTimeout).GetAwaiter().GetResult();
     }
 
     private void OnFlushSucceeded()
     {
-        if (_sfMode)
-        {
-            // SF frames are self-sufficient — Reset, not Commit, so the dict can't grow unbounded.
-            _symbolDictionary.Reset();
-            foreach (var t in _flushBatch) t.SchemaId = -1;
-        }
-        else
-        {
-            _symbolDictionary.Commit();
-        }
-
+        _symbolDictionary.Reset();
         foreach (var t in _flushBatch)
         {
+            t.SchemaId = -1;
             t.Clear();
         }
 
@@ -987,104 +678,6 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
         _currentTable = null;
         LastFlush = DateTime.UtcNow;
         _lastFlushTickCount = Environment.TickCount64;
-    }
-
-    private async Task SendLoop(CancellationToken ct)
-    {
-        try
-        {
-            await foreach (var batch in _sendChannel!.Reader.ReadAllAsync(ct).ConfigureAwait(false))
-            {
-                try
-                {
-                    await _transport!.SendBinaryAsync(batch.Frame, ct).ConfigureAwait(false);
-                }
-                catch (Exception ex) when (ex is not OperationCanceledException)
-                {
-                    FailTerminal(ex);
-                    return;
-                }
-                finally
-                {
-                    // The receiver releases _slot on ACK; here we only return the encoder buffer.
-                    _encoderReady[batch.BufferIndex].Release();
-                }
-            }
-        }
-        catch (OperationCanceledException)
-        {
-        }
-    }
-
-    private async Task ReceiveLoop(CancellationToken ct)
-    {
-        try
-        {
-            while (!ct.IsCancellationRequested)
-            {
-                int read;
-                try
-                {
-                    (read, _receiveBuffer) = await _transport!.ReceiveFrameAsync(_receiveBuffer, MaxReceiveBufferBytes, ct).ConfigureAwait(false);
-                }
-                catch (OperationCanceledException)
-                {
-                    return;
-                }
-                catch (Exception ex)
-                {
-                    FailTerminal(ex);
-                    return;
-                }
-
-                QwpResponse response;
-                try
-                {
-                    response = QwpResponse.Parse(_receiveBuffer.AsSpan(0, read));
-                }
-                catch (Exception ex)
-                {
-                    FailTerminal(ex);
-                    return;
-                }
-
-                try
-                {
-                    if (response.IsDurableAck)
-                    {
-                        // Informational watermark; doesn't advance the in-flight window.
-                        ProcessTableEntries(response.TableEntries, isDurable: true);
-                        continue;
-                    }
-
-                    if (!response.IsOk)
-                    {
-                        FailTerminal(response.ToException());
-                        return;
-                    }
-
-                    var prevAcked = _inFlightWindow.AckedSequence;
-                    _inFlightWindow.AcknowledgeUpTo(response.Sequence);
-                    var newAcked = _inFlightWindow.AckedSequence;
-                    var freed = (int)(newAcked - prevAcked);
-                    if (freed > 0)
-                    {
-                        _slot!.Release(freed);
-                    }
-
-                    ProcessTableEntries(response.TableEntries, isDurable: false);
-                }
-                catch (Exception ex) when (ex is not OperationCanceledException)
-                {
-                    // Malformed ACK must terminalise; otherwise producers block until close_flush_timeout_millis.
-                    FailTerminal(ex);
-                    return;
-                }
-            }
-        }
-        catch (OperationCanceledException)
-        {
-        }
     }
 
     /// <inheritdoc />
@@ -1140,10 +733,10 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
     }
 
     /// <inheritdoc />
-    public long DroppedErrorNotifications => _sfErrorDispatcher?.DroppedNotifications ?? 0L;
+    public long DroppedErrorNotifications => _errorDispatcher?.DroppedNotifications ?? 0L;
 
     /// <inheritdoc />
-    public long TotalErrorNotificationsDelivered => _sfErrorDispatcher?.TotalDelivered ?? 0L;
+    public long TotalErrorNotificationsDelivered => _errorDispatcher?.TotalDelivered ?? 0L;
 
     private void UpdateSeqTxnFromAck(QwpTableEntry entry, bool isDurable)
     {
@@ -1177,235 +770,59 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
     private async ValueTask PingAsyncCore(CancellationToken ct)
     {
         ThrowIfTerminal();
-
-        if (_sfMode)
-        {
-            await _sfEngine!.FlushAsync(Options.ping_timeout, ct).ConfigureAwait(false);
-            return;
-        }
-
-        // Race-safe: capture _ioCts under the disposed-check window. If Dispose set _disposed = 1
-        // and disposed _ioCts already, ThrowIfDisposed() above re-throws on next call; here we
-        // tolerate the late-Dispose case by catching ObjectDisposedException from the linked CTS.
-        CancellationTokenSource? linked = null;
-        try
-        {
-            linked = CancellationTokenSource.CreateLinkedTokenSource(_ioCts!.Token, ct);
-            await _inFlightWindow.AwaitEmptyAsync(Options.ping_timeout, linked.Token).ConfigureAwait(false);
-        }
-        catch (ObjectDisposedException)
-        {
-            ThrowIfDisposed();
-            throw;
-        }
-        catch (OperationCanceledException) when (LoadTerminal() is not null)
-        {
-            ThrowIfTerminal();
-            throw;
-        }
-        catch (Exception ex) when (ex is not OperationCanceledException && ex is not IngressError)
-        {
-            FailTerminal(ex);
-            throw LoadTerminal()!;
-        }
-        finally
-        {
-            linked?.Dispose();
-        }
-    }
-
-    private void ThrowIfDisposed()
-    {
-        if (Volatile.Read(ref _disposed) != 0)
-        {
-            throw new ObjectDisposedException(nameof(QwpWebSocketSender));
-        }
+        await _engine.FlushAsync(Options.ping_timeout, ct).ConfigureAwait(false);
     }
 
     /// <inheritdoc />
     public void Dispose()
     {
         if (Interlocked.CompareExchange(ref _disposed, 1, 0) != 0) return;
-        if (_sfMode) DisposeSfStackSync();
-        else DisposeWsStackSync();
+        DisposeStackSync();
     }
 
     /// <inheritdoc />
     public async ValueTask DisposeAsync()
     {
         if (Interlocked.CompareExchange(ref _disposed, 1, 0) != 0) return;
-        if (_sfMode) await DisposeSfStackAsync().ConfigureAwait(false);
-        else await DisposeWsStackAsync().ConfigureAwait(false);
+        await DisposeStackAsync().ConfigureAwait(false);
     }
 
-    private void DisposeWsStackSync()
+    private void DisposeStackSync()
     {
         try
         {
-            if (LoadTerminal() is null)
+            if (!_engine.IsTerminallyFailed && Options.close_flush_timeout_millis.TotalMilliseconds > 0)
             {
-                using var flushCts = new CancellationTokenSource(Options.close_flush_timeout_millis);
-                EnqueueSync(flushCts.Token, awaitDrain: true, drainTimeout: Options.close_flush_timeout_millis);
+                FlushSync(CancellationToken.None);
+                _engine.FlushAsync(Options.close_flush_timeout_millis).GetAwaiter().GetResult();
             }
         }
         catch (Exception)
         {
         }
 
-        var totalBudgetMs = (int)Options.close_flush_timeout_millis.TotalMilliseconds;
-        var sw = System.Diagnostics.Stopwatch.StartNew();
-
-        try
-        {
-            _sendChannel!.Writer.TryComplete();
-            _sendLoopTask!.Wait(totalBudgetMs);
-        }
-        catch (Exception)
-        {
-        }
-
-        var ioJoined = false;
-        try
-        {
-            _ioCts!.Cancel();
-            var remaining = Math.Max(0, totalBudgetMs - (int)sw.ElapsedMilliseconds);
-            ioJoined = Task.WhenAll(_sendLoopTask!, _receiveLoopTask!).Wait(remaining);
-        }
-        catch (Exception)
-        {
-        }
-
-        if (ioJoined)
-        {
-            try
-            {
-                using var closeCts = new CancellationTokenSource(Options.close_flush_timeout_millis);
-                _transport!.CloseAsync(WebSocketCloseStatus.NormalClosure, null, closeCts.Token).GetAwaiter().GetResult();
-            }
-            catch (Exception)
-            {
-            }
-            SfCleanup.Dispose(_transport);
-        }
-
-        FinalizeWsTeardown(ioJoined);
+        SfCleanup.Dispose(_drainerPool);
+        SfCleanup.Dispose(_engine);
+        SfCleanup.Dispose(_errorDispatcher);
     }
 
-    private async ValueTask DisposeWsStackAsync()
+    private async ValueTask DisposeStackAsync()
     {
         try
         {
-            if (LoadTerminal() is null)
+            if (!_engine.IsTerminallyFailed && Options.close_flush_timeout_millis.TotalMilliseconds > 0)
             {
-                using var flushCts = new CancellationTokenSource(Options.close_flush_timeout_millis);
-                await EnqueueAsyncCore(flushCts.Token, awaitDrain: true, drainTimeout: Options.close_flush_timeout_millis).ConfigureAwait(false);
+                await FlushAsyncCore(CancellationToken.None).ConfigureAwait(false);
+                await _engine.FlushAsync(Options.close_flush_timeout_millis).ConfigureAwait(false);
             }
         }
         catch (Exception)
         {
         }
 
-        var totalBudget = Options.close_flush_timeout_millis;
-        var totalBudgetMs = (int)totalBudget.TotalMilliseconds;
-        var sw = System.Diagnostics.Stopwatch.StartNew();
-
-        try
-        {
-            _sendChannel!.Writer.TryComplete();
-            await _sendLoopTask!.WaitAsync(totalBudget).ConfigureAwait(false);
-        }
-        catch (Exception)
-        {
-        }
-
-        var ioJoined = false;
-        try
-        {
-            _ioCts!.Cancel();
-            var remaining = Math.Max(0, totalBudgetMs - (int)sw.ElapsedMilliseconds);
-            await Task.WhenAll(_sendLoopTask!, _receiveLoopTask!)
-                .WaitAsync(TimeSpan.FromMilliseconds(remaining)).ConfigureAwait(false);
-            ioJoined = true;
-        }
-        catch (Exception)
-        {
-        }
-
-        if (ioJoined)
-        {
-            try
-            {
-                using var closeCts = new CancellationTokenSource(Options.close_flush_timeout_millis);
-                await _transport!.CloseAsync(WebSocketCloseStatus.NormalClosure, null, closeCts.Token).ConfigureAwait(false);
-            }
-            catch (Exception)
-            {
-            }
-            SfCleanup.Dispose(_transport);
-        }
-
-        FinalizeWsTeardown(ioJoined);
-    }
-
-    private void FinalizeWsTeardown(bool ioJoined)
-    {
-        // On wedge, leak the semaphores: SendLoop's finally still calls Release on them.
-        if (!ioJoined) return;
-
-        SfCleanup.Dispose(_ioCts);
-        SfCleanup.Dispose(_slot);
-        foreach (var sem in _encoderReady)
-        {
-            SfCleanup.Dispose(sem);
-        }
-    }
-
-    private void DisposeSfStackSync()
-    {
-        try
-        {
-            if (LoadTerminal() is null && Options.close_flush_timeout_millis.TotalMilliseconds > 0)
-            {
-                FlushToSfEngineSync(CancellationToken.None);
-                _sfEngine!.FlushAsync(Options.close_flush_timeout_millis).GetAwaiter().GetResult();
-            }
-        }
-        catch (Exception)
-        {
-        }
-
-        SfCleanup.Dispose(_sfDrainerPool);
-        SfCleanup.Dispose(_sfEngine);
-        SfCleanup.Dispose(_sfErrorDispatcher);
-
-        foreach (var sem in _encoderReady)
-        {
-            SfCleanup.Dispose(sem);
-        }
-    }
-
-    private async ValueTask DisposeSfStackAsync()
-    {
-        try
-        {
-            if (LoadTerminal() is null && Options.close_flush_timeout_millis.TotalMilliseconds > 0)
-            {
-                await FlushToSfEngineAsyncCore(CancellationToken.None).ConfigureAwait(false);
-                await _sfEngine!.FlushAsync(Options.close_flush_timeout_millis).ConfigureAwait(false);
-            }
-        }
-        catch (Exception)
-        {
-        }
-
-        SfCleanup.Dispose(_sfDrainerPool);
-        SfCleanup.Dispose(_sfEngine);
-        SfCleanup.Dispose(_sfErrorDispatcher);
-
-        foreach (var sem in _encoderReady)
-        {
-            SfCleanup.Dispose(sem);
-        }
+        SfCleanup.Dispose(_drainerPool);
+        SfCleanup.Dispose(_engine);
+        SfCleanup.Dispose(_errorDispatcher);
     }
 
     private QwpTableBuffer EnsureCurrentTable()
@@ -1418,8 +835,6 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
         return _currentTable;
     }
 
-    private IngressError? LoadTerminal() => Volatile.Read(ref _terminalError);
-
     private void ThrowIfTerminal()
     {
         if (Volatile.Read(ref _disposed) != 0)
@@ -1427,37 +842,15 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
             throw new ObjectDisposedException(nameof(QwpWebSocketSender));
         }
 
-        var terminal = LoadTerminal();
-        if (terminal is not null)
+        if (_engine.IsTerminallyFailed)
         {
-            // Re-wrap so the user sees a fresh stack trace pointing to their call site, but
-            // preserves the original failure as the inner exception.
-            throw new IngressError(terminal.code, terminal.Message, terminal);
-        }
-
-        if (_sfMode && _sfEngine!.IsTerminallyFailed)
-        {
-            var inner = _sfEngine.TerminalError;
+            var inner = _engine.TerminalError;
             var code = (inner as IngressError)?.code ?? ErrorCode.ServerFlushError;
             var msg = inner?.Message ?? "QWP cursor engine failed terminally";
             throw inner is null
                 ? new IngressError(code, msg)
                 : new IngressError(code, msg, inner);
         }
-    }
-
-    private void FailTerminal(Exception ex)
-    {
-        var failure = ex as IngressError ?? new IngressError(ErrorCode.SocketError, ex.Message, ex);
-        // Race with concurrent producer / send / receive loops; only the first writer wins so that
-        // FailAll and the I/O cancellation each fire exactly once.
-        if (Interlocked.CompareExchange(ref _terminalError, failure, null) is not null)
-        {
-            return;
-        }
-
-        _inFlightWindow.FailAll(failure);
-        _ioCts?.Cancel();
     }
 
     private void GuardLastFlushNotSet()
@@ -1472,26 +865,13 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
     private void FlushIfNecessary(CancellationToken ct)
     {
         if (!ShouldAutoFlush()) return;
-
-        if (_sfMode)
-        {
-            FlushToSfEngineSync(ct);
-            return;
-        }
-
-        EnqueueSync(ct, awaitDrain: false);
+        FlushSync(ct);
     }
 
     private ValueTask FlushIfNecessaryAsyncCore(CancellationToken ct)
     {
         if (!ShouldAutoFlush()) return ValueTask.CompletedTask;
-
-        if (_sfMode)
-        {
-            return FlushToSfEngineAsyncCore(ct);
-        }
-
-        return EnqueueAsyncCore(ct, awaitDrain: false);
+        return FlushAsyncCore(ct);
     }
 
     private bool ShouldAutoFlush()
@@ -1528,72 +908,6 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
     {
         var utc = value.Kind == DateTimeKind.Local ? value.ToUniversalTime() : value;
         return (utc - DateTime.UnixEpoch).Ticks / TicksPerMicrosecond;
-    }
-
-    private static QwpWebSocketTransport ConnectInitialTransport(
-        SenderOptions options,
-        QwpHostHealthTracker tracker,
-        string? authHeader,
-        System.Net.Security.RemoteCertificateValidationCallback? certValidator)
-    {
-        var proxy = ResolveProxy(options.proxy);
-        Exception? lastFailure = null;
-        var hostCount = tracker.Count;
-        for (var attempt = 0; attempt < hostCount; attempt++)
-        {
-            var idx = tracker.PickNext();
-            if (idx < 0) break;
-
-            var transportOpts = new QwpWebSocketTransportOptions
-            {
-                Uri = options.BuildUri(idx, QwpConstants.WritePath),
-                AuthorizationHeader = authHeader,
-                RequestDurableAck = options.request_durable_ack,
-                RemoteCertificateValidationCallback = certValidator,
-                Proxy = proxy,
-            };
-
-            QwpWebSocketTransport? candidate = null;
-            try
-            {
-                candidate = new QwpWebSocketTransport(transportOpts);
-                using var connectCts = new CancellationTokenSource(options.auth_timeout);
-                try
-                {
-                    candidate.ConnectAsync(connectCts.Token).GetAwaiter().GetResult();
-                }
-                catch (OperationCanceledException) when (connectCts.IsCancellationRequested)
-                {
-                    throw new IngressError(ErrorCode.SocketError,
-                        $"WebSocket upgrade to {transportOpts.Uri} exceeded auth_timeout={options.auth_timeout.TotalMilliseconds}ms");
-                }
-
-                tracker.RecordSuccess(idx);
-                return candidate;
-            }
-            catch (IngressError ex) when (ex.code == ErrorCode.AuthError ||
-                                          ex.code == ErrorCode.ProtocolVersionError)
-            {
-                candidate?.Dispose();
-                throw;
-            }
-            catch (QwpIngressRoleRejectedException ex)
-            {
-                candidate?.Dispose();
-                tracker.RecordRoleReject(idx, ex.IsTransient);
-                lastFailure = ex;
-            }
-            catch (Exception ex)
-            {
-                candidate?.Dispose();
-                tracker.RecordTransportError(idx);
-                lastFailure = ex;
-            }
-        }
-
-        throw new IngressError(ErrorCode.SocketError,
-            $"WebSocket ingress failed against all {tracker.Count} configured endpoint(s); auth_timeout is per-host (worst case = auth_timeout × {tracker.Count}): {lastFailure?.Message}",
-            lastFailure);
     }
 
     private static Func<IQwpCursorTransport> BuildHostRotatingFactory(

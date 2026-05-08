@@ -12,10 +12,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
   WebSocket (`/write/v4`). Higher throughput than ILP for wide rows, exposes the full
   QuestDB type system (int8/int16/int32, float32, char, date,
   timestamp-nanos, uuid, varchar, geohash, decimal128, long256, double
-  arrays, long arrays, Gorilla DoD timestamp compression). Ships an opt-in
-  **store-and-forward (SF) mode** that mmap's outgoing batches to disk
-  before the wire send, enabling crash-safe replay through transient
-  server outages.
+  arrays, long arrays, Gorilla DoD timestamp compression). Always routed
+  through the **cursor send engine**: every appended frame lands in a segment
+  ring (RAM-backed by default, mmap-backed when `sf_dir` is set), is shipped
+  asynchronously, and is replayed on transient WS reconnects. Setting
+  `sf_dir` switches the segment backing to mmap files so frames survive a
+  process restart.
 - **WS / WSS (QWP) — egress** — read-side WebSocket (`/read/v1`) that
   streams query results as binary `RESULT_BATCH` frames. Surfaced through
   a separate `QueryClient.New(...)` factory (not `Sender.New`) returning
@@ -212,52 +214,75 @@ own framing, codecs, and server handshake. Everything QWP lives in
     identity + the `target=` filter rejection. SERVER_INFO is emitted
     unconditionally on connect; failover walks `addr=` candidates
     filtering against role.
-- `Senders/QwpWebSocketSender.cs` — owns the lifecycle. Two execution
-  modes (sync / `in_flight_window=1` is rejected at construction; the
-  double-buffered encoder pipeline assumes window ≥ 2 — for one-batch-at-a-time
+- `Senders/QwpWebSocketSender.cs` — owns the lifecycle. Single
+  execution path through `QwpCursorSendEngine` regardless of mode
+  (`in_flight_window=1` is rejected at construction; the engine's
+  double-buffered pumps assume window ≥ 2 — for one-batch-at-a-time
   ILP semantics use the `http::` scheme instead):
-  - **Async pipelined** (default `in_flight_window=128`): bounded
-    `Channel<AsyncBatch>` between producer and `SendLoop`; double-buffered
-    encoders so batch N+1 encodes while batch N is in flight. Caches
-    advance on enqueue — safety comes from the sender being terminal
-    on I/O error (`_terminalError` poisons every subsequent call).
-    `_slot` semaphore reserves channel capacity before encoding to
-    prevent producer from racing the I/O thread.
-  - **SF** (`sf_dir=...` set): wires through `_sfEngine`
-    (`Qwp/Sf/QwpCursorSendEngine`) instead of the in-memory channel.
-    Frames are appended to mmap'd segment files first; the engine's
-    pumps replay them across reconnects.
+  - **RAM mode** (default, `sf_dir` unset): the engine sits over a
+    memory-backed `QwpSegmentRing` (`OpenMemoryBacked`) of
+    `QwpMemorySegment`s, capped at `sf_max_total_bytes` (default
+    128 MiB; 4 MiB per segment). No persistence; segments are
+    `NativeMemory.Alloc`'d and freed on trim.
+  - **SF mode** (`sf_dir=...` set): the engine sits over a
+    file-backed `QwpSegmentRing` (`Open`) of mmap'd
+    `QwpMmapSegment`s, capped at `sf_max_total_bytes` (default
+    10 GiB). Frames survive process crashes and replay on next
+    startup.
+  - In both modes a wire failure (server close, transient I/O,
+    timeout) triggers `QwpReconnectPolicy` backoff. The sender only
+    becomes terminal on auth/upgrade-reject, protocol violation, or
+    reconnect-budget exhaustion — `flush()` does **not** throw on
+    transient disconnects.
 
-### Store-and-forward (SF, opt-in)
+### Cursor send engine + segment backings
 
-Lives entirely under `Qwp/Sf/` and only activates when the connect
-string carries `sf_dir=...`. Implements the QWiP store-and-forward
-client buffer.
+Lives under `Qwp/Sf/`. The cursor engine is the universal hot path;
+segments are an abstraction (`IQwpSegment`) over either
+`QwpMmapSegment` (file-backed, used when `sf_dir` is set) or
+`QwpMemorySegment` (RAM-backed, used when `sf_dir` is null).
 
+- `IQwpSegment.cs` — common segment contract used by the ring.
+  Implementations: `QwpMmapSegment` (file-backed) and
+  `QwpMemorySegment` (RAM-backed).
 - `QwpFiles.cs` — exclusive-locking file ops. `OpenExclusive` /
   `TryOpenExclusive` use `FileShare.None` as a portable advisory lock
   (held for the lifetime of the returned `FileStream`). SF is documented
   as **local filesystem only** — `FileShare.None` is unreliable on NFS
-  / SMB.
-- `QwpSlotLock.cs` — per-sender lock file. `Acquire` uses
-  `TryOpenExclusive` so non-collision IO errors propagate; only a real
-  file-share-violation maps to "already locked".
+  / SMB. `LooksLikeNetworkPath` heuristic guards `QwpSlotLock.Acquire`,
+  which throws when the slot path is on a UNC mount.
+- `QwpSlotLock.cs` — per-sender lock file (SF mode only). `Acquire` uses
+  `TryOpenExclusive`; `IsHolderProcessAlive` is a PID-based liveness
+  check, with a `.heartbeat` mtime check (`IsHolderHeartbeatFresh`)
+  refreshed by the segment manager every ~1s — orphan scanner adopts
+  any slot whose heartbeat is older than 5 min, even if the recorded
+  PID happens to be live (PID-reuse safe).
 - `QwpMmapSegment.cs` — single mmap'd segment file with envelope frames
   `[u32 crc32c][u32 frame_len][frame bytes]`. Replays on open via
   `ScanForLastGoodEnvelope` to find the last good write position;
-  truncates torn tails. `TryAppend` rejects frames larger than
-  `_maxFrameLength` (defaults to `int.MaxValue`) to prevent the next
-  reopen from silently treating them as torn.
-- `QwpSegmentRing.cs` — ring of active + sealed segments + hot-spare
-  slot. Hot path is lock-free (`Volatile`/`Interlocked`); the manager
-  thread provisions spares ahead of time so the producer never blocks
-  on segment allocation. Recovery treats the tail as sealed if it
-  carries the sealed flag (handles crashes between `Seal()` and the
-  next active alloc).
-- `QwpSegmentManager.cs` — manager thread: heartbeat-driven plus
-  callback-driven (producer's `NeedsHotSpare` / spare-adoption-failed).
-  Provisions hot spares, trims acked segments, enforces
-  `sf_max_total_bytes` cap.
+  truncates torn tails. On `Seal()` writes a 16-byte trailer
+  (magic + last-good-offset) at the file's end; `Open()` reads the
+  trailer first and skips per-envelope CRC verification on the
+  walk-and-build-offsets pass when the trailer is consistent (falls
+  back to a full CRC scan when the trailer is missing, corrupt, or
+  doesn't match the envelope walk).
+- `QwpMemorySegment.cs` — RAM-backed segment via
+  `NativeMemory.Alloc` / `Free`. Same envelope wire format as mmap
+  (preserves CRC verification on read), but no on-disk header /
+  trailer — recovery and replay don't apply.
+- `QwpSegmentRing.cs` — ring of active + sealed segments. File-backed
+  rings (`Open`) use a hot-spare-path mechanism (manager pre-creates
+  `.tmp` files, producer `File.Move`s them into place) so producer
+  never blocks on disk allocation. Memory-backed rings
+  (`OpenMemoryBacked`) skip the hot-spare path: producer allocates
+  inline (cheap), and the cap is enforced directly via
+  `SetMaxTotalBytes`. `IsMemoryBacked` flips many conditional paths.
+- `QwpSegmentManager.cs` — manager thread: heartbeat-driven (~1s)
+  plus callback-driven. File mode: provisions hot spares, trims
+  acked segments by unlinking files, refreshes the slot heartbeat,
+  flushes the active mmap segment to bound the host-crash data-loss
+  window. Memory mode: only trims (free instead of unlink); spare
+  provisioning is a no-op.
 - `QwpCrc32C.cs` — software slice-by-8 CRC32C, reflected polynomial
   `0x82F63B78`. Deliberately avoids `System.IO.Hashing.Crc32C` and
   hardware intrinsics so output is bit-identical across runtime
@@ -414,18 +439,13 @@ semantics in `HttpSender`. WS / SF manage their own concurrency model
   takes a stricter line: any `AppendXxx` failure aborts the entire
   in-progress row (`CancelCurrentRow`) so the buffer never carries a
   partially-applied row.
-- QWP cache advancement differs by mode:
-  - **Sync mode** advances `maxSentSchemaId` / `maxSentSymbolId` only
-    after the server ACKs the batch. A failed flush leaves the caches
-    untouched so retries re-send the full schema and symbol delta.
-  - **Async mode** advances them immediately after a successful
-    enqueue. Safety comes from the sender being terminal on I/O error
-    (`_terminalError` poisons every subsequent call), so stale cache
-    state can never reach the wire on a live connection.
-  - **SF mode** uses self-sufficient frames — every frame carries the
-    full schema and full symbol dictionary; no cache advancement, no
-    reference mode. This makes each segment file independently
-    replayable against fresh server state.
+- QWP frames are **always self-sufficient**: every frame carries the
+  full schema + full symbol-dictionary delta, regardless of whether
+  `sf_dir` is set. There is no reference-mode schema reuse on the
+  ingest path. This is what lets the cursor engine replay un-acked
+  frames after a transient WS reconnect (and lets segment files
+  replay against a fresh server in SF mode) without server-side
+  cache state.
 - The WS sender requires net7.0+. Gate any new WS-related code behind
   `#if NET7_0_OR_GREATER` if it touches `ClientWebSocket`-specific APIs;
   HTTP and TCP code must continue to compile on net6.0.

@@ -35,7 +35,7 @@ namespace net_questdb_client_benchmarks;
 /// <summary>
 ///     SF vs non-SF sustained throughput. Senders live across iterations so per-invocation cost
 ///     is row-encoding + frame I/O + ACK wait, not slot-lock acquire / mmap setup / engine spin-up.
-///     Acceptance: SF overhead should stay within ~30% of non-SF at the same <c>in_flight_window</c>.
+///     Acceptance: SF overhead should stay within ~30% of non-SF.
 /// </summary>
 [MemoryDiagnoser]
 public class BenchSfThroughput
@@ -45,9 +45,6 @@ public class BenchSfThroughput
     private string _sfRoot = null!;
     private ISender _wsNoSf = null!;
     private ISender _wsWithSf = null!;
-
-    [Params(2, 8, 32, 128)]
-    public int InFlightWindow;
 
     [Params(10_000, 100_000)]
     public int Rows;
@@ -81,11 +78,11 @@ public class BenchSfThroughput
         }
 
         _wsNoSf = Sender.New(
-            $"ws::addr={_wsEndpoint};in_flight_window={InFlightWindow};" +
+            $"ws::addr={_wsEndpoint};" +
             $"auto_flush_rows=1000;auto_flush_interval=off;auto_flush_bytes=off;");
 
         _wsWithSf = Sender.New(
-            $"ws::addr={_wsEndpoint};in_flight_window={InFlightWindow};" +
+            $"ws::addr={_wsEndpoint};" +
             $"sf_dir={_sfRoot};sender_id=bench;" +
             $"auto_flush_rows=1000;auto_flush_interval=off;auto_flush_bytes=off;");
     }

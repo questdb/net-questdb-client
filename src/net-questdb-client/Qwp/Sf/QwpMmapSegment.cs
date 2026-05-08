@@ -65,7 +65,7 @@ internal sealed class EmptySegmentHeaderException : IOException
     }
 }
 
-internal sealed class QwpMmapSegment : IDisposable
+internal sealed class QwpMmapSegment : IQwpSegment
 {
     public const int EnvelopeHeaderSize = 8;
     public const int HeaderSize = 24;
@@ -73,6 +73,10 @@ internal sealed class QwpMmapSegment : IDisposable
     public const byte FileVersion = 1;
     // Frames are bounded only by their enclosing segment; CRC + length sanity catch torn tails.
     public const int DefaultMaxFrameLength = int.MaxValue;
+    // Optimistic seal trailer at the file's last 16 bytes: lets recovery skip the O(n) envelope
+    // scan when a sealed segment was flushed cleanly. Format: u32 magic | u32 reserved | i64 offset.
+    public const int SealTrailerSize = 16;
+    public const uint SealTrailerMagic = 0x534C5453;
 
     private readonly MemoryMappedFile _mmap;
     private readonly MemoryMappedViewAccessor _view;
@@ -179,7 +183,8 @@ internal sealed class QwpMmapSegment : IDisposable
                     $"segment {path}: on-disk baseSeq {onDiskBaseFsn} does not match expected {baseFsn}");
             }
 
-            var (writePos, offsets) = ScanForLastGoodEnvelope(view, capacity, maxFrameLength);
+            var trustedEnd = TryReadSealTrailer(view, capacity);
+            var (writePos, offsets) = ScanForLastGoodEnvelope(view, capacity, maxFrameLength, trustedEnd);
             ZeroViewRange(view, writePos, capacity - writePos);
 
             return new QwpMmapSegment(path, mmap, view, fs, capacity, onDiskBaseFsn, writePos, offsets, maxFrameLength);
@@ -352,8 +357,8 @@ internal sealed class QwpMmapSegment : IDisposable
     }
 
     /// <summary>
-    ///     Marks the segment as no longer accepting appends. In-memory only — recovery re-derives
-    ///     sealed state from segment ordering.
+    ///     Marks the segment as no longer accepting appends. Stamps the last-good-offset into
+    ///     the segment's trailer so the next Open() can skip the per-envelope CRC walk.
     /// </summary>
     public void Seal()
     {
@@ -363,7 +368,45 @@ internal sealed class QwpMmapSegment : IDisposable
         }
 
         IsSealed = true;
+        WriteSealTrailer(_writePosition);
         Flush();
+    }
+
+    private void WriteSealTrailer(long lastGoodOffset)
+    {
+        if (Capacity < SealTrailerSize) return;
+        if (lastGoodOffset > Capacity - SealTrailerSize) return;
+
+        Span<byte> trailer = stackalloc byte[SealTrailerSize];
+        BinaryPrimitives.WriteUInt32LittleEndian(trailer.Slice(0, 4), SealTrailerMagic);
+        BinaryPrimitives.WriteUInt32LittleEndian(trailer.Slice(4, 4), 0);
+        BinaryPrimitives.WriteInt64LittleEndian(trailer.Slice(8, 8), lastGoodOffset);
+        WriteSpan(Capacity - SealTrailerSize, trailer);
+    }
+
+    private static long TryReadSealTrailer(MemoryMappedViewAccessor view, long capacity)
+    {
+        if (capacity < SealTrailerSize)
+        {
+            return -1L;
+        }
+
+        Span<byte> trailer = stackalloc byte[SealTrailerSize];
+        ViewToSpan(view, capacity - SealTrailerSize, trailer);
+
+        var magic = BinaryPrimitives.ReadUInt32LittleEndian(trailer.Slice(0, 4));
+        if (magic != SealTrailerMagic)
+        {
+            return -1L;
+        }
+
+        var offset = BinaryPrimitives.ReadInt64LittleEndian(trailer.Slice(8, 8));
+        if (offset < HeaderSize || offset > capacity - SealTrailerSize)
+        {
+            return -1L;
+        }
+
+        return offset;
     }
 
     /// <summary>Forces dirty pages to be written to disk.</summary>
@@ -414,13 +457,16 @@ internal sealed class QwpMmapSegment : IDisposable
     }
 
     /// <summary>
-    ///     Public test seam: replays the entire mmap and returns the last good offset and the table
-    ///     of envelope start offsets.
+    ///     Public test seam: replays the mmap and returns the last good offset and the table
+    ///     of envelope start offsets. When <paramref name="trustedEnd" /> is non-negative (set
+    ///     by Open after a valid seal trailer), envelopes between HeaderSize and trustedEnd are
+    ///     indexed without per-envelope CRC verification.
     /// </summary>
     internal static unsafe (long WritePosition, List<long> Offsets) ScanForLastGoodEnvelope(
         MemoryMappedViewAccessor view,
         long capacity,
-        int maxFrameLength = DefaultMaxFrameLength)
+        int maxFrameLength = DefaultMaxFrameLength,
+        long trustedEnd = -1L)
     {
         long offset = HeaderSize;
         var offsets = new List<long>();
@@ -430,7 +476,9 @@ internal sealed class QwpMmapSegment : IDisposable
         handle.AcquirePointer(ref basePtr);
         try
         {
-            while (offset + EnvelopeHeaderSize <= capacity)
+            var skipCrc = trustedEnd >= HeaderSize;
+            var endLimit = skipCrc ? trustedEnd : capacity;
+            while (offset + EnvelopeHeaderSize <= endLimit)
             {
                 var header = new ReadOnlySpan<byte>(basePtr + offset, EnvelopeHeaderSize);
 
@@ -448,17 +496,20 @@ internal sealed class QwpMmapSegment : IDisposable
                 }
 
                 var len = (int)lenU;
-                if (offset + EnvelopeHeaderSize + len > capacity)
+                if (offset + EnvelopeHeaderSize + len > endLimit)
                 {
                     break;
                 }
 
-                var frame = new ReadOnlySpan<byte>(basePtr + offset + EnvelopeHeaderSize, len);
-                var crcOverLen = QwpCrc32C.Compute(header.Slice(4, 4));
-                var actual = QwpCrc32C.Compute(frame, crcOverLen);
-                if (actual != crc)
+                if (!skipCrc)
                 {
-                    break;
+                    var frame = new ReadOnlySpan<byte>(basePtr + offset + EnvelopeHeaderSize, len);
+                    var crcOverLen = QwpCrc32C.Compute(header.Slice(4, 4));
+                    var actual = QwpCrc32C.Compute(frame, crcOverLen);
+                    if (actual != crc)
+                    {
+                        break;
+                    }
                 }
 
                 offsets.Add(offset);
@@ -468,6 +519,13 @@ internal sealed class QwpMmapSegment : IDisposable
         finally
         {
             handle.ReleasePointer();
+        }
+
+        // If we trusted the trailer and the envelope walk ended before reaching it, the trailer
+        // was lying — fall back to a full CRC scan from scratch.
+        if (trustedEnd >= HeaderSize && offset != trustedEnd)
+        {
+            return ScanForLastGoodEnvelope(view, capacity, maxFrameLength, trustedEnd: -1L);
         }
 
         return (offset, offsets);

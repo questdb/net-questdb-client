@@ -210,9 +210,6 @@ internal static class QwpConstants
     /// <summary>Default auto-flush interval, in milliseconds.</summary>
     public const int DefaultAutoFlushIntervalMs = 100;
 
-    /// <summary>Default in-flight window size; 1 collapses to synchronous mode.</summary>
-    public const int DefaultInFlightWindow = 128;
-
     /// <summary>Default cap on per-connection schema slots; matches the wire schema-id range.</summary>
     public const int DefaultMaxSchemasPerConnection = 65535;
 

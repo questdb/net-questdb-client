@@ -626,7 +626,8 @@ public class QwpQueryClientEndToEndTests
         });
         await server.StartAsync();
 
-        var options = new QueryOptions(BuildConnString(server)) { initial_credit = 4096 };
+        // initial_credit small enough that each batch crosses the half-threshold and triggers a CREDIT.
+        var options = new QueryOptions(BuildConnString(server)) { initial_credit = 50 };
         using var client = QueryClient.New(options);
         client.Execute("SELECT 1", new RecordingHandler());
 

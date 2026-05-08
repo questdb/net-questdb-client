@@ -96,4 +96,34 @@ public static class Sender
     {
         return new SenderOptions(confStr);
     }
+
+#if NET7_0_OR_GREATER
+    /// <summary>
+    ///     Builds a ws::/wss:: sender and returns the QWP-specific interface so callers can use
+    ///     <see cref="Senders.IQwpWebSocketSender.Ping" />,
+    ///     <see cref="Senders.IQwpWebSocketSender.GetHighestAckedSeqTxn" />, and
+    ///     <see cref="Senders.IQwpWebSocketSender.GetHighestDurableSeqTxn" /> without an
+    ///     <c>(IQwpWebSocketSender)</c> cast. Mirrors <see cref="QueryClient.New(string)" />.
+    /// </summary>
+    public static Senders.IQwpWebSocketSender NewQwp(string confStr)
+    {
+        var sender = New(confStr);
+        return AsQwp(sender);
+    }
+
+    /// <inheritdoc cref="NewQwp(string)" />
+    public static Senders.IQwpWebSocketSender NewQwp(SenderOptions options)
+    {
+        var sender = New(options);
+        return AsQwp(sender);
+    }
+
+    private static Senders.IQwpWebSocketSender AsQwp(ISender sender)
+    {
+        if (sender is Senders.IQwpWebSocketSender qwp) return qwp;
+        sender.Dispose();
+        throw new IngressError(ErrorCode.ConfigError,
+            "NewQwp requires a ws:: or wss:: connect string");
+    }
+#endif
 }

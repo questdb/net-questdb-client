@@ -81,7 +81,6 @@ public record SenderOptions
     private X509Certificate2? _clientCert;
 
     // WebSocket / QWP knobs.
-    private int _inFlightWindow = 128;
     private int _maxSchemasPerConnection = 65535;
     private bool _requestDurableAck;
     private bool _gorilla = true;
@@ -111,7 +110,6 @@ public record SenderOptions
     private SenderErrorPolicy? _onSecurityError;
     private SenderErrorPolicy? _onWriteError;
 
-    private bool _inFlightWindowUserSet;
     private bool _maxSchemasPerConnectionUserSet;
     private bool _requestDurableAckUserSet;
     private bool _gorillaUserSet;
@@ -211,7 +209,6 @@ public record SenderOptions
 
         // WebSocket / QWP knobs. Parsed unconditionally; ValidateWebSocketKeys throws if any
         // appear with a non-WebSocket scheme.
-        ParseIntWithDefault(nameof(in_flight_window), "128", out _inFlightWindow);
         ParseIntWithDefault(nameof(max_schemas_per_connection), "65535", out _maxSchemasPerConnection);
         ParseBoolOnOff(nameof(request_durable_ack), "off", out _requestDurableAck);
         ParseBoolOnOff(nameof(gorilla), "on", out _gorilla);
@@ -455,36 +452,6 @@ public record SenderOptions
 
     private void ValidateInitialConnectModeRequiresSf()
     {
-        // The non-SF WS path connects synchronously in the constructor and never consults SF-engine
-        // knobs — accepting them without sf_dir would silently no-op.
-        if (string.IsNullOrEmpty(_sfDir))
-        {
-            if (_initialConnectMode != InitialConnectMode.off)
-            {
-                throw new IngressError(ErrorCode.ConfigError,
-                    "`initial_connect_retry` requires `sf_dir` to be set (only the SF cursor engine implements first-connect retry).");
-            }
-            if (_errorHandler != null)
-            {
-                throw new IngressError(ErrorCode.ConfigError,
-                    "`error_handler` requires `sf_dir` to be set (only the SF cursor engine emits async error notifications).");
-            }
-            if (_errorPolicyResolver != null)
-            {
-                throw new IngressError(ErrorCode.ConfigError,
-                    "`error_policy_resolver` requires `sf_dir` to be set.");
-            }
-            if (_errorInboxCapacityUserSet)
-            {
-                throw new IngressError(ErrorCode.ConfigError,
-                    "`error_inbox_capacity` requires `sf_dir` to be set.");
-            }
-            if (HasAnyPolicyKeySet())
-            {
-                throw new IngressError(ErrorCode.ConfigError,
-                    "`on_server_error` / `on_*_error` keys require `sf_dir` to be set.");
-            }
-        }
         if (_errorInboxCapacity < 1)
         {
             throw new IngressError(ErrorCode.ConfigError,
@@ -574,7 +541,6 @@ public record SenderOptions
             return;
         }
 
-        if (_inFlightWindowUserSet) Throw(nameof(in_flight_window));
         if (_maxSchemasPerConnectionUserSet) Throw(nameof(max_schemas_per_connection));
         if (_gorillaUserSet) Throw(nameof(gorilla));
         if (_requestDurableAckUserSet) Throw(nameof(request_durable_ack));
@@ -587,7 +553,7 @@ public record SenderOptions
         if (_reconnectMaxDurationUserSet) Throw(nameof(reconnect_max_duration_millis));
         if (_reconnectInitialBackoffUserSet) Throw(nameof(reconnect_initial_backoff_millis));
         if (_reconnectMaxBackoffUserSet) Throw(nameof(reconnect_max_backoff_millis));
-        if (_initialConnectModeUserSet) Throw(nameof(initial_connect_retry));
+        if (_initialConnectModeUserSet) Throw("initial_connect_retry / initial_connect_mode");
         if (_closeFlushTimeoutUserSet) Throw(nameof(close_flush_timeout_millis));
         if (_drainOrphansUserSet) Throw(nameof(drain_orphans));
         if (_maxBackgroundDrainersUserSet) Throw(nameof(max_background_drainers));
@@ -627,7 +593,7 @@ public record SenderOptions
 
     private static readonly string[] WebSocketOnlyKeys =
     {
-        "in_flight_window", "max_schemas_per_connection",
+        "max_schemas_per_connection",
         "gorilla", "request_durable_ack",
         "sf_dir", "sender_id", "sf_max_bytes", "sf_max_total_bytes", "sf_durability",
         "sf_append_deadline_millis", "reconnect_max_duration_millis", "reconnect_initial_backoff_millis",
@@ -981,17 +947,6 @@ public record SenderOptions
     {
         get => _poolTimeout;
         set => _poolTimeout = value;
-    }
-
-    /// <summary>
-    ///     Maximum number of unacknowledged batches in flight on a WebSocket connection.
-    ///     <c>1</c> selects synchronous mode (one batch at a time). Defaults to <c>128</c>.
-    ///     Only meaningful for <see cref="ProtocolType.ws" /> / <see cref="ProtocolType.wss" />.
-    /// </summary>
-    public int in_flight_window
-    {
-        get => _inFlightWindow;
-        set { _inFlightWindow = value; _inFlightWindowUserSet = true; }
     }
 
     /// <summary>
@@ -1524,13 +1479,14 @@ public record SenderOptions
 
     private void ReadConfigStringIntoBuilder(string confStr)
     {
-        if (!confStr.Contains("::"))
+        var sep = confStr.IndexOf("::", StringComparison.Ordinal);
+        if (sep <= 0)
         {
             throw new IngressError(ErrorCode.ConfigError, "Config string must contain a protocol, separated by `::`");
         }
 
-        var splits = confStr.Split("::");
-        var paramString = splits[1];
+        var protocolPart = confStr.Substring(0, sep);
+        var paramString = confStr.Substring(sep + 2);
 
         // Parse addresses manually before using DbConnectionStringBuilder
         // because DbConnectionStringBuilder only keeps the last value for duplicate keys
@@ -1574,7 +1530,7 @@ public record SenderOptions
             ConnectionString = paramString,
         };
 
-        _connectionStringBuilder.Add("protocol", splits[0]);
+        _connectionStringBuilder.Add("protocol", protocolPart);
     }
 
     private string? ReadOptionFromBuilder(string name)

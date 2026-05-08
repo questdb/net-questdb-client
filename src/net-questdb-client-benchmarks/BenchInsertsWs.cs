@@ -60,9 +60,6 @@ public class BenchInsertsWs
     private string[] _wideStringK = null!;
     private long _rowSeq;
 
-    [Params(2, 8, 32, 128, 512)]
-    public int InFlightWindow;
-
     [Params(100, 1000, 10000)]
     public int AutoFlushRows;
 
@@ -105,7 +102,7 @@ public class BenchInsertsWs
         _httpSender = Sender.New(
             $"http::addr={_httpEndpoint};auto_flush_rows={AutoFlushRows};auto_flush_interval=off;auto_flush_bytes=off;");
         _wsSender = Sender.New(
-            $"ws::addr={_wsEndpoint};in_flight_window={InFlightWindow};" +
+            $"ws::addr={_wsEndpoint};" +
             $"auto_flush_rows={AutoFlushRows};auto_flush_interval=off;auto_flush_bytes=off;");
 
         _wideStringG = Enumerable.Range(0, Rows).Select(i => "string-" + i).ToArray();

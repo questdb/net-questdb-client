@@ -125,16 +125,13 @@ public class QwpWebSocketSenderTests
         });
         await server.StartAsync();
 
-        using var sender = NewSender(server, "auto_flush=off;");
+        using var sender = NewSender(server, "auto_flush=off;on_server_error=halt;");
+        var qwp = (IQwpWebSocketSender)sender;
 
-        sender.Table("t")
-              .Column("v", 1L)
-              .At(DateTime.UtcNow);
+        sender.Table("t").Column("v", 1L).At(DateTime.UtcNow);
+        sender.Send();
+        Assert.CatchAsync<IngressError>(async () => await qwp.PingAsync());
 
-        // First failure is the QwpException (subclass of IngressError) carrying the server status.
-        Assert.Catch<IngressError>(() => sender.Send());
-
-        // Subsequent calls rethrow the cached terminal error wrapped in a fresh IngressError.
         Assert.Catch<IngressError>(() => sender.Table("t").Column("v", 2L).At(DateTime.UtcNow));
         Assert.Catch<IngressError>(() => sender.Send());
     }
@@ -158,7 +155,7 @@ public class QwpWebSocketSenderTests
     }
 
     [Test]
-    public async Task EndToEnd_SecondFlush_ReusesSchemaInReferenceMode()
+    public async Task EndToEnd_SecondFlush_StaysSelfSufficient()
     {
         await using var server = StartServerWithOkAcks();
         using var sender = NewSender(server, "auto_flush=off;");
@@ -171,10 +168,9 @@ public class QwpWebSocketSenderTests
         await WaitFor(() => server.ReceivedFrames.Count >= 2);
         var frames = server.ReceivedFrames.Take(2).ToList();
 
-        // Schema mode byte location (computed in QwpEncoderTests):
-        //   header(12) + delta(2) + tableNameLen(1) + "t"(1) + rowCount(1) + colCount(1) = 18
-        Assert.That(frames[0][18], Is.EqualTo(QwpConstants.SchemaModeFull), "first frame uses full schema");
-        Assert.That(frames[1][18], Is.EqualTo(QwpConstants.SchemaModeReference), "second frame references it");
+        // Cursor-engine path emits self-sufficient frames; both frames carry the full schema.
+        Assert.That(frames[0][18], Is.EqualTo(QwpConstants.SchemaModeFull));
+        Assert.That(frames[1][18], Is.EqualTo(QwpConstants.SchemaModeFull));
     }
 
     [Test]
@@ -198,7 +194,7 @@ public class QwpWebSocketSenderTests
     }
 
     [Test]
-    public async Task EndToEnd_SymbolDeltaIsCommittedAfterFlush()
+    public async Task EndToEnd_SymbolDeltaIsResetEachFlush()
     {
         await using var server = StartServerWithOkAcks();
         using var sender = NewSender(server, "auto_flush=off;");
@@ -211,12 +207,10 @@ public class QwpWebSocketSenderTests
         await WaitFor(() => server.ReceivedFrames.Count >= 2);
         var frames = server.ReceivedFrames.Take(2).ToList();
 
-        // Frame 1: delta_start=0, delta_count=1, "us".
+        // Cursor engine emits self-sufficient frames: each restarts symbol-dict at delta_start=0.
         Assert.That(frames[0][12], Is.EqualTo(0));
         Assert.That(frames[0][13], Is.EqualTo(1));
-
-        // Frame 2: delta_start=1 (committed_count=1), delta_count=1, "eu".
-        Assert.That(frames[1][12], Is.EqualTo(1));
+        Assert.That(frames[1][12], Is.EqualTo(0));
         Assert.That(frames[1][13], Is.EqualTo(1));
     }
 
@@ -287,15 +281,6 @@ public class QwpWebSocketSenderTests
     }
 
     [Test]
-    public void InFlightWindow_One_Rejected()
-    {
-        var ex = Assert.Catch<IngressError>(() =>
-            Sender.New("ws::addr=127.0.0.1:1;auto_flush=off;in_flight_window=1;"));
-        Assert.That(ex!.code, Is.EqualTo(ErrorCode.ConfigError));
-        Assert.That(ex.Message, Does.Contain("in_flight_window"));
-    }
-
-    [Test]
     public async Task Tls_SelfSignedCert_VerifyOff_ConnectsAndSends()
     {
         using var cert = NewSelfSignedCertificate("CN=localhost");
@@ -326,7 +311,7 @@ public class QwpWebSocketSenderTests
     public async Task DisposeAsync_FlushesAndCleansUp()
     {
         await using var server = StartServerWithOkAcks();
-        var sender = NewSender(server, "auto_flush=off;in_flight_window=4;");
+        var sender = NewSender(server, "auto_flush=off;");
         sender.Table("t").Column("v", 1L).At(DateTime.UtcNow);
         sender.Send();
 
@@ -346,15 +331,17 @@ public class QwpWebSocketSenderTests
         });
         await server.StartAsync();
 
-        var sender = NewSender(server, "auto_flush=off;in_flight_window=4;");
+        var sender = NewSender(server, "auto_flush=off;on_server_error=halt;");
+        var qwp = (IQwpWebSocketSender)sender;
         sender.Table("t").Column("v", 1L).At(DateTime.UtcNow);
-        Assert.Catch<IngressError>(() => sender.Send());
+        sender.Send();
+        Assert.CatchAsync<IngressError>(async () => await qwp.PingAsync());
 
         Assert.DoesNotThrowAsync(async () => await ((IAsyncDisposable)sender).DisposeAsync());
     }
 
     [Test]
-    public async Task SendAsync_DoesNotBlockCallerWhileServerStalls()
+    public async Task SendAsync_CompletesFastWhileServerStalls()
     {
         using var ackGate = new SemaphoreSlim(0, int.MaxValue);
         await using var server = new DummyQwpServer(new DummyQwpServerOptions
@@ -367,15 +354,11 @@ public class QwpWebSocketSenderTests
         });
         await server.StartAsync();
 
-        using var sender = NewSender(server, "auto_flush=off;in_flight_window=2;");
+        using var sender = NewSender(server, "auto_flush=off;");
         sender.Table("t").Column("v", 1L).At(DateTime.UtcNow);
 
-        var pending = sender.SendAsync();
-        Assert.That(pending.IsCompleted, Is.False, "SendAsync must not complete while the server holds the ACK");
-
-        ackGate.Release();
-        await pending.WaitAsync(TimeSpan.FromSeconds(5));
-        Assert.That(pending.IsCompletedSuccessfully, Is.True);
+        // Cursor engine path: SendAsync returns once the frame is in the ring, regardless of ACK.
+        await sender.SendAsync().WaitAsync(TimeSpan.FromSeconds(5));
 
         ackGate.Release(8);
     }
@@ -394,7 +377,7 @@ public class QwpWebSocketSenderTests
         });
         await server.StartAsync();
 
-        using var sender = NewSender(server, "auto_flush=off;in_flight_window=4;");
+        using var sender = NewSender(server, "auto_flush=off;");
         sender.Table("t").Column("v", 1L).At(DateTime.UtcNow);
         var firstSend = sender.SendAsync();
         // Frame is enqueued and on the wire; server's FrameHandler is parked on ackGate.Wait().
@@ -424,7 +407,7 @@ public class QwpWebSocketSenderTests
         await server.StartAsync();
 
         using var sender = NewSender(server,
-            "auto_flush=on;auto_flush_rows=1;auto_flush_interval=off;auto_flush_bytes=off;in_flight_window=2;");
+            "auto_flush=on;auto_flush_rows=1;auto_flush_interval=off;auto_flush_bytes=off;");
 
         // First AtAsync triggers an auto-flush; with the server stalled the returned ValueTask
         // should land on the in-flight wait, not synchronously.
@@ -455,7 +438,7 @@ public class QwpWebSocketSenderTests
     }
 
     [Test]
-    public async Task ServerClosesAfterFirstFrame_TerminalError()
+    public async Task ServerClosesAfterFirstFrame_ReconnectsThenTerminalAfterBudget()
     {
         await using var server = new DummyQwpServer(new DummyQwpServerOptions
         {
@@ -466,17 +449,27 @@ public class QwpWebSocketSenderTests
         });
         await server.StartAsync();
 
-        using var sender = NewSender(server, "auto_flush=off;");
+        using var sender = NewSender(server,
+            "auto_flush=off;reconnect_initial_backoff_millis=10;reconnect_max_backoff_millis=50;reconnect_max_duration_millis=500;");
         sender.Table("t").Column("v", 1L).At(DateTime.UtcNow);
         sender.Send();
 
         await WaitFor(() => server.ReceivedFrames.Count >= 1);
 
-        Assert.Catch<IngressError>(() =>
+        // Server is gone after frame 1; sender retries through the reconnect budget then terminalises.
+        await WaitFor(() =>
         {
-            sender.Table("t").Column("v", 2L).At(DateTime.UtcNow);
-            sender.Send();
-        });
+            try
+            {
+                sender.Table("t").Column("v", 2L).At(DateTime.UtcNow);
+                sender.Send();
+                return false;
+            }
+            catch (IngressError)
+            {
+                return true;
+            }
+        }, timeoutMs: 5000);
     }
 
     private static System.Security.Cryptography.X509Certificates.X509Certificate2 NewSelfSignedCertificate(string subject)
@@ -514,7 +507,7 @@ public class QwpWebSocketSenderTests
     public async Task AsyncMode_PipelinedBatches_AllAcked()
     {
         await using var server = StartServerWithOkAcks();
-        using var sender = NewSender(server, "in_flight_window=8;auto_flush=off;");
+        using var sender = NewSender(server, "auto_flush=off;");
 
         for (var i = 0; i < 20; i++)
         {
@@ -531,7 +524,7 @@ public class QwpWebSocketSenderTests
     public async Task AsyncMode_AutoFlushDoesNotBlockOnAck()
     {
         // Server stalls on ACKs (slow handler). Async mode should keep accepting rows without blocking
-        // the producer until in_flight_window fills up.
+        // the producer until the segment ring fills up.
         var ackGate = new SemaphoreSlim(0, int.MaxValue);
         long nextSeq = 0;
         await using var server = new DummyQwpServer(new DummyQwpServerOptions
@@ -544,7 +537,7 @@ public class QwpWebSocketSenderTests
             },
         });
         await server.StartAsync();
-        using var sender = NewSender(server, "in_flight_window=4;auto_flush_rows=1;auto_flush_interval=off;auto_flush_bytes=off;");
+        using var sender = NewSender(server, "auto_flush_rows=1;auto_flush_interval=off;auto_flush_bytes=off;");
 
         // Push 4 rows; each triggers auto-flush. Window is 4, so 4 fit before producer would block.
         for (var i = 0; i < 4; i++)
@@ -558,7 +551,7 @@ public class QwpWebSocketSenderTests
             ackGate.Release();
         }
 
-        sender.Send(); // drain remaining (no rows, but waits for in-flight to clear)
+        await ((IQwpWebSocketSender)sender).PingAsync();
         Assert.That(server.ReceivedFrames.Count, Is.EqualTo(4));
     }
 
@@ -581,14 +574,15 @@ public class QwpWebSocketSenderTests
             },
         });
         await server.StartAsync();
-        using var sender = NewSender(server, "auto_flush=off;request_durable_ack=on;in_flight_window=2;");
+        using var sender = NewSender(server, "auto_flush=off;request_durable_ack=on;");
 
+        var ws = (IQwpWebSocketSender)sender;
         sender.Table("trades").Column("v", 1L).At(DateTime.UtcNow);
         sender.Send();
         sender.Table("trades").Column("v", 2L).At(DateTime.UtcNow);
         sender.Send();
+        await ws.PingAsync();
 
-        var ws = (IQwpWebSocketSender)sender;
         Assert.That(ws.GetHighestAckedSeqTxn("trades"), Is.EqualTo(201L), "OK frame's per-table entry");
         Assert.That(ws.GetHighestDurableSeqTxn("trades"), Is.EqualTo(101L), "DURABLE_ACK frame's per-table entry");
     }
@@ -618,10 +612,10 @@ public class QwpWebSocketSenderTests
     }
 
     [Test]
-    public async Task PingAsync_AfterPipelinedBatches_DrainsInFlightWindow()
+    public async Task PingAsync_AfterPipelinedBatches_DrainsRing()
     {
         await using var server = StartServerWithOkAcks();
-        using var sender = NewSender(server, "in_flight_window=8;auto_flush=off;");
+        using var sender = NewSender(server, "auto_flush=off;");
 
         for (var i = 0; i < 2; i++)
         {
@@ -635,10 +629,10 @@ public class QwpWebSocketSenderTests
     }
 
     [Test]
-    public async Task Ping_AfterPipelinedBatches_DrainsInFlightWindow()
+    public async Task Ping_AfterPipelinedBatches_DrainsRing()
     {
         await using var server = StartServerWithOkAcks();
-        using var sender = NewSender(server, "in_flight_window=8;auto_flush=off;");
+        using var sender = NewSender(server, "auto_flush=off;");
 
         for (var i = 0; i < 4; i++)
         {
@@ -670,13 +664,15 @@ public class QwpWebSocketSenderTests
             },
         });
         await server.StartAsync();
-        using var sender = NewSender(server, "in_flight_window=4;auto_flush=off;");
+        using var sender = NewSender(server, "auto_flush=off;on_server_error=halt;");
 
+        var qwp = (IQwpWebSocketSender)sender;
         sender.Table("t").Column("v", 1L).At(DateTime.UtcNow);
         sender.Send(); // first batch — OK
 
         sender.Table("t").Column("v", 2L).At(DateTime.UtcNow);
-        Assert.Catch<IngressError>(() => sender.Send()); // second — server returns error
+        sender.Send();
+        Assert.CatchAsync<IngressError>(async () => await qwp.PingAsync());
     }
 
     [Test]
@@ -846,6 +842,7 @@ public class QwpWebSocketSenderTests
         ws.ColumnDecimal64("p", 12.34m);
         sender.At(DateTime.UtcNow);
         await sender.SendAsync();
+        await ws.PingAsync();
 
         var payload = server.ReceivedFrames.First().AsSpan();
         Assert.That(payload.IndexOf((byte)QwpTypeCode.Decimal64), Is.GreaterThan(0));
@@ -862,6 +859,7 @@ public class QwpWebSocketSenderTests
         ws.ColumnDecimal256("p", -1m);
         sender.At(DateTime.UtcNow);
         await sender.SendAsync();
+        await ws.PingAsync();
 
         var payload = server.ReceivedFrames.First().AsSpan();
         Assert.That(payload.IndexOf((byte)QwpTypeCode.Decimal256), Is.GreaterThan(0));
@@ -878,6 +876,7 @@ public class QwpWebSocketSenderTests
         ws.ColumnBinary("blob", new byte[] { 0x10, 0x20, 0x30 });
         sender.At(DateTime.UtcNow);
         await sender.SendAsync();
+        await ws.PingAsync();
 
         var payload = server.ReceivedFrames.First().AsSpan();
         Assert.That(payload.IndexOf((byte)QwpTypeCode.Binary), Is.GreaterThan(0));
@@ -894,6 +893,7 @@ public class QwpWebSocketSenderTests
         ws.ColumnIPv4("ip", System.Net.IPAddress.Parse("1.2.3.4"));
         sender.At(DateTime.UtcNow);
         await sender.SendAsync();
+        await ws.PingAsync();
 
         var payload = server.ReceivedFrames.First().AsSpan();
         Assert.That(payload.IndexOf((byte)QwpTypeCode.IPv4), Is.GreaterThan(0));
@@ -1020,10 +1020,12 @@ public class QwpWebSocketSenderTests
             FrameHandler = _ => BuildErrorAck(QwpStatusCode.WriteError, 0, "boom"),
         });
         await server.StartAsync();
-        using var sender = NewSender(server, "auto_flush=off;");
+        using var sender = NewSender(server, "auto_flush=off;on_server_error=halt;");
+        var qwp = (IQwpWebSocketSender)sender;
 
         sender.Table("t").Column("v", 1L).At(DateTime.UtcNow);
-        try { sender.Send(); } catch { /* expected terminal */ }
+        sender.Send();
+        try { await qwp.PingAsync(); } catch { /* expected terminal */ }
 
         Assert.Throws<IngressError>(() => sender.Truncate());
         Assert.Throws<IngressError>(() => sender.CancelRow());

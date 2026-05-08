@@ -60,6 +60,7 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient
     private ZstdSharp.Decompressor? _decompressor;
     private long _nextRequestId;
     private long _currentRequestId = -1;
+    private long _pendingCreditBytes;
     private int _disposed;
     private int _terminal;
     private int _cancelRequested;
@@ -169,6 +170,7 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient
             {
                 var requestId = Interlocked.Increment(ref _nextRequestId);
                 Interlocked.Exchange(ref _currentRequestId, requestId);
+                _pendingCreditBytes = 0;
                 try
                 {
                     await SendQueryRequestAsync(requestId, sql, sqlByteCount, _options.initial_credit, bindBlob, bindCount, ct)
@@ -629,12 +631,16 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient
                             .ConfigureAwait(false);
                         throw;
                     }
-                    // Credit replenishes only after the handler returns ("done with this buffer"
-                    // semantics for byte-credit flow control).
                     if (_options.initial_credit > 0)
                     {
-                        await SendCreditAsync(batchRid, batchBytes + QwpConstants.HeaderSize, ct)
-                            .ConfigureAwait(false);
+                        _pendingCreditBytes += batchBytes + QwpConstants.HeaderSize;
+                        var threshold = Math.Max(1L, _options.initial_credit / 2);
+                        if (_pendingCreditBytes >= threshold)
+                        {
+                            var toReturn = _pendingCreditBytes;
+                            _pendingCreditBytes = 0;
+                            await SendCreditAsync(batchRid, toReturn, ct).ConfigureAwait(false);
+                        }
                     }
                     break;
 

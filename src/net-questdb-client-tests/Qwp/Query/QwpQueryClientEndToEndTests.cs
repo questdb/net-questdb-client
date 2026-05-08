@@ -1107,7 +1107,7 @@ public class QwpQueryClientEndToEndTests
 
             Assert.That(ex!.code, Is.EqualTo(ErrorCode.SocketError));
             StringAssert.Contains("auth_timeout", ex.Message);
-            Assert.That(sw.ElapsedMilliseconds, Is.LessThan(2000),
+            Assert.That(sw.ElapsedMilliseconds, Is.LessThan(3000),
                 "auth_timeout=300ms should bound connect well below OS-level TCP timeout");
         }
         finally

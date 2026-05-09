@@ -138,7 +138,7 @@ internal static class QwpEgressFrameBuilder
 #endif
 
     public static byte[] BuildServerInfo(byte role, ulong epoch, uint capabilities, long serverWallNs,
-        string clusterId, string nodeId)
+        string clusterId, string nodeId, string? zoneId = null)
     {
         var clusterBytes = Encoding.UTF8.GetBytes(clusterId);
         var nodeBytes = Encoding.UTF8.GetBytes(nodeId);
@@ -152,6 +152,12 @@ internal static class QwpEgressFrameBuilder
         payload.Write(clusterBytes, 0, clusterBytes.Length);
         WriteU16Le(payload, (ushort)nodeBytes.Length);
         payload.Write(nodeBytes, 0, nodeBytes.Length);
+        if ((capabilities & QwpConstants.CapZone) != 0)
+        {
+            var zoneBytes = Encoding.UTF8.GetBytes(zoneId ?? string.Empty);
+            WriteU16Le(payload, (ushort)zoneBytes.Length);
+            payload.Write(zoneBytes, 0, zoneBytes.Length);
+        }
         return WrapFrame(flags: 0, tableCount: 0, payload.ToArray());
     }
 

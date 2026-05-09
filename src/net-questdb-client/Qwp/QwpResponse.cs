@@ -129,12 +129,6 @@ internal readonly struct QwpResponse
             return ParseDurableAck(frame);
         }
 
-        if (!IsKnownErrorStatus(status))
-        {
-            throw new IngressError(ErrorCode.ProtocolVersionError,
-                $"QWP response carries unknown status code 0x{statusByte:X2}");
-        }
-
         return ParseError(status, frame);
     }
 
@@ -268,12 +262,4 @@ internal readonly struct QwpResponse
         return entries;
     }
 
-    private static bool IsKnownErrorStatus(QwpStatusCode status)
-    {
-        return status is QwpStatusCode.SchemaMismatch
-            or QwpStatusCode.ParseError
-            or QwpStatusCode.InternalError
-            or QwpStatusCode.SecurityError
-            or QwpStatusCode.WriteError;
-    }
 }

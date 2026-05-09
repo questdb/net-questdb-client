@@ -85,6 +85,26 @@ public class QueryOptionsTests
     }
 
     [Test]
+    public void Parse_Zone_SetsZone()
+    {
+        var o = new QueryOptions("ws::addr=h:9000;zone=eu-west-1a;");
+        Assert.That(o.zone, Is.EqualTo("eu-west-1a"));
+    }
+
+    [Test]
+    public void Parse_Zone_DefaultIsNull()
+    {
+        var o = new QueryOptions("ws::addr=h:9000;");
+        Assert.That(o.zone, Is.Null);
+    }
+
+    [Test]
+    public void Parse_Zone_RejectsControlChars()
+    {
+        Assert.Throws<IngressError>(() => new QueryOptions("ws::addr=h:9000;zone=eu\nwest;"));
+    }
+
+    [Test]
     public void Parse_Wss_SwitchesProtocol()
     {
         var o = new QueryOptions("wss::addr=secure.host:443;");

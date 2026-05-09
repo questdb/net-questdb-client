@@ -171,6 +171,10 @@ public sealed class DummyQwpServer : IAsyncDisposable
             {
                 ctx.Response.Headers["X-QuestDB-Role"] = role;
             }
+            if (_options.RejectUpgradeZoneHeader is { Length: > 0 } zone)
+            {
+                ctx.Response.Headers["X-QuestDB-Zone"] = zone;
+            }
             await ctx.Response.WriteAsync("rejected by test").ConfigureAwait(false);
             return;
         }
@@ -276,6 +280,9 @@ public sealed class DummyQwpServerOptions
 
     /// <summary>Optional <c>X-QuestDB-Role</c> header value attached to a rejection response (used with 503 to test role-aware failover).</summary>
     public string? RejectUpgradeRoleHeader { get; init; }
+
+    /// <summary>Optional <c>X-QuestDB-Zone</c> header value attached to a 421 rejection response.</summary>
+    public string? RejectUpgradeZoneHeader { get; init; }
 
     /// <summary>Optional <c>X-QuestDB-Role</c> header value attached to a successful 101 response (diagnostic / tests).</summary>
     public string? RoleHeader { get; init; }

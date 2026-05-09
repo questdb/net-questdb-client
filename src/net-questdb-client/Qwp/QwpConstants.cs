@@ -160,6 +160,9 @@ internal static class QwpConstants
     public const byte RoleReplica = 0x02;
     public const byte RolePrimaryCatchup = 0x03;
 
+    /// <summary>SERVER_INFO capabilities bits. <c>CapZone</c> = server appends zone_id_len+zone_id after node_id.</summary>
+    public const uint CapZone = 0x00000001;
+
     /// <summary>QWP egress status codes (in QUERY_ERROR frames). No STATUS_OK — egress success is RESULT_END.</summary>
     public const byte StatusSchemaMismatch = 0x03;
     public const byte StatusParseError = 0x05;
@@ -230,6 +233,9 @@ internal static class QwpConstants
 
     /// <summary>Server → client: replication role on 101 (diagnostic) and 421 (role-reject) responses.</summary>
     public const string HeaderQuestDbRole = "X-QuestDB-Role";
+
+    /// <summary>Server → client: zone identifier on 421 (role-reject) responses; companion to <c>SERVER_INFO.zone_id</c>.</summary>
+    public const string HeaderQuestDbZone = "X-QuestDB-Zone";
 
     public const string RoleStandaloneName = "STANDALONE";
     public const string RolePrimaryName = "PRIMARY";

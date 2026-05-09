@@ -177,4 +177,105 @@ public class QwpHostHealthTrackerTests
         t.RecordTransportError(1);
         Assert.That(t.PickNext(), Is.EqualTo(-1));
     }
+
+    [Test]
+    public void ZoneTier_DefaultsToSame_WhenClientZoneUnset()
+    {
+        var t = new QwpHostHealthTracker(new[] { "a", "b" });
+        Assert.That(t.GetZoneTier(0), Is.EqualTo(QwpZoneTier.Same));
+        Assert.That(t.GetZoneTier(1), Is.EqualTo(QwpZoneTier.Same));
+    }
+
+    [Test]
+    public void ZoneTier_DefaultsToSame_WhenTargetIsPrimary()
+    {
+        var t = new QwpHostHealthTracker(new[] { "a", "b" }, clientZone: "us-east-1", targetIsPrimary: true);
+        Assert.That(t.GetZoneTier(0), Is.EqualTo(QwpZoneTier.Same));
+    }
+
+    [Test]
+    public void ZoneTier_DefaultsToUnknown_WhenZoneSetAndNotPrimary()
+    {
+        var t = new QwpHostHealthTracker(new[] { "a", "b" }, clientZone: "us-east-1", targetIsPrimary: false);
+        Assert.That(t.GetZoneTier(0), Is.EqualTo(QwpZoneTier.Unknown));
+        Assert.That(t.GetZoneTier(1), Is.EqualTo(QwpZoneTier.Unknown));
+    }
+
+    [Test]
+    public void RecordZone_MatchingClientZone_MapsToSame()
+    {
+        var t = new QwpHostHealthTracker(new[] { "a", "b" }, clientZone: "us-east-1", targetIsPrimary: false);
+        t.RecordZone(0, "US-EAST-1");
+        Assert.That(t.GetZoneTier(0), Is.EqualTo(QwpZoneTier.Same));
+    }
+
+    [Test]
+    public void RecordZone_DifferentZone_MapsToOther()
+    {
+        var t = new QwpHostHealthTracker(new[] { "a", "b" }, clientZone: "us-east-1", targetIsPrimary: false);
+        t.RecordZone(0, "us-west-2");
+        Assert.That(t.GetZoneTier(0), Is.EqualTo(QwpZoneTier.Other));
+    }
+
+    [Test]
+    public void RecordZone_NullOrEmpty_IsNoOp()
+    {
+        var t = new QwpHostHealthTracker(new[] { "a", "b" }, clientZone: "us-east-1", targetIsPrimary: false);
+        t.RecordZone(0, "us-east-1");
+        t.RecordZone(0, null);
+        t.RecordZone(0, "");
+        Assert.That(t.GetZoneTier(0), Is.EqualTo(QwpZoneTier.Same));
+    }
+
+    [Test]
+    public void RecordZone_CollapsesToSame_WhenTargetIsPrimary()
+    {
+        var t = new QwpHostHealthTracker(new[] { "a", "b" }, clientZone: "us-east-1", targetIsPrimary: true);
+        t.RecordZone(0, "us-west-2");
+        Assert.That(t.GetZoneTier(0), Is.EqualTo(QwpZoneTier.Same));
+    }
+
+    [Test]
+    public void PickNext_PrefersSameZoneOverOtherZone_WithinSameState()
+    {
+        var t = new QwpHostHealthTracker(new[] { "a", "b" }, clientZone: "us-east-1", targetIsPrimary: false);
+        t.RecordZone(0, "us-west-2");
+        t.RecordZone(1, "us-east-1");
+        Assert.That(t.PickNext(), Is.EqualTo(1));
+    }
+
+    [Test]
+    public void PickNext_StateOutranksZone()
+    {
+        var t = new QwpHostHealthTracker(new[] { "a", "b" }, clientZone: "us-east-1", targetIsPrimary: false);
+        t.RecordZone(0, "us-west-2");
+        t.RecordSuccess(0);
+        t.RecordZone(1, "us-east-1");
+        t.BeginRound(forgetClassifications: false);
+        Assert.That(t.PickNext(), Is.EqualTo(0));
+    }
+
+    [Test]
+    public void BeginRound_ForgetClassifications_PreservesOnlySameZoneHealthy()
+    {
+        var t = new QwpHostHealthTracker(new[] { "a", "b" }, clientZone: "us-east-1", targetIsPrimary: false);
+        t.RecordZone(0, "us-west-2");
+        t.RecordZone(1, "us-east-1");
+        t.RecordSuccess(0);
+        t.RecordSuccess(1);
+        t.BeginRound(forgetClassifications: true);
+        Assert.That(t.GetState(0), Is.EqualTo(QwpHostState.Unknown));
+        Assert.That(t.GetState(1), Is.EqualTo(QwpHostState.Healthy));
+    }
+
+    [Test]
+    public void ZoneTier_PersistsAcrossBeginRound()
+    {
+        var t = new QwpHostHealthTracker(new[] { "a", "b" }, clientZone: "us-east-1", targetIsPrimary: false);
+        t.RecordZone(0, "us-east-1");
+        t.RecordZone(1, "us-west-2");
+        t.BeginRound(forgetClassifications: true);
+        Assert.That(t.GetZoneTier(0), Is.EqualTo(QwpZoneTier.Same));
+        Assert.That(t.GetZoneTier(1), Is.EqualTo(QwpZoneTier.Other));
+    }
 }

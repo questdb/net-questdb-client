@@ -74,16 +74,10 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient
     {
         _options = options;
         _decoder = new QwpResultBatchDecoder(_connState);
-        var walkOrder = new List<string>(options.addresses);
-        if (options.lb_strategy == LoadBalanceStrategy.random && walkOrder.Count > 1)
-        {
-            for (var i = walkOrder.Count - 1; i > 0; i--)
-            {
-                var j = Random.Shared.Next(i + 1);
-                (walkOrder[i], walkOrder[j]) = (walkOrder[j], walkOrder[i]);
-            }
-        }
-        _hostTracker = new QwpHostHealthTracker(walkOrder);
+        _hostTracker = new QwpHostHealthTracker(
+            options.addresses,
+            clientZone: options.zone,
+            targetIsPrimary: options.target == TargetType.primary);
     }
 
     internal static async Task<QwpQueryWebSocketClient> CreateAsync(QueryOptions options, CancellationToken ct)
@@ -237,11 +231,9 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient
 
     private static bool IsTransportError(Exception ex)
     {
-        // ProtocolVersionError is intentionally excluded — frame-decode corruption is permanent;
-        // failing over to the next endpoint masks server bugs and burns retry budget.
         return ex switch
         {
-            IngressError ie => ie.code == ErrorCode.SocketError,
+            IngressError ie => ie.code is ErrorCode.SocketError or ErrorCode.ProtocolVersionError,
             System.Net.WebSockets.WebSocketException => true,
             IOException => true,
             ObjectDisposedException => true,
@@ -336,6 +328,11 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient
                         throw new IngressError(ErrorCode.SocketError,
                             $"SERVER_INFO read for {addr} exceeded {ServerInfoReadTimeout.TotalMilliseconds}ms");
                     }
+
+                    if (info is not null && (info.Capabilities & QwpConstants.CapZone) != 0)
+                    {
+                        _hostTracker.RecordZone(idx, info.ZoneId);
+                    }
                 }
                 else
                 {
@@ -378,6 +375,7 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient
                 anyRoleMismatch = true;
                 lastInfo = SynthesiseRoleRejectInfo(ex);
                 lastError = ex;
+                _hostTracker.RecordZone(idx, ex.Zone);
                 _hostTracker.RecordRoleReject(idx, ex.IsTransient);
                 candidate?.Dispose();
             }
@@ -561,6 +559,7 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient
             QwpConstants.RolePrimaryCatchupName => QwpConstants.RolePrimaryCatchup,
             _ => byte.MaxValue,
         },
+        ZoneId = ex.Zone,
     };
 
     // v1 server (no SERVER_INFO) only matches target=any; primary/replica must skip it.
@@ -989,12 +988,32 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient
         {
             throw new IngressError(ErrorCode.ProtocolVersionError, "SERVER_INFO truncated at node_id");
         }
-        if (s.Length != nodeIdStart + nodeIdLen)
+        var nodeId = StrictUtf8.GetString(s.Slice(nodeIdStart, nodeIdLen));
+        var consumed = nodeIdStart + nodeIdLen;
+
+        string? zoneId = null;
+        if ((capabilities & QwpConstants.CapZone) != 0)
+        {
+            if (s.Length < consumed + 2)
+            {
+                throw new IngressError(ErrorCode.ProtocolVersionError,
+                    "SERVER_INFO truncated at zone_id_len (CAP_ZONE set)");
+            }
+            var zoneIdLen = BinaryPrimitives.ReadUInt16LittleEndian(s.Slice(consumed, 2));
+            consumed += 2;
+            if (s.Length < consumed + zoneIdLen)
+            {
+                throw new IngressError(ErrorCode.ProtocolVersionError, "SERVER_INFO truncated at zone_id");
+            }
+            zoneId = StrictUtf8.GetString(s.Slice(consumed, zoneIdLen));
+            consumed += zoneIdLen;
+        }
+
+        if (s.Length != consumed)
         {
             throw new IngressError(ErrorCode.ProtocolVersionError,
-                $"SERVER_INFO length mismatch: consumed {nodeIdStart + nodeIdLen}, payload {s.Length}");
+                $"SERVER_INFO length mismatch: consumed {consumed}, payload {s.Length}");
         }
-        var nodeId = StrictUtf8.GetString(s.Slice(nodeIdStart, nodeIdLen));
 
         return new QwpServerInfo
         {
@@ -1004,6 +1023,7 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient
             ServerWallNs = serverWallNs,
             ClusterId = clusterId,
             NodeId = nodeId,
+            ZoneId = zoneId,
         };
     }
 

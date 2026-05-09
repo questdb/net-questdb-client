@@ -36,13 +36,14 @@ namespace QuestDB.Qwp;
 /// </summary>
 public sealed class QwpIngressRoleRejectedException : IngressError
 {
-    public QwpIngressRoleRejectedException(string role, Uri uri, Exception? innerException = null)
+    public QwpIngressRoleRejectedException(string role, Uri uri, string? zone = null, Exception? innerException = null)
         : base(ErrorCode.SocketError,
             $"WebSocket ingress upgrade rejected by role={role} at {uri}",
             innerException)
     {
         Role = role;
         Uri = uri;
+        Zone = zone;
     }
 
     /// <summary><c>X-QuestDB-Role</c> value as advertised by the server (uppercase ASCII).</summary>
@@ -50,6 +51,12 @@ public sealed class QwpIngressRoleRejectedException : IngressError
 
     /// <summary>The endpoint that returned the role-reject response.</summary>
     public Uri Uri { get; }
+
+    /// <summary>
+    ///     <c>X-QuestDB-Zone</c> value advertised by the server on the <c>421</c> response (case-insensitive
+    ///     identifier such as <c>eu-west-1a</c>); <c>null</c> when the header was absent or empty.
+    /// </summary>
+    public string? Zone { get; }
 
     /// <summary>
     ///     <c>true</c> when the role indicates a transient promotion-in-progress state

@@ -566,7 +566,7 @@ internal sealed class QwpCursorSendEngine : IDisposable
                     return;
                 }
                 catch (IngressError ex) when (
-                    ex.code is ErrorCode.AuthError or ErrorCode.ProtocolVersionError
+                    ex.code is ErrorCode.AuthError
                     && ex is not QwpIngressRoleRejectedException)
                 {
                     SetTerminal(ex);
@@ -1052,13 +1052,11 @@ internal sealed class QwpCursorSendEngine : IDisposable
             : new IngressError(code, "QWP cursor engine has terminally failed; see inner exception", inner);
     }
 
-    // QwpException carries a server status code; per spec these are application-layer rejects
-    // that replay cannot fix. AuthError / ProtocolVersionError are likewise non-retryable.
     private static bool IsTerminalServerError(Exception ex)
     {
         return ex is QwpException
             || ex is HaltCarrier
-            || (ex is IngressError ie && ie.code is ErrorCode.AuthError or ErrorCode.ProtocolVersionError);
+            || (ex is IngressError ie && ie.code is ErrorCode.AuthError);
     }
 
     private sealed class HaltCarrier : Exception

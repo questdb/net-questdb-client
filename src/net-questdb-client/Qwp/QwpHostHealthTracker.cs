@@ -36,25 +36,20 @@ internal enum QwpHostState
     TopologyReject,
 }
 
+internal enum QwpZoneTier
+{
+    Same,
+    Unknown,
+    Other,
+}
+
 /// <summary>
-///     Per-sender bookkeeping that ranks the configured <c>addr=</c> list when
-///     selecting the next endpoint to try. Classifications are populated from
-///     the outcome of each connect attempt: a <c>421 + X-QuestDB-Role:
-///     PRIMARY_CATCHUP</c> reject becomes <see cref="QwpHostState.TransientReject" />,
-///     a <c>REPLICA</c> reject becomes <see cref="QwpHostState.TopologyReject" />,
-///     any other transport failure becomes <see cref="QwpHostState.TransportError" />,
-///     and a successful upgrade becomes <see cref="QwpHostState.Healthy" />.
-///     <para>
-///         Within a round, <see cref="PickNext" /> returns the highest-priority host
-///         that has not yet been attempted. The caller calls <see cref="BeginRound" />
-///         to clear the attempted-this-round flags either keeping classifications
-///         (sticky-recovery after a previously-healthy connection drops) or
-///         discarding them (re-evaluate after backoff completes a failed round).
-///     </para>
+///     Per-sender host-ranking bookkeeping. <see cref="PickNext" /> returns the highest-priority
+///     <c>(state, zone)</c> host not yet tried this round.
 /// </summary>
 internal sealed class QwpHostHealthTracker
 {
-    private static readonly QwpHostState[] PriorityOrder =
+    private static readonly QwpHostState[] StatePriorityOrder =
     {
         QwpHostState.Healthy,
         QwpHostState.Unknown,
@@ -63,15 +58,30 @@ internal sealed class QwpHostHealthTracker
         QwpHostState.TopologyReject,
     };
 
-    // Shared between the SF reconnect thread and drainer-pool tasks; guards _states + _attemptedThisRound.
+    private static readonly QwpZoneTier[] ZonePriorityOrder =
+    {
+        QwpZoneTier.Same,
+        QwpZoneTier.Unknown,
+        QwpZoneTier.Other,
+    };
+
+    // Shared between the SF reconnect thread and drainer-pool tasks; guards _states + _attemptedThisRound + _zoneTiers.
     private readonly object _lock = new();
     private readonly bool[] _attemptedThisRound;
     private readonly string[] _hosts;
     private readonly QwpHostState[] _states;
+    private readonly QwpZoneTier[] _zoneTiers;
     private readonly long[] _lastSuccessEpoch;
+    private readonly string? _clientZone;
+    private readonly bool _zoneCollapseToSame;
     private long _successCounter;
 
     public QwpHostHealthTracker(IReadOnlyList<string> hosts)
+        : this(hosts, clientZone: null, targetIsPrimary: false)
+    {
+    }
+
+    public QwpHostHealthTracker(IReadOnlyList<string> hosts, string? clientZone, bool targetIsPrimary)
     {
         if (hosts == null) throw new ArgumentNullException(nameof(hosts));
         if (hosts.Count == 0) throw new ArgumentException("hosts must be non-empty", nameof(hosts));
@@ -80,6 +90,12 @@ internal sealed class QwpHostHealthTracker
         _states = new QwpHostState[_hosts.Length];
         _attemptedThisRound = new bool[_hosts.Length];
         _lastSuccessEpoch = new long[_hosts.Length];
+        _zoneTiers = new QwpZoneTier[_hosts.Length];
+
+        _clientZone = string.IsNullOrEmpty(clientZone) ? null : clientZone;
+        _zoneCollapseToSame = _clientZone is null || targetIsPrimary;
+        var defaultTier = _zoneCollapseToSame ? QwpZoneTier.Same : QwpZoneTier.Unknown;
+        for (var i = 0; i < _zoneTiers.Length; i++) _zoneTiers[i] = defaultTier;
     }
 
     public int Count => _hosts.Length;
@@ -107,16 +123,29 @@ internal sealed class QwpHostHealthTracker
         lock (_lock) return _states[index];
     }
 
+    public QwpZoneTier GetZoneTier(int index)
+    {
+        lock (_lock) return _zoneTiers[index];
+    }
+
     /// <summary>Returns the highest-priority host not yet attempted this round, or -1 when exhausted.</summary>
     public int PickNext()
     {
         lock (_lock)
         {
-            foreach (var priority in PriorityOrder)
+            foreach (var statePriority in StatePriorityOrder)
             {
-                for (var i = 0; i < _hosts.Length; i++)
+                foreach (var zonePriority in ZonePriorityOrder)
                 {
-                    if (!_attemptedThisRound[i] && _states[i] == priority) return i;
+                    for (var i = 0; i < _hosts.Length; i++)
+                    {
+                        if (!_attemptedThisRound[i]
+                            && _states[i] == statePriority
+                            && _zoneTiers[i] == zonePriority)
+                        {
+                            return i;
+                        }
+                    }
                 }
             }
 
@@ -170,10 +199,25 @@ internal sealed class QwpHostHealthTracker
     }
 
     /// <summary>
-    ///     Clears the attempted-this-round flags. With <paramref name="forgetClassifications" />,
-    ///     every host except the last-known <see cref="QwpHostState.Healthy" /> entry is reset
-    ///     to <see cref="QwpHostState.Unknown" /> — the sticky-Healthy keeps the previously-good
-    ///     host first in line on the next round while letting the rest re-evaluate.
+    ///     Records the server-advertised zone for a host; null/empty is a no-op. Persists across
+    ///     <see cref="BeginRound" />.
+    /// </summary>
+    public void RecordZone(int hostIndex, string? zoneId)
+    {
+        if (string.IsNullOrEmpty(zoneId)) return;
+        lock (_lock)
+        {
+            _zoneTiers[hostIndex] = _zoneCollapseToSame
+                || string.Equals(zoneId, _clientZone, StringComparison.OrdinalIgnoreCase)
+                ? QwpZoneTier.Same
+                : QwpZoneTier.Other;
+        }
+    }
+
+    /// <summary>
+    ///     Clears the attempted-this-round flags. With <paramref name="forgetClassifications" />, also
+    ///     resets non-Healthy states to <see cref="QwpHostState.Unknown" /> while preserving the last
+    ///     same-zone <see cref="QwpHostState.Healthy" /> as sticky pick.
     /// </summary>
     public void BeginRound(bool forgetClassifications)
     {
@@ -185,7 +229,9 @@ internal sealed class QwpHostHealthTracker
                 var bestEpoch = 0L;
                 for (var i = 0; i < _hosts.Length; i++)
                 {
-                    if (_states[i] == QwpHostState.Healthy && _lastSuccessEpoch[i] > bestEpoch)
+                    if (_states[i] == QwpHostState.Healthy
+                        && _zoneTiers[i] == QwpZoneTier.Same
+                        && _lastSuccessEpoch[i] > bestEpoch)
                     {
                         bestEpoch = _lastSuccessEpoch[i];
                         stickyIndex = i;

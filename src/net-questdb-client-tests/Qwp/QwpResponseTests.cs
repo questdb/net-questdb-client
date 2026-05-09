@@ -231,12 +231,17 @@ public class QwpResponseTests
     }
 
     [Test]
-    public void Parse_UnknownStatusCode_Throws()
+    public void Parse_UnknownStatusCode_ParsesAsErrorFrame()
     {
         var frame = new byte[QwpConstants.ErrorAckHeaderSize];
-        frame[0] = 0xFE; // not a known status code.
+        frame[0] = 0xFE;
+        BinaryPrimitives.WriteInt64LittleEndian(frame.AsSpan(1, 8), 7L);
 
-        Assert.Throws<IngressError>(() => QwpResponse.Parse(frame));
+        var r = QwpResponse.Parse(frame);
+        Assert.That((byte)r.Status, Is.EqualTo(0xFE));
+        Assert.That(r.Sequence, Is.EqualTo(7L));
+        Assert.That(r.IsOk, Is.False);
+        Assert.That(r.IsDurableAck, Is.False);
     }
 
     [Test]

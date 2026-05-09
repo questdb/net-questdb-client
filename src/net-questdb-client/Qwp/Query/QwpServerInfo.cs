@@ -39,6 +39,12 @@ public sealed class QwpServerInfo
     public string ClusterId { get; init; } = string.Empty;
     /// <summary>Node identifier within the cluster.</summary>
     public string NodeId { get; init; } = string.Empty;
+    /// <summary>
+    ///     Server-advertised zone identifier; non-null only when <see cref="Capabilities" /> has the
+    ///     <see cref="QwpConstants.CapZone" /> bit set. Compared case-insensitively against the client's
+    ///     configured <c>zone=</c> for same-zone routing preference.
+    /// </summary>
+    public string? ZoneId { get; init; }
 
     /// <summary>Human-readable name of <see cref="Role" />; <c>UNKNOWN(n)</c> for unrecognised codes.</summary>
     public string RoleName => Role switch

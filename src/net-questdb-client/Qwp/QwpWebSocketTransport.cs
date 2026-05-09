@@ -153,7 +153,8 @@ internal sealed class QwpWebSocketTransport : IQwpCursorTransport
                 var role = ReadOptionalHeader(QwpConstants.HeaderQuestDbRole);
                 if (!string.IsNullOrEmpty(role))
                 {
-                    throw new QwpIngressRoleRejectedException(role!, _options.Uri!, ex);
+                    var zone = ReadOptionalHeader(QwpConstants.HeaderQuestDbZone);
+                    throw new QwpIngressRoleRejectedException(role!, _options.Uri!, zone, ex);
                 }
             }
 
@@ -178,7 +179,9 @@ internal sealed class QwpWebSocketTransport : IQwpCursorTransport
         if (headers is null || !headers.TryGetValue(name, out var values)) return null;
         foreach (var v in values)
         {
-            if (!string.IsNullOrEmpty(v)) return v;
+            if (string.IsNullOrEmpty(v)) continue;
+            var trimmed = v.Trim();
+            if (trimmed.Length > 0) return trimmed;
         }
         return null;
     }

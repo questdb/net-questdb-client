@@ -56,7 +56,7 @@ public sealed class QueryOptions
         "failover_backoff_initial_ms", "failover_backoff_max_ms",
         "failover_max_duration_ms",
         "auth_timeout_ms",
-        "lb_strategy",
+        "zone",
         "max_batch_rows",
         "client_id",
         "buffer_pool_size",
@@ -165,8 +165,6 @@ public sealed class QueryOptions
 
     /// <summary>Server-side target preference forwarded with the upgrade request.</summary>
     public TargetType target { get; set; } = TargetType.any;
-    /// <summary>Initial address-pick strategy across the configured endpoints.</summary>
-    public LoadBalanceStrategy lb_strategy { get; set; } = LoadBalanceStrategy.random;
     /// <summary>Whether to retry against alternative addresses on connect failure.</summary>
     public bool failover { get; set; } = true;
     /// <summary>Cap on consecutive failover attempts before surfacing the underlying error.</summary>
@@ -179,6 +177,14 @@ public sealed class QueryOptions
     public TimeSpan failover_max_duration_ms { get; set; } = TimeSpan.FromSeconds(30);
     /// <summary>Per-endpoint timeout applied to the WebSocket upgrade (TCP+TLS+HTTP+SERVER_INFO). Without this, an unreachable address can block on OS-level TCP timeouts (~21s Linux, ~75s macOS).</summary>
     public TimeSpan auth_timeout_ms { get; set; } = TimeSpan.FromSeconds(15);
+
+    /// <summary>
+    ///     Client zone identifier (opaque, case-insensitive; e.g. <c>eu-west-1a</c>). When set with
+    ///     <c>target=any</c> or <c>target=replica</c>, prefers endpoints whose server-advertised
+    ///     <c>zone_id</c> matches. Ignored when <c>target=primary</c> (writers follow the master across
+    ///     zones).
+    /// </summary>
+    public string? zone { get; set; }
 
     /// <summary>Optional cap on rows per decoded batch; <c>0</c> defers to the server's batch size.</summary>
     public int max_batch_rows { get; set; }
@@ -216,6 +222,7 @@ public sealed class QueryOptions
         RejectControlChars(nameof(auth), auth);
         RejectControlChars(nameof(client_id), client_id);
         RejectControlChars(nameof(path), path);
+        RejectControlChars(nameof(zone), zone);
     }
 
     private void Parse(string connStr)
@@ -306,7 +313,6 @@ public sealed class QueryOptions
         compression_level = ReadInt(builder, "compression_level", 3);
 
         target = ReadEnum(builder, "target", TargetType.any);
-        lb_strategy = ReadEnum(builder, "lb_strategy", LoadBalanceStrategy.random);
         failover = ReadBoolOnOff(builder, "failover", true);
         failover_max_attempts = ReadInt(builder, "failover_max_attempts", 8);
         failover_backoff_initial_ms = TimeSpan.FromMilliseconds(
@@ -317,6 +323,7 @@ public sealed class QueryOptions
             ReadInt(builder, "failover_max_duration_ms", 30000));
         auth_timeout_ms = TimeSpan.FromMilliseconds(
             ReadInt(builder, "auth_timeout_ms", 15000));
+        zone = ReadString(builder, "zone");
 
         if (builder.ContainsKey("max_batch_rows"))
         {

@@ -437,6 +437,61 @@ public class QwpWebSocketSenderTests
             Sender.New($"wss::addr=127.0.0.1:{port};tls_verify=on;auto_flush=off;"));
     }
 
+    [TestCase(System.Net.WebSockets.WebSocketCloseStatus.ProtocolError)]
+    [TestCase(System.Net.WebSockets.WebSocketCloseStatus.InvalidMessageType)]
+    [TestCase(System.Net.WebSockets.WebSocketCloseStatus.InvalidPayloadData)]
+    [TestCase(System.Net.WebSockets.WebSocketCloseStatus.PolicyViolation)]
+    [TestCase(System.Net.WebSockets.WebSocketCloseStatus.MessageTooBig)]
+    [TestCase(System.Net.WebSockets.WebSocketCloseStatus.MandatoryExtension)]
+    public async Task ServerClosesWithProtocolViolation_TerminatesWithoutReconnect(
+        System.Net.WebSockets.WebSocketCloseStatus status)
+    {
+        await using var server = new DummyQwpServer(new DummyQwpServerOptions
+        {
+            FrameHandler = _ => BuildOkAck(0),
+            CloseAfterFrameCount = 1,
+            CloseStatus = status,
+            CloseReason = "boom",
+        });
+        await server.StartAsync();
+
+        using var sender = NewSender(server,
+            "auto_flush=off;reconnect_initial_backoff_millis=10;reconnect_max_backoff_millis=50;reconnect_max_duration_millis=5000;");
+        sender.Table("t").Column("v", 1L).At(DateTime.UtcNow);
+        sender.Send();
+
+        await WaitFor(() => server.ReceivedFrames.Count >= 1);
+
+        // Once the protocol-violation close hits the engine, the next API call must surface a
+        // terminal IngressError carrying ProtocolViolation — without sitting in reconnect.
+        IngressError? caught = null;
+        await WaitFor(() =>
+        {
+            try
+            {
+                sender.Table("t").Column("v", 2L).At(DateTime.UtcNow);
+                sender.Send();
+                return false;
+            }
+            catch (IngressError ex)
+            {
+                caught = ex;
+                return true;
+            }
+        }, timeoutMs: 5000);
+
+        Assert.That(caught, Is.Not.Null);
+        var rootCode = caught!.code is ErrorCode.ProtocolViolation
+            ? caught.code
+            : (caught.InnerException as IngressError)?.code ?? caught.code;
+        Assert.That(rootCode, Is.EqualTo(ErrorCode.ProtocolViolation));
+
+        // No reconnect attempts: the engine must terminate after the single upgrade. Frame count
+        // races with the in-flight close so isn't a stable signal — UpgradeCount is.
+        await Task.Delay(200);
+        Assert.That(server.UpgradeCount, Is.EqualTo(1));
+    }
+
     [Test]
     public async Task ServerClosesAfterFirstFrame_ReconnectsThenTerminalAfterBudget()
     {

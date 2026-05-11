@@ -228,12 +228,7 @@ internal sealed class QwpWebSocketTransport : IQwpCursorTransport
 
             if (result.MessageType == WebSocketMessageType.Close)
             {
-                var ec = _client.CloseStatus == WebSocketCloseStatus.PolicyViolation
-                    ? ErrorCode.AuthError
-                    : ErrorCode.SocketError;
-                throw new IngressError(
-                    ec,
-                    $"server closed the WebSocket: {_client.CloseStatus} {_client.CloseStatusDescription}");
+                throw MapCloseToException();
             }
 
             if (result.MessageType != WebSocketMessageType.Binary)
@@ -289,12 +284,7 @@ internal sealed class QwpWebSocketTransport : IQwpCursorTransport
 
             if (result.MessageType == WebSocketMessageType.Close)
             {
-                var ec = _client.CloseStatus == WebSocketCloseStatus.PolicyViolation
-                    ? ErrorCode.AuthError
-                    : ErrorCode.SocketError;
-                throw new IngressError(
-                    ec,
-                    $"server closed the WebSocket: {_client.CloseStatus} {_client.CloseStatusDescription}");
+                throw MapCloseToException();
             }
 
             if (result.MessageType != WebSocketMessageType.Binary)
@@ -312,6 +302,21 @@ internal sealed class QwpWebSocketTransport : IQwpCursorTransport
                 return (totalRead, buffer);
             }
         }
+    }
+
+    // Protocol-violation close codes are terminal: replaying the same bytes against a fresh
+    // connection would just re-trigger the close. Everything else routes to the reconnect loop.
+    private IngressError MapCloseToException()
+    {
+        var status = _client.CloseStatus ?? WebSocketCloseStatus.Empty;
+        var reason = _client.CloseStatusDescription;
+        if (QwpProtocolViolationException.IsProtocolViolationCode(status))
+        {
+            return new QwpProtocolViolationException(status, reason);
+        }
+        return new IngressError(
+            ErrorCode.SocketError,
+            $"server closed the WebSocket: {status} {reason}");
     }
 
     /// <summary>

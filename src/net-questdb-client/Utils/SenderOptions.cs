@@ -446,11 +446,11 @@ public record SenderOptions
         ValidateTimeouts();
         ValidateWebSocketKeys();
         ValidateWebSocketKeysAgainstDefaults();
-        ValidateInitialConnectModeRequiresSf();
+        ValidateErrorInboxCapacity();
         ApplyAutoFlushNormalisation();
     }
 
-    private void ValidateInitialConnectModeRequiresSf()
+    private void ValidateErrorInboxCapacity()
     {
         if (_errorInboxCapacity < 1)
         {
@@ -670,7 +670,7 @@ public record SenderOptions
     ///     Populated from <c>addr=h1:p1,h2:p2,...</c>. Supported on every protocol; the list is
     ///     never empty. For ws/wss the sender walks the list with role-aware skipping
     ///     (<c>REPLICA</c> and <c>PRIMARY_CATCHUP</c> upgrade rejections are detected via
-    ///     <c>503</c> + <c>X-QuestDB-Role</c> and rotated past).
+    ///     <c>421 Misdirected Request</c> + <c>X-QuestDB-Role</c> and rotated past).
     /// </remarks>
     [JsonIgnore]
     public IReadOnlyList<string> addresses => _addresses.AsReadOnly();

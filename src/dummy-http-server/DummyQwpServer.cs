@@ -117,6 +117,11 @@ public sealed class DummyQwpServer : IAsyncDisposable
     /// <summary>Headers from the last WebSocket upgrade request, set after the upgrade completes.</summary>
     public IDictionary<string, string>? LastUpgradeHeaders { get; private set; }
 
+    /// <summary>Count of WebSocket upgrades the server has accepted. Useful for asserting no reconnect.</summary>
+    public int UpgradeCount => Volatile.Read(ref _upgradeCount);
+
+    private int _upgradeCount;
+
     /// <summary>Starts the host and binds to its random port.</summary>
     public async Task StartAsync(CancellationToken ct = default)
     {
@@ -156,6 +161,7 @@ public sealed class DummyQwpServer : IAsyncDisposable
         // Capture the upgrade headers before the handshake runs.
         LastUpgradeHeaders = ctx.Request.Headers
             .ToDictionary(kvp => kvp.Key, kvp => kvp.Value.ToString(), StringComparer.OrdinalIgnoreCase);
+        Interlocked.Increment(ref _upgradeCount);
 
         // The X-QWP-Version response header is set on Response.Headers BEFORE accepting; the
         // accept call writes the 101 response.
@@ -278,7 +284,7 @@ public sealed class DummyQwpServerOptions
     /// <summary>If set, the server returns this HTTP status during the upgrade and never opens the WebSocket.</summary>
     public HttpStatusCode? RejectUpgradeWith { get; init; }
 
-    /// <summary>Optional <c>X-QuestDB-Role</c> header value attached to a rejection response (used with 503 to test role-aware failover).</summary>
+    /// <summary>Optional <c>X-QuestDB-Role</c> header value attached to a rejection response (paired with 421 Misdirected Request to test role-aware failover).</summary>
     public string? RejectUpgradeRoleHeader { get; init; }
 
     /// <summary>Optional <c>X-QuestDB-Zone</c> header value attached to a 421 rejection response.</summary>

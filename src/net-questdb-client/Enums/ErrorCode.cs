@@ -97,4 +97,11 @@ public enum ErrorCode
     ///     Bad configuration.
     /// </summary>
     InvalidArrayShapeError,
+
+    /// <summary>
+    ///     The server closed the WebSocket with a protocol-violation code
+    ///     (RFC 6455 1002 / 1003 / 1007 / 1008 / 1009 / 1010). Terminal; the
+    ///     cursor engine must not reconnect.
+    /// </summary>
+    ProtocolViolation,
 }

@@ -660,6 +660,11 @@ internal sealed class QwpCursorSendEngine : IDisposable
                     SetTerminal(hc.Wire, hc.SenderError);
                     return;
                 }
+                catch (QwpProtocolViolationException ex)
+                {
+                    SetTerminal(ex, BuildProtocolViolationError(ex));
+                    return;
+                }
                 catch (Exception ex) when (IsTerminalServerError(ex))
                 {
                     SetTerminal(ex);
@@ -725,9 +730,14 @@ internal sealed class QwpCursorSendEngine : IDisposable
         {
         }
 
-        // Prefer a faulted task over WhenAny's winner: if recv faulted with QwpException and send
-        // completed via cancellation, IsTerminalServerError must see the recv exception.
-        var fault = sendTask.Exception?.GetBaseException() ?? recvTask.Exception?.GetBaseException();
+        // Both pumps can fault simultaneously when the server closes the socket: recv sees the
+        // CLOSE frame while send's in-flight write fails with a generic transport error. Prefer
+        // the terminal fault so QwpProtocolViolationException / QwpException don't get masked
+        // by the concurrent send-side WebSocketException, which would otherwise route through
+        // the transient reconnect path.
+        var sendFault = sendTask.Exception?.GetBaseException();
+        var recvFault = recvTask.Exception?.GetBaseException();
+        var fault = PickTerminalFault(sendFault, recvFault) ?? sendFault ?? recvFault;
         if (fault is not null)
         {
             throw fault;
@@ -976,6 +986,31 @@ internal sealed class QwpCursorSendEngine : IDisposable
             exception: error,
             isInitialConnect: isInitialConnect);
 
+    private SenderError BuildProtocolViolationError(QwpProtocolViolationException error)
+    {
+        long fromFsn, toFsn;
+        lock (_stateLock)
+        {
+            // _ackedFsn is the first un-acked FSN; the highest published FSN is NextFsn - 1.
+            // A fully-drained slot leaves fromFsn > toFsn — by convention, an empty span.
+            fromFsn = _ackedFsn;
+            toFsn = _ring.NextFsn - 1L;
+        }
+
+        return new SenderError(
+            category: SenderErrorCategory.ProtocolViolation,
+            appliedPolicy: SenderErrorPolicy.Halt,
+            serverStatusByte: SenderError.NoStatusByte,
+            serverMessage: error.Message,
+            messageSequence: SenderError.NoMessageSequence,
+            fromFsn: fromFsn,
+            toFsn: toFsn,
+            tableName: null,
+            detectedAtUtc: DateTime.UtcNow,
+            exception: error,
+            isInitialConnect: !_seenFirstConnect);
+    }
+
     /// <summary>
     ///     Completes when the engine has either successfully established its first connection or
     ///     reached a terminal state. Used by SF mode <see cref="InitialConnectMode.off" /> and
@@ -1055,8 +1090,16 @@ internal sealed class QwpCursorSendEngine : IDisposable
     private static bool IsTerminalServerError(Exception ex)
     {
         return ex is QwpException
+            || ex is QwpProtocolViolationException
             || ex is HaltCarrier
             || (ex is IngressError ie && ie.code is ErrorCode.AuthError);
+    }
+
+    private static Exception? PickTerminalFault(Exception? a, Exception? b)
+    {
+        if (a is not null && IsTerminalServerError(a)) return a;
+        if (b is not null && IsTerminalServerError(b)) return b;
+        return null;
     }
 
     private sealed class HaltCarrier : Exception

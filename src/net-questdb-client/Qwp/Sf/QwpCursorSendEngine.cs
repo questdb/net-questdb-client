@@ -544,8 +544,13 @@ internal sealed class QwpCursorSendEngine : IDisposable
         }
         finally
         {
-            FireFirstConnectFailed(
-                new IngressError(ErrorCode.SocketError, "SF engine loop exited before first connect"));
+            bool needFallback;
+            lock (_stateLock) { needFallback = !_terminal; }
+            if (needFallback)
+            {
+                FireFirstConnectFailed(
+                    new IngressError(ErrorCode.SocketError, "SF engine loop exited before first connect"));
+            }
         }
     }
 

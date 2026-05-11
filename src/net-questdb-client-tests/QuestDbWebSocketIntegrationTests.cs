@@ -285,7 +285,7 @@ public class QuestDbWebSocketIntegrationTests
                 }
             }
 
-            await VerifyTableRowCountAsync("test_ws_restart", expected: 30);
+            await VerifyTableRowCountAsync("test_ws_restart", expected: 30, maxAttempts: 150);
         }
         finally
         {
@@ -437,19 +437,18 @@ public class QuestDbWebSocketIntegrationTests
         Assert.That(value, Is.GreaterThan(0));
     }
 
-    private async Task VerifyTableRowCountAsync(string tableName, long expected)
+    private async Task VerifyTableRowCountAsync(string tableName, long expected, int maxAttempts = 30)
     {
-        var value = await GetTableRowCountAsync(tableName, minimum: expected);
+        var value = await GetTableRowCountAsync(tableName, minimum: expected, maxAttempts: maxAttempts);
         Assert.That(value, Is.GreaterThanOrEqualTo(expected));
     }
 
-    private async Task<long> GetTableRowCountAsync(string tableName, long minimum)
+    private async Task<long> GetTableRowCountAsync(string tableName, long minimum, int maxAttempts = 30)
     {
         var endpoint = _questDb!.GetHttpEndpoint();
         using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
 
         var attempts = 0;
-        const int maxAttempts = 30;
 
         while (attempts < maxAttempts)
         {

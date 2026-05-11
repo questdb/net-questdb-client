@@ -135,7 +135,8 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
                 maxTotalBytes: options.sf_max_total_bytes,
                 skipBackoffPredicate: () => !tracker.IsRoundExhausted,
                 errorDispatcher: dispatcher,
-                policyResolver: options.BuildEffectivePolicyResolver());
+                policyResolver: options.BuildEffectivePolicyResolver(),
+                durableAckMode: options.request_durable_ack);
 
             engine.Start();
 
@@ -167,7 +168,8 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
                     },
                     policy,
                     segmentCapacity: options.sf_max_bytes,
-                    drainTimeout: options.reconnect_max_duration_millis);
+                    drainTimeout: options.reconnect_max_duration_millis,
+                    durableAckMode: options.request_durable_ack);
                 pool = new QwpBackgroundDrainerPool(
                     options.max_background_drainers,
                     drainer,

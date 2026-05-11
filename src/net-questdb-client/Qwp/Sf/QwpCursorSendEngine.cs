@@ -53,6 +53,9 @@ internal sealed class QwpCursorSendEngine : IDisposable
     private readonly object _stateLock = new();
     private readonly byte[] _sendBuffer;
     private readonly byte[] _ackBuffer;
+    private readonly bool _durableAckMode;
+    private readonly Queue<PendingDurable> _pendingDurable = new();
+    private readonly Dictionary<string, long> _durableTableWatermarks = new(StringComparer.Ordinal);
 
     private long _cursorFsn;
     private long _ackedFsn;
@@ -93,6 +96,12 @@ internal sealed class QwpCursorSendEngine : IDisposable
     /// <param name="policyResolver">
     ///     Optional override for the per-<see cref="SenderErrorCategory" /> default policy.
     /// </param>
+    /// <param name="durableAckMode">
+    ///     When <c>true</c>, trim is driven by <see cref="QwpStatusCode.DurableAck" /> frames
+    ///     covering the longest pending-OK prefix, not by <see cref="QwpStatusCode.Ok" />
+    ///     frames directly. The caller must have verified the server echoed
+    ///     <c>X-QWP-Durable-Ack: enabled</c> on the upgrade.
+    /// </param>
     public QwpCursorSendEngine(
         QwpSlotLock? slotLock,
         QwpSegmentRing ring,
@@ -103,7 +112,8 @@ internal sealed class QwpCursorSendEngine : IDisposable
         long maxTotalBytes = long.MaxValue,
         Func<bool>? skipBackoffPredicate = null,
         QwpSenderErrorDispatcher? errorDispatcher = null,
-        SenderErrorPolicyResolver? policyResolver = null)
+        SenderErrorPolicyResolver? policyResolver = null,
+        bool durableAckMode = false)
     {
         ArgumentNullException.ThrowIfNull(ring);
         ArgumentNullException.ThrowIfNull(transportFactory);
@@ -122,6 +132,7 @@ internal sealed class QwpCursorSendEngine : IDisposable
         _skipBackoffPredicate = skipBackoffPredicate;
         _errorDispatcher = errorDispatcher;
         _policyResolver = policyResolver;
+        _durableAckMode = durableAckMode;
         _cursorFsn = ring.OldestFsn;
         _ackedFsn = ring.OldestFsn;
         _segmentManager = new QwpSegmentManager(ring, maxTotalBytes);
@@ -644,6 +655,10 @@ internal sealed class QwpCursorSendEngine : IDisposable
                     _cursorFsn = Math.Max(_ackedFsn, _ring.OldestFsn);
                     fsnAtZero = _cursorFsn;
                     _sentFsnHighWatermark = _cursorFsn - 1;
+                    // Pending durable state is per-connection (wireSeq is reset on every upgrade);
+                    // the new server replays cumulative watermarks from scratch.
+                    _pendingDurable.Clear();
+                    _durableTableWatermarks.Clear();
                 }
 
                 try
@@ -812,8 +827,9 @@ internal sealed class QwpCursorSendEngine : IDisposable
 
             DispatchTableEntries(response);
 
-            if (!response.IsOk)
+            if (response.IsDurableAck)
             {
+                if (_durableAckMode) HandleDurableAck(response, fsnAtZero);
                 continue;
             }
 
@@ -823,6 +839,12 @@ internal sealed class QwpCursorSendEngine : IDisposable
                 throw new IngressError(
                     ErrorCode.ServerFlushError,
                     $"server returned negative ack sequence {ackedSeq}");
+            }
+
+            if (_durableAckMode)
+            {
+                HandleOkInDurableMode(response, ackedSeq, fsnAtZero);
+                continue;
             }
 
             lock (_stateLock)
@@ -842,14 +864,83 @@ internal sealed class QwpCursorSendEngine : IDisposable
                 if (newAcked > _ackedFsn)
                 {
                     _ackedFsn = newAcked;
-                    // Manager polls AckedFsn and trims off the I/O critical path. Acknowledge takes
-                    // the highest acked FSN, so subtract 1 from our "first un-acked" semantics.
                     _ring.Acknowledge(_ackedFsn - 1);
                     FireAckSignalLocked();
                 }
             }
         }
     }
+
+    private void HandleOkInDurableMode(in QwpResponse response, long ackedSeq, long fsnAtZero)
+    {
+        var entries = response.TableEntries.Count == 0
+            ? Array.Empty<QwpTableEntry>()
+            : response.TableEntries.ToArray();
+
+        lock (_stateLock)
+        {
+            var highestSentWireSeq = _sentFsnHighWatermark - fsnAtZero;
+            if (highestSentWireSeq < 0 || ackedSeq > highestSentWireSeq) return;
+
+            _pendingDurable.Enqueue(new PendingDurable(ackedSeq, entries));
+            TrimCoveredPrefixLocked(fsnAtZero);
+        }
+    }
+
+    private void HandleDurableAck(in QwpResponse response, long fsnAtZero)
+    {
+        lock (_stateLock)
+        {
+            foreach (var entry in response.TableEntries)
+            {
+                if (!_durableTableWatermarks.TryGetValue(entry.TableName, out var prev) || entry.SeqTxn > prev)
+                {
+                    _durableTableWatermarks[entry.TableName] = entry.SeqTxn;
+                }
+            }
+            TrimCoveredPrefixLocked(fsnAtZero);
+        }
+    }
+
+    // Drain pendingDurable head while head is covered (empty entries, or every (table, seqTxn)
+    // ≤ watermark). Caller holds _stateLock.
+    private void TrimCoveredPrefixLocked(long fsnAtZero)
+    {
+        var maxPoppedWireSeq = -1L;
+        while (_pendingDurable.Count > 0)
+        {
+            var head = _pendingDurable.Peek();
+            if (!IsCoveredLocked(head)) break;
+            _pendingDurable.Dequeue();
+            maxPoppedWireSeq = head.WireSeq;
+        }
+
+        if (maxPoppedWireSeq < 0) return;
+
+        var newAcked = checked(fsnAtZero + maxPoppedWireSeq + 1);
+        if (newAcked > _ackedFsn)
+        {
+            _ackedFsn = newAcked;
+            _ring.Acknowledge(_ackedFsn - 1);
+            FireAckSignalLocked();
+        }
+    }
+
+    private bool IsCoveredLocked(PendingDurable entry)
+    {
+        // Empty entries are trivially durable — no per-table commit to wait for.
+        if (entry.Entries.Length == 0) return true;
+        foreach (var t in entry.Entries)
+        {
+            if (!_durableTableWatermarks.TryGetValue(t.TableName, out var w) || w < t.SeqTxn)
+            {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private readonly record struct PendingDurable(long WireSeq, QwpTableEntry[] Entries);
 
     private void HandleServerRejection(in QwpResponse response, long fsnAtZero)
     {

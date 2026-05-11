@@ -51,16 +51,18 @@ dotnet test src/net-questdb-client-tests/net-questdb-client-tests.csproj \
 
 # Integration tests. All three suites (HTTP/TCP, WebSocket ingest, Egress query) are
 # plain `[TestFixture]` and lean on `QuestDbManager` to boot QuestDB. By default it
-# pulls `questdb/questdb:latest` via Docker; override `QUESTDB_IMAGE` to point at the
-# master image (required for `/write/v4` + `/read/v1`), or set `QDB_LIVE_HTTP` /
-# `QDB_LIVE_ILP` to use an existing instance and skip Docker entirely.
-QUESTDB_IMAGE=questdb/questdb:master \
+# pulls `questdb/questdb:latest` via Docker; for WS / egress endpoints (`/write/v4`,
+# `/read/v1`) that only exist on master, override `QUESTDB_IMAGE=questdb/questdb:nightly`
+# (master-equivalent rolling tag; `:master` is not published). Switch back to `:latest`
+# once a stable release ships those endpoints. `QDB_LIVE_HTTP` / `QDB_LIVE_ILP` skip
+# Docker entirely when pointed at an existing instance.
+QUESTDB_IMAGE=questdb/questdb:nightly \
   dotnet test src/net-questdb-client-tests/net-questdb-client-tests.csproj \
   --framework net10.0 -c Release \
   --filter "FullyQualifiedName~QuestDbIntegrationTests|FullyQualifiedName~QuestDbWebSocketIntegrationTests|FullyQualifiedName~QuestDbQueryIntegrationTests"
 
 # Single-suite drilldowns:
-QUESTDB_IMAGE=questdb/questdb:master \
+QUESTDB_IMAGE=questdb/questdb:nightly \
   dotnet test ... --filter "FullyQualifiedName~QuestDbWebSocketIntegrationTests"
 QDB_LIVE_HTTP=127.0.0.1:9000 QDB_LIVE_ILP=127.0.0.1:9009 \
   dotnet test ... --filter "FullyQualifiedName~QuestDbQueryIntegrationTests"
@@ -395,9 +397,10 @@ semantics in `HttpSender`. WS / SF manage their own concurrency model
 - Integration tests — all three suites are plain `[TestFixture]` (no
   `[Explicit]`), bootstrapped by `QuestDbManager`. CI excludes them by FQN
   on every leg except Linux + net9.0, which runs them with
-  `QUESTDB_IMAGE=questdb/questdb:master` so the WS (`/write/v4`) and egress
-  (`/read/v1`) endpoints are present. `QDB_LIVE_HTTP` / `QDB_LIVE_ILP`
-  short-circuit Docker when pointed at an existing instance.
+  `QUESTDB_IMAGE=questdb/questdb:nightly` so the WS (`/write/v4`) and egress
+  (`/read/v1`) endpoints are present (master-equivalent rolling tag; switch
+  to `:latest` once a stable release ships those endpoints). `QDB_LIVE_HTTP` /
+  `QDB_LIVE_ILP` short-circuit Docker when pointed at an existing instance.
   - `QuestDbIntegrationTests.cs` — HTTP/TCP integration via Docker container
     provisioning.
   - `QuestDbWebSocketIntegrationTests.cs` — ingest WS/QWP integration.

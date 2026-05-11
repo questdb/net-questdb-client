@@ -95,10 +95,11 @@ steps:
     projects: 'src/net-questdb-client-tests/net-questdb-client-tests.csproj'
     arguments: '--configuration $(buildConfiguration) --framework net9.0 --no-build --verbosity normal --logger trx --blame-hang --blame-hang-timeout 120s --blame-hang-dump-type mini --collect:"XPlat Code Coverage"'
     publishTestResults: true
-  # Linux net9.0 is the only leg that runs the integration suites; point QuestDbManager at the
-  # master image so the WS (/write/v4) and egress (/read/v1) endpoints are present.
+  # Linux net9.0 is the only leg that runs the integration suites. The WS (/write/v4) and
+  # egress (/read/v1) endpoints currently only ship on master, so point QuestDbManager at the
+  # nightly tag. Switch back to questdb/questdb:latest once a stable release ships those endpoints.
   env:
-    QUESTDB_IMAGE: 'questdb/questdb:master'
+    QUESTDB_IMAGE: 'questdb/questdb:nightly'
   condition: eq(variables['osName'], 'Linux')
 
 - task: DotNetCoreCLI@2

@@ -27,6 +27,7 @@
 using NUnit.Framework;
 using QuestDB;
 using QuestDB.Enums;
+using QuestDB.Qwp;
 using QuestDB.Qwp.Query;
 
 namespace net_questdb_client_tests;
@@ -86,7 +87,8 @@ public class QuestDbQueryIntegrationTests
         Assert.That(handler.LastBatch, Is.Not.Null);
         Assert.That(handler.LastBatch!.RowCount, Is.EqualTo(1));
         Assert.That(handler.LastBatch.ColumnCount, Is.EqualTo(1));
-        Assert.That(handler.LastBatch.GetLongValue(0, 0), Is.EqualTo(42L));
+        Assert.That(handler.LastBatch.GetColumnWireType(0), Is.EqualTo(QwpTypeCode.Int));
+        Assert.That(handler.LastBatch.GetIntValue(0, 0), Is.EqualTo(42));
     }
 
     [Test]

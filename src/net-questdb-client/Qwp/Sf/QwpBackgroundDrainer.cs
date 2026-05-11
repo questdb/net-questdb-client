@@ -52,6 +52,7 @@ internal sealed class QwpBackgroundDrainer : IQwpSlotDrainer
     private readonly QwpReconnectPolicy _reconnectPolicy;
     private readonly long _segmentCapacity;
     private readonly TimeSpan _drainTimeout;
+    private readonly bool _durableAckMode;
 
     // Per-drain context isolates host-health state across concurrent drains; the foreground engine
     // and each pooled drainer task get their own tracker so a BeginRound by one does not clear the
@@ -60,7 +61,8 @@ internal sealed class QwpBackgroundDrainer : IQwpSlotDrainer
         Func<DrainContext> contextBuilder,
         QwpReconnectPolicy reconnectPolicy,
         long segmentCapacity,
-        TimeSpan drainTimeout)
+        TimeSpan drainTimeout,
+        bool durableAckMode = false)
     {
         ArgumentNullException.ThrowIfNull(contextBuilder);
         ArgumentNullException.ThrowIfNull(reconnectPolicy);
@@ -78,6 +80,7 @@ internal sealed class QwpBackgroundDrainer : IQwpSlotDrainer
         _reconnectPolicy = reconnectPolicy;
         _segmentCapacity = segmentCapacity;
         _drainTimeout = drainTimeout;
+        _durableAckMode = durableAckMode;
     }
 
     public QwpBackgroundDrainer(
@@ -85,12 +88,14 @@ internal sealed class QwpBackgroundDrainer : IQwpSlotDrainer
         QwpReconnectPolicy reconnectPolicy,
         long segmentCapacity,
         TimeSpan drainTimeout,
-        Func<bool>? skipBackoffPredicate = null)
+        Func<bool>? skipBackoffPredicate = null,
+        bool durableAckMode = false)
         : this(
             () => new DrainContext(transportFactory, skipBackoffPredicate),
             reconnectPolicy,
             segmentCapacity,
-            drainTimeout)
+            drainTimeout,
+            durableAckMode)
     {
         ArgumentNullException.ThrowIfNull(transportFactory);
     }
@@ -112,7 +117,8 @@ internal sealed class QwpBackgroundDrainer : IQwpSlotDrainer
                 _reconnectPolicy,
                 appendDeadline: TimeSpan.FromSeconds(30),
                 initialConnectMode: InitialConnectMode.off,
-                skipBackoffPredicate: ctx.SkipBackoffPredicate);
+                skipBackoffPredicate: ctx.SkipBackoffPredicate,
+                durableAckMode: _durableAckMode);
 
             if (ring.NextFsn > ring.OldestFsn)
             {

@@ -637,7 +637,9 @@ public class QwpWebSocketSenderTests
         sender.Send();
         sender.Table("trades").Column("v", 2L).At(DateTime.UtcNow);
         sender.Send();
-        await ws.PingAsync();
+
+        await WaitFor(() => ws.GetHighestAckedSeqTxn("trades") == 201L
+                            && ws.GetHighestDurableSeqTxn("trades") == 101L);
 
         Assert.That(ws.GetHighestAckedSeqTxn("trades"), Is.EqualTo(201L), "OK frame's per-table entry");
         Assert.That(ws.GetHighestDurableSeqTxn("trades"), Is.EqualTo(101L), "DURABLE_ACK frame's per-table entry");

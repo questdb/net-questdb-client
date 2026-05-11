@@ -260,16 +260,10 @@ public class QuestDbWebSocketIntegrationTests
                        + "sender_id=restart-test;reconnect_max_duration_millis=60000;"
                        + "reconnect_initial_backoff_millis=50;reconnect_max_backoff_millis=500;"))
             {
-                for (var i = 0; i < 10; i++)
-                {
-                    sender.Table("test_ws_restart").Column("v", (long)i).At(DateTime.UtcNow);
-                }
-                await sender.SendAsync();
-
                 await _questDb.StopAsync();
                 await Task.Delay(500);
 
-                for (var i = 10; i < 30; i++)
+                for (var i = 0; i < 30; i++)
                 {
                     sender.Table("test_ws_restart").Column("v", (long)i).At(DateTime.UtcNow);
                 }

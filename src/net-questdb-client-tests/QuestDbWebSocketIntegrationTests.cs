@@ -27,6 +27,9 @@
 using System.Text.Json;
 using NUnit.Framework;
 using QuestDB;
+using QuestDB.Enums;
+using QuestDB.Senders;
+using QuestDB.Utils;
 
 namespace net_questdb_client_tests;
 
@@ -36,7 +39,6 @@ namespace net_questdb_client_tests;
 ///     QuestDbWebSocketIntegrationTests</c> once the snapshot is available.
 /// </summary>
 [TestFixture]
-[Explicit("Requires QuestDB master image (questdb/questdb:master) — sets QUESTDB_IMAGE env var")]
 public class QuestDbWebSocketIntegrationTests
 {
     private const int IlpPort = 19109;
@@ -132,19 +134,36 @@ public class QuestDbWebSocketIntegrationTests
     public async Task DurableAck_OnRequestDurableAck_PopulatesSeqTxn()
     {
         var endpoint = _questDb!.GetWebSocketEndpoint();
-        using var sender = Sender.New(
-            $"ws::addr={endpoint};auto_flush=off;request_durable_ack=on;");
+        ISender sender;
+        try
+        {
+            sender = Sender.New($"ws::addr={endpoint};auto_flush=off;request_durable_ack=on;");
+        }
+        catch (IngressError ex) when (ex.code == ErrorCode.DurableAckNotSupported)
+        {
+            Assert.Inconclusive(
+                "server did not echo `X-QWP-Durable-Ack: enabled` — primary replication not "
+                + "configured on this engine; skipping durable-ack assertion");
+            return;
+        }
 
-        sender.Table("test_ws_durable")
-            .Column("v", 42L)
-            .At(DateTime.UtcNow);
-        await sender.SendAsync();
+        using (sender)
+        {
+            sender.Table("test_ws_durable").Column("v", 42L).At(DateTime.UtcNow);
+            await sender.SendAsync();
 
-        var ws = (QuestDB.Senders.IQwpWebSocketSender)sender;
-        ws.Ping();
-
-        var durableSeqTxn = ws.GetHighestDurableSeqTxn("test_ws_durable");
-        Assert.That(durableSeqTxn, Is.GreaterThanOrEqualTo(0L));
+            var ws = (IQwpWebSocketSender)sender;
+            // Ping triggers server-side flush of pending durable-acks; the recv pump processes
+            // the resulting frame asynchronously, so poll instead of racing the first Ping.
+            long durableSeqTxn = -1;
+            for (var i = 0; i < 50 && durableSeqTxn < 0; i++)
+            {
+                ws.Ping();
+                durableSeqTxn = ws.GetHighestDurableSeqTxn("test_ws_durable");
+                if (durableSeqTxn < 0) await Task.Delay(100);
+            }
+            Assert.That(durableSeqTxn, Is.GreaterThanOrEqualTo(0L));
+        }
     }
 
     private async Task VerifyTableHasDataAsync(string tableName)

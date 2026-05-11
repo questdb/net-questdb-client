@@ -104,4 +104,11 @@ public enum ErrorCode
     ///     cursor engine must not reconnect.
     /// </summary>
     ProtocolViolation,
+
+    /// <summary>
+    ///     <c>request_durable_ack=on</c> was set but the server did not echo
+    ///     <c>X-QWP-Durable-Ack: enabled</c>. Terminal — without it the SF log would
+    ///     grow unbounded waiting for ack frames that will never arrive.
+    /// </summary>
+    DurableAckNotSupported,
 }

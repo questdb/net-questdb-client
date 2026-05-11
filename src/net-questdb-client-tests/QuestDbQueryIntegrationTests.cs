@@ -37,8 +37,6 @@ namespace net_questdb_client_tests;
 ///     e.g. <c>QUESTDB_IMAGE=questdb/questdb:&lt;branch&gt; dotnet test --filter QuestDbQueryIntegrationTests</c>.
 /// </summary>
 [TestFixture]
-[Category("integration")]
-[Explicit("Requires a QuestDB image with the /read/v1 egress endpoint — set QUESTDB_IMAGE to such a build")]
 public class QuestDbQueryIntegrationTests
 {
     private const int IlpPort = 19209;

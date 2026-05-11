@@ -163,7 +163,7 @@ public class QwpWebSocketTransportTests
     [Test]
     public async Task Handshake_RequestDurableAck_OptsInViaHeader()
     {
-        await using var server = new DummyQwpServer();
+        await using var server = new DummyQwpServer(new DummyQwpServerOptions { DurableAckEnabled = true });
         await server.StartAsync();
 
         using var transport = new QwpWebSocketTransport(new QwpWebSocketTransportOptions
@@ -177,6 +177,22 @@ public class QwpWebSocketTransportTests
 
         Assert.That(server.LastUpgradeHeaders!.ContainsKey("X-QWP-Request-Durable-Ack"));
         Assert.That(server.LastUpgradeHeaders["X-QWP-Request-Durable-Ack"], Is.EqualTo("true"));
+    }
+
+    [Test]
+    public async Task Handshake_RequestDurableAck_ServerDoesNotEcho_ThrowsTerminal()
+    {
+        await using var server = new DummyQwpServer();
+        await server.StartAsync();
+
+        using var transport = new QwpWebSocketTransport(new QwpWebSocketTransportOptions
+        {
+            Uri = server.Uri,
+            RequestDurableAck = true,
+        });
+
+        var ex = Assert.ThrowsAsync<IngressError>(async () => await transport.ConnectAsync());
+        Assert.That(ex!.code, Is.EqualTo(ErrorCode.DurableAckNotSupported));
     }
 
     [Test]

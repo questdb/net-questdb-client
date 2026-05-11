@@ -170,6 +170,21 @@ internal sealed class QwpWebSocketTransport : IQwpCursorTransport
                 ErrorCode.ProtocolVersionError,
                 $"server negotiated QWP version {_negotiatedVersion}; this client supports v1..v{_options.ClientMaxVersion}");
         }
+
+        if (_options.RequestDurableAck)
+        {
+            var ack = ReadOptionalHeader(QwpConstants.HeaderDurableAck);
+            if (!string.Equals(ack, "enabled", StringComparison.OrdinalIgnoreCase))
+            {
+                await TryCloseAsync(WebSocketCloseStatus.PolicyViolation,
+                    "durable-ack opt-in not honoured by server", ct).ConfigureAwait(false);
+                throw new IngressError(
+                    ErrorCode.DurableAckNotSupported,
+                    "client requested durable-ack but server did not echo `X-QWP-Durable-Ack: enabled` "
+                    + "on the upgrade response (primary replication not configured on this engine)");
+            }
+        }
+
         NegotiatedContentEncoding = ReadOptionalHeader(QwpConstants.HeaderContentEncoding);
     }
 

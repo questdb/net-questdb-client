@@ -616,6 +616,7 @@ public class QwpWebSocketSenderTests
         long nextSeq = 0;
         await using var server = new DummyQwpServer(new DummyQwpServerOptions
         {
+            DurableAckEnabled = true,
             FrameHandlerMulti = _ =>
             {
                 // For each batch, server emits a DURABLE_ACK first (out-of-band watermark) and
@@ -645,7 +646,13 @@ public class QwpWebSocketSenderTests
     [Test]
     public async Task DurableAck_UpgradeRequestIncludesOptInHeader()
     {
-        await using var server = StartServerWithOkAcks();
+        long nextSeq = 0;
+        await using var server = new DummyQwpServer(new DummyQwpServerOptions
+        {
+            DurableAckEnabled = true,
+            FrameHandler = _ => BuildOkAck(Interlocked.Increment(ref nextSeq) - 1),
+        });
+        await server.StartAsync();
         using var sender = NewSender(server, "auto_flush=off;request_durable_ack=on;");
 
         // Force a no-op flush so we know the upgrade has completed and the server captured the headers.

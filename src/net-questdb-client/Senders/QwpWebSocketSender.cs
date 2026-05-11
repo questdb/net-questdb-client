@@ -147,7 +147,8 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
                 }
                 catch (Exception ex)
                 {
-                    throw new IngressError(ErrorCode.SocketError,
+                    var code = (ex as IngressError)?.code ?? ErrorCode.SocketError;
+                    throw new IngressError(code,
                         $"first connect failed against all {options.AddressCount} configured endpoint(s): {ex.Message}", ex);
                 }
             }

@@ -85,7 +85,7 @@ internal sealed class QwpTrackedCursorTransport : IQwpCursorTransport
             _tracker.RecordRoleReject(_hostIndex, ex.IsTransient);
             throw;
         }
-        catch (IngressError ex) when (ex.code == ErrorCode.AuthError)
+        catch (IngressError ex) when (ex.code is ErrorCode.AuthError or ErrorCode.DurableAckNotSupported)
         {
             throw;
         }

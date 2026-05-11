@@ -190,6 +190,11 @@ public sealed class DummyQwpServer : IAsyncDisposable
             ctx.Response.Headers["X-QuestDB-Role"] = acceptRole;
         }
 
+        if (_options.DurableAckEnabled)
+        {
+            ctx.Response.Headers["X-QWP-Durable-Ack"] = "enabled";
+        }
+
         using var ws = await ctx.WebSockets.AcceptWebSocketAsync().ConfigureAwait(false);
 
         if (_options.InitialServerFrame is { Length: > 0 } initial)
@@ -295,6 +300,10 @@ public sealed class DummyQwpServerOptions
 
     /// <summary>If set, Kestrel binds an HTTPS listener using this certificate; <see cref="DummyQwpServer.Uri" /> returns a <c>wss://</c> URI.</summary>
     public X509Certificate2? TlsCertificate { get; init; }
+
+    /// <summary>If true, the server echoes <c>X-QWP-Durable-Ack: enabled</c> on the upgrade response,
+    /// confirming durable-ack support to clients that requested it via <c>request_durable_ack=on</c>.</summary>
+    public bool DurableAckEnabled { get; init; }
 
     /// <summary>If set, the server emits its (optional) response then sends a WebSocket CLOSE with this status after handling the Nth frame (1-based).</summary>
     public int? CloseAfterFrameCount { get; init; }

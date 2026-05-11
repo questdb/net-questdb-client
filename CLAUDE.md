@@ -38,30 +38,32 @@ and TCP senders work on every supported target.
 # Build the whole solution.
 dotnet build net-questdb-client.sln -c Release
 
-# Full unit-test pass (excludes [Explicit] integration tests that need
-# a live QuestDB / Docker).
+# Full test pass excluding the three integration suites (which need Docker / live
+# QuestDB). Mirrors the CI filter applied to every leg except Linux + net9.0.
 dotnet test src/net-questdb-client-tests/net-questdb-client-tests.csproj \
-  --framework net10.0 -c Release
+  --framework net10.0 -c Release \
+  --filter "FullyQualifiedName!~QuestDbIntegrationTests&FullyQualifiedName!~QuestDbWebSocketIntegrationTests&FullyQualifiedName!~QuestDbQueryIntegrationTests"
 
 # Run a single test or namespace via NUnit's name filter.
 dotnet test src/net-questdb-client-tests/net-questdb-client-tests.csproj \
   --framework net10.0 -c Release \
   --filter "FullyQualifiedName~QwpEncoder"
 
-# Integration tests (`[Explicit]`) — boot a real QuestDB via Docker,
-# require Docker daemon + the master image with /write/v4 + /read/v1 enabled.
+# Integration tests. All three suites (HTTP/TCP, WebSocket ingest, Egress query) are
+# plain `[TestFixture]` and lean on `QuestDbManager` to boot QuestDB. By default it
+# pulls `questdb/questdb:latest` via Docker; override `QUESTDB_IMAGE` to point at the
+# master image (required for `/write/v4` + `/read/v1`), or set `QDB_LIVE_HTTP` /
+# `QDB_LIVE_ILP` to use an existing instance and skip Docker entirely.
 QUESTDB_IMAGE=questdb/questdb:master \
   dotnet test src/net-questdb-client-tests/net-questdb-client-tests.csproj \
   --framework net10.0 -c Release \
-  --filter "FullyQualifiedName~QuestDbWebSocketIntegrationTests"
+  --filter "FullyQualifiedName~QuestDbIntegrationTests|FullyQualifiedName~QuestDbWebSocketIntegrationTests|FullyQualifiedName~QuestDbQueryIntegrationTests"
 
-# Egress integration tests (read-side QWP). Uses `[Category("integration")]`
-# rather than `[Explicit]` so the filter shape differs. Skip Docker by
-# pointing QDB_LIVE_HTTP / QDB_LIVE_ILP at an existing master instance;
+# Single-suite drilldowns:
+QUESTDB_IMAGE=questdb/questdb:master \
+  dotnet test ... --filter "FullyQualifiedName~QuestDbWebSocketIntegrationTests"
 QDB_LIVE_HTTP=127.0.0.1:9000 QDB_LIVE_ILP=127.0.0.1:9009 \
-  dotnet test src/net-questdb-client-tests/net-questdb-client-tests.csproj \
-  --framework net10.0 -c Release \
-  --filter "TestCategory=integration&FullyQualifiedName~QuestDbQueryIntegration"
+  dotnet test ... --filter "FullyQualifiedName~QuestDbQueryIntegrationTests"
 
 # Benchmarks. Names match the BenchmarkDotNet 0.13 filter syntax
 # (`Param: value` colon-space, NOT the [Param=value] display format).
@@ -390,18 +392,18 @@ semantics in `HttpSender`. WS / SF manage their own concurrency model
     per wire type.
   - `Utils/QwpTlsAuthTests.cs` — auth / TLS helper unit tests shared
     by ingest and egress.
-- Integration tests:
-  - `QuestDbIntegrationTests.cs` (`[Explicit]`) — HTTP/TCP integration
-    via `QuestDbManager` (Docker container provisioning).
-  - `QuestDbWebSocketIntegrationTests.cs` (`[Explicit]`) — ingest WS/QWP
-    integration. Requires `questdb/questdb:master`; gated by
-    `QUESTDB_IMAGE` env var.
-  - `QuestDbQueryIntegrationTests.cs` (`[Category("integration")]`) —
-    egress integration. Filter via `TestCategory=integration` rather
-    than `[Explicit]`. `OneTimeSetUp` drops + re-seeds fixture tables
-    so runs are idempotent against a long-lived master instance.
-    `QuestDbManager` honours `QDB_LIVE_HTTP` / `QDB_LIVE_ILP` to skip
-    Docker when an existing instance is already running.
+- Integration tests — all three suites are plain `[TestFixture]` (no
+  `[Explicit]`), bootstrapped by `QuestDbManager`. CI excludes them by FQN
+  on every leg except Linux + net9.0, which runs them with
+  `QUESTDB_IMAGE=questdb/questdb:master` so the WS (`/write/v4`) and egress
+  (`/read/v1`) endpoints are present. `QDB_LIVE_HTTP` / `QDB_LIVE_ILP`
+  short-circuit Docker when pointed at an existing instance.
+  - `QuestDbIntegrationTests.cs` — HTTP/TCP integration via Docker container
+    provisioning.
+  - `QuestDbWebSocketIntegrationTests.cs` — ingest WS/QWP integration.
+  - `QuestDbQueryIntegrationTests.cs` — egress integration. `OneTimeSetUp`
+    drops + re-seeds fixture tables so runs are idempotent against a
+    long-lived master instance.
 - `JsonSpecTestRunner.cs` — shared ILP conformance vectors
   (`Json/specs/*.json`) driven via the `RunHttp` / `RunTcp`
   `[TestCaseSource]` parameterisation.

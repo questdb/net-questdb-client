@@ -244,4 +244,7 @@ internal static class QwpConstants
 
     /// <summary>Client → server: opt-in for STATUS_DURABLE_ACK frames.</summary>
     public const string HeaderRequestDurableAck = "X-QWP-Request-Durable-Ack";
+
+    /// <summary>Server → client: echoed when the server will deliver durable-ack frames.</summary>
+    public const string HeaderDurableAck = "X-QWP-Durable-Ack";
 }

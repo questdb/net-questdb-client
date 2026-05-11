@@ -85,7 +85,7 @@ steps:
   inputs:
     command: 'test'
     projects: 'src/net-questdb-client-tests/net-questdb-client-tests.csproj'
-    arguments: '--configuration $(buildConfiguration) --framework net8.0 --no-build --verbosity normal --logger trx --blame-hang --blame-hang-timeout 120s --blame-hang-dump-type mini --filter "FullyQualifiedName!~QuestDbIntegrationTests"'
+    arguments: '--configuration $(buildConfiguration) --framework net8.0 --no-build --verbosity normal --logger trx --blame-hang --blame-hang-timeout 120s --blame-hang-dump-type mini --filter "FullyQualifiedName!~QuestDbIntegrationTests&FullyQualifiedName!~QuestDbWebSocketIntegrationTests&FullyQualifiedName!~QuestDbQueryIntegrationTests"'
     publishTestResults: true
 
 - task: DotNetCoreCLI@2
@@ -95,6 +95,10 @@ steps:
     projects: 'src/net-questdb-client-tests/net-questdb-client-tests.csproj'
     arguments: '--configuration $(buildConfiguration) --framework net9.0 --no-build --verbosity normal --logger trx --blame-hang --blame-hang-timeout 120s --blame-hang-dump-type mini --collect:"XPlat Code Coverage"'
     publishTestResults: true
+  # Linux net9.0 is the only leg that runs the integration suites; point QuestDbManager at the
+  # master image so the WS (/write/v4) and egress (/read/v1) endpoints are present.
+  env:
+    QUESTDB_IMAGE: 'questdb/questdb:master'
   condition: eq(variables['osName'], 'Linux')
 
 - task: DotNetCoreCLI@2
@@ -102,7 +106,7 @@ steps:
   inputs:
     command: 'test'
     projects: 'src/net-questdb-client-tests/net-questdb-client-tests.csproj'
-    arguments: '--configuration $(buildConfiguration) --framework net9.0 --no-build --verbosity normal --logger trx --blame-hang --blame-hang-timeout 120s --blame-hang-dump-type mini --collect:"XPlat Code Coverage" --filter "FullyQualifiedName!~QuestDbIntegrationTests"'
+    arguments: '--configuration $(buildConfiguration) --framework net9.0 --no-build --verbosity normal --logger trx --blame-hang --blame-hang-timeout 120s --blame-hang-dump-type mini --collect:"XPlat Code Coverage" --filter "FullyQualifiedName!~QuestDbIntegrationTests&FullyQualifiedName!~QuestDbWebSocketIntegrationTests&FullyQualifiedName!~QuestDbQueryIntegrationTests"'
     publishTestResults: true
   condition: ne(variables['osName'], 'Linux')
 
@@ -111,7 +115,7 @@ steps:
   inputs:
     command: 'test'
     projects: 'src/net-questdb-client-tests/net-questdb-client-tests.csproj'
-    arguments: '--configuration $(buildConfiguration) --framework net10.0 --no-build --verbosity normal --logger trx --blame-hang --blame-hang-timeout 120s --blame-hang-dump-type mini --filter "FullyQualifiedName!~QuestDbIntegrationTests"'
+    arguments: '--configuration $(buildConfiguration) --framework net10.0 --no-build --verbosity normal --logger trx --blame-hang --blame-hang-timeout 120s --blame-hang-dump-type mini --filter "FullyQualifiedName!~QuestDbIntegrationTests&FullyQualifiedName!~QuestDbWebSocketIntegrationTests&FullyQualifiedName!~QuestDbQueryIntegrationTests"'
     publishTestResults: true
 
 - task: CopyFiles@2

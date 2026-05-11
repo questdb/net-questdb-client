@@ -24,6 +24,7 @@
 
 #if NET7_0_OR_GREATER
 
+using System.Text.Json;
 using NUnit.Framework;
 using QuestDB;
 using QuestDB.Enums;
@@ -148,6 +149,67 @@ public class QuestDbQueryIntegrationTests
         Assert.That(handler.Ended, Is.False);
     }
 
+    [Test]
+    public async Task LargeResultSet_StreamsAcrossMultipleBatchesWithCreditRefills()
+    {
+        const string table = "qwp_egress_large_test";
+        await SeedLargeFixtureAsync(table, rowCount: 25_000);
+
+        using var client = QueryClient.New(new QueryOptions($"ws::addr={_questDb!.GetWebSocketEndpoint()};")
+        {
+            initial_credit = 4096,
+        });
+        var handler = new RecordingHandler();
+        client.Execute($"SELECT id FROM {table} ORDER BY id", handler);
+
+        Assert.That(handler.Ended, Is.True);
+        Assert.That(handler.TotalRowCount, Is.EqualTo(25_000));
+        Assert.That(handler.BatchCount, Is.GreaterThan(1));
+
+        var ids = handler.AllLongs(colIndex: 0);
+        Assert.That(ids.Length, Is.EqualTo(25_000));
+        Assert.That(ids[0], Is.EqualTo(1L));
+        Assert.That(ids[^1], Is.EqualTo(25_000L));
+    }
+
+    private async Task SeedLargeFixtureAsync(string table, int rowCount)
+    {
+        using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(15) };
+        var endpoint = _questDb!.GetHttpEndpoint();
+        using (var drop = await http.GetAsync(
+            $"http://{endpoint}/exec?query={Uri.EscapeDataString($"DROP TABLE IF EXISTS {table}")}"))
+        {
+            drop.EnsureSuccessStatusCode();
+        }
+
+        using var sender = Sender.New($"http::addr={endpoint};auto_flush=off;");
+        for (var i = 1; i <= rowCount; i++)
+        {
+            sender.Table(table).Column("id", (long)i).At(DateTime.UtcNow);
+        }
+        await sender.SendAsync();
+
+        // Wait until the WAL drains the seeded rows.
+        for (var attempt = 0; attempt < 60; attempt++)
+        {
+            using var resp = await http.GetAsync(
+                $"http://{endpoint}/exec?query={Uri.EscapeDataString($"SELECT count(*) FROM {table}")}");
+            if (resp.IsSuccessStatusCode)
+            {
+                var body = await resp.Content.ReadAsStringAsync();
+                using var json = JsonDocument.Parse(body);
+                if (json.RootElement.TryGetProperty("dataset", out var ds)
+                    && ds.GetArrayLength() > 0 && ds[0].GetArrayLength() > 0
+                    && ds[0][0].GetInt64() >= rowCount)
+                {
+                    return;
+                }
+            }
+            await Task.Delay(250);
+        }
+        Assert.Fail($"Seed of {rowCount} rows into {table} did not complete");
+    }
+
     private async Task SeedFixtureTableAsync()
     {
         using var sender = Sender.New($"http::addr={_questDb!.GetHttpEndpoint()};auto_flush=off;");
@@ -166,6 +228,7 @@ public class QuestDbQueryIntegrationTests
         private readonly List<long[]> _columnLongs = new();
         public QwpColumnBatch? LastBatch { get; private set; }
         public int TotalRowCount { get; private set; }
+        public int BatchCount { get; private set; }
         public bool Ended { get; private set; }
         public bool ExecDoneObserved { get; private set; }
         public byte LastErrorStatus { get; private set; }
@@ -173,6 +236,7 @@ public class QuestDbQueryIntegrationTests
         public override void OnBatch(QwpColumnBatch batch)
         {
             LastBatch = batch;
+            BatchCount++;
             TotalRowCount += batch.RowCount;
             if (batch.ColumnCount > 0 && batch.GetColumnWireType(0) is QwpTypeCode.Long)
             {

@@ -177,11 +177,7 @@ internal static class QwpConstants
     /// <summary>Egress wire limits.</summary>
     public const int MaxSqlLengthBytes = 1024 * 1024;
 
-    /// <summary>
-    ///     Server cap is <c>MAX_COLUMNS_PER_TABLE = 2048</c>; the egress spec doc §16 quotes 1024
-    ///     but is stale relative to the server.
-    /// </summary>
-    public const int MaxBindParameters = 2048;
+    public const int MaxBindParameters = 1024;
 
     public const int MaxResultBatchWireBytes = 16 * 1024 * 1024;
 

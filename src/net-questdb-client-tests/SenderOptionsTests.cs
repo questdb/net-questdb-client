@@ -344,10 +344,18 @@ public class SenderOptionsTests
     }
 
     [Test]
-    public void UnknownKey_IsSilentlyIgnored()
+    public void UnknownKey_IsRejected()
+    {
+        var ex = Assert.Throws<IngressError>(
+            () => new SenderOptions("ws::addr=localhost:9000;some_unrecognised_key=42;"));
+        Assert.That(ex!.Message, Does.Contain("some_unrecognised_key"));
+    }
+
+    [Test]
+    public void TokenXY_AreAcceptedForCrossClientInterop()
     {
         Assert.That(
-            () => new SenderOptions("ws::addr=localhost:9000;some_unrecognised_key=42;"),
+            () => new SenderOptions("ws::addr=localhost:9000;token_x=abc;token_y=def;"),
             Throws.Nothing);
     }
 

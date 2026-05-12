@@ -101,7 +101,7 @@ internal sealed class QwpReconnectPolicy
     }
 
     /// <summary>
-    ///     Full-jitter transform — uniform in <c>[0, base]</c>. Used by the egress
+    ///     Full-jitter transform — uniform in <c>[0, base)</c>. Used by the egress
     ///     per-Execute failover loop where a single user benefits from the lowest
     ///     expected recovery time.
     /// </summary>
@@ -112,7 +112,7 @@ internal sealed class QwpReconnectPolicy
             return baseBackoff;
         }
 
-        var ticks = (long)(Random.Shared.NextDouble() * (baseBackoff.Ticks + 1));
+        var ticks = (long)(Random.Shared.NextDouble() * baseBackoff.Ticks);
         return TimeSpan.FromTicks(ticks);
     }
 

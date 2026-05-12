@@ -78,7 +78,7 @@ internal sealed class QwpWebSocketTransport : IQwpCursorTransport
         _options = options;
 
         var ws = _client.Options;
-        ws.KeepAliveInterval = TimeSpan.Zero;
+        ws.KeepAliveInterval = options.KeepAliveInterval;
         ws.CollectHttpResponseDetails = true; // expose response headers for X-QWP-Version negotiation
         ws.Proxy = options.Proxy;
         ws.SetRequestHeader(QwpConstants.HeaderMaxVersion, options.ClientMaxVersion.ToString());
@@ -470,6 +470,13 @@ internal sealed class QwpWebSocketTransportOptions
 
     /// <summary>Whether to opt in to STATUS_DURABLE_ACK frames. Maps to the upgrade header.</summary>
     public bool RequestDurableAck { get; init; }
+
+    /// <summary>
+    ///     WebSocket-level keepalive PING cadence. Zero disables. Per spec, the ingest sender sets
+    ///     this only when <c>request_durable_ack=on</c> so the server flushes pending durable-ack
+    ///     frames on each ping recv event.
+    /// </summary>
+    public TimeSpan KeepAliveInterval { get; init; } = TimeSpan.Zero;
 
     /// <summary>Optional dump-mode stream; the transport tees both directions of binary traffic here.</summary>
     public Stream? DumpStream { get; init; }

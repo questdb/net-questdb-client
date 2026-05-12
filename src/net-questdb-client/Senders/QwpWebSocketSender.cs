@@ -929,6 +929,11 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
                 idx = tracker.PickNext();
             }
 
+            var keepalive = options.request_durable_ack
+                && options.durable_ack_keepalive_interval_millis > TimeSpan.Zero
+                ? options.durable_ack_keepalive_interval_millis
+                : TimeSpan.Zero;
+
             var transportOpts = new QwpWebSocketTransportOptions
             {
                 Uri = options.BuildUri(idx, QwpConstants.WritePath),
@@ -936,6 +941,7 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
                 RequestDurableAck = options.request_durable_ack,
                 RemoteCertificateValidationCallback = certValidator,
                 Proxy = proxy,
+                KeepAliveInterval = keepalive,
             };
 
             return new QwpTrackedCursorTransport(new QwpWebSocketTransport(transportOpts), tracker, idx,

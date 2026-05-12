@@ -99,6 +99,7 @@ public record SenderOptions
     private bool _drainOrphans;
     private int _maxBackgroundDrainers = 4;
     private TimeSpan _pingTimeout = TimeSpan.FromMilliseconds(5000);
+    private TimeSpan _durableAckKeepaliveInterval = TimeSpan.FromMilliseconds(200);
     private string? _proxy;
     private SenderErrorHandler? _errorHandler;
     private SenderErrorPolicyResolver? _errorPolicyResolver;
@@ -127,6 +128,7 @@ public record SenderOptions
     private bool _drainOrphansUserSet;
     private bool _maxBackgroundDrainersUserSet;
     private bool _pingTimeoutUserSet;
+    private bool _durableAckKeepaliveIntervalUserSet;
     private bool _proxyUserSet;
     private bool _errorHandlerUserSet;
     private bool _errorPolicyResolverUserSet;
@@ -242,7 +244,11 @@ public record SenderOptions
         ParseBoolOnOff(nameof(drain_orphans), "off", out _drainOrphans);
         ParseIntWithDefault(nameof(max_background_drainers), "4", out _maxBackgroundDrainers);
         ParseMillisecondsWithDefault(nameof(ping_timeout), "5000", out _pingTimeout);
+        ParseMillisecondsWithDefault(nameof(durable_ack_keepalive_interval_millis), "200",
+            out _durableAckKeepaliveInterval);
         ParseStringWithDefault(nameof(proxy), null, out _proxy);
+
+        ParseIntWithDefault(nameof(error_inbox_capacity), "256", out _errorInboxCapacity);
 
         _onServerError = ParsePolicyKey(nameof(on_server_error));
         _onSchemaMismatchError = ParsePolicyKey(nameof(on_schema_mismatch_error));
@@ -251,7 +257,43 @@ public record SenderOptions
         _onSecurityError = ParsePolicyKey(nameof(on_security_error));
         _onWriteError = ParsePolicyKey(nameof(on_write_error));
 
+        RejectUnknownConnectStringKeys();
         EnsureValid();
+    }
+
+    private static readonly HashSet<string> KnownConnectStringKeys = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "protocol", "protocol_version", "addr",
+        "auto_flush", "auto_flush_rows", "auto_flush_bytes", "auto_flush_interval",
+        "gzip", "init_buf_size", "max_buf_size", "max_name_len",
+        "username", "user", "password", "pass", "token",
+        "request_min_throughput", "auth_timeout", "auth_timeout_ms",
+        "request_timeout", "retry_timeout", "pool_timeout",
+        "tls_verify", "tls_roots", "tls_roots_password", "own_socket",
+        "max_schemas_per_connection", "request_durable_ack", "gorilla",
+        "sf_dir", "sender_id", "sf_max_bytes", "sf_max_total_bytes", "sf_durability",
+        "sf_append_deadline_millis",
+        "reconnect_max_duration_millis", "reconnect_initial_backoff_millis", "reconnect_max_backoff_millis",
+        "initial_connect_retry", "close_flush_timeout_millis",
+        "drain_orphans", "max_background_drainers", "ping_timeout", "proxy",
+        "durable_ack_keepalive_interval_millis",
+        "error_inbox_capacity",
+        "on_server_error", "on_schema_mismatch_error", "on_parse_error",
+        "on_internal_error", "on_security_error", "on_write_error",
+        "token_x", "token_y",
+    };
+
+    private void RejectUnknownConnectStringKeys()
+    {
+        if (_connectionStringBuilder is null) return;
+        foreach (string key in _connectionStringBuilder.Keys)
+        {
+            if (!KnownConnectStringKeys.Contains(key))
+            {
+                throw new IngressError(ErrorCode.ConfigError,
+                    $"Unknown connect-string key `{key}`");
+            }
+        }
     }
 
     private void ValidateAuthCombination()
@@ -430,8 +472,6 @@ public record SenderOptions
                     $"`reconnect_initial_backoff_millis` ({_reconnectInitialBackoff.TotalMilliseconds}ms) must be ≤ `reconnect_max_backoff_millis` ({_reconnectMaxBackoff.TotalMilliseconds}ms)");
             if (_pingTimeout <= TimeSpan.Zero)
                 throw new IngressError(ErrorCode.ConfigError, $"`ping_timeout` must be > 0; got {_pingTimeout.TotalMilliseconds}ms");
-            if (_closeFlushTimeout <= TimeSpan.Zero)
-                throw new IngressError(ErrorCode.ConfigError, $"`close_flush_timeout_millis` must be > 0; got {_closeFlushTimeout.TotalMilliseconds}ms");
         }
     }
 
@@ -558,6 +598,7 @@ public record SenderOptions
         if (_drainOrphansUserSet) Throw(nameof(drain_orphans));
         if (_maxBackgroundDrainersUserSet) Throw(nameof(max_background_drainers));
         if (_pingTimeoutUserSet) Throw(nameof(ping_timeout));
+        if (_durableAckKeepaliveIntervalUserSet) Throw(nameof(durable_ack_keepalive_interval_millis));
         if (_proxyUserSet) Throw(nameof(proxy));
         if (_errorHandlerUserSet) Throw(nameof(error_handler));
         if (_errorPolicyResolverUserSet) Throw(nameof(error_policy_resolver));
@@ -598,7 +639,8 @@ public record SenderOptions
         "sf_dir", "sender_id", "sf_max_bytes", "sf_max_total_bytes", "sf_durability",
         "sf_append_deadline_millis", "reconnect_max_duration_millis", "reconnect_initial_backoff_millis",
         "reconnect_max_backoff_millis", "initial_connect_retry", "initial_connect_mode",
-        "close_flush_timeout_millis", "drain_orphans", "max_background_drainers", "ping_timeout", "proxy",
+        "close_flush_timeout_millis", "drain_orphans", "max_background_drainers", "ping_timeout",
+        "durable_ack_keepalive_interval_millis", "proxy",
         "error_handler", "error_policy_resolver", "error_inbox_capacity",
         "on_server_error", "on_schema_mismatch_error", "on_parse_error", "on_internal_error",
         "on_security_error", "on_write_error",
@@ -1225,6 +1267,17 @@ public record SenderOptions
     }
 
     /// <summary>
+    ///     Cadence of WebSocket PING the I/O loop sends while there are pending durable-ack
+    ///     confirmations and <see cref="request_durable_ack" /> is on. Zero or negative disables
+    ///     the keepalive. Defaults to 200 ms.
+    /// </summary>
+    public TimeSpan durable_ack_keepalive_interval_millis
+    {
+        get => _durableAckKeepaliveInterval;
+        set { _durableAckKeepaliveInterval = value; _durableAckKeepaliveIntervalUserSet = true; }
+    }
+
+    /// <summary>
     ///     Proxy override for the WebSocket transport. Accepts <c>disable</c> (no proxy, the default —
     ///     long-lived WS connections rarely survive HTTP proxies), <c>system</c> (use the system
     ///     default proxy), or an explicit proxy URI like <c>http://proxy.local:3128</c>. Ignored on
@@ -1617,6 +1670,11 @@ public record SenderOptions
                 continue;
             }
 
+            if (prop.Name == nameof(initial_connect_retry))
+            {
+                continue;
+            }
+
             if (SecretPropertyNames.Contains(prop.Name))
             {
                 continue;
@@ -1642,9 +1700,12 @@ public record SenderOptions
                 continue;
             }
 
-            var emitName = (IsWebSocket() && prop.Name == nameof(auth_timeout))
-                ? "auth_timeout_ms"
-                : prop.Name;
+            var emitName = prop.Name switch
+            {
+                nameof(initial_connect_mode) => "initial_connect_retry",
+                nameof(auth_timeout) when IsWebSocket() => "auth_timeout_ms",
+                _ => prop.Name,
+            };
 
             if (value is TimeSpan span)
             {

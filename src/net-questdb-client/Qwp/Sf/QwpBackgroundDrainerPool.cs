@@ -210,13 +210,9 @@ internal sealed class QwpBackgroundDrainerPool : IDisposable
             {
                 // Late teardown of a CTS / drainer dependency is shutdown noise, not a slot failure.
             }
-            catch (Exception ex) when (IsReplayImpossible(ex))
+            catch (Exception ex)
             {
                 TryDropFailedSentinel(slotLock.SlotDirectory, ex);
-            }
-            catch (Exception)
-            {
-                // Transient (timeout, transport, IO) — leave the slot for next attempt.
             }
             finally
             {
@@ -240,22 +236,6 @@ internal sealed class QwpBackgroundDrainerPool : IDisposable
             }
             slotLock.Dispose();
         }
-    }
-
-    private static bool IsReplayImpossible(Exception ex)
-    {
-        if (ex is QwpException q)
-        {
-            return q.Status switch
-            {
-                Enums.QwpStatusCode.SchemaMismatch => true,
-                Enums.QwpStatusCode.SecurityError => true,
-                Enums.QwpStatusCode.ParseError => true,
-                _ => false,
-            };
-        }
-
-        return false;
     }
 
     private const int FailedSentinelMaxBytes = 4096;

@@ -54,6 +54,7 @@ internal sealed class QwpSegmentRing : IDisposable
     private long _maxTotalBytes = long.MaxValue;
     private long _publishedFsn;
     private long _ackedFsn;
+    private long _fileGeneration = -1L;
     private Action? _managerWakeup;
     private Action? _spareInstalledCallback;
     private Action? _spareAdoptionFailed;
@@ -182,6 +183,7 @@ internal sealed class QwpSegmentRing : IDisposable
     {
         QwpFiles.EnsureDirectory(directory);
         var ring = new QwpSegmentRing(directory, segmentCapacity, maxFrameLength);
+        ring._fileGeneration = ScanMaxGeneration(directory);
 
         try
         {
@@ -520,7 +522,8 @@ internal sealed class QwpSegmentRing : IDisposable
             return TryAllocateNewActiveMemory(baseFsn);
         }
 
-        var realPath = Path.Combine(_directory!, BuildFileName(baseFsn));
+        var generation = Interlocked.Increment(ref _fileGeneration);
+        var realPath = Path.Combine(_directory!, BuildFileName(generation));
 
         var sparePath = Interlocked.Exchange(ref _hotSparePath, null);
         if (sparePath is not null && TryAdoptSpare(sparePath, realPath, baseFsn))
@@ -678,9 +681,26 @@ internal sealed class QwpSegmentRing : IDisposable
         if (_closed) throw new ObjectDisposedException(nameof(QwpSegmentRing));
     }
 
-    internal static string BuildFileName(long baseFsn)
+    internal static string BuildFileName(long generation)
     {
-        return FilenamePrefix + baseFsn.ToString("x16", CultureInfo.InvariantCulture) + FilenameSuffix;
+        return FilenamePrefix + generation.ToString("x16", CultureInfo.InvariantCulture) + FilenameSuffix;
+    }
+
+    private static long ScanMaxGeneration(string directory)
+    {
+        var max = -1L;
+        foreach (var path in QwpFiles.EnumerateFiles(directory, FilenamePrefix + "*" + FilenameSuffix))
+        {
+            var name = Path.GetFileName(path);
+            if (name.StartsWith(SparePrefix, StringComparison.Ordinal)) continue;
+            var hex = name.AsSpan(FilenamePrefix.Length,
+                name.Length - FilenamePrefix.Length - FilenameSuffix.Length);
+            if (hex.Length != 16) continue;
+            if (!long.TryParse(hex, System.Globalization.NumberStyles.HexNumber,
+                    CultureInfo.InvariantCulture, out var gen)) continue;
+            if (gen > max) max = gen;
+        }
+        return max;
     }
 
     private static void CleanupStaleSpares(string directory)

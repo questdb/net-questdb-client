@@ -104,16 +104,6 @@ internal static class QwpOrphanScanner
             return;
         }
 
-        if (QwpSlotLock.IsHolderHeartbeatFresh(slotDir))
-        {
-            return;
-        }
-
-        if (QwpSlotLock.IsHolderProcessAlive(slotDir))
-        {
-            return;
-        }
-
         var slotLock = QwpSlotLock.TryAcquire(slotDir);
         if (slotLock is null)
         {

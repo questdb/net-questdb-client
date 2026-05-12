@@ -97,7 +97,7 @@ public class QwpBackgroundDrainerPoolTests
     }
 
     [Test]
-    public async Task Enqueue_TransientFailure_LeavesSlotForRetry()
+    public async Task Enqueue_ServerFlushError_DropsFailedSentinel()
     {
         var slotDir = Path.Combine(_root, "slot");
         var slotLock = QwpSlotLock.Acquire(slotDir);
@@ -107,14 +107,11 @@ public class QwpBackgroundDrainerPoolTests
         pool.Enqueue(slotLock);
         await pool.WaitForAllAsync();
 
-        Assert.That(File.Exists(Path.Combine(slotDir, ".failed")), Is.False,
-            "transient errors must not permanently quarantine the slot");
-        using var reacquired = QwpSlotLock.Acquire(slotDir);
-        Assert.That(reacquired.SlotDirectory, Is.EqualTo(slotDir));
+        Assert.That(File.Exists(Path.Combine(slotDir, ".failed")), Is.True);
     }
 
     [Test]
-    public async Task Enqueue_GenericException_LeavesSlotForRetry()
+    public async Task Enqueue_GenericException_DropsFailedSentinel()
     {
         var slotDir = Path.Combine(_root, "slot");
         var slotLock = QwpSlotLock.Acquire(slotDir);
@@ -124,7 +121,7 @@ public class QwpBackgroundDrainerPoolTests
         pool.Enqueue(slotLock);
         await pool.WaitForAllAsync();
 
-        Assert.That(File.Exists(Path.Combine(slotDir, ".failed")), Is.False);
+        Assert.That(File.Exists(Path.Combine(slotDir, ".failed")), Is.True);
     }
 
     [Test]

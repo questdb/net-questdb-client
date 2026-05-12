@@ -33,6 +33,7 @@ internal sealed class QwpSenderErrorDispatcher : IDisposable
 {
     private readonly Channel<SenderError> _inbox;
     private readonly SenderErrorHandler _handler;
+    private readonly bool _hasCustomHandler;
     private readonly CancellationTokenSource _shutdown = new();
     private long _dropped;
     private long _delivered;
@@ -43,6 +44,7 @@ internal sealed class QwpSenderErrorDispatcher : IDisposable
     public QwpSenderErrorDispatcher(SenderErrorHandler? handler, int capacity)
     {
         if (capacity < 1) throw new ArgumentOutOfRangeException(nameof(capacity));
+        _hasCustomHandler = handler != null;
         _handler = handler ?? DefaultHandler;
         _inbox = Channel.CreateBounded<SenderError>(new BoundedChannelOptions(capacity)
         {
@@ -54,6 +56,9 @@ internal sealed class QwpSenderErrorDispatcher : IDisposable
 
     public long DroppedNotifications => Volatile.Read(ref _dropped);
     public long TotalDelivered => Volatile.Read(ref _delivered);
+
+    public bool HasDeliveredToCustomHandler =>
+        _hasCustomHandler && Volatile.Read(ref _delivered) > 0;
 
     public bool Offer(SenderError error)
     {

@@ -60,6 +60,11 @@ internal sealed class QwpCursorSendEngine : IDisposable
     private long _cursorFsn;
     private long _ackedFsn;
     private long _sentFsnHighWatermark;
+    private long _totalAcks;
+    private long _totalFramesSent;
+    private long _totalServerErrors;
+    private long _totalReconnectAttempts;
+    private long _totalReconnectsSucceeded;
     private bool _terminal;
     private Exception? _terminalError;
     private bool _seenFirstConnect;
@@ -168,6 +173,12 @@ internal sealed class QwpCursorSendEngine : IDisposable
             }
         }
     }
+
+    public long TotalFramesSent => Volatile.Read(ref _totalFramesSent);
+    public long TotalAcks => Volatile.Read(ref _totalAcks);
+    public long TotalServerErrors => Volatile.Read(ref _totalServerErrors);
+    public long TotalReconnectAttempts => Volatile.Read(ref _totalReconnectAttempts);
+    public long TotalReconnectsSucceeded => Volatile.Read(ref _totalReconnectsSucceeded);
 
     /// <summary>True once the engine has hit a terminal failure.</summary>
     public bool IsTerminallyFailed
@@ -573,6 +584,7 @@ internal sealed class QwpCursorSendEngine : IDisposable
 
             try
             {
+                Interlocked.Increment(ref _totalReconnectAttempts);
                 try
                 {
                     await transport.ConnectAsync(ct).ConfigureAwait(false);
@@ -649,6 +661,7 @@ internal sealed class QwpCursorSendEngine : IDisposable
                 }
 
                 _seenFirstConnect = true;
+                Interlocked.Increment(ref _totalReconnectsSucceeded);
                 backoff.Reset();
                 FireFirstConnectSucceeded();
 
@@ -812,6 +825,7 @@ internal sealed class QwpCursorSendEngine : IDisposable
             }
 
             await transport.SendBinaryAsync(sendBuffer.AsMemory(0, frameLen), ct).ConfigureAwait(false);
+            Interlocked.Increment(ref _totalFramesSent);
         }
     }
 
@@ -826,6 +840,7 @@ internal sealed class QwpCursorSendEngine : IDisposable
 
             if (!response.IsOk && !response.IsDurableAck)
             {
+                Interlocked.Increment(ref _totalServerErrors);
                 HandleServerRejection(response, fsnAtZero);
                 continue;
             }
@@ -837,6 +852,8 @@ internal sealed class QwpCursorSendEngine : IDisposable
                 if (_durableAckMode) HandleDurableAck(response, fsnAtZero);
                 continue;
             }
+
+            Interlocked.Increment(ref _totalAcks);
 
             var ackedSeq = response.Sequence;
             if (ackedSeq < 0)
@@ -995,12 +1012,21 @@ internal sealed class QwpCursorSendEngine : IDisposable
         {
             lock (_stateLock)
             {
-                var newAcked = checked(fromFsn + 1L);
-                if (newAcked > _ackedFsn)
+                if (_durableAckMode)
                 {
-                    _ackedFsn = newAcked;
-                    _ring.Acknowledge(_ackedFsn - 1);
-                    FireAckSignalLocked();
+                    var cappedSeq = fromFsn - fsnAtZero;
+                    _pendingDurable.Enqueue(new PendingDurable(cappedSeq, Array.Empty<QwpTableEntry>()));
+                    TrimCoveredPrefixLocked(fsnAtZero);
+                }
+                else
+                {
+                    var newAcked = checked(fromFsn + 1L);
+                    if (newAcked > _ackedFsn)
+                    {
+                        _ackedFsn = newAcked;
+                        _ring.Acknowledge(_ackedFsn - 1);
+                        FireAckSignalLocked();
+                    }
                 }
             }
         }

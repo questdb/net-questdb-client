@@ -42,14 +42,11 @@ internal readonly record struct QwpTableEntry(string TableName, long SeqTxn);
 ///     Three on-wire shapes are supported:
 ///     <list type="bullet">
 ///         <item>
-///             <b>OK (legacy)</b> — 9 bytes: <c>uint8 status (0x00)</c> + <c>int64 sequence</c>.
-///             The sequence is the cumulative ACK watermark; every batch with seq ≤
-///             <see cref="Sequence" /> has succeeded. <see cref="TableEntries" /> is empty.
-///         </item>
-///         <item>
-///             <b>OK (with per-table seqTxns)</b> — same prefix as legacy, plus a <c>uint16 tableCount</c>
-///             and <c>tableCount</c> repeating <c>[uint16 nameLen + name + int64 seqTxn]</c> entries.
-///             Servers send this shape when the client opted in via <c>request_durable_ack=on</c>.
+///             <b>OK</b> — 11+ bytes: <c>uint8 status (0x00)</c> + <c>int64 sequence</c> +
+///             <c>uint16 tableCount</c> + <c>tableCount</c> repeating
+///             <c>[uint16 nameLen + name + int64 seqTxn]</c> entries. The sequence is the
+///             cumulative ACK watermark; every batch with seq ≤ <see cref="Sequence" /> has
+///             succeeded.
 ///         </item>
 ///         <item>
 ///             <b>Durable-ACK</b> — <c>uint8 status (0x02)</c> + <c>uint16 tableCount</c> + entries.

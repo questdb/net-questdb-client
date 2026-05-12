@@ -22,7 +22,6 @@
  *
  ******************************************************************************/
 
-using System.Diagnostics;
 using System.Text;
 using QuestDB.Enums;
 using QuestDB.Utils;
@@ -47,18 +46,15 @@ internal sealed class QwpSlotLock : IDisposable
     private const string LockFileName = ".lock";
     private const string PidSidecarName = ".lock.pid";
     private const string HeartbeatFileName = ".heartbeat";
-    public static readonly TimeSpan HeartbeatStaleAfter = TimeSpan.FromMinutes(5);
 
     private readonly FileStream _file;
-    private readonly string _pidSidecarPath;
     private readonly string _heartbeatPath;
     private bool _disposed;
 
-    private QwpSlotLock(string slotDirectory, string lockFilePath, string pidSidecarPath, FileStream file)
+    private QwpSlotLock(string slotDirectory, string lockFilePath, FileStream file)
     {
         SlotDirectory = slotDirectory;
         LockFilePath = lockFilePath;
-        _pidSidecarPath = pidSidecarPath;
         _heartbeatPath = Path.Combine(slotDirectory, HeartbeatFileName);
         _file = file;
         RefreshHeartbeat();
@@ -105,7 +101,7 @@ internal sealed class QwpSlotLock : IDisposable
         }
 
         WritePidSidecar(pidPath);
-        return new QwpSlotLock(slotDirectory, path, pidPath, fs);
+        return new QwpSlotLock(slotDirectory, path, fs);
     }
 
     /// <summary>Like <see cref="Acquire" /> but returns <c>null</c> on collision instead of throwing.</summary>
@@ -121,7 +117,7 @@ internal sealed class QwpSlotLock : IDisposable
         if (fs is null) return null;
 
         WritePidSidecar(pidPath);
-        return new QwpSlotLock(slotDirectory, path, pidPath, fs);
+        return new QwpSlotLock(slotDirectory, path, fs);
     }
 
     private static void RejectIfNetworkPath(string slotDirectory)
@@ -140,7 +136,7 @@ internal sealed class QwpSlotLock : IDisposable
     {
         try
         {
-            File.WriteAllText(pidPath, Environment.ProcessId.ToString(), Encoding.ASCII);
+            File.WriteAllText(pidPath, Environment.ProcessId + "\n", Encoding.UTF8);
         }
         catch
         {
@@ -161,57 +157,6 @@ internal sealed class QwpSlotLock : IDisposable
         }
     }
 
-    internal static int? TryReadHolderPid(string slotDirectory)
-    {
-        try
-        {
-            var pidPath = Path.Combine(slotDirectory, PidSidecarName);
-            if (!File.Exists(pidPath)) return null;
-            var s = File.ReadAllText(pidPath, Encoding.ASCII).Trim();
-            return int.TryParse(s, System.Globalization.NumberStyles.Integer,
-                System.Globalization.CultureInfo.InvariantCulture, out var pid) ? pid : null;
-        }
-        catch
-        {
-            return null;
-        }
-    }
-
-    internal static bool IsHolderProcessAlive(string slotDirectory)
-    {
-        var pid = TryReadHolderPid(slotDirectory);
-        if (pid is null || pid <= 0) return false;
-        try
-        {
-            using var proc = Process.GetProcessById(pid.Value);
-            return !proc.HasExited;
-        }
-        catch
-        {
-            return false;
-        }
-    }
-
-    /// <summary>
-    ///     True when the slot has a heartbeat file whose mtime is within
-    ///     <see cref="HeartbeatStaleAfter" />. PID-reuse safe: even if the original sender's PID
-    ///     was recycled into an unrelated process, a stale mtime makes the slot adoptable.
-    /// </summary>
-    internal static bool IsHolderHeartbeatFresh(string slotDirectory)
-    {
-        try
-        {
-            var path = Path.Combine(slotDirectory, HeartbeatFileName);
-            if (!File.Exists(path)) return false;
-            var mtime = File.GetLastWriteTimeUtc(path);
-            return DateTime.UtcNow - mtime < HeartbeatStaleAfter;
-        }
-        catch
-        {
-            return false;
-        }
-    }
-
     /// <inheritdoc />
     public void Dispose()
     {
@@ -226,22 +171,6 @@ internal sealed class QwpSlotLock : IDisposable
             _file.Dispose();
         }
         catch (Exception)
-        {
-        }
-
-        try
-        {
-            if (File.Exists(_pidSidecarPath)) File.Delete(_pidSidecarPath);
-        }
-        catch
-        {
-        }
-
-        try
-        {
-            if (File.Exists(_heartbeatPath)) File.Delete(_heartbeatPath);
-        }
-        catch
         {
         }
     }

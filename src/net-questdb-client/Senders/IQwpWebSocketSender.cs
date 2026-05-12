@@ -91,4 +91,19 @@ public interface IQwpWebSocketSender : ISender
     ///     user-supplied (or default) error_handler. SF mode only; <c>0</c> otherwise.
     /// </summary>
     long TotalErrorNotificationsDelivered { get; }
+
+    /// <summary>Total frames sent.</summary>
+    long TotalFramesSent { get; }
+
+    /// <summary>Total OK ack frames received. Excludes durable-ack and error frames.</summary>
+    long TotalAcks { get; }
+
+    /// <summary>Total server error frames received.</summary>
+    long TotalServerErrors { get; }
+
+    /// <summary>Total connect attempts (succeeded plus failed).</summary>
+    long TotalReconnectAttempts { get; }
+
+    /// <summary>Total successful connects.</summary>
+    long TotalReconnectsSucceeded { get; }
 }

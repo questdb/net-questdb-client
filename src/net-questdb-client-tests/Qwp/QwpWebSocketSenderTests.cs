@@ -125,15 +125,22 @@ public class QwpWebSocketSenderTests
         });
         await server.StartAsync();
 
-        using var sender = NewSender(server, "auto_flush=off;on_server_error=halt;");
-        var qwp = (IQwpWebSocketSender)sender;
+        var sender = NewSender(server, "auto_flush=off;on_server_error=halt;");
+        try
+        {
+            var qwp = (IQwpWebSocketSender)sender;
 
-        sender.Table("t").Column("v", 1L).At(DateTime.UtcNow);
-        sender.Send();
-        Assert.CatchAsync<IngressError>(async () => await qwp.PingAsync());
+            sender.Table("t").Column("v", 1L).At(DateTime.UtcNow);
+            sender.Send();
+            Assert.CatchAsync<IngressError>(async () => await qwp.PingAsync());
 
-        Assert.Catch<IngressError>(() => sender.Table("t").Column("v", 2L).At(DateTime.UtcNow));
-        Assert.Catch<IngressError>(() => sender.Send());
+            Assert.Catch<IngressError>(() => sender.Table("t").Column("v", 2L).At(DateTime.UtcNow));
+            Assert.Catch<IngressError>(() => sender.Send());
+        }
+        finally
+        {
+            try { sender.Dispose(); } catch { }
+        }
     }
 
     [Test]
@@ -323,7 +330,7 @@ public class QwpWebSocketSenderTests
     }
 
     [Test]
-    public async Task DisposeAsync_OnTerminalSender_DoesNotThrow()
+    public async Task DisposeAsync_OnTerminalSender_RethrowsLatchedError()
     {
         await using var server = new DummyQwpServer(new DummyQwpServerOptions
         {
@@ -337,7 +344,8 @@ public class QwpWebSocketSenderTests
         sender.Send();
         Assert.CatchAsync<IngressError>(async () => await qwp.PingAsync());
 
-        Assert.DoesNotThrowAsync(async () => await ((IAsyncDisposable)sender).DisposeAsync());
+        Assert.ThrowsAsync<LineSenderServerException>(
+            async () => await ((IAsyncDisposable)sender).DisposeAsync());
     }
 
     [Test]
@@ -455,41 +463,48 @@ public class QwpWebSocketSenderTests
         });
         await server.StartAsync();
 
-        using var sender = NewSender(server,
+        var sender = NewSender(server,
             "auto_flush=off;reconnect_initial_backoff_millis=10;reconnect_max_backoff_millis=50;reconnect_max_duration_millis=5000;");
-        sender.Table("t").Column("v", 1L).At(DateTime.UtcNow);
-        sender.Send();
-
-        await WaitFor(() => server.ReceivedFrames.Count >= 1);
-
-        // Once the protocol-violation close hits the engine, the next API call must surface a
-        // terminal IngressError carrying ProtocolViolation — without sitting in reconnect.
-        IngressError? caught = null;
-        await WaitFor(() =>
+        try
         {
-            try
-            {
-                sender.Table("t").Column("v", 2L).At(DateTime.UtcNow);
-                sender.Send();
-                return false;
-            }
-            catch (IngressError ex)
-            {
-                caught = ex;
-                return true;
-            }
-        }, timeoutMs: 5000);
+            sender.Table("t").Column("v", 1L).At(DateTime.UtcNow);
+            sender.Send();
 
-        Assert.That(caught, Is.Not.Null);
-        var rootCode = caught!.code is ErrorCode.ProtocolViolation
-            ? caught.code
-            : (caught.InnerException as IngressError)?.code ?? caught.code;
-        Assert.That(rootCode, Is.EqualTo(ErrorCode.ProtocolViolation));
+            await WaitFor(() => server.ReceivedFrames.Count >= 1);
 
-        // No reconnect attempts: the engine must terminate after the single upgrade. Frame count
-        // races with the in-flight close so isn't a stable signal — UpgradeCount is.
-        await Task.Delay(200);
-        Assert.That(server.UpgradeCount, Is.EqualTo(1));
+            // Once the protocol-violation close hits the engine, the next API call must surface a
+            // terminal IngressError carrying ProtocolViolation — without sitting in reconnect.
+            IngressError? caught = null;
+            await WaitFor(() =>
+            {
+                try
+                {
+                    sender.Table("t").Column("v", 2L).At(DateTime.UtcNow);
+                    sender.Send();
+                    return false;
+                }
+                catch (IngressError ex)
+                {
+                    caught = ex;
+                    return true;
+                }
+            }, timeoutMs: 5000);
+
+            Assert.That(caught, Is.Not.Null);
+            var rootCode = caught!.code is ErrorCode.ProtocolViolation
+                ? caught.code
+                : (caught.InnerException as IngressError)?.code ?? caught.code;
+            Assert.That(rootCode, Is.EqualTo(ErrorCode.ProtocolViolation));
+
+            // No reconnect attempts: the engine must terminate after the single upgrade. Frame count
+            // races with the in-flight close so isn't a stable signal — UpgradeCount is.
+            await Task.Delay(200);
+            Assert.That(server.UpgradeCount, Is.EqualTo(1));
+        }
+        finally
+        {
+            try { sender.Dispose(); } catch { }
+        }
     }
 
     [Test]
@@ -728,15 +743,21 @@ public class QwpWebSocketSenderTests
             },
         });
         await server.StartAsync();
-        using var sender = NewSender(server, "auto_flush=off;on_server_error=halt;");
+        var sender = NewSender(server, "auto_flush=off;on_server_error=halt;");
+        try
+        {
+            var qwp = (IQwpWebSocketSender)sender;
+            sender.Table("t").Column("v", 1L).At(DateTime.UtcNow);
+            sender.Send(); // first batch — OK
 
-        var qwp = (IQwpWebSocketSender)sender;
-        sender.Table("t").Column("v", 1L).At(DateTime.UtcNow);
-        sender.Send(); // first batch — OK
-
-        sender.Table("t").Column("v", 2L).At(DateTime.UtcNow);
-        sender.Send();
-        Assert.CatchAsync<IngressError>(async () => await qwp.PingAsync());
+            sender.Table("t").Column("v", 2L).At(DateTime.UtcNow);
+            sender.Send();
+            Assert.CatchAsync<IngressError>(async () => await qwp.PingAsync());
+        }
+        finally
+        {
+            try { sender.Dispose(); } catch { }
+        }
     }
 
     [Test]
@@ -1084,16 +1105,23 @@ public class QwpWebSocketSenderTests
             FrameHandler = _ => BuildErrorAck(QwpStatusCode.WriteError, 0, "boom"),
         });
         await server.StartAsync();
-        using var sender = NewSender(server, "auto_flush=off;on_server_error=halt;");
-        var qwp = (IQwpWebSocketSender)sender;
+        var sender = NewSender(server, "auto_flush=off;on_server_error=halt;");
+        try
+        {
+            var qwp = (IQwpWebSocketSender)sender;
 
-        sender.Table("t").Column("v", 1L).At(DateTime.UtcNow);
-        sender.Send();
-        try { await qwp.PingAsync(); } catch { /* expected terminal */ }
+            sender.Table("t").Column("v", 1L).At(DateTime.UtcNow);
+            sender.Send();
+            try { await qwp.PingAsync(); } catch { /* expected terminal */ }
 
-        Assert.Throws<IngressError>(() => sender.Truncate());
-        Assert.Throws<IngressError>(() => sender.CancelRow());
-        Assert.Throws<IngressError>(() => sender.Clear());
+            Assert.Throws<IngressError>(() => sender.Truncate());
+            Assert.Throws<IngressError>(() => sender.CancelRow());
+            Assert.Throws<IngressError>(() => sender.Clear());
+        }
+        finally
+        {
+            try { sender.Dispose(); } catch { }
+        }
     }
 
     private static async Task WaitFor(Func<bool> predicate, int timeoutMs = 2000)

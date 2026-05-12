@@ -602,7 +602,12 @@ internal sealed class QwpMmapSegment : IQwpSegment
             throw new InvalidDataException($"segment {path}: unsupported version {version}");
         }
 
-        return BinaryPrimitives.ReadInt64LittleEndian(hdr.Slice(8, 8));
+        var readBaseFsn = BinaryPrimitives.ReadInt64LittleEndian(hdr.Slice(8, 8));
+        if (readBaseFsn < 0)
+        {
+            throw new InvalidDataException($"segment {path}: bad baseFsn {readBaseFsn}");
+        }
+        return readBaseFsn;
     }
 
     private static void WriteHeader(MemoryMappedViewAccessor view, long baseFsn, long createdAtMicros)

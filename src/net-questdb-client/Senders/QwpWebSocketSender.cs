@@ -743,6 +743,21 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
     /// <inheritdoc />
     public long TotalErrorNotificationsDelivered => _errorDispatcher?.TotalDelivered ?? 0L;
 
+    /// <inheritdoc />
+    public long TotalFramesSent => _engine.TotalFramesSent;
+
+    /// <inheritdoc />
+    public long TotalAcks => _engine.TotalAcks;
+
+    /// <inheritdoc />
+    public long TotalServerErrors => _engine.TotalServerErrors;
+
+    /// <inheritdoc />
+    public long TotalReconnectAttempts => _engine.TotalReconnectAttempts;
+
+    /// <inheritdoc />
+    public long TotalReconnectsSucceeded => _engine.TotalReconnectsSucceeded;
+
     private void UpdateSeqTxnFromAck(QwpTableEntry entry, bool isDurable)
     {
         lock (_seqTxnLock)
@@ -841,15 +856,11 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
         var timeoutMs = Options.close_flush_timeout_millis.TotalMilliseconds;
         if (timeoutMs <= 0) return null;
 
-        var pre = _engine.TerminalError;
-        if (pre != null) return ExceptionDispatchInfo.Capture(pre);
-
         try { drain(); }
         catch (TimeoutException) { LogCloseFlushTimeoutWarn(timeoutMs); }
         catch { }
 
-        var post = _engine.TerminalError;
-        return post != null ? ExceptionDispatchInfo.Capture(post) : null;
+        return CaptureTerminalForRethrow();
     }
 
     private async ValueTask<ExceptionDispatchInfo?> DrainOnCloseAsync(Func<ValueTask> drain)
@@ -857,15 +868,19 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
         var timeoutMs = Options.close_flush_timeout_millis.TotalMilliseconds;
         if (timeoutMs <= 0) return null;
 
-        var pre = _engine.TerminalError;
-        if (pre != null) return ExceptionDispatchInfo.Capture(pre);
-
         try { await drain().ConfigureAwait(false); }
         catch (TimeoutException) { LogCloseFlushTimeoutWarn(timeoutMs); }
         catch { }
 
-        var post = _engine.TerminalError;
-        return post != null ? ExceptionDispatchInfo.Capture(post) : null;
+        return CaptureTerminalForRethrow();
+    }
+
+    private ExceptionDispatchInfo? CaptureTerminalForRethrow()
+    {
+        var terminal = _engine.TerminalError;
+        if (terminal is null) return null;
+        if (_errorDispatcher?.HasDeliveredToCustomHandler == true) return null;
+        return ExceptionDispatchInfo.Capture(terminal);
     }
 
     private void LogCloseFlushTimeoutWarn(double timeoutMs)

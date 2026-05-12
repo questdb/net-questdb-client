@@ -104,9 +104,16 @@ internal sealed class QwpBackgroundDrainer : IQwpSlotDrainer
     {
         var ctx = _contextBuilder();
         var ring = QwpSegmentRing.Open(slotDirectory, segmentCapacity: _segmentCapacity);
+        QwpAckWatermark? watermark = null;
         QwpCursorSendEngine? engine = null;
         try
         {
+            if (ring.NextFsn == 0)
+            {
+                QwpAckWatermark.RemoveOrphan(slotDirectory);
+            }
+            watermark = QwpAckWatermark.Open(slotDirectory);
+
             // Construct the engine even when the ring is empty so engine.Dispose's full-drain
             // branch still unlinks residual sf-*.sfa files. A slot with empty .sfa survivors
             // would otherwise be re-adopted by every subsequent scan and never make progress.
@@ -118,7 +125,8 @@ internal sealed class QwpBackgroundDrainer : IQwpSlotDrainer
                 appendDeadline: TimeSpan.FromSeconds(30),
                 initialConnectMode: InitialConnectMode.off,
                 skipBackoffPredicate: ctx.SkipBackoffPredicate,
-                durableAckMode: _durableAckMode);
+                durableAckMode: _durableAckMode,
+                ackWatermark: watermark);
 
             if (ring.NextFsn > ring.OldestFsn)
             {
@@ -135,6 +143,7 @@ internal sealed class QwpBackgroundDrainer : IQwpSlotDrainer
             else
             {
                 ring.Dispose();
+                if (watermark is not null) watermark.Dispose();
             }
         }
     }

@@ -470,18 +470,6 @@ internal sealed class QwpResultBatchDecoder
             throw new QwpDecodeException("truncated before decimal scale prefix");
         }
         var scale = payload[p++];
-        var maxScale = valueBytes switch
-        {
-            8  => QwpConstants.MaxDecimal64Scale,
-            16 => QwpConstants.MaxDecimal128Scale,
-            32 => QwpConstants.MaxDecimal256Scale,
-            _  => byte.MaxValue,
-        };
-        if (scale > maxScale)
-        {
-            throw new QwpDecodeException(
-                $"decimal scale {scale} exceeds the wire-format max {maxScale} for {valueBytes}-byte decimals");
-        }
         SetScale(col, scale);
         CopyFixed(payload, ref p, col, nonNull * valueBytes);
     }

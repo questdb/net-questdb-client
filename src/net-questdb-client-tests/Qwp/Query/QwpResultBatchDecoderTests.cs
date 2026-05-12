@@ -1204,7 +1204,7 @@ public class QwpResultBatchDecoderTests
     }
 
     [Test]
-    public void Decode_Decimal128_OutOfRangeScale_Throws()
+    public void Decode_Decimal128_HighScale_DecodesAsByteValue()
     {
         var schema = new ResultSchema { SchemaId = 80, Columns = { new SchemaColumn("d", QwpTypeCode.Decimal128) } };
         var data = new ResultBatchData
@@ -1212,11 +1212,12 @@ public class QwpResultBatchDecoderTests
             RowCount = 1,
             Columns = { new DecimalColumnData { Scale = 200, DenseBytes = new byte[16] } },
         };
-        Assert.Throws<QwpDecodeException>(() => DecodeOneBatch(schema, data));
+        var (_, batch, _, _) = DecodeOneBatch(schema, data);
+        Assert.That(batch.GetDecimalScale(0), Is.EqualTo((byte)200));
     }
 
     [Test]
-    public void Decode_Decimal64_OutOfRangeScale_Throws()
+    public void Decode_Decimal64_HighScale_DecodesAsByteValue()
     {
         var schema = new ResultSchema { SchemaId = 81, Columns = { new SchemaColumn("d", QwpTypeCode.Decimal64) } };
         var data = new ResultBatchData
@@ -1224,7 +1225,21 @@ public class QwpResultBatchDecoderTests
             RowCount = 1,
             Columns = { new DecimalColumnData { Scale = 25, DenseBytes = new byte[8] } },
         };
-        Assert.Throws<QwpDecodeException>(() => DecodeOneBatch(schema, data));
+        var (_, batch, _, _) = DecodeOneBatch(schema, data);
+        Assert.That(batch.GetDecimalScale(0), Is.EqualTo((byte)25));
+    }
+
+    [Test]
+    public void Decode_Decimal256_MaxScale_DecodesAsByteValue()
+    {
+        var schema = new ResultSchema { SchemaId = 82, Columns = { new SchemaColumn("d", QwpTypeCode.Decimal256) } };
+        var data = new ResultBatchData
+        {
+            RowCount = 1,
+            Columns = { new DecimalColumnData { Scale = 255, DenseBytes = new byte[32] } },
+        };
+        var (_, batch, _, _) = DecodeOneBatch(schema, data);
+        Assert.That(batch.GetDecimalScale(0), Is.EqualTo(byte.MaxValue));
     }
 
     [Test]

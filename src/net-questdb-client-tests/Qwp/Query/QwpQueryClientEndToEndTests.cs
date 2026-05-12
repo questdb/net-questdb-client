@@ -159,6 +159,47 @@ public class QwpQueryClientEndToEndTests
     }
 
     [Test]
+    public async Task V2ServerInfo_TrailingBytes_FromUnknownCapBit_AreIgnored()
+    {
+        var baseFrame = QwpEgressFrameBuilder.BuildServerInfo(
+            role: QwpConstants.RolePrimary,
+            epoch: 1UL,
+            capabilities: 0,
+            serverWallNs: 0L,
+            clusterId: "c",
+            nodeId: "n");
+
+        var extra = new byte[] { 0xDE, 0xAD, 0xBE, 0xEF };
+        var extended = new byte[baseFrame.Length + extra.Length];
+        Buffer.BlockCopy(baseFrame, 0, extended, 0, baseFrame.Length);
+        Buffer.BlockCopy(extra, 0, extended, baseFrame.Length, extra.Length);
+        var existingLen = BinaryPrimitives.ReadUInt32LittleEndian(
+            extended.AsSpan(QwpConstants.OffsetPayloadLength, 4));
+        BinaryPrimitives.WriteUInt32LittleEndian(
+            extended.AsSpan(QwpConstants.OffsetPayloadLength, 4),
+            existingLen + (uint)extra.Length);
+
+        var schema = new ResultSchema { SchemaId = 1, Columns = { new SchemaColumn("c", QwpTypeCode.Long) } };
+        var data = new ResultBatchData { RowCount = 1, Columns = { new FixedColumnData { DenseBytes = LongLe(1L) } } };
+        var batch = QwpEgressFrameBuilder.BuildResultBatch(1L, 0L, schema, data);
+        var end = QwpEgressFrameBuilder.BuildResultEnd(1L, 0L, 1L);
+
+        await using var server = new DummyQwpServer(new DummyQwpServerOptions
+        {
+            Path = QwpConstants.ReadPath,
+            NegotiatedVersion = "2",
+            InitialServerFrame = extended,
+            FrameHandlerMulti = _ => new[] { batch, end },
+        });
+        await server.StartAsync();
+
+        using var client = QueryClient.New(BuildConnString(server, "target=primary;"));
+        Assert.That(client.ServerInfo, Is.Not.Null);
+        Assert.That(client.ServerInfo!.Role, Is.EqualTo(QwpConstants.RolePrimary));
+        Assert.That(client.ServerInfo.NodeId, Is.EqualTo("n"));
+    }
+
+    [Test]
     public async Task V2ServerInfo_WithCapZone_ExposesZoneId()
     {
         var serverInfo = QwpEgressFrameBuilder.BuildServerInfo(

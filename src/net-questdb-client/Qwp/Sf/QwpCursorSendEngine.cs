@@ -50,6 +50,7 @@ internal sealed class QwpCursorSendEngine : IDisposable
     private readonly Func<bool>? _skipBackoffPredicate;
     private readonly QwpSenderErrorDispatcher? _errorDispatcher;
     private readonly SenderErrorPolicyResolver? _policyResolver;
+    private readonly QwpAckWatermark? _ackWatermark;
     private readonly object _stateLock = new();
     private readonly byte[] _sendBuffer;
     private readonly byte[] _ackBuffer;
@@ -107,6 +108,12 @@ internal sealed class QwpCursorSendEngine : IDisposable
     ///     frames directly. The caller must have verified the server echoed
     ///     <c>X-QWP-Durable-Ack: enabled</c> on the upgrade.
     /// </param>
+    /// <param name="ackWatermark">
+    ///     Optional persisted durable-ack high-water mark. When supplied, refines the startup
+    ///     ackedFsn seed past frames the previous session already had durable-acks for,
+    ///     avoiding row-level re-replay inside the lowest surviving sealed segment. The engine
+    ///     takes ownership and disposes the watermark on shutdown.
+    /// </param>
     public QwpCursorSendEngine(
         QwpSlotLock? slotLock,
         QwpSegmentRing ring,
@@ -118,7 +125,8 @@ internal sealed class QwpCursorSendEngine : IDisposable
         Func<bool>? skipBackoffPredicate = null,
         QwpSenderErrorDispatcher? errorDispatcher = null,
         SenderErrorPolicyResolver? policyResolver = null,
-        bool durableAckMode = false)
+        bool durableAckMode = false,
+        QwpAckWatermark? ackWatermark = null)
     {
         ArgumentNullException.ThrowIfNull(ring);
         ArgumentNullException.ThrowIfNull(transportFactory);
@@ -138,9 +146,33 @@ internal sealed class QwpCursorSendEngine : IDisposable
         _errorDispatcher = errorDispatcher;
         _policyResolver = policyResolver;
         _durableAckMode = durableAckMode;
-        _cursorFsn = ring.OldestFsn;
-        _ackedFsn = ring.OldestFsn;
+        _ackWatermark = ackWatermark;
+
+        var baseSeed = ring.OldestFsn;
+        if (ackWatermark is not null)
+        {
+            var wm = ackWatermark.Read();
+            if (wm != QwpAckWatermark.Invalid)
+            {
+                // max() absorbs either ordering of the manager's persist-then-trim tick.
+                var candidate = Math.Max(baseSeed, wm + 1);
+                // candidate > NextFsn means corruption: a clean prior session can't produce one.
+                if (candidate <= ring.NextFsn)
+                {
+                    baseSeed = candidate;
+                }
+            }
+        }
+
+        _cursorFsn = baseSeed;
+        _ackedFsn = baseSeed;
+        if (baseSeed > ring.OldestFsn)
+        {
+            ring.Acknowledge(baseSeed - 1);
+        }
+
         _segmentManager = new QwpSegmentManager(ring, maxTotalBytes);
+        _segmentManager.SetAckWatermark(ackWatermark);
         _sendBuffer = new byte[ring.SegmentCapacity];
         _ackBuffer = new byte[AckBufferSize];
         // Spare arrival from the manager wakes any producer parked in AppendBlocking.
@@ -516,10 +548,12 @@ internal sealed class QwpCursorSendEngine : IDisposable
     {
         SfCleanup.Dispose(_segmentManager);
         SfCleanup.Dispose(_ring);
+        SfCleanup.Dispose(_ackWatermark);
 
         if (fullyDrained && slotDir is not null)
         {
             UnlinkSegmentFiles(slotDir);
+            QwpAckWatermark.RemoveOrphan(slotDir);
         }
 
         SfCleanup.Dispose(_slotLock);

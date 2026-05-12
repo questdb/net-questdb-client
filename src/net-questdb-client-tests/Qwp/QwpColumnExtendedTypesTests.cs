@@ -138,18 +138,74 @@ public class QwpColumnExtendedTypesTests
     }
 
     [Test]
-    public void AppendLong256_Negative_Throws()
+    public void AppendLong256_NegativeOne_EncodesAsAll0xFF()
     {
         var col = new QwpColumn("hash", 0);
-        Assert.Throws<IngressError>(() => col.AppendLong256(new BigInteger(-1)));
+        col.AppendLong256(new BigInteger(-1));
+
+        var span = col.FixedData!.AsSpan(0, 32);
+        for (var i = 0; i < 32; i++)
+        {
+            Assert.That(span[i], Is.EqualTo((byte)0xFF), $"byte {i}");
+        }
     }
 
     [Test]
-    public void AppendLong256_TooLarge_Throws()
+    public void AppendLong256_MinSignedInt256_EncodesAsHighBitOnly()
+    {
+        var col = new QwpColumn("hash", 0);
+        var minSigned = -(BigInteger.One << 255);
+        col.AppendLong256(minSigned);
+
+        var span = col.FixedData!.AsSpan(0, 32);
+        for (var i = 0; i < 31; i++)
+        {
+            Assert.That(span[i], Is.Zero, $"byte {i}");
+        }
+        Assert.That(span[31], Is.EqualTo((byte)0x80));
+    }
+
+    [Test]
+    public void AppendLong256_BelowSignedMinimum_Throws()
+    {
+        var col = new QwpColumn("hash", 0);
+        var underflow = -(BigInteger.One << 255) - 1;
+        Assert.Throws<IngressError>(() => col.AppendLong256(underflow));
+    }
+
+    [Test]
+    public void AppendLong256_AboveUnsignedMaximum_Throws()
     {
         var col = new QwpColumn("hash", 0);
         var tooBig = BigInteger.One << 256;
         Assert.Throws<IngressError>(() => col.AppendLong256(tooBig));
+    }
+
+    [Test]
+    public void AppendLong256_FourLongs_WritesLittleEndianWords()
+    {
+        var col = new QwpColumn("hash", 0);
+        col.AppendLong256(0x0807060504030201L, 0x100F0E0D0C0B0A09L, 0x1817161514131211L, 0x201F1E1D1C1B1A19L);
+
+        Assert.That(col.TypeCode, Is.EqualTo(QwpTypeCode.Long256));
+        Assert.That(col.FixedLen, Is.EqualTo(32));
+
+        var span = col.FixedData!.AsSpan(0, 32);
+        for (var i = 0; i < 32; i++)
+        {
+            Assert.That(span[i], Is.EqualTo((byte)(i + 1)), $"byte {i}");
+        }
+    }
+
+    [Test]
+    public void AppendLong256_FourLongs_AllOnes_RoundTripsToBigInteger()
+    {
+        var colA = new QwpColumn("a", 0);
+        var colB = new QwpColumn("b", 0);
+        colA.AppendLong256(-1L, -1L, -1L, -1L);
+        colB.AppendLong256((BigInteger.One << 256) - 1);
+        Assert.That(colA.FixedData!.AsSpan(0, 32).ToArray(),
+            Is.EqualTo(colB.FixedData!.AsSpan(0, 32).ToArray()));
     }
 
     [Test]

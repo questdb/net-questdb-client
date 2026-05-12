@@ -46,6 +46,8 @@ internal sealed class QwpSegmentManager : IDisposable
     private bool _disposed;
     private Exception? _lastServiceError;
     private Action? _heartbeatCallback;
+    private QwpAckWatermark? _ackWatermark;
+    private long _lastPersistedAck = long.MinValue;
 
     public QwpSegmentManager(QwpSegmentRing ring, long maxTotalBytes, TimeSpan? shutdownWait = null)
     {
@@ -76,6 +78,11 @@ internal sealed class QwpSegmentManager : IDisposable
     public void SetHeartbeatCallback(Action? callback)
     {
         Volatile.Write(ref _heartbeatCallback, callback);
+    }
+
+    public void SetAckWatermark(QwpAckWatermark? watermark)
+    {
+        _ackWatermark = watermark;
     }
     internal long TrimCycles { get; private set; }
     internal long SparesInstalled { get; private set; }
@@ -207,10 +214,23 @@ internal sealed class QwpSegmentManager : IDisposable
             }
         }
 
+        PersistAckWatermark();
         DrainAndDisposeTrimmable();
         _ring.FlushActive();
         try { Volatile.Read(ref _heartbeatCallback)?.Invoke(); }
         catch (Exception ex) { Volatile.Write(ref _lastServiceError, ex); }
+    }
+
+    private void PersistAckWatermark()
+    {
+        var watermark = _ackWatermark;
+        if (watermark is null) return;
+        var currentAck = _ring.AckedFsn;
+        if (currentAck > _lastPersistedAck)
+        {
+            watermark.Write(currentAck);
+            _lastPersistedAck = currentAck;
+        }
     }
 
     private void ProvisionHotSpare()

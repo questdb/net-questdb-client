@@ -52,6 +52,9 @@ internal sealed class QwpColumn
     private const int InitialStringCapacity = 64;
     private const int InitialSymbolCapacity = 32;
 
+    private static readonly BigInteger Long256MinSigned = -(BigInteger.One << 255);
+    private static readonly BigInteger Long256Pow2_256 = BigInteger.One << 256;
+
     /// <summary>
     ///     Constructs a new column with the given name. Type is set by the first non-null append.
     /// </summary>
@@ -580,26 +583,49 @@ internal sealed class QwpColumn
     }
 
     /// <summary>
-    ///     Appends a LONG256 value. The value must be non-negative and fit in 256 bits unsigned.
+    ///     Appends a LONG256 value as four little-endian 64-bit words. Zero-allocation; matches the
+    ///     canonical wire layout exactly.
+    /// </summary>
+    public void AppendLong256(long l0, long l1, long l2, long l3)
+    {
+        AssertOrSetType(QwpTypeCode.Long256);
+        EnsureFixedCapacity(FixedLen + QwpConstants.Long256SizeBytes);
+        var dest = FixedData.AsSpan(FixedLen, QwpConstants.Long256SizeBytes);
+        BinaryPrimitives.WriteInt64LittleEndian(dest.Slice(0, 8), l0);
+        BinaryPrimitives.WriteInt64LittleEndian(dest.Slice(8, 8), l1);
+        BinaryPrimitives.WriteInt64LittleEndian(dest.Slice(16, 8), l2);
+        BinaryPrimitives.WriteInt64LittleEndian(dest.Slice(24, 8), l3);
+        FixedLen += QwpConstants.Long256SizeBytes;
+        AdvanceNonNull();
+    }
+
+    /// <summary>
+    ///     Appends a LONG256 value from a <see cref="BigInteger" />. Accepts the full 256-bit
+    ///     range under either interpretation: <c>[0, 2^256 - 1]</c> unsigned or
+    ///     <c>[-(2^255), 2^255 - 1]</c> signed. Negative values are encoded as two's-complement
+    ///     low 32 bytes.
     /// </summary>
     public void AppendLong256(BigInteger value)
     {
         AssertOrSetType(QwpTypeCode.Long256);
-
-        if (value.Sign < 0)
-        {
-            throw new IngressError(ErrorCode.InvalidApiCall,
-                $"column '{Name}' Long256 values must be non-negative");
-        }
-
         EnsureFixedCapacity(FixedLen + QwpConstants.Long256SizeBytes);
         var dest = FixedData.AsSpan(FixedLen, QwpConstants.Long256SizeBytes);
 
-        // Write unsigned LE bytes directly into the destination span; no per-row byte[] alloc.
-        if (!value.TryWriteBytes(dest, out var bytesWritten, isUnsigned: true, isBigEndian: false))
+        var raw = value;
+        if (raw.Sign < 0)
+        {
+            if (raw < Long256MinSigned)
+            {
+                throw new IngressError(ErrorCode.InvalidApiCall,
+                    $"column '{Name}' Long256 value below the 256-bit signed minimum -(2^255)");
+            }
+            raw = Long256Pow2_256 + raw;
+        }
+
+        if (!raw.TryWriteBytes(dest, out var bytesWritten, isUnsigned: true, isBigEndian: false))
         {
             throw new IngressError(ErrorCode.InvalidApiCall,
-                $"column '{Name}' Long256 value exceeds 256 bits ({value.GetByteCount(isUnsigned: true) * 8} bits supplied)");
+                $"column '{Name}' Long256 value exceeds the 256-bit unsigned maximum 2^256 - 1");
         }
 
         if (bytesWritten < QwpConstants.Long256SizeBytes)

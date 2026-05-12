@@ -96,6 +96,7 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
         var sfMode = !string.IsNullOrEmpty(options.sf_dir);
         QwpSlotLock? slotLock = null;
         QwpSegmentRing? ring = null;
+        QwpAckWatermark? ackWatermark = null;
         QwpCursorSendEngine? engine = null;
         QwpBackgroundDrainerPool? pool = null;
         QwpSenderErrorDispatcher? dispatcher = null;
@@ -108,6 +109,12 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
                 var slotDir = Path.Combine(sfRoot, options.sender_id);
                 slotLock = QwpSlotLock.Acquire(slotDir);
                 ring = QwpSegmentRing.Open(slotDir, segmentCapacity: options.sf_max_bytes);
+                if (ring.NextFsn == 0)
+                {
+                    // Clear any stale watermark from a prior session that left no segments behind.
+                    QwpAckWatermark.RemoveOrphan(slotDir);
+                }
+                ackWatermark = QwpAckWatermark.Open(slotDir);
             }
             else
             {
@@ -138,7 +145,8 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
                 skipBackoffPredicate: () => !tracker.IsRoundExhausted,
                 errorDispatcher: dispatcher,
                 policyResolver: options.BuildEffectivePolicyResolver(),
-                durableAckMode: options.request_durable_ack);
+                durableAckMode: options.request_durable_ack,
+                ackWatermark: ackWatermark);
 
             engine.Start();
 
@@ -203,6 +211,7 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
             SfCleanup.Dispose(engine);
             SfCleanup.Dispose(dispatcher);
             SfCleanup.Dispose(ring);
+            SfCleanup.Dispose(ackWatermark);
             SfCleanup.Dispose(slotLock);
             throw;
         }

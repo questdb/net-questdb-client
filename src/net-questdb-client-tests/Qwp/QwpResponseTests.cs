@@ -35,6 +35,20 @@ namespace net_questdb_client_tests.Qwp;
 public class QwpResponseTests
 {
     [Test]
+    public void StatusCodes_HaveStableByteValues()
+    {
+        Assert.That((byte)QwpStatusCode.Ok,             Is.EqualTo((byte)0x00));
+        Assert.That((byte)QwpStatusCode.DurableAck,     Is.EqualTo((byte)0x02));
+        Assert.That((byte)QwpStatusCode.SchemaMismatch, Is.EqualTo((byte)0x03));
+        Assert.That((byte)QwpStatusCode.ParseError,     Is.EqualTo((byte)0x05));
+        Assert.That((byte)QwpStatusCode.InternalError,  Is.EqualTo((byte)0x06));
+        Assert.That((byte)QwpStatusCode.SecurityError,  Is.EqualTo((byte)0x08));
+        Assert.That((byte)QwpStatusCode.WriteError,     Is.EqualTo((byte)0x09));
+        Assert.That((byte)QwpStatusCode.Cancelled,      Is.EqualTo((byte)0x0A));
+        Assert.That((byte)QwpStatusCode.LimitExceeded,  Is.EqualTo((byte)0x0B));
+    }
+
+    [Test]
     public void Parse_OkResponse_ReturnsSequenceAndEmptyMessage()
     {
         var frame = BuildOk(sequence: 42L);

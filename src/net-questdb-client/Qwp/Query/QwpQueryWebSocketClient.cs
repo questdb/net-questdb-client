@@ -1009,10 +1009,10 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient
             consumed += zoneIdLen;
         }
 
-        if (s.Length != consumed)
+        if (s.Length < consumed)
         {
             throw new IngressError(ErrorCode.ProtocolVersionError,
-                $"SERVER_INFO length mismatch: consumed {consumed}, payload {s.Length}");
+                $"SERVER_INFO truncated: consumed {consumed}, payload {s.Length}");
         }
 
         return new QwpServerInfo

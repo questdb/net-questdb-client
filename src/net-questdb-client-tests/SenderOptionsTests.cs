@@ -360,6 +360,30 @@ public class SenderOptionsTests
     }
 
     [Test]
+    public void Zone_IsAcceptedOnAllSchemesForCrossClientInterop()
+    {
+        Assert.That(() => new SenderOptions("ws::addr=localhost:9000;zone=eu-west-1a;"), Throws.Nothing);
+        Assert.That(() => new SenderOptions("http::addr=localhost:9000;zone=eu-west-1a;"), Throws.Nothing);
+        Assert.That(() => new SenderOptions("tcp::addr=localhost:9009;zone=eu-west-1a;"), Throws.Nothing);
+    }
+
+    [Test]
+    public void InFlightWindow_IsAcceptedOnWebSocketForCrossClientInterop()
+    {
+        Assert.That(
+            () => new SenderOptions("ws::addr=localhost:9000;in_flight_window=128;"),
+            Throws.Nothing);
+    }
+
+    [Test]
+    public void InFlightWindow_IsRejectedOnNonWebSocket()
+    {
+        var ex = Assert.Throws<IngressError>(
+            () => new SenderOptions("http::addr=localhost:9000;in_flight_window=128;"));
+        Assert.That(ex!.Message, Does.Contain("in_flight_window"));
+    }
+
+    [Test]
     public void Ws_AuthTimeoutMs_AliasParses()
     {
         var withMs = new SenderOptions("ws::addr=localhost:9000;auth_timeout_ms=2500;");

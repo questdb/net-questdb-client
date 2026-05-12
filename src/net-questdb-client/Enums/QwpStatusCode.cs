@@ -52,4 +52,10 @@ public enum QwpStatusCode : byte
 
     /// <summary>Write failure (for example, table not accepting writes).</summary>
     WriteError = 0x09,
+
+    /// <summary>Query terminated in response to a CANCEL frame.</summary>
+    Cancelled = 0x0A,
+
+    /// <summary>A protocol limit was hit.</summary>
+    LimitExceeded = 0x0B,
 }

@@ -219,10 +219,10 @@ own framing, codecs, and server handshake. Everything QWP lives in
     unconditionally on connect; failover walks `addr=` candidates
     filtering against role.
 - `Senders/QwpWebSocketSender.cs` — owns the lifecycle. Single
-  execution path through `QwpCursorSendEngine` regardless of mode
-  (`in_flight_window=1` is rejected at construction; the engine's
-  double-buffered pumps assume window ≥ 2 — for one-batch-at-a-time
-  ILP semantics use the `http::` scheme instead):
+  execution path through `QwpCursorSendEngine` regardless of mode.
+  `in_flight_window=` is accepted (cross-client config-string interop)
+  and ignored — the engine uses pipelined double-buffering bounded by
+  the FSN ring capacity rather than a numeric window:
   - **RAM mode** (default, `sf_dir` unset): the engine sits over a
     memory-backed `QwpSegmentRing` (`OpenMemoryBacked`) of
     `QwpMemorySegment`s, capped at `sf_max_total_bytes` (default
@@ -256,11 +256,12 @@ segments are an abstraction (`IQwpSegment`) over either
   / SMB. `LooksLikeNetworkPath` heuristic guards `QwpSlotLock.Acquire`,
   which throws when the slot path is on a UNC mount.
 - `QwpSlotLock.cs` — per-sender lock file (SF mode only). `Acquire` uses
-  `TryOpenExclusive`; `IsHolderProcessAlive` is a PID-based liveness
-  check, with a `.heartbeat` mtime check (`IsHolderHeartbeatFresh`)
-  refreshed by the segment manager every ~1s — orphan scanner adopts
-  any slot whose heartbeat is older than 5 min, even if the recorded
-  PID happens to be live (PID-reuse safe).
+  `TryOpenExclusive`; liveness is signalled by holding the OS file lock
+  for the slot's lifetime — release on process exit (graceful or crashed)
+  is what makes the slot eligible for adoption by the orphan scanner.
+  A best-effort `.heartbeat` mtime is refreshed by the segment manager
+  every ~1s for observability; it is not consulted by the lock contention
+  test.
 - `QwpMmapSegment.cs` — single mmap'd segment file with envelope frames
   `[u32 crc32c][u32 frame_len][frame bytes]`. Replays on open via
   `ScanForLastGoodEnvelope` to find the last good write position;

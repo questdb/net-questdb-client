@@ -281,6 +281,7 @@ public record SenderOptions
         "on_server_error", "on_schema_mismatch_error", "on_parse_error",
         "on_internal_error", "on_security_error", "on_write_error",
         "token_x", "token_y",
+        "zone", "in_flight_window",
     };
 
     private void RejectUnknownConnectStringKeys()
@@ -644,6 +645,7 @@ public record SenderOptions
         "error_handler", "error_policy_resolver", "error_inbox_capacity",
         "on_server_error", "on_schema_mismatch_error", "on_parse_error", "on_internal_error",
         "on_security_error", "on_write_error",
+        "in_flight_window",
     };
 
     /// <summary>

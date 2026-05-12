@@ -652,9 +652,8 @@ internal sealed class QwpCursorSendEngine : IDisposable
                     }
 
                     var remaining = _reconnectPolicy.MaxOutageDuration - elapsed;
-                    var sleep = remaining < _reconnectPolicy.InitialBackoff
-                        ? remaining
-                        : _reconnectPolicy.InitialBackoff;
+                    var jittered = _reconnectPolicy.ComputeBackoff(0);
+                    var sleep = remaining < jittered ? remaining : jittered;
                     try
                     {
                         await Task.Delay(sleep, ct).ConfigureAwait(false);

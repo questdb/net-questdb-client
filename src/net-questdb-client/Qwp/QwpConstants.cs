@@ -73,7 +73,7 @@ internal static class QwpConstants
     /// <summary>Schema-id only; the server resolves columns from its registry.</summary>
     public const byte SchemaModeReference = 0x01;
 
-    /// <summary>Size of an OK response without per-table entries: 1-byte status + 8-byte sequence.</summary>
+    /// <summary>Byte offset of the <c>tableCount</c> field in an OK response (after status + sequence).</summary>
     public const int OkAckMinSize = 9;
 
     /// <summary>Size of an error response header: 1-byte status + 8-byte sequence + 2-byte message length.</summary>
@@ -191,9 +191,9 @@ internal static class QwpConstants
     public const int MaxConnSymbolDictHeapBytes = 256 * 1024 * 1024;
     public const int MaxSchemasPerConnection = 65_535;
 
-    /// <summary>Server-side zstd level clamp. Client may send any level; server rounds.</summary>
+    /// <summary>Inclusive zstd compression level range. Server clamps anything higher to 9 silently.</summary>
     public const int ZstdLevelMin = 1;
-    public const int ZstdLevelMax = 22;
+    public const int ZstdLevelMax = 9;
 
     /// <summary>Egress upgrade headers.</summary>
     public const string HeaderAcceptEncoding = "X-QWP-Accept-Encoding";

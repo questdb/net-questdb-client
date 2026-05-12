@@ -74,10 +74,11 @@ internal sealed class QwpMmapSegment : IQwpSegment
     public const byte FileVersion = 1;
     // Frames are bounded only by their enclosing segment; CRC + length sanity catch torn tails.
     public const int DefaultMaxFrameLength = int.MaxValue;
-    // Optimistic seal trailer at the file's last 16 bytes: lets recovery skip the O(n) envelope
-    // scan when a sealed segment was flushed cleanly. Format: u32 magic | u32 reserved | i64 offset.
-    public const int SealTrailerSize = 16;
-    public const uint SealTrailerMagic = 0x534C5453;
+    // Optional sidecar `<segment>.seal` written on Seal(); lets recovery skip the O(n) envelope
+    // CRC scan when present. The segment file itself is byte-identical to the spec layout.
+    public const int SealSidecarSize = 16;
+    public const uint SealSidecarMagic = 0x534C5453;
+    public const string SealSidecarSuffix = ".seal";
 
     private readonly MemoryMappedFile _mmap;
     private readonly MemoryMappedViewAccessor _view;
@@ -184,7 +185,7 @@ internal sealed class QwpMmapSegment : IQwpSegment
                     $"segment {path}: on-disk baseSeq {onDiskBaseFsn} does not match expected {baseFsn}");
             }
 
-            var trustedEnd = TryReadSealTrailer(view, capacity);
+            var trustedEnd = TryReadSealSidecar(path, capacity);
             var (writePos, offsets) = ScanForLastGoodEnvelope(view, capacity, maxFrameLength, trustedEnd);
 
             var tornByteCount = CountTornTailBytes(view, writePos, capacity);
@@ -367,8 +368,9 @@ internal sealed class QwpMmapSegment : IQwpSegment
     }
 
     /// <summary>
-    ///     Marks the segment as no longer accepting appends. Stamps the last-good-offset into
-    ///     the segment's trailer so the next Open() can skip the per-envelope CRC walk.
+    ///     Marks the segment as no longer accepting appends. Flushes the segment, then writes a
+    ///     <see cref="SealSidecarSuffix" /> sidecar so the next Open() can skip the per-envelope CRC
+    ///     walk. Sidecar failures are non-fatal — recovery falls back to a full scan.
     /// </summary>
     public void Seal()
     {
@@ -378,43 +380,62 @@ internal sealed class QwpMmapSegment : IQwpSegment
         }
 
         IsSealed = true;
-        WriteSealTrailer(_writePosition);
         Flush();
+        WriteSealSidecar(Path, _writePosition);
     }
 
-    private void WriteSealTrailer(long lastGoodOffset)
-    {
-        if (Capacity < SealTrailerSize) return;
-        if (lastGoodOffset > Capacity - SealTrailerSize) return;
+    /// <summary>Returns the sidecar path for a given segment file.</summary>
+    public static string SidecarPath(string segmentPath) => segmentPath + SealSidecarSuffix;
 
-        Span<byte> trailer = stackalloc byte[SealTrailerSize];
-        BinaryPrimitives.WriteUInt32LittleEndian(trailer.Slice(0, 4), SealTrailerMagic);
-        BinaryPrimitives.WriteUInt32LittleEndian(trailer.Slice(4, 4), 0);
-        BinaryPrimitives.WriteInt64LittleEndian(trailer.Slice(8, 8), lastGoodOffset);
-        WriteSpan(Capacity - SealTrailerSize, trailer);
+    private static void WriteSealSidecar(string segmentPath, long lastGoodOffset)
+    {
+        if (lastGoodOffset < HeaderSize) return;
+
+        Span<byte> sidecar = stackalloc byte[SealSidecarSize];
+        BinaryPrimitives.WriteUInt32LittleEndian(sidecar.Slice(0, 4), SealSidecarMagic);
+        BinaryPrimitives.WriteUInt32LittleEndian(sidecar.Slice(4, 4), 0);
+        BinaryPrimitives.WriteInt64LittleEndian(sidecar.Slice(8, 8), lastGoodOffset);
+
+        var sidecarPath = SidecarPath(segmentPath);
+        var tmpPath = sidecarPath + ".tmp";
+        try
+        {
+            using (var fs = new FileStream(tmpPath, FileMode.Create, FileAccess.Write, FileShare.None))
+            {
+                fs.Write(sidecar);
+                fs.Flush(flushToDisk: true);
+            }
+            File.Move(tmpPath, sidecarPath, overwrite: true);
+        }
+        catch
+        {
+            SfCleanup.DeleteFile(tmpPath);
+        }
     }
 
-    private static long TryReadSealTrailer(MemoryMappedViewAccessor view, long capacity)
+    private static long TryReadSealSidecar(string segmentPath, long capacity)
     {
-        if (capacity < SealTrailerSize)
+        var sidecarPath = SidecarPath(segmentPath);
+        if (!File.Exists(sidecarPath)) return -1L;
+
+        Span<byte> sidecar = stackalloc byte[SealSidecarSize];
+        try
+        {
+            using var fs = new FileStream(sidecarPath, FileMode.Open, FileAccess.Read, FileShare.Read);
+            if (fs.Length != SealSidecarSize) return -1L;
+            var n = fs.Read(sidecar);
+            if (n != SealSidecarSize) return -1L;
+        }
+        catch
         {
             return -1L;
         }
 
-        Span<byte> trailer = stackalloc byte[SealTrailerSize];
-        ViewToSpan(view, capacity - SealTrailerSize, trailer);
+        var magic = BinaryPrimitives.ReadUInt32LittleEndian(sidecar.Slice(0, 4));
+        if (magic != SealSidecarMagic) return -1L;
 
-        var magic = BinaryPrimitives.ReadUInt32LittleEndian(trailer.Slice(0, 4));
-        if (magic != SealTrailerMagic)
-        {
-            return -1L;
-        }
-
-        var offset = BinaryPrimitives.ReadInt64LittleEndian(trailer.Slice(8, 8));
-        if (offset < HeaderSize || offset > capacity - SealTrailerSize)
-        {
-            return -1L;
-        }
+        var offset = BinaryPrimitives.ReadInt64LittleEndian(sidecar.Slice(8, 8));
+        if (offset < HeaderSize || offset > capacity) return -1L;
 
         return offset;
     }
@@ -469,7 +490,7 @@ internal sealed class QwpMmapSegment : IQwpSegment
     /// <summary>
     ///     Public test seam: replays the mmap and returns the last good offset and the table
     ///     of envelope start offsets. When <paramref name="trustedEnd" /> is non-negative (set
-    ///     by Open after a valid seal trailer), envelopes between HeaderSize and trustedEnd are
+    ///     by Open after a valid seal sidecar), envelopes between HeaderSize and trustedEnd are
     ///     indexed without per-envelope CRC verification.
     /// </summary>
     internal static unsafe (long WritePosition, List<long> Offsets) ScanForLastGoodEnvelope(
@@ -531,7 +552,7 @@ internal sealed class QwpMmapSegment : IQwpSegment
             handle.ReleasePointer();
         }
 
-        // If we trusted the trailer and the envelope walk ended before reaching it, the trailer
+        // If we trusted the sidecar and the envelope walk ended before reaching it, the sidecar
         // was lying — fall back to a full CRC scan from scratch.
         if (trustedEnd >= HeaderSize && offset != trustedEnd)
         {

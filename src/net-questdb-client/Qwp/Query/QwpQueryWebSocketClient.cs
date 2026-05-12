@@ -156,7 +156,11 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient
         try
         {
             var attempt = 0;
-            var backoffMs = _options.failover_backoff_initial_ms.TotalMilliseconds;
+            var backoffPolicy = new QwpReconnectPolicy(
+                _options.failover_backoff_initial_ms,
+                _options.failover_backoff_max_ms,
+                _options.failover_backoff_max_ms,
+                QwpReconnectPolicy.FullJitter);
             var failoverDeadline = _options.failover_max_duration_ms > TimeSpan.Zero
                 ? Environment.TickCount64 + (long)_options.failover_max_duration_ms.TotalMilliseconds
                 : long.MaxValue;
@@ -191,8 +195,7 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient
                     && Volatile.Read(ref _disposed) == 0)
                 {
                     if (_activeAddressIndex >= 0) _hostTracker.RecordMidStreamFailure(_activeAddressIndex);
-                    var sleep = QwpReconnectPolicy.FullJitter(TimeSpan.FromMilliseconds(backoffMs));
-                    if (sleep > _options.failover_backoff_max_ms) sleep = _options.failover_backoff_max_ms;
+                    var sleep = backoffPolicy.ComputeBackoff(attempt);
                     var remainingMs = failoverDeadline - Environment.TickCount64;
                     if (remainingMs <= 0) throw;
                     if (sleep.TotalMilliseconds > remainingMs)
@@ -202,7 +205,6 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient
                     {
                         throw new OperationCanceledException("query cancelled during failover");
                     }
-                    backoffMs = Math.Min(backoffMs * 2, _options.failover_backoff_max_ms.TotalMilliseconds);
                     attempt++;
                     await ReconnectAsync(attempt, ct).ConfigureAwait(false);
                     if (Volatile.Read(ref _cancelRequested) != 0)

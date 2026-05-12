@@ -307,6 +307,7 @@ internal sealed class QwpSegmentManager : IDisposable
             {
                 // File-mode: unlink failure leaves the file for next sender startup recovery.
                 SfCleanup.DeleteFile(path);
+                SfCleanup.DeleteFile(QwpMmapSegment.SidecarPath(path));
             }
             freed += size;
         }

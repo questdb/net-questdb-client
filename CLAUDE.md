@@ -167,7 +167,7 @@ own framing, codecs, and server handshake. Everything QWP lives in
 - `QwpGorilla.cs` — delta-of-delta timestamp compression. The encoder
   emits a 1-byte encoding flag (`0x00` uncompressed, `0x01` Gorilla)
   only when `FLAG_GORILLA` is set on the message header. Falls back to
-  uncompressed when the column has < 2 non-null values or any DoD
+  uncompressed when the column has < 3 non-null values or any DoD
   exceeds int32. Always-on; no opt-in flag.
 - `QwpResponse.cs` — ACK / error frame parser. Strict UTF-8 (throws on
   invalid bytes) for error messages and per-table names; rejects empty

@@ -514,15 +514,15 @@ public class SenderOptionsTests
     }
 
     [Test]
-    public void ErrorInboxCapacity_LessThanOne_Rejected()
+    public void ErrorInboxCapacity_BelowMinimum_Rejected()
     {
         var opts = new SenderOptions
         {
-            protocol = ProtocolType.ws, addr = "h:9000", sf_dir = "/tmp/qdb", error_inbox_capacity = 0,
+            protocol = ProtocolType.ws, addr = "h:9000", sf_dir = "/tmp/qdb", error_inbox_capacity = 15,
         };
         Assert.That(
             () => opts.EnsureValid(),
-            Throws.TypeOf<IngressError>().With.Message.Contains(">= 1"));
+            Throws.TypeOf<IngressError>().With.Message.Contains(">= 16"));
     }
 
     [Test]

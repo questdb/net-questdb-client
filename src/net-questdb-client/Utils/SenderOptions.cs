@@ -251,7 +251,7 @@ public record SenderOptions
         ParseIntWithDefault(nameof(error_inbox_capacity), "256", out _errorInboxCapacity);
 
         _onServerError = ParsePolicyKey(nameof(on_server_error));
-        _onSchemaMismatchError = ParsePolicyKey(nameof(on_schema_mismatch_error));
+        _onSchemaMismatchError = ParsePolicyKey(nameof(on_schema_mismatch_error), aliasName: "on_schema_error");
         _onParseError = ParsePolicyKey(nameof(on_parse_error));
         _onInternalError = ParsePolicyKey(nameof(on_internal_error));
         _onSecurityError = ParsePolicyKey(nameof(on_security_error));
@@ -278,7 +278,7 @@ public record SenderOptions
         "drain_orphans", "max_background_drainers", "ping_timeout", "proxy",
         "durable_ack_keepalive_interval_millis",
         "error_inbox_capacity",
-        "on_server_error", "on_schema_mismatch_error", "on_parse_error",
+        "on_server_error", "on_schema_mismatch_error", "on_schema_error", "on_parse_error",
         "on_internal_error", "on_security_error", "on_write_error",
         "token_x", "token_y",
         "zone", "in_flight_window",
@@ -386,9 +386,19 @@ public record SenderOptions
         }
     }
 
-    private SenderErrorPolicy? ParsePolicyKey(string name)
+    private SenderErrorPolicy? ParsePolicyKey(string name, string? aliasName = null)
     {
         var raw = ReadOptionFromBuilder(name);
+        if (aliasName is not null)
+        {
+            var aliasRaw = ReadOptionFromBuilder(aliasName);
+            if (raw is not null && aliasRaw is not null)
+            {
+                throw new IngressError(ErrorCode.ConfigError,
+                    $"`{name}` and `{aliasName}` are aliases; set only one");
+            }
+            raw ??= aliasRaw;
+        }
         if (raw is null) return null;
         if (string.Equals(raw, "halt", StringComparison.OrdinalIgnoreCase))
         {
@@ -493,10 +503,10 @@ public record SenderOptions
 
     private void ValidateErrorInboxCapacity()
     {
-        if (_errorInboxCapacity < 1)
+        if (_errorInboxCapacity < 16)
         {
             throw new IngressError(ErrorCode.ConfigError,
-                $"`error_inbox_capacity` must be >= 1; got {_errorInboxCapacity}");
+                $"`error_inbox_capacity` must be >= 16; got {_errorInboxCapacity}");
         }
     }
 
@@ -643,7 +653,7 @@ public record SenderOptions
         "close_flush_timeout_millis", "drain_orphans", "max_background_drainers", "ping_timeout",
         "durable_ack_keepalive_interval_millis", "proxy",
         "error_handler", "error_policy_resolver", "error_inbox_capacity",
-        "on_server_error", "on_schema_mismatch_error", "on_parse_error", "on_internal_error",
+        "on_server_error", "on_schema_mismatch_error", "on_schema_error", "on_parse_error", "on_internal_error",
         "on_security_error", "on_write_error",
         "in_flight_window",
     };

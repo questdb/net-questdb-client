@@ -23,6 +23,7 @@
  ******************************************************************************/
 
 using System.Buffers.Binary;
+using System.Diagnostics;
 using System.IO.MemoryMappedFiles;
 using Microsoft.Win32.SafeHandles;
 
@@ -185,6 +186,15 @@ internal sealed class QwpMmapSegment : IQwpSegment
 
             var trustedEnd = TryReadSealTrailer(view, capacity);
             var (writePos, offsets) = ScanForLastGoodEnvelope(view, capacity, maxFrameLength, trustedEnd);
+
+            var tornByteCount = CountTornTailBytes(view, writePos, capacity);
+            if (tornByteCount > 0)
+            {
+                Trace.TraceWarning(
+                    "QWP segment recovery: torn tail in {0} at offset {1} ({2} non-zero byte(s) in 8-byte boundary window); truncating.",
+                    path, writePos, tornByteCount);
+            }
+
             ZeroViewRange(view, writePos, capacity - writePos);
 
             return new QwpMmapSegment(path, mmap, view, fs, capacity, onDiskBaseFsn, writePos, offsets, maxFrameLength);
@@ -529,6 +539,29 @@ internal sealed class QwpMmapSegment : IQwpSegment
         }
 
         return (offset, offsets);
+    }
+
+    private static unsafe int CountTornTailBytes(MemoryMappedViewAccessor view, long offset, long capacity)
+    {
+        var window = (int)Math.Min(8, capacity - offset);
+        if (window <= 0) return 0;
+
+        var handle = view.SafeMemoryMappedViewHandle;
+        byte* basePtr = null;
+        handle.AcquirePointer(ref basePtr);
+        try
+        {
+            var count = 0;
+            for (var i = 0; i < window; i++)
+            {
+                if (basePtr[offset + i] != 0) count++;
+            }
+            return count;
+        }
+        finally
+        {
+            handle.ReleasePointer();
+        }
     }
 
     private static long ReadOrInitHeader(

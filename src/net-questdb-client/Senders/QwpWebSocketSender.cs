@@ -24,6 +24,8 @@
 
 #if NET7_0_OR_GREATER
 
+using System.Diagnostics;
+using System.Runtime.ExceptionServices;
 using QuestDB.Enums;
 using QuestDB.Qwp;
 using QuestDB.Qwp.Sf;
@@ -792,40 +794,86 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
 
     private void DisposeStackSync()
     {
+        ExceptionDispatchInfo? toRethrow = null;
         try
         {
-            if (!_engine.IsTerminallyFailed && Options.close_flush_timeout_millis.TotalMilliseconds > 0)
-            {
-                FlushSync(CancellationToken.None);
-                _engine.FlushAsync(Options.close_flush_timeout_millis).GetAwaiter().GetResult();
-            }
+            toRethrow = DrainOnClose(
+                drain: () =>
+                {
+                    FlushSync(CancellationToken.None);
+                    _engine.FlushAsync(Options.close_flush_timeout_millis).GetAwaiter().GetResult();
+                });
         }
-        catch (Exception)
+        finally
         {
+            SfCleanup.Dispose(_drainerPool);
+            SfCleanup.Dispose(_engine);
+            SfCleanup.Dispose(_errorDispatcher);
         }
 
-        SfCleanup.Dispose(_drainerPool);
-        SfCleanup.Dispose(_engine);
-        SfCleanup.Dispose(_errorDispatcher);
+        toRethrow?.Throw();
     }
 
     private async ValueTask DisposeStackAsync()
     {
+        ExceptionDispatchInfo? toRethrow = null;
         try
         {
-            if (!_engine.IsTerminallyFailed && Options.close_flush_timeout_millis.TotalMilliseconds > 0)
-            {
-                await FlushAsyncCore(CancellationToken.None).ConfigureAwait(false);
-                await _engine.FlushAsync(Options.close_flush_timeout_millis).ConfigureAwait(false);
-            }
+            toRethrow = await DrainOnCloseAsync(
+                drain: async () =>
+                {
+                    await FlushAsyncCore(CancellationToken.None).ConfigureAwait(false);
+                    await _engine.FlushAsync(Options.close_flush_timeout_millis).ConfigureAwait(false);
+                }).ConfigureAwait(false);
         }
-        catch (Exception)
+        finally
         {
+            SfCleanup.Dispose(_drainerPool);
+            SfCleanup.Dispose(_engine);
+            SfCleanup.Dispose(_errorDispatcher);
         }
 
-        SfCleanup.Dispose(_drainerPool);
-        SfCleanup.Dispose(_engine);
-        SfCleanup.Dispose(_errorDispatcher);
+        toRethrow?.Throw();
+    }
+
+    private ExceptionDispatchInfo? DrainOnClose(Action drain)
+    {
+        var timeoutMs = Options.close_flush_timeout_millis.TotalMilliseconds;
+        if (timeoutMs <= 0) return null;
+
+        var pre = _engine.TerminalError;
+        if (pre != null) return ExceptionDispatchInfo.Capture(pre);
+
+        try { drain(); }
+        catch (TimeoutException) { LogCloseFlushTimeoutWarn(timeoutMs); }
+        catch { }
+
+        var post = _engine.TerminalError;
+        return post != null ? ExceptionDispatchInfo.Capture(post) : null;
+    }
+
+    private async ValueTask<ExceptionDispatchInfo?> DrainOnCloseAsync(Func<ValueTask> drain)
+    {
+        var timeoutMs = Options.close_flush_timeout_millis.TotalMilliseconds;
+        if (timeoutMs <= 0) return null;
+
+        var pre = _engine.TerminalError;
+        if (pre != null) return ExceptionDispatchInfo.Capture(pre);
+
+        try { await drain().ConfigureAwait(false); }
+        catch (TimeoutException) { LogCloseFlushTimeoutWarn(timeoutMs); }
+        catch { }
+
+        var post = _engine.TerminalError;
+        return post != null ? ExceptionDispatchInfo.Capture(post) : null;
+    }
+
+    private void LogCloseFlushTimeoutWarn(double timeoutMs)
+    {
+        Trace.TraceWarning(
+            "QWP close: close_flush_timeout ({0:F0} ms) expired with un-acked frames pending; pending data {1}.",
+            timeoutMs,
+            !string.IsNullOrEmpty(Options.sf_dir) ? "remains on disk (SF mode)" : "is lost (Memory mode)");
     }
 
     private QwpTableBuffer EnsureCurrentTable()

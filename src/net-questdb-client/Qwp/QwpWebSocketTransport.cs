@@ -46,8 +46,11 @@ namespace QuestDB.Qwp;
 ///     <c>X-QWP-Version</c> response header via <see cref="ClientWebSocket.HttpResponseHeaders" />,
 ///     which was added in .NET 7. Older targets get HTTP / TCP transports only.
 ///     <para />
-///     <b>KeepAliveInterval = 0</b>: we manage connection liveness via QWP ACK timeouts in the
-///     sender; built-in WebSocket pings would only complicate that.
+///     <b>KeepAliveInterval</b>: zero unless durable-ack is requested. The cursor-engine spec
+///     would prefer PINGs gated on a non-empty <c>pendingDurable</c> queue as well, but
+///     <see cref="ClientWebSocket" /> sets the cadence once at construction and exposes no public
+///     ping-send API, so the gate is approximated by "durable-ack negotiated + non-zero interval".
+///     Net effect on an idle durable-ack sender: a few unnecessary PING frames; server tolerates them.
 ///     <para />
 ///     <b>Dump format</b>: when <see cref="QwpWebSocketTransportOptions.DumpStream" /> is set, the
 ///     transport tees both directions of binary traffic to that stream as

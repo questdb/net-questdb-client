@@ -46,6 +46,25 @@ public class QwpTableBufferTests
     }
 
     [Test]
+    public void NewBuffer_TableNameWithLoneSurrogate_ThrowsBeforeEmit()
+    {
+        // \uD800 is an unpaired high surrogate; lenient Encoding.UTF8 would replace with U+FFFD
+        // and slip the size-check, then explode at encoder emit time. Strict path fails up-front.
+        var name = "t\uD800bad";
+        var ex = Assert.Throws<IngressError>(() => new QwpTableBuffer(name));
+        Assert.That(ex!.code, Is.EqualTo(ErrorCode.InvalidName));
+    }
+
+    [Test]
+    public void AppendColumn_NameWithLoneSurrogate_ThrowsBeforeEmit()
+    {
+        var t = new QwpTableBuffer("trades");
+        var name = "col\uDC00";
+        var ex = Assert.Throws<IngressError>(() => t.AppendDouble(name, 1.0));
+        Assert.That(ex!.code, Is.EqualTo(ErrorCode.InvalidName));
+    }
+
+    [Test]
     public void HappyPath_SingleRow_ProducesExpectedColumns()
     {
         var t = new QwpTableBuffer("trades");

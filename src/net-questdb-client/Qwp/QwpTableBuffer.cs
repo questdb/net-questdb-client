@@ -29,6 +29,12 @@ using QuestDB.Utils;
 
 namespace QuestDB.Qwp;
 
+internal static class QwpStrictUtf8
+{
+    internal static readonly UTF8Encoding Encoding =
+        new(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true);
+}
+
 /// <summary>
 ///     Per-table columnar buffer used by the WebSocket sender.
 /// </summary>
@@ -76,7 +82,16 @@ internal sealed class QwpTableBuffer
             throw new IngressError(ErrorCode.InvalidName, "table name must not be empty");
         }
 
-        var nameByteCount = Encoding.UTF8.GetByteCount(tableName);
+        int nameByteCount;
+        try
+        {
+            nameByteCount = QwpStrictUtf8.Encoding.GetByteCount(tableName);
+        }
+        catch (EncoderFallbackException ex)
+        {
+            throw new IngressError(ErrorCode.InvalidName,
+                "table name is not valid UTF-8 (lone surrogate)", ex);
+        }
         if (nameByteCount > maxNameLengthBytes)
         {
             throw new IngressError(ErrorCode.InvalidName,
@@ -400,7 +415,16 @@ internal sealed class QwpTableBuffer
         }
 #endif
 
-        var nameByteCount = Encoding.UTF8.GetByteCount(columnName);
+        int nameByteCount;
+        try
+        {
+            nameByteCount = QwpStrictUtf8.Encoding.GetByteCount(columnName);
+        }
+        catch (EncoderFallbackException ex)
+        {
+            throw new IngressError(ErrorCode.InvalidName,
+                "column name is not valid UTF-8 (lone surrogate)", ex);
+        }
         if (nameByteCount > _maxNameLengthBytes)
         {
             throw new IngressError(ErrorCode.InvalidName,

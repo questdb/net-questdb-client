@@ -364,9 +364,10 @@ public class QwpResponseTests
     }
 
     [Test]
-    public void Parse_ErrorResponse_InvalidUtf8Message_DecodedLeniently()
+    public void Parse_ErrorResponse_InvalidUtf8Message_ThrowsProtocolError()
     {
-        // 0xC3 0x28 is a malformed two-byte sequence; replaced with U+FFFD.
+        // 0xC3 0x28 is a malformed two-byte sequence. Per-table names already throw on bad UTF-8;
+        // the error-message path must match (otherwise a buggy server smuggles U+FFFD into logs).
         var msgBytes = new byte[] { 0xC3, 0x28 };
         var frame = new byte[QwpConstants.ErrorAckHeaderSize + msgBytes.Length];
         frame[0] = (byte)QwpStatusCode.WriteError;
@@ -374,8 +375,49 @@ public class QwpResponseTests
         BinaryPrimitives.WriteUInt16LittleEndian(frame.AsSpan(9, 2), (ushort)msgBytes.Length);
         msgBytes.CopyTo(frame, QwpConstants.ErrorAckHeaderSize);
 
-        var resp = QwpResponse.Parse(frame);
-        Assert.That(resp.Message, Does.Contain("�"));
+        var ex = Assert.Throws<IngressError>(() => QwpResponse.Parse(frame));
+        Assert.That(ex!.code, Is.EqualTo(ErrorCode.InvalidUtf8));
+    }
+
+    [Test]
+    public void Parse_IngestResponse_CancelledStatus_RejectedAsProtocolError()
+    {
+        // Cancelled (0x0A) is egress-only (QUERY_ERROR). It must not appear on the ingest reply
+        // channel; rejecting it loudly catches server bugs instead of masking them as generic errors.
+        var frame = new byte[QwpConstants.ErrorAckHeaderSize];
+        frame[0] = (byte)QwpStatusCode.Cancelled;
+        BinaryPrimitives.WriteInt64LittleEndian(frame.AsSpan(1, 8), 0L);
+        BinaryPrimitives.WriteUInt16LittleEndian(frame.AsSpan(9, 2), 0);
+
+        var ex = Assert.Throws<IngressError>(() => QwpResponse.Parse(frame));
+        Assert.That(ex!.code, Is.EqualTo(ErrorCode.ProtocolVersionError));
+    }
+
+    [Test]
+    public void Parse_IngestResponse_LimitExceededStatus_RejectedAsProtocolError()
+    {
+        var frame = new byte[QwpConstants.ErrorAckHeaderSize];
+        frame[0] = (byte)QwpStatusCode.LimitExceeded;
+        BinaryPrimitives.WriteInt64LittleEndian(frame.AsSpan(1, 8), 0L);
+        BinaryPrimitives.WriteUInt16LittleEndian(frame.AsSpan(9, 2), 0);
+
+        var ex = Assert.Throws<IngressError>(() => QwpResponse.Parse(frame));
+        Assert.That(ex!.code, Is.EqualTo(ErrorCode.ProtocolVersionError));
+    }
+
+    [Test]
+    public void Parse_IngestResponse_GenuinelyUnknownStatusByte_StillParsedForwardCompat()
+    {
+        // Truly unknown bytes (not the known-egress-only 0x0A/0x0B) must keep flowing through
+        // ParseError so future server-side status codes don't need a client update — the engine's
+        // error classifier maps them to category=Unknown which always halts, no data corruption risk.
+        var frame = new byte[QwpConstants.ErrorAckHeaderSize];
+        frame[0] = 0x7F;
+        BinaryPrimitives.WriteInt64LittleEndian(frame.AsSpan(1, 8), 0L);
+        BinaryPrimitives.WriteUInt16LittleEndian(frame.AsSpan(9, 2), 0);
+
+        var r = QwpResponse.Parse(frame);
+        Assert.That((byte)r.Status, Is.EqualTo(0x7F));
     }
 
     [Test]

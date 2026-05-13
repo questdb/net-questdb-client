@@ -38,10 +38,19 @@ public class QwpRoleFilterTests
     [TestCase(QwpConstants.RolePrimary)]
     [TestCase(QwpConstants.RoleReplica)]
     [TestCase(QwpConstants.RolePrimaryCatchup)]
-    [TestCase((byte)0xFF)]
-    public void Any_AcceptsEveryRoleByteIncludingFutureUnknowns(byte role)
+    public void Any_AcceptsSpecDefinedRoleBytes(byte role)
     {
         Assert.That(QwpQueryWebSocketClient.RoleMatchesTarget(role, TargetType.any), Is.True);
+    }
+
+    [TestCase((byte)0x04)]
+    [TestCase((byte)0x7F)]
+    [TestCase((byte)0xFF)]
+    public void Any_RejectsUnknownRoleByte_SoFutureServerBugsAreLoud(byte role)
+    {
+        // target=any silently accepting any byte was masking buggy or future-protocol servers
+        // as "matches anything"; only the four defined role bytes (0x00..0x03) are allowed.
+        Assert.That(QwpQueryWebSocketClient.RoleMatchesTarget(role, TargetType.any), Is.False);
     }
 
     [TestCase(QwpConstants.RoleStandalone, true)]
@@ -60,6 +69,32 @@ public class QwpRoleFilterTests
     public void Replica_AcceptsReplicaOnly(byte role, bool expected)
     {
         Assert.That(QwpQueryWebSocketClient.RoleMatchesTarget(role, TargetType.replica), Is.EqualTo(expected));
+    }
+
+    [TestCase("PRIMARY", QwpConstants.RolePrimary)]
+    [TestCase("primary", QwpConstants.RolePrimary)]
+    [TestCase("Primary", QwpConstants.RolePrimary)]
+    [TestCase("REPLICA", QwpConstants.RoleReplica)]
+    [TestCase("replica", QwpConstants.RoleReplica)]
+    [TestCase("STANDALONE", QwpConstants.RoleStandalone)]
+    [TestCase("standalone", QwpConstants.RoleStandalone)]
+    [TestCase("PRIMARY_CATCHUP", QwpConstants.RolePrimaryCatchup)]
+    [TestCase("Primary_Catchup", QwpConstants.RolePrimaryCatchup)]
+    [TestCase("primary_catchup", QwpConstants.RolePrimaryCatchup)]
+    public void MapRoleName_IsCaseInsensitive(string role, byte expected)
+    {
+        // QwpIngressRoleRejectedException carries the X-QuestDB-Role header verbatim; matching
+        // case-sensitively (the old code) silently dropped well-formed but mixed-case responses
+        // into the byte.MaxValue diagnostic-only bucket.
+        Assert.That(QwpQueryWebSocketClient.MapRoleName(role), Is.EqualTo(expected));
+    }
+
+    [TestCase(null)]
+    [TestCase("")]
+    [TestCase("UNKNOWN")]
+    public void MapRoleName_UnknownStringReturnsSentinel(string? role)
+    {
+        Assert.That(QwpQueryWebSocketClient.MapRoleName(role), Is.EqualTo(byte.MaxValue));
     }
 }
 

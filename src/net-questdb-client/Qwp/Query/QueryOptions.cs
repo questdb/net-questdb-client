@@ -409,10 +409,16 @@ public sealed class QueryOptions
                 $"`failover_max_attempts` must be >= 1, got {failover_max_attempts}");
         }
 
-        if (failover_backoff_initial_ms < TimeSpan.Zero || failover_backoff_max_ms < TimeSpan.Zero)
+        if (failover_backoff_initial_ms <= TimeSpan.Zero)
         {
             throw new IngressError(ErrorCode.ConfigError,
-                "`failover_backoff_*_ms` must be non-negative");
+                "`failover_backoff_initial_ms` must be positive");
+        }
+
+        if (failover_backoff_max_ms <= TimeSpan.Zero)
+        {
+            throw new IngressError(ErrorCode.ConfigError,
+                "`failover_backoff_max_ms` must be positive");
         }
 
         if (failover_backoff_initial_ms > failover_backoff_max_ms)

@@ -24,6 +24,7 @@
 
 using System.Buffers;
 using System.Buffers.Binary;
+using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Text;
 using QuestDB.Enums;
@@ -271,9 +272,13 @@ internal static class QwpEncoder
                 case QwpTypeCode.Decimal64:
                 case QwpTypeCode.Decimal128:
                 case QwpTypeCode.Decimal256:
+                    Debug.Assert(col.DecimalScaleSet,
+                        "DECIMAL column with no non-null values must still have a scale set on first typing");
                     buf.WriteByte(col.DecimalScale);
                     return;
                 case QwpTypeCode.Geohash:
+                    Debug.Assert(col.GeohashPrecisionBits >= 1 && col.GeohashPrecisionBits <= 60,
+                        "GEOHASH column precision must be in [1, 60] before encode");
                     buf.WriteVarint((ulong)col.GeohashPrecisionBits);
                     return;
                 default:

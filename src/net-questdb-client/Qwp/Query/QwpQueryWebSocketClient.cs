@@ -162,7 +162,9 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient
             var backoffPolicy = new QwpReconnectPolicy(
                 _options.failover_backoff_initial_ms,
                 _options.failover_backoff_max_ms,
-                _options.failover_backoff_max_ms,
+                _options.failover_max_duration_ms > TimeSpan.Zero
+                    ? _options.failover_max_duration_ms
+                    : _options.failover_backoff_max_ms,
                 QwpReconnectPolicy.FullJitter);
             var failoverDeadline = _options.failover_max_duration_ms > TimeSpan.Zero
                 ? Environment.TickCount64 + (long)_options.failover_max_duration_ms.TotalMilliseconds
@@ -553,18 +555,27 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient
                 : $"connect failed against every endpoint: {lastError.Message}");
     }
 
-    private static QwpServerInfo SynthesiseRoleRejectInfo(QwpIngressRoleRejectedException ex) => new()
+    internal static QwpServerInfo SynthesiseRoleRejectInfo(QwpIngressRoleRejectedException ex) => new()
     {
-        Role = ex.Role switch
-        {
-            QwpConstants.RoleStandaloneName => QwpConstants.RoleStandalone,
-            QwpConstants.RolePrimaryName => QwpConstants.RolePrimary,
-            QwpConstants.RoleReplicaName => QwpConstants.RoleReplica,
-            QwpConstants.RolePrimaryCatchupName => QwpConstants.RolePrimaryCatchup,
-            _ => byte.MaxValue,
-        },
+        // Role-header strings are case-insensitive per the failover spec; align here with the
+        // RoleRejected.IsTransient check rather than the case-sensitive switch.
+        Role = MapRoleName(ex.Role),
         ZoneId = ex.Zone,
     };
+
+    internal static byte MapRoleName(string? role)
+    {
+        if (string.IsNullOrEmpty(role)) return byte.MaxValue;
+        if (string.Equals(role, QwpConstants.RoleStandaloneName, StringComparison.OrdinalIgnoreCase))
+            return QwpConstants.RoleStandalone;
+        if (string.Equals(role, QwpConstants.RolePrimaryName, StringComparison.OrdinalIgnoreCase))
+            return QwpConstants.RolePrimary;
+        if (string.Equals(role, QwpConstants.RoleReplicaName, StringComparison.OrdinalIgnoreCase))
+            return QwpConstants.RoleReplica;
+        if (string.Equals(role, QwpConstants.RolePrimaryCatchupName, StringComparison.OrdinalIgnoreCase))
+            return QwpConstants.RolePrimaryCatchup;
+        return byte.MaxValue;
+    }
 
     // v1 server (no SERVER_INFO) only matches target=any; primary/replica must skip it.
     private bool EndpointMatchesTarget(QwpServerInfo? info)
@@ -575,6 +586,13 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient
 
     internal static bool RoleMatchesTarget(byte role, TargetType target)
     {
+        // target=any only accepts spec-defined role bytes; unknown values must topology-reject
+        // so a future or buggy server is rejected loudly rather than masked as "matches anything".
+        if (role is not (QwpConstants.RoleStandalone or QwpConstants.RolePrimary
+            or QwpConstants.RoleReplica or QwpConstants.RolePrimaryCatchup))
+        {
+            return false;
+        }
         return target switch
         {
             TargetType.any => true,
@@ -1058,12 +1076,12 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient
         return (requestId, totalRows);
     }
 
-    private static (long RequestId, short OpType, long RowsAffected) DecodeExecDone(ReadOnlyMemory<byte> payload)
+    private static (long RequestId, byte OpType, long RowsAffected) DecodeExecDone(ReadOnlyMemory<byte> payload)
     {
         var s = payload.Span;
         if (s.Length < 1 + 8 + 1 + 1) throw new IngressError(ErrorCode.ProtocolVersionError, "EXEC_DONE too short");
         var requestId = BinaryPrimitives.ReadInt64LittleEndian(s.Slice(1, 8));
-        short opType = s[9];
+        byte opType = s[9];
         var rowsAffected = (long)QwpVarint.Read(s.Slice(10), out var consumed);
         var p = 10 + consumed;
         if (p != s.Length)

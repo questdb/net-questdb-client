@@ -396,6 +396,24 @@ public class QueryOptionsTests
     }
 
     [Test]
+    public void Parse_FailoverBackoffInitialZero_Rejected()
+    {
+        // EnsureValid must reject 0 here because QwpReconnectPolicy ctor rejects it; without this
+        // we'd surface the throw deep inside the first Execute() attempt instead of at config-load.
+        var ex = Assert.Throws<IngressError>(() => new QueryOptions(
+            "ws::addr=h:9000;failover_backoff_initial_ms=0;"));
+        Assert.That(ex!.Message, Does.Contain("failover_backoff_initial_ms"));
+    }
+
+    [Test]
+    public void Parse_FailoverBackoffMaxZero_Rejected()
+    {
+        var ex = Assert.Throws<IngressError>(() => new QueryOptions(
+            "ws::addr=h:9000;failover_backoff_max_ms=0;"));
+        Assert.That(ex!.Message, Does.Contain("failover_backoff_max_ms"));
+    }
+
+    [Test]
     public void Parse_FailoverMaxAttemptsZero_Rejected()
     {
         Assert.Throws<IngressError>(() => new QueryOptions(

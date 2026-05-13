@@ -115,7 +115,7 @@ public class QwpQueryClientEndToEndTests
         var handler = new RecordingHandler();
         client.Execute("INSERT INTO t VALUES(1)", handler);
 
-        Assert.That(handler.LastExecOpType, Is.EqualTo((short)7));
+        Assert.That(handler.LastExecOpType, Is.EqualTo((byte)7));
         Assert.That(handler.LastExecRowsAffected, Is.EqualTo(99L));
     }
 
@@ -1682,7 +1682,7 @@ public class QwpQueryClientEndToEndTests
         public long TotalRows { get; private set; }
         public byte LastErrorStatus { get; private set; }
         public string LastErrorMessage { get; private set; } = string.Empty;
-        public short LastExecOpType { get; private set; }
+        public byte LastExecOpType { get; private set; }
         public long LastExecRowsAffected { get; private set; }
         public List<QwpServerInfo?> FailoverResets { get; } = new();
         public Action<QwpColumnBatch>? OnBatchHook { get; set; }
@@ -1713,7 +1713,7 @@ public class QwpQueryClientEndToEndTests
             LastErrorMessage = message;
         }
 
-        public override void OnExecDone(short opType, long rowsAffected)
+        public override void OnExecDone(byte opType, long rowsAffected)
         {
             LastExecOpType = opType;
             LastExecRowsAffected = rowsAffected;

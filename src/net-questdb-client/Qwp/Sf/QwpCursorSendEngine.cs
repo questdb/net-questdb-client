@@ -793,9 +793,16 @@ internal sealed class QwpCursorSendEngine : IDisposable
                 long fsnAtZero;
                 lock (_stateLock)
                 {
-                    // Rewind cursor to first un-acked, clamped to the ring's oldest available FSN
-                    // so we never rewind past frames already trimmed off the ring head.
-                    _cursorFsn = Math.Max(_ackedFsn, _ring.OldestFsn);
+                    // Invariant: the manager only trims segments at or below ackedFsn-1, so the
+                    // ring's oldest FSN must never sit ahead of the cursor's resume point.
+                    // A violation means trim and ack are out of sync — surface it as terminal
+                    // rather than silently skip un-acked frames at the ring head.
+                    if (_ackedFsn < _ring.OldestFsn)
+                    {
+                        throw new InvalidDataException(
+                            $"cursor invariant violation: ackedFsn={_ackedFsn} < ring.OldestFsn={_ring.OldestFsn}");
+                    }
+                    _cursorFsn = _ackedFsn;
                     fsnAtZero = _cursorFsn;
                     _sentFsnHighWatermark = _cursorFsn - 1;
                     // Pending durable state is per-connection (wireSeq is reset on every upgrade);
@@ -1032,7 +1039,12 @@ internal sealed class QwpCursorSendEngine : IDisposable
         lock (_stateLock)
         {
             var highestSentWireSeq = _sentFsnHighWatermark - fsnAtZero;
-            if (highestSentWireSeq < 0 || ackedSeq > highestSentWireSeq) return;
+            if (highestSentWireSeq < 0) return;
+
+            // Cap the wire seq instead of dropping the frame: cumulative ACK semantics mean a
+            // sequence beyond our highest sent is still a valid commitment of everything we've
+            // sent, and the queued per-table watermarks must still drive TrimCoveredPrefix.
+            if (ackedSeq > highestSentWireSeq) ackedSeq = highestSentWireSeq;
 
             _pendingDurable.Enqueue(new PendingDurable(ackedSeq, entries));
             TrimCoveredPrefixLocked(fsnAtZero);
@@ -1100,6 +1112,14 @@ internal sealed class QwpCursorSendEngine : IDisposable
         var policy = QwpErrorClassifier.ResolvePolicy(category, _policyResolver);
 
         var wireSeq = response.Sequence;
+        if (wireSeq < 0)
+        {
+            // Symmetry with the OK path's negative-seq rejection: error frames also follow the
+            // non-negative-sequence wire contract.
+            throw new IngressError(
+                ErrorCode.ServerFlushError,
+                $"server returned negative error sequence {wireSeq}");
+        }
         long fromFsn, toFsn;
         long highestSentWireSeq;
         lock (_stateLock)
@@ -1116,7 +1136,7 @@ internal sealed class QwpCursorSendEngine : IDisposable
         }
         else
         {
-            var capped = Math.Max(0L, Math.Min(wireSeq, highestSentWireSeq));
+            var capped = Math.Min(wireSeq, highestSentWireSeq);
             fromFsn = checked(fsnAtZero + capped);
             toFsn = fromFsn;
         }

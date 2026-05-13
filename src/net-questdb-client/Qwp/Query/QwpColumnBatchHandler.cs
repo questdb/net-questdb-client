@@ -43,7 +43,7 @@ public abstract class QwpColumnBatchHandler
     public virtual void OnError(byte status, string message) { }
 
     /// <summary>Terminator for non-row-returning ops (DDL/DML); <paramref name="opType" /> identifies the operation, <paramref name="rowsAffected" /> the row count when applicable.</summary>
-    public virtual void OnExecDone(short opType, long rowsAffected) { }
+    public virtual void OnExecDone(byte opType, long rowsAffected) { }
 
     /// <summary>Fired when the connection failed over to a new node; the in-flight query is restarted from scratch.</summary>
     public virtual void OnFailoverReset(QwpServerInfo? newNode) { }

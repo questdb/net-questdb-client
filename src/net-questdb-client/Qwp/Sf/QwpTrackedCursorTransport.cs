@@ -84,6 +84,12 @@ internal sealed class QwpTrackedCursorTransport : IQwpCursorTransport
         }
         catch (QwpIngressRoleRejectedException ex)
         {
+            // Record the zone before the reject so a host that role-rejects but exposes a zone
+            // still contributes to the same-zone vs other-zone tiering for later walks.
+            if (!string.IsNullOrEmpty(ex.Zone))
+            {
+                _tracker.RecordZone(_hostIndex, ex.Zone);
+            }
             _tracker.RecordRoleReject(_hostIndex, ex.IsTransient);
             throw;
         }

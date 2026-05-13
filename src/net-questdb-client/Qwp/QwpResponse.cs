@@ -126,7 +126,22 @@ internal readonly struct QwpResponse
             return ParseDurableAck(frame);
         }
 
+        if (IsKnownEgressOnlyStatus(status))
+        {
+            throw new IngressError(ErrorCode.ProtocolVersionError,
+                $"QWP ingest response carries egress-only status 0x{statusByte:X2}");
+        }
+
         return ParseError(status, frame);
+    }
+
+    // Cancelled (0x0A) / LimitExceeded (0x0B) are defined for egress QUERY_ERROR; they must not
+    // appear on the ingest reply channel. Other undefined bytes are left through so future status
+    // codes the server adds are forward-compatible — the engine routes them via the Unknown
+    // category which always halts (see QwpErrorClassifier).
+    private static bool IsKnownEgressOnlyStatus(QwpStatusCode status)
+    {
+        return status is QwpStatusCode.Cancelled or QwpStatusCode.LimitExceeded;
     }
 
     private static QwpResponse ParseOk(ReadOnlySpan<byte> frame)
@@ -184,10 +199,23 @@ internal readonly struct QwpResponse
                 $"QWP error response size mismatch: header+message expects {expectedTotal} bytes, got {frame.Length}");
         }
 
-        // Lenient on the user-visible error string so a buggy server can't crash the client mid-error.
-        var message = msgLen == 0
-            ? string.Empty
-            : Encoding.UTF8.GetString(frame.Slice(QwpConstants.ErrorAckHeaderSize, msgLen));
+        string message;
+        if (msgLen == 0)
+        {
+            message = string.Empty;
+        }
+        else
+        {
+            try
+            {
+                message = StrictUtf8.GetString(frame.Slice(QwpConstants.ErrorAckHeaderSize, msgLen));
+            }
+            catch (DecoderFallbackException ex)
+            {
+                throw new IngressError(ErrorCode.InvalidUtf8,
+                    "QWP error response: invalid UTF-8 in message bytes", ex);
+            }
+        }
 
         return new QwpResponse(status, seq, message, EmptyEntries);
     }

@@ -269,23 +269,8 @@ internal sealed class QwpSegmentManager : IDisposable
         }
     }
 
-    private static void ReserveDiskBlocks(FileStream fs, long length)
-    {
-        var pageSize = QwpFiles.PageSize > 0 ? QwpFiles.PageSize : 4096;
-        Span<byte> zero = stackalloc byte[1];
-        zero[0] = 0;
-        for (long offset = 0; offset < length; offset += pageSize)
-        {
-            fs.Position = offset;
-            fs.Write(zero);
-        }
-
-        if (length > 0)
-        {
-            fs.Position = length - 1;
-            fs.Write(zero);
-        }
-    }
+    private static void ReserveDiskBlocks(FileStream fs, long length) =>
+        QwpFallocate.Reserve(fs, length);
 
     private void DrainAndDisposeTrimmable()
     {

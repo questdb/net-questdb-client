@@ -49,6 +49,7 @@ internal sealed class QwpSlotLock : IDisposable
 
     private readonly FileStream _file;
     private readonly string _heartbeatPath;
+    private readonly object _stateLock = new();
     private bool _disposed;
 
     private QwpSlotLock(string slotDirectory, string lockFilePath, FileStream file)
@@ -82,6 +83,22 @@ internal sealed class QwpSlotLock : IDisposable
 
     /// <summary>Full path of the lock file.</summary>
     public string LockFilePath { get; }
+
+    /// <summary>
+    ///     Runs <paramref name="action" /> against <see cref="SlotDirectory" /> while holding an
+    ///     internal mutex that excludes <see cref="Dispose" />. Returns <c>false</c> (without
+    ///     invoking the action) if the lock has already been disposed.
+    /// </summary>
+    public bool TryRunUnderLock(Action<string> action)
+    {
+        ArgumentNullException.ThrowIfNull(action);
+        lock (_stateLock)
+        {
+            if (_disposed) return false;
+            action(SlotDirectory);
+            return true;
+        }
+    }
 
     /// <summary>
     ///     Acquires the lock on the given slot. Creates the slot directory if it doesn't exist.
@@ -164,18 +181,17 @@ internal sealed class QwpSlotLock : IDisposable
     /// <inheritdoc />
     public void Dispose()
     {
-        if (_disposed)
+        lock (_stateLock)
         {
-            return;
-        }
-
-        _disposed = true;
-        try
-        {
-            _file.Dispose();
-        }
-        catch (Exception)
-        {
+            if (_disposed) return;
+            _disposed = true;
+            try
+            {
+                _file.Dispose();
+            }
+            catch (Exception)
+            {
+            }
         }
     }
 }

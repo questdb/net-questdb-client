@@ -130,14 +130,68 @@ public class QwpSlotLockTests
     }
 
     [Test]
+    public void TryRunUnderLock_BeforeDispose_RunsAction()
+    {
+        using var slotLock = QwpSlotLock.Acquire(_root);
+        var observedDir = string.Empty;
+
+        var ran = slotLock.TryRunUnderLock(dir => observedDir = dir);
+
+        Assert.That(ran, Is.True);
+        Assert.That(observedDir, Is.EqualTo(_root));
+    }
+
+    [Test]
+    public void TryRunUnderLock_AfterDispose_SkipsAction()
+    {
+        var slotLock = QwpSlotLock.Acquire(_root);
+        slotLock.Dispose();
+        var actionInvoked = false;
+
+        var ran = slotLock.TryRunUnderLock(_ => actionInvoked = true);
+
+        Assert.That(ran, Is.False);
+        Assert.That(actionInvoked, Is.False);
+    }
+
+    [Test]
+    public void TryRunUnderLock_SerializesAgainstDispose()
+    {
+        var slotLock = QwpSlotLock.Acquire(_root);
+        var enteredAction = new ManualResetEventSlim();
+        var releaseAction = new ManualResetEventSlim();
+        var actionCompleted = false;
+
+        var holder = Task.Run(() =>
+        {
+            slotLock.TryRunUnderLock(_ =>
+            {
+                enteredAction.Set();
+                releaseAction.Wait();
+                actionCompleted = true;
+            });
+        });
+
+        Assert.That(enteredAction.Wait(TimeSpan.FromSeconds(2)), Is.True);
+
+        var disposer = Task.Run(() => slotLock.Dispose());
+
+        Assert.That(disposer.Wait(TimeSpan.FromMilliseconds(100)), Is.False,
+            "Dispose must not complete while a TryRunUnderLock action is in flight");
+
+        releaseAction.Set();
+        Assert.That(Task.WhenAll(holder, disposer).Wait(TimeSpan.FromSeconds(5)), Is.True);
+        Assert.That(actionCompleted, Is.True);
+        Assert.That(slotLock.TryRunUnderLock(_ => { }), Is.False);
+    }
+
+    [Test]
     public void RefreshHeartbeat_AdvancesMtime_OnAlreadyEmptyFile()
     {
         using var slotLock = QwpSlotLock.Acquire(_root);
         var heartbeatPath = Path.Combine(_root, ".heartbeat");
         Assert.That(File.Exists(heartbeatPath), Is.True);
 
-        // SetLength(0) is a no-op on an already-empty file on some filesystems; SetLastWriteTime
-        // is the reliable path. Backdate, refresh, and assert mtime moved forward.
         var stale = DateTime.UtcNow.AddMinutes(-5);
         File.SetLastWriteTimeUtc(heartbeatPath, stale);
         Assert.That(File.GetLastWriteTimeUtc(heartbeatPath), Is.EqualTo(stale).Within(TimeSpan.FromSeconds(1)));
@@ -145,7 +199,6 @@ public class QwpSlotLockTests
         slotLock.RefreshHeartbeat();
 
         var after = File.GetLastWriteTimeUtc(heartbeatPath);
-        Assert.That(after, Is.GreaterThan(stale.AddMinutes(1)),
-            "RefreshHeartbeat must advance mtime even when the heartbeat file is already empty");
+        Assert.That(after, Is.GreaterThan(stale.AddMinutes(1)));
     }
 }

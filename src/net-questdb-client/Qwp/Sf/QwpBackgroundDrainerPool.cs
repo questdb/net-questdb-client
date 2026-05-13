@@ -212,7 +212,7 @@ internal sealed class QwpBackgroundDrainerPool : IDisposable
             }
             catch (Exception ex)
             {
-                TryDropFailedSentinel(slotLock.SlotDirectory, ex);
+                TryDropFailedSentinel(slotLock, ex);
             }
             finally
             {
@@ -240,21 +240,24 @@ internal sealed class QwpBackgroundDrainerPool : IDisposable
 
     private const int FailedSentinelMaxBytes = 4096;
 
-    private static void TryDropFailedSentinel(string slotDirectory, Exception ex)
+    private static void TryDropFailedSentinel(QwpSlotLock slotLock, Exception ex)
     {
-        try
+        var content = ex.ToString();
+        if (content.Length > FailedSentinelMaxBytes)
         {
-            var content = ex.ToString();
-            if (content.Length > FailedSentinelMaxBytes)
+            content = content.Substring(0, FailedSentinelMaxBytes) + "\n... [truncated]";
+        }
+        slotLock.TryRunUnderLock(dir =>
+        {
+            try
             {
-                content = content.Substring(0, FailedSentinelMaxBytes) + "\n... [truncated]";
+                File.WriteAllText(Path.Combine(dir, FailedSentinel), content);
             }
-            File.WriteAllText(Path.Combine(slotDirectory, FailedSentinel), content);
-        }
-        catch (Exception)
-        {
-            // Best-effort sentinel; swallow any I/O failure rather than mask the real drain error.
-        }
+            catch (Exception)
+            {
+                // Best-effort sentinel; swallow any I/O failure rather than mask the real drain error.
+            }
+        });
     }
 
     private void EnsureNotDisposed()

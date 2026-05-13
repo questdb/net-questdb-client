@@ -237,6 +237,29 @@ public class QwpBackgroundDrainerPoolTests
     }
 
     [Test]
+    public async Task Dispose_WedgedDrainerThrowsLater_NoSentinelWrittenToEvictedSlot()
+    {
+        var slotDir = Path.Combine(_root, "slot");
+        var slotLock = QwpSlotLock.Acquire(slotDir);
+        var drainer = new GatedThrowingDrainer();
+        var pool = new QwpBackgroundDrainerPool(2, drainer, shutdownWait: TimeSpan.FromMilliseconds(50));
+        pool.Enqueue(slotLock);
+        Assert.That(drainer.DrainStarted.Wait(TimeSpan.FromSeconds(2)), Is.True);
+
+        pool.Dispose();
+        using var newOwner = QwpSlotLock.Acquire(slotDir);
+
+        drainer.AllowThrow.Set();
+        var deadline = DateTime.UtcNow.AddSeconds(2);
+        while (drainer.Completed.CurrentCount > 0 && DateTime.UtcNow < deadline)
+        {
+            await Task.Delay(10);
+        }
+
+        Assert.That(File.Exists(Path.Combine(slotDir, ".failed")), Is.False);
+    }
+
+    [Test]
     public void Enqueue_AfterDispose_Throws()
     {
         var pool = new QwpBackgroundDrainerPool(2, new SuccessDrainer());
@@ -278,6 +301,30 @@ public class QwpBackgroundDrainerPoolTests
         private readonly Exception _ex;
         public ThrowingDrainer(Exception ex) => _ex = ex;
         public Task DrainAsync(string slotDirectory, CancellationToken cancellationToken) => Task.FromException(_ex);
+    }
+
+    private sealed class GatedThrowingDrainer : IQwpSlotDrainer
+    {
+        public ManualResetEventSlim DrainStarted { get; } = new();
+        public ManualResetEventSlim AllowThrow { get; } = new();
+        public CountdownEvent Completed { get; } = new(1);
+
+        public Task DrainAsync(string slotDirectory, CancellationToken cancellationToken)
+        {
+            return Task.Run(() =>
+            {
+                DrainStarted.Set();
+                AllowThrow.Wait();
+                try
+                {
+                    throw new InvalidOperationException("wedged drainer woke up and threw");
+                }
+                finally
+                {
+                    Completed.Signal();
+                }
+            });
+        }
     }
 
     private sealed class GatedDrainer : IQwpSlotDrainer

@@ -944,7 +944,13 @@ internal sealed class QwpCursorSendEngine : IDisposable
                                 $"internal: cursor at FSN {readFsn} fell out of segment range");
                         }
 
+                        // Watermark must bump atomically with cursor; a fast server ACK racing ahead
+                        // of SendBinaryAsync completion would otherwise be dropped by the receive pump.
                         _cursorFsn = readFsn + 1;
+                        if (readFsn > _sentFsnHighWatermark)
+                        {
+                            _sentFsnHighWatermark = readFsn;
+                        }
                         break;
                     }
 
@@ -955,13 +961,6 @@ internal sealed class QwpCursorSendEngine : IDisposable
             }
 
             await transport.SendBinaryAsync(sendBuffer.AsMemory(0, frameLen), ct).ConfigureAwait(false);
-            lock (_stateLock)
-            {
-                if (readFsn > _sentFsnHighWatermark)
-                {
-                    _sentFsnHighWatermark = readFsn;
-                }
-            }
             Interlocked.Increment(ref _totalFramesSent);
         }
     }

@@ -58,6 +58,8 @@ internal sealed class QwpTrackedCursorTransport : IQwpCursorTransport
         _connectTimeout = connectTimeout;
     }
 
+    public (string Host, int Port)? Endpoint => _inner.Endpoint;
+
     public async Task ConnectAsync(CancellationToken cancellationToken)
     {
         CancellationTokenSource? timeoutCts = null;

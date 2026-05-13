@@ -225,6 +225,24 @@ internal sealed class QwpTableBuffer
         try { GetOrCreateColumn(columnName)?.AppendDecimal256(value); } catch { CancelCurrentRow(); throw; }
     }
 
+    /// <summary>Append a DECIMAL64 value as the unscaled int64 with explicit scale.</summary>
+    public void AppendDecimal64(ReadOnlySpan<char> columnName, long unscaledValue, byte scale)
+    {
+        try { GetOrCreateColumn(columnName)?.AppendDecimal64(unscaledValue, scale); } catch { CancelCurrentRow(); throw; }
+    }
+
+    /// <summary>Append a DECIMAL128 value as two int64 limbs (LSB first) with explicit scale.</summary>
+    public void AppendDecimal128(ReadOnlySpan<char> columnName, long lo, long hi, byte scale)
+    {
+        try { GetOrCreateColumn(columnName)?.AppendDecimal128(lo, hi, scale); } catch { CancelCurrentRow(); throw; }
+    }
+
+    /// <summary>Append a DECIMAL256 value as four int64 limbs (LSB first) with explicit scale.</summary>
+    public void AppendDecimal256(ReadOnlySpan<char> columnName, long l0, long l1, long l2, long l3, byte scale)
+    {
+        try { GetOrCreateColumn(columnName)?.AppendDecimal256(l0, l1, l2, l3, scale); } catch { CancelCurrentRow(); throw; }
+    }
+
     /// <summary>Append a BINARY value as opaque bytes (no UTF-8 contract).</summary>
     public void AppendBinary(ReadOnlySpan<char> columnName, ReadOnlySpan<byte> value)
     {

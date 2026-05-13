@@ -119,7 +119,28 @@ public class QwpWebSocketTransportTests
             Uri = server.Uri,
         });
 
-        Assert.ThrowsAsync<IngressError>(async () => await transport.ConnectAsync());
+        Assert.CatchAsync<IngressError>(async () => await transport.ConnectAsync());
+    }
+
+    [Test]
+    public async Task Handshake_Rejected401_ThrowsQwpAuthFailedExceptionPreservingIngressErrorCatch()
+    {
+        await using var server = new DummyQwpServer(new DummyQwpServerOptions
+        {
+            RejectUpgradeWith = HttpStatusCode.Unauthorized,
+        });
+        await server.StartAsync();
+
+        using var transport = new QwpWebSocketTransport(new QwpWebSocketTransportOptions
+        {
+            Uri = server.Uri,
+        });
+
+        var ex = Assert.ThrowsAsync<QwpAuthFailedException>(async () => await transport.ConnectAsync());
+        Assert.That(ex!.HttpStatusCode, Is.EqualTo(401));
+        Assert.That(ex.Endpoint, Is.EqualTo(server.Uri));
+        Assert.That(ex, Is.InstanceOf<IngressError>(), "must remain catchable as IngressError");
+        Assert.That(ex.code, Is.EqualTo(ErrorCode.AuthError), "code must remain AuthError");
     }
 
     [Test]

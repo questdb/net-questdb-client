@@ -210,6 +210,7 @@ public class QwpBackgroundDrainerTests
     private sealed class StubTransport : IQwpCursorTransport
     {
         public Func<byte[], byte[]>? OnSend;
+        public (string Host, int Port)? Endpoint { get; set; } = ("stub", 0);
         private readonly Channel<byte[]> _acks = Channel.CreateUnbounded<byte[]>();
         private int _autoSeq;
 

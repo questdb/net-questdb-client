@@ -61,6 +61,7 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
     private readonly QwpCursorSendEngine _engine;
     private readonly QwpBackgroundDrainerPool? _drainerPool;
     private readonly QwpSenderErrorDispatcher? _errorDispatcher;
+    private readonly QwpConnectionEventDispatcher? _connectionEventDispatcher;
 
     private readonly Dictionary<string, long> _committedSeqTxn = new(StringComparer.Ordinal);
     private readonly Dictionary<string, long> _durableSeqTxn = new(StringComparer.Ordinal);
@@ -86,11 +87,11 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
 #endif
         _encoderBuffer = new QwpEncoder.FrameBuilder(EncoderInitialCapacity);
 
-        (_slotLock, _engine, _drainerPool, _errorDispatcher) = BuildEngineStack(options);
+        (_slotLock, _engine, _drainerPool, _errorDispatcher, _connectionEventDispatcher) = BuildEngineStack(options);
         _engine.SetTableEntryHandler(UpdateSeqTxnFromAck);
     }
 
-    private static (QwpSlotLock? slotLock, QwpCursorSendEngine engine, QwpBackgroundDrainerPool? pool, QwpSenderErrorDispatcher? dispatcher)
+    private static (QwpSlotLock? slotLock, QwpCursorSendEngine engine, QwpBackgroundDrainerPool? pool, QwpSenderErrorDispatcher? dispatcher, QwpConnectionEventDispatcher? eventDispatcher)
         BuildEngineStack(SenderOptions options)
     {
         var sfMode = !string.IsNullOrEmpty(options.sf_dir);
@@ -100,6 +101,7 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
         QwpCursorSendEngine? engine = null;
         QwpBackgroundDrainerPool? pool = null;
         QwpSenderErrorDispatcher? dispatcher = null;
+        QwpConnectionEventDispatcher? eventDispatcher = null;
 
         try
         {
@@ -134,6 +136,14 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
 
             dispatcher = new QwpSenderErrorDispatcher(options.error_handler, options.error_inbox_capacity);
 
+            if (options.ConnectionListener is not null)
+            {
+                eventDispatcher = new QwpConnectionEventDispatcher(
+                    options.ConnectionListener,
+                    options.connection_listener_inbox_capacity);
+            }
+
+            var capturedSink = eventDispatcher;
             engine = new QwpCursorSendEngine(
                 slotLock,
                 ring,
@@ -146,7 +156,8 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
                 errorDispatcher: dispatcher,
                 policyResolver: options.BuildEffectivePolicyResolver(),
                 durableAckMode: options.request_durable_ack,
-                ackWatermark: ackWatermark);
+                ackWatermark: ackWatermark,
+                connectionEventSink: capturedSink is null ? null : (Action<SenderConnectionEvent>)(evt => capturedSink.Offer(evt)));
 
             engine.Start();
 
@@ -203,13 +214,14 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
                 }
             }
 
-            return (slotLock, engine, pool, dispatcher);
+            return (slotLock, engine, pool, dispatcher, eventDispatcher);
         }
         catch (Exception)
         {
             SfCleanup.Dispose(pool);
             SfCleanup.Dispose(engine);
             SfCleanup.Dispose(dispatcher);
+            SfCleanup.Dispose(eventDispatcher);
             SfCleanup.Dispose(ring);
             SfCleanup.Dispose(ackWatermark);
             SfCleanup.Dispose(slotLock);
@@ -480,6 +492,30 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
         return this;
     }
 
+    /// <inheritdoc />
+    public IQwpWebSocketSender ColumnDecimal64(ReadOnlySpan<char> name, long unscaledValue, byte scale)
+    {
+        ThrowIfTerminal();
+        EnsureCurrentTable().AppendDecimal64(name, unscaledValue, scale);
+        return this;
+    }
+
+    /// <inheritdoc />
+    public IQwpWebSocketSender ColumnDecimal128(ReadOnlySpan<char> name, long lo, long hi, byte scale)
+    {
+        ThrowIfTerminal();
+        EnsureCurrentTable().AppendDecimal128(name, lo, hi, scale);
+        return this;
+    }
+
+    /// <inheritdoc />
+    public IQwpWebSocketSender ColumnDecimal256(ReadOnlySpan<char> name, long l0, long l1, long l2, long l3, byte scale)
+    {
+        ThrowIfTerminal();
+        EnsureCurrentTable().AppendDecimal256(name, l0, l1, l2, l3, scale);
+        return this;
+    }
+
     /// <summary>Appends a BINARY value (opaque bytes; same wire layout as VARCHAR but no UTF-8 contract).</summary>
     public IQwpWebSocketSender ColumnBinary(ReadOnlySpan<char> name, ReadOnlySpan<byte> value)
     {
@@ -505,9 +541,7 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
             throw new IngressError(ErrorCode.InvalidApiCall, $"failed to serialise IPv4 address `{addr}`");
         }
 
-        // IPAddress.TryWriteBytes writes network-byte-order octets (a.b.c.d → bytes a,b,c,d).
-        // Wire format is uint32 little-endian, where octet `a` is the LSB.
-        var packed = (uint)octets[0] | ((uint)octets[1] << 8) | ((uint)octets[2] << 16) | ((uint)octets[3] << 24);
+        var packed = System.Buffers.Binary.BinaryPrimitives.ReadUInt32BigEndian(octets);
         EnsureCurrentTable().AppendIPv4(name, packed);
         return this;
     }
@@ -678,6 +712,29 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
         OnFlushSucceeded();
     }
 
+    /// <inheritdoc />
+    public long AckedFsn => _engine.AckedFsn - 1;
+
+    /// <inheritdoc />
+    public async Task<long> FlushAndGetSequenceAsync(CancellationToken ct = default)
+    {
+        ThrowIfTerminal();
+        var len = EncodeBatch();
+        if (len == 0) return _engine.NextFsn - 1;
+        await _engine.AppendAsync(_encoderBuffer.WrittenMemory, ct).ConfigureAwait(false);
+        var publishedFsn = _engine.NextFsn - 1;
+        OnFlushSucceeded();
+        return publishedFsn;
+    }
+
+    /// <inheritdoc />
+    public Task<bool> AwaitAckedFsnAsync(long targetFsn, TimeSpan timeout, CancellationToken ct = default)
+    {
+        if (targetFsn < 0) return Task.FromResult(true);
+        ThrowIfTerminal();
+        return _engine.AwaitAckedFsnAsync(targetFsn + 1, timeout, ct);
+    }
+
     private void OnFlushSucceeded()
     {
         _symbolDictionary.Reset();
@@ -748,6 +805,9 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
 
     /// <inheritdoc />
     public long DroppedErrorNotifications => _errorDispatcher?.DroppedNotifications ?? 0L;
+
+    /// <inheritdoc />
+    public long DroppedConnectionNotifications => _connectionEventDispatcher?.DroppedNotifications ?? 0L;
 
     /// <inheritdoc />
     public long TotalErrorNotificationsDelivered => _errorDispatcher?.TotalDelivered ?? 0L;
@@ -833,6 +893,7 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
             SfCleanup.Dispose(_drainerPool);
             SfCleanup.Dispose(_engine);
             SfCleanup.Dispose(_errorDispatcher);
+            SfCleanup.Dispose(_connectionEventDispatcher);
         }
 
         toRethrow?.Throw();
@@ -855,6 +916,7 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
             SfCleanup.Dispose(_drainerPool);
             SfCleanup.Dispose(_engine);
             SfCleanup.Dispose(_errorDispatcher);
+            SfCleanup.Dispose(_connectionEventDispatcher);
         }
 
         toRethrow?.Throw();

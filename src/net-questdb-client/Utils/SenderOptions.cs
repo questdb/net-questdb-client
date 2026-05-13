@@ -104,6 +104,8 @@ public record SenderOptions
     private SenderErrorHandler? _errorHandler;
     private SenderErrorPolicyResolver? _errorPolicyResolver;
     private int _errorInboxCapacity = 256;
+    private int _connectionListenerInboxCapacity = 256;
+    private QuestDB.Senders.ISenderConnectionListener? _connectionListener;
     private SenderErrorPolicy? _onServerError;
     private SenderErrorPolicy? _onSchemaMismatchError;
     private SenderErrorPolicy? _onParseError;
@@ -133,6 +135,8 @@ public record SenderOptions
     private bool _errorHandlerUserSet;
     private bool _errorPolicyResolverUserSet;
     private bool _errorInboxCapacityUserSet;
+    private bool _connectionListenerInboxCapacityUserSet;
+    private bool _connectionListenerUserSet;
     private bool _onServerErrorUserSet;
     private bool _onSchemaMismatchErrorUserSet;
     private bool _onParseErrorUserSet;
@@ -249,6 +253,7 @@ public record SenderOptions
         ParseStringWithDefault(nameof(proxy), null, out _proxy);
 
         ParseIntWithDefault(nameof(error_inbox_capacity), "256", out _errorInboxCapacity);
+        ParseIntWithDefault(nameof(connection_listener_inbox_capacity), "256", out _connectionListenerInboxCapacity);
 
         _onServerError = ParsePolicyKey(nameof(on_server_error));
         _onSchemaMismatchError = ParsePolicyKey(nameof(on_schema_mismatch_error), aliasName: "on_schema_error");
@@ -277,7 +282,7 @@ public record SenderOptions
         "initial_connect_retry", "close_flush_timeout_millis",
         "drain_orphans", "max_background_drainers", "ping_timeout", "proxy",
         "durable_ack_keepalive_interval_millis",
-        "error_inbox_capacity",
+        "error_inbox_capacity", "connection_listener_inbox_capacity",
         "on_server_error", "on_schema_mismatch_error", "on_schema_error", "on_parse_error",
         "on_internal_error", "on_security_error", "on_write_error",
         "token_x", "token_y",
@@ -508,6 +513,11 @@ public record SenderOptions
             throw new IngressError(ErrorCode.ConfigError,
                 $"`error_inbox_capacity` must be >= 16; got {_errorInboxCapacity}");
         }
+        if (_connectionListenerInboxCapacity < 1)
+        {
+            throw new IngressError(ErrorCode.ConfigError,
+                $"`connection_listener_inbox_capacity` must be >= 1; got {_connectionListenerInboxCapacity}");
+        }
     }
 
     private bool HasAnyPolicyKeySet() =>
@@ -614,6 +624,8 @@ public record SenderOptions
         if (_errorHandlerUserSet) Throw(nameof(error_handler));
         if (_errorPolicyResolverUserSet) Throw(nameof(error_policy_resolver));
         if (_errorInboxCapacityUserSet) Throw(nameof(error_inbox_capacity));
+        if (_connectionListenerInboxCapacityUserSet) Throw(nameof(connection_listener_inbox_capacity));
+        if (_connectionListenerUserSet) Throw(nameof(ConnectionListener));
         if (_onServerErrorUserSet) Throw(nameof(on_server_error));
         if (_onSchemaMismatchErrorUserSet) Throw(nameof(on_schema_mismatch_error));
         if (_onParseErrorUserSet) Throw(nameof(on_parse_error));
@@ -652,7 +664,7 @@ public record SenderOptions
         "reconnect_max_backoff_millis", "initial_connect_retry", "initial_connect_mode",
         "close_flush_timeout_millis", "drain_orphans", "max_background_drainers", "ping_timeout",
         "durable_ack_keepalive_interval_millis", "proxy",
-        "error_handler", "error_policy_resolver", "error_inbox_capacity",
+        "error_handler", "error_policy_resolver", "error_inbox_capacity", "connection_listener_inbox_capacity",
         "on_server_error", "on_schema_mismatch_error", "on_schema_error", "on_parse_error", "on_internal_error",
         "on_security_error", "on_write_error",
         "in_flight_window",
@@ -1193,6 +1205,29 @@ public record SenderOptions
     {
         get => _errorInboxCapacity;
         set { _errorInboxCapacity = value; _errorInboxCapacityUserSet = true; }
+    }
+
+    /// <summary>
+    ///     Bounded inbox capacity for the async connection-event dispatcher. When the inbox fills,
+    ///     surplus events are dropped and counted (visible via
+    ///     <see cref="QuestDB.Senders.IQwpWebSocketSender.DroppedConnectionNotifications" />).
+    ///     Defaults to 256. WS-only.
+    /// </summary>
+    public int connection_listener_inbox_capacity
+    {
+        get => _connectionListenerInboxCapacity;
+        set { _connectionListenerInboxCapacity = value; _connectionListenerInboxCapacityUserSet = true; }
+    }
+
+    /// <summary>
+    ///     Programmatic-only registration of an <see cref="QuestDB.Senders.ISenderConnectionListener" />.
+    ///     Not a connect-string key (a callback can't be expressed in a string). WS-only; ignored on
+    ///     other transports.
+    /// </summary>
+    public QuestDB.Senders.ISenderConnectionListener? ConnectionListener
+    {
+        get => _connectionListener;
+        set { _connectionListener = value; _connectionListenerUserSet = true; }
     }
 
     /// <summary>

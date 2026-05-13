@@ -580,6 +580,84 @@ public class QwpColumnExtendedTypesTests
         Assert.Throws<IngressError>(() => col.AppendIPv4(1));
     }
 
+    [Test]
+    public void AppendDecimal64_Limbs_WritesEightBytesLittleEndian()
+    {
+        var col = new QwpColumn("p", 0);
+        col.AppendDecimal64(unchecked((long)0x123456789ABCDEF0UL), scale: 5);
+
+        Assert.That(col.TypeCode, Is.EqualTo(QwpTypeCode.Decimal64));
+        Assert.That(col.DecimalScale, Is.EqualTo((byte)5));
+        Assert.That(col.DecimalScaleSet, Is.True);
+        Assert.That(col.FixedLen, Is.EqualTo(8));
+        Assert.That(BinaryPrimitives.ReadInt64LittleEndian(col.FixedData!.AsSpan(0, 8)),
+            Is.EqualTo(unchecked((long)0x123456789ABCDEF0UL)));
+    }
+
+    [Test]
+    public void AppendDecimal128_Limbs_WritesTwoLimbsLsbFirst()
+    {
+        var col = new QwpColumn("p", 0);
+        col.AppendDecimal128(lo: unchecked((long)0xAAAAAAAAAAAAAAAAUL), hi: 0x5555555555555555L, scale: 0);
+
+        Assert.That(col.TypeCode, Is.EqualTo(QwpTypeCode.Decimal128));
+        Assert.That(col.FixedLen, Is.EqualTo(16));
+        var span = col.FixedData!.AsSpan(0, 16);
+        Assert.That(BinaryPrimitives.ReadInt64LittleEndian(span.Slice(0, 8)),
+            Is.EqualTo(unchecked((long)0xAAAAAAAAAAAAAAAAUL)));
+        Assert.That(BinaryPrimitives.ReadInt64LittleEndian(span.Slice(8, 8)),
+            Is.EqualTo(0x5555555555555555L));
+    }
+
+    [Test]
+    public void AppendDecimal256_Limbs_WritesFourLimbsLsbFirst()
+    {
+        var col = new QwpColumn("p", 0);
+        col.AppendDecimal256(
+            l0: 0x0102030405060708L,
+            l1: 0x1112131415161718L,
+            l2: 0x2122232425262728L,
+            l3: 0x3132333435363738L,
+            scale: 10);
+
+        Assert.That(col.TypeCode, Is.EqualTo(QwpTypeCode.Decimal256));
+        Assert.That(col.DecimalScale, Is.EqualTo((byte)10));
+        Assert.That(col.FixedLen, Is.EqualTo(32));
+        var span = col.FixedData!.AsSpan(0, 32);
+        Assert.That(BinaryPrimitives.ReadInt64LittleEndian(span.Slice(0, 8)), Is.EqualTo(0x0102030405060708L));
+        Assert.That(BinaryPrimitives.ReadInt64LittleEndian(span.Slice(8, 8)), Is.EqualTo(0x1112131415161718L));
+        Assert.That(BinaryPrimitives.ReadInt64LittleEndian(span.Slice(16, 8)), Is.EqualTo(0x2122232425262728L));
+        Assert.That(BinaryPrimitives.ReadInt64LittleEndian(span.Slice(24, 8)), Is.EqualTo(0x3132333435363738L));
+    }
+
+    [Test]
+    public void AppendDecimal64_Limbs_ScaleMismatch_Throws()
+    {
+        var col = new QwpColumn("p", 0);
+        col.AppendDecimal64(100L, scale: 2);
+        Assert.Throws<IngressError>(() => col.AppendDecimal64(200L, scale: 3));
+    }
+
+    [Test]
+    public void AppendDecimal256_Limbs_ScaleAboveMax_Throws()
+    {
+        var col = new QwpColumn("p", 0);
+        Assert.Throws<IngressError>(() => col.AppendDecimal256(0, 0, 0, 0, scale: 77));
+    }
+
+    [Test]
+    public void AppendDecimal64_LimbAndDecimalForms_ShareScaleLock()
+    {
+        var col = new QwpColumn("p", 0);
+        col.AppendDecimal64(100L, scale: 2);
+        col.AppendDecimal64(0.55m);
+        Assert.That(col.DecimalScale, Is.EqualTo((byte)2));
+        Assert.That(col.NonNullCount, Is.EqualTo(2));
+        var span = col.FixedData!.AsSpan(0, 16);
+        Assert.That(BinaryPrimitives.ReadInt64LittleEndian(span.Slice(0, 8)), Is.EqualTo(100L));
+        Assert.That(BinaryPrimitives.ReadInt64LittleEndian(span.Slice(8, 8)), Is.EqualTo(55L));
+    }
+
     /// <summary>Reads a 16-byte little-endian two's-complement integer.</summary>
     private static BigInteger ReadInt128(ReadOnlySpan<byte> bytes)
     {

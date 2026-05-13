@@ -49,6 +49,9 @@ internal sealed class QwpCursorSendEngine : IDisposable
         new(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly Func<bool>? _skipBackoffPredicate;
     private readonly QwpSenderErrorDispatcher? _errorDispatcher;
+    private readonly Action<QuestDB.Senders.SenderConnectionEvent>? _connectionEventSink;
+    private (string Host, int Port)? _liveEndpoint;
+    private long _currentRoundSeq;
     private readonly SenderErrorPolicyResolver? _policyResolver;
     private readonly QwpAckWatermark? _ackWatermark;
     private readonly object _stateLock = new();
@@ -126,7 +129,8 @@ internal sealed class QwpCursorSendEngine : IDisposable
         QwpSenderErrorDispatcher? errorDispatcher = null,
         SenderErrorPolicyResolver? policyResolver = null,
         bool durableAckMode = false,
-        QwpAckWatermark? ackWatermark = null)
+        QwpAckWatermark? ackWatermark = null,
+        Action<QuestDB.Senders.SenderConnectionEvent>? connectionEventSink = null)
     {
         ArgumentNullException.ThrowIfNull(ring);
         ArgumentNullException.ThrowIfNull(transportFactory);
@@ -147,6 +151,7 @@ internal sealed class QwpCursorSendEngine : IDisposable
         _policyResolver = policyResolver;
         _durableAckMode = durableAckMode;
         _ackWatermark = ackWatermark;
+        _connectionEventSink = connectionEventSink;
 
         var baseSeed = ring.OldestFsn;
         if (ackWatermark is not null)
@@ -427,6 +432,51 @@ internal sealed class QwpCursorSendEngine : IDisposable
         }
     }
 
+    /// <summary>
+    ///     Blocks until <see cref="AckedFsn" /> reaches <paramref name="targetFsn" /> or
+    ///     <paramref name="timeout" /> elapses. Returns <c>true</c> on success, <c>false</c> on
+    ///     timeout. Throws on terminal failure or cancellation.
+    /// </summary>
+    public async Task<bool> AwaitAckedFsnAsync(long targetFsn, TimeSpan timeout, CancellationToken cancellationToken = default)
+    {
+        EnsureNotDisposed();
+        var infiniteTimeout = timeout == Timeout.InfiniteTimeSpan;
+        var deadlineMs = infiniteTimeout
+            ? long.MaxValue
+            : Environment.TickCount64 + (long)timeout.TotalMilliseconds;
+
+        while (true)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            Task waitTask;
+            lock (_stateLock)
+            {
+                if (_disposed) throw new ObjectDisposedException(nameof(QwpCursorSendEngine));
+                if (_terminal) throw WrapTerminalForProducer();
+                if (_ackedFsn >= targetFsn) return true;
+                waitTask = _ackSignal.Task;
+            }
+
+            if (infiniteTimeout)
+            {
+                await waitTask.WaitAsync(cancellationToken).ConfigureAwait(false);
+                continue;
+            }
+
+            var remainingMs = deadlineMs - Environment.TickCount64;
+            if (remainingMs <= 0) return false;
+
+            try
+            {
+                await waitTask.WaitAsync(TimeSpan.FromMilliseconds(remainingMs), cancellationToken).ConfigureAwait(false);
+            }
+            catch (TimeoutException)
+            {
+            }
+        }
+    }
+
     /// <summary>Returns once every appended frame is acked, or throws on timeout / terminal failure.</summary>
     public async Task FlushAsync(TimeSpan timeout, CancellationToken cancellationToken = default)
     {
@@ -631,17 +681,25 @@ internal sealed class QwpCursorSendEngine : IDisposable
                     ex.code is ErrorCode.AuthError or ErrorCode.DurableAckNotSupported
                     && ex is not QwpIngressRoleRejectedException)
                 {
+                    if (ex.code is ErrorCode.AuthError)
+                    {
+                        EmitConnectionEvent(QuestDB.Senders.SenderConnectionEventKind.AuthFailed, cause: ex);
+                    }
                     SetTerminal(ex);
                     return;
                 }
                 catch (QwpIngressRoleRejectedException ex)
                 {
+                    EmitConnectionEvent(QuestDB.Senders.SenderConnectionEventKind.EndpointAttemptFailed,
+                        cause: ex, endpoint: transport.Endpoint);
                     backoff.ResetAttempt();
                     backoff.OutageStartTickMs ??= Environment.TickCount64;
                     var elapsed = TimeSpan.FromMilliseconds(
                         Environment.TickCount64 - backoff.OutageStartTickMs.Value);
                     if (elapsed >= _reconnectPolicy.MaxOutageDuration)
                     {
+                        EmitConnectionEvent(QuestDB.Senders.SenderConnectionEventKind.ReconnectBudgetExhausted,
+                            cause: ex, endpoint: transport.Endpoint);
                         SetTerminal(ex);
                         return;
                     }
@@ -650,6 +708,10 @@ internal sealed class QwpCursorSendEngine : IDisposable
                     {
                         continue;
                     }
+
+                    EmitConnectionEvent(QuestDB.Senders.SenderConnectionEventKind.AllEndpointsUnreachable,
+                        cause: ex, endpoint: transport.Endpoint);
+                    Interlocked.Increment(ref _currentRoundSeq);
 
                     var remaining = _reconnectPolicy.MaxOutageDuration - elapsed;
                     var jittered = _reconnectPolicy.ComputeBackoff(0);
@@ -667,6 +729,8 @@ internal sealed class QwpCursorSendEngine : IDisposable
                         Environment.TickCount64 - backoff.OutageStartTickMs.Value);
                     if (elapsed >= _reconnectPolicy.MaxOutageDuration)
                     {
+                        EmitConnectionEvent(QuestDB.Senders.SenderConnectionEventKind.ReconnectBudgetExhausted,
+                            cause: ex, endpoint: transport.Endpoint);
                         SetTerminal(ex);
                         return;
                     }
@@ -674,10 +738,17 @@ internal sealed class QwpCursorSendEngine : IDisposable
                 }
                 catch (Exception ex)
                 {
+                    EmitConnectionEvent(QuestDB.Senders.SenderConnectionEventKind.EndpointAttemptFailed,
+                        cause: ex, endpoint: transport.Endpoint);
+
                     if (_skipBackoffPredicate?.Invoke() == true)
                     {
                         continue;
                     }
+
+                    EmitConnectionEvent(QuestDB.Senders.SenderConnectionEventKind.AllEndpointsUnreachable,
+                        cause: ex, endpoint: transport.Endpoint);
+                    Interlocked.Increment(ref _currentRoundSeq);
 
                     if (!_seenFirstConnect && _initialConnectMode == InitialConnectMode.off)
                     {
@@ -693,10 +764,31 @@ internal sealed class QwpCursorSendEngine : IDisposable
                     continue;
                 }
 
+                var wasFirst = !_seenFirstConnect;
+                var newEndpoint = transport.Endpoint;
+                var prevEndpoint = _liveEndpoint;
                 _seenFirstConnect = true;
+                _liveEndpoint = newEndpoint;
                 Interlocked.Increment(ref _totalReconnectsSucceeded);
                 backoff.Reset();
                 FireFirstConnectSucceeded();
+
+                QuestDB.Senders.SenderConnectionEventKind successKind;
+                if (wasFirst)
+                {
+                    successKind = QuestDB.Senders.SenderConnectionEventKind.Connected;
+                }
+                else if (newEndpoint is not null && prevEndpoint is not null
+                                                 && (newEndpoint.Value.Host != prevEndpoint.Value.Host
+                                                     || newEndpoint.Value.Port != prevEndpoint.Value.Port))
+                {
+                    successKind = QuestDB.Senders.SenderConnectionEventKind.FailedOver;
+                }
+                else
+                {
+                    successKind = QuestDB.Senders.SenderConnectionEventKind.Reconnected;
+                }
+                EmitConnectionEvent(successKind, cause: null, endpoint: newEndpoint);
 
                 long fsnAtZero;
                 lock (_stateLock)
@@ -738,6 +830,9 @@ internal sealed class QwpCursorSendEngine : IDisposable
                 }
                 catch (Exception ex)
                 {
+                    EmitConnectionEvent(QuestDB.Senders.SenderConnectionEventKind.Disconnected,
+                        cause: ex, endpoint: _liveEndpoint);
+                    _liveEndpoint = null;
                     if (!await BackoffOrGiveUpAsync(ex, backoff, ct).ConfigureAwait(false))
                     {
                         return;
@@ -1089,6 +1184,7 @@ internal sealed class QwpCursorSendEngine : IDisposable
         var next = _reconnectPolicy.NextBackoffOrGiveUp(state.Attempt, elapsed);
         if (next is null)
         {
+            EmitConnectionEvent(QuestDB.Senders.SenderConnectionEventKind.ReconnectBudgetExhausted, cause: lastError);
             SetTerminal(lastError);
             return false;
         }
@@ -1198,6 +1294,28 @@ internal sealed class QwpCursorSendEngine : IDisposable
         var gate = _firstConnectGate;
         _ = Task.Factory.StartNew(static s => ((TaskCompletionSource<bool>)s!).TrySetResult(true),
             gate, CancellationToken.None, TaskCreationOptions.DenyChildAttach, TaskScheduler.Default);
+    }
+
+    private void EmitConnectionEvent(
+        QuestDB.Senders.SenderConnectionEventKind kind,
+        Exception? cause,
+        (string Host, int Port)? endpoint = null,
+        long? attemptNumberOverride = null,
+        long? roundNumberOverride = null)
+    {
+        var sink = _connectionEventSink;
+        if (sink is null) return;
+        var attempt = attemptNumberOverride ?? Volatile.Read(ref _totalReconnectAttempts);
+        var round = roundNumberOverride ?? Volatile.Read(ref _currentRoundSeq);
+        var evt = new QuestDB.Senders.SenderConnectionEvent(
+            kind,
+            host: endpoint?.Host,
+            port: endpoint?.Port ?? QuestDB.Senders.SenderConnectionEvent.NoPort,
+            attemptNumber: attempt,
+            roundNumber: round,
+            cause: cause,
+            timestamp: DateTimeOffset.UtcNow);
+        try { sink(evt); } catch { /* dispatcher absorbs listener exceptions */ }
     }
 
     private void FireFirstConnectFailed(Exception error)

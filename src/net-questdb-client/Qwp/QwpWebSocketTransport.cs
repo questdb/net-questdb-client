@@ -76,6 +76,7 @@ internal sealed class QwpWebSocketTransport : IQwpCursorTransport
         }
 
         _options = options;
+        Endpoint = options.Uri is null ? null : (options.Uri.Host, options.Uri.Port);
 
         var ws = _client.Options;
         ws.KeepAliveInterval = options.KeepAliveInterval;
@@ -123,6 +124,9 @@ internal sealed class QwpWebSocketTransport : IQwpCursorTransport
     /// </summary>
     public string? NegotiatedContentEncoding { get; private set; }
 
+    /// <inheritdoc />
+    public (string Host, int Port)? Endpoint { get; }
+
     /// <summary>
     ///     Opens the TCP/TLS connection, performs the WebSocket upgrade, and validates that the
     ///     server selected a version this client speaks.
@@ -144,8 +148,7 @@ internal sealed class QwpWebSocketTransport : IQwpCursorTransport
             var status = (int)_client.HttpStatusCode;
             if (status is 401 or 403)
             {
-                throw new IngressError(ErrorCode.AuthError,
-                    $"WebSocket upgrade rejected with HTTP {status} for {_options.Uri}", ex);
+                throw new QwpAuthFailedException(status, _options.Uri, ex);
             }
 
             if (status == 421)

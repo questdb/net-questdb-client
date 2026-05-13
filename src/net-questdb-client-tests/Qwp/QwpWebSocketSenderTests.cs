@@ -917,6 +917,146 @@ public class QwpWebSocketSenderTests
     }
 
     [Test]
+    public async Task ConnectionListener_FiresConnectedOnFirstConnect()
+    {
+        await using var server = StartServerWithOkAcks();
+        var listener = new CapturingListener();
+        using var sender = NewSenderWithListener(server, "auto_flush=off;", listener);
+        var ws = (IQwpWebSocketSender)sender;
+
+        sender.Table("t").Column("v", 1L).At(DateTime.UtcNow);
+        await sender.SendAsync();
+        await ws.PingAsync();
+
+        AssertEventuallyTrue(
+            () => listener.Events.Any(e => e.Kind == SenderConnectionEventKind.Connected),
+            "Connected event never delivered");
+        var connected = listener.Events.First(e => e.Kind == SenderConnectionEventKind.Connected);
+        Assert.That(connected.Cause, Is.Null);
+        Assert.That(ws.DroppedConnectionNotifications, Is.EqualTo(0L));
+    }
+
+    [Test]
+    public async Task ConnectionListener_FiresAuthFailedOn401()
+    {
+        await using var server = new DummyQwpServer(new DummyQwpServerOptions
+        {
+            RejectUpgradeWith = System.Net.HttpStatusCode.Unauthorized,
+        });
+        await server.StartAsync();
+
+        var listener = new CapturingListener();
+        var port = server.Uri.Port;
+        var options = new SenderOptions($"ws::addr=127.0.0.1:{port};auto_flush=off;");
+        options.ConnectionListener = listener;
+        var ex = Assert.Catch<IngressError>(() => new QwpWebSocketSender(options));
+        Assert.That(ex!.code, Is.EqualTo(ErrorCode.AuthError));
+
+        AssertEventuallyTrue(
+            () => listener.Events.Any(e => e.Kind == SenderConnectionEventKind.AuthFailed),
+            "AuthFailed event never delivered");
+        var authFailed = listener.Events.First(e => e.Kind == SenderConnectionEventKind.AuthFailed);
+        Assert.That(authFailed.Cause, Is.InstanceOf<QwpAuthFailedException>());
+    }
+
+    [Test]
+    public async Task ConnectionListener_ExceptionInOnEvent_DoesNotCrashDispatcher()
+    {
+        await using var server = StartServerWithOkAcks();
+        var blewUp = 0;
+        var caught = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var listener = new DelegateListener(evt =>
+        {
+            Interlocked.Increment(ref blewUp);
+            caught.TrySetResult(true);
+            throw new InvalidOperationException("boom");
+        });
+
+        using var sender = NewSenderWithListener(server, "auto_flush=off;", listener);
+        var ws = (IQwpWebSocketSender)sender;
+
+        sender.Table("t").Column("v", 1L).At(DateTime.UtcNow);
+        await sender.SendAsync();
+        await ws.PingAsync();
+
+        await caught.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.That(blewUp, Is.GreaterThan(0));
+
+        sender.Table("t").Column("v", 2L).At(DateTime.UtcNow);
+        Assert.DoesNotThrowAsync(async () => await sender.SendAsync());
+    }
+
+    private sealed class DelegateListener : ISenderConnectionListener
+    {
+        private readonly Action<SenderConnectionEvent> _onEvent;
+        public DelegateListener(Action<SenderConnectionEvent> onEvent) => _onEvent = onEvent;
+        public void OnEvent(SenderConnectionEvent evt) => _onEvent(evt);
+    }
+
+    private static void AssertEventuallyTrue(Func<bool> predicate, string message, int timeoutMs = 5000)
+    {
+        var deadline = Environment.TickCount64 + timeoutMs;
+        while (Environment.TickCount64 < deadline)
+        {
+            if (predicate()) return;
+            Thread.Sleep(20);
+        }
+        Assert.Fail(message);
+    }
+
+    [Test]
+    public async Task FlushAndGetSequenceAsync_NothingPublished_ReturnsMinusOne()
+    {
+        await using var server = StartServerWithOkAcks();
+        using var sender = NewSender(server, "auto_flush=off;");
+        var ws = (IQwpWebSocketSender)sender;
+
+        var fsn = await ws.FlushAndGetSequenceAsync();
+        Assert.That(fsn, Is.EqualTo(-1L));
+        Assert.That(ws.AckedFsn, Is.EqualTo(-1L));
+    }
+
+    [Test]
+    public async Task FlushAndGetSequenceAsync_PublishesSequentialFsns()
+    {
+        await using var server = StartServerWithOkAcks();
+        using var sender = NewSender(server, "auto_flush=off;");
+        var ws = (IQwpWebSocketSender)sender;
+
+        sender.Table("t").Column("v", 1L).At(DateTime.UtcNow);
+        var fsn1 = await ws.FlushAndGetSequenceAsync();
+        Assert.That(fsn1, Is.EqualTo(0L));
+
+        sender.Table("t").Column("v", 2L).At(DateTime.UtcNow);
+        var fsn2 = await ws.FlushAndGetSequenceAsync();
+        Assert.That(fsn2, Is.EqualTo(1L));
+    }
+
+    [Test]
+    public async Task AwaitAckedFsnAsync_NegativeTarget_ReturnsTrueImmediately()
+    {
+        await using var server = StartServerWithOkAcks();
+        using var sender = NewSender(server, "auto_flush=off;");
+        var ws = (IQwpWebSocketSender)sender;
+
+        Assert.That(await ws.AwaitAckedFsnAsync(-1L, TimeSpan.Zero), Is.True);
+    }
+
+    [Test]
+    public async Task AwaitAckedFsnAsync_AfterPublish_ReachesTarget()
+    {
+        await using var server = StartServerWithOkAcks();
+        using var sender = NewSender(server, "auto_flush=off;");
+        var ws = (IQwpWebSocketSender)sender;
+
+        sender.Table("t").Column("v", 1L).At(DateTime.UtcNow);
+        var published = await ws.FlushAndGetSequenceAsync();
+
+        Assert.That(await ws.AwaitAckedFsnAsync(published, TimeSpan.FromSeconds(5)), Is.True);
+        Assert.That(ws.AckedFsn, Is.GreaterThanOrEqualTo(published));
+    }
+
+    [Test]
     public async Task ColumnDecimal64_RoundTripsToServer()
     {
         await using var server = StartServerWithOkAcks();
@@ -951,6 +1091,84 @@ public class QwpWebSocketSenderTests
     }
 
     [Test]
+    public async Task ColumnDecimal64_LimbOverload_RoundTripsToServer()
+    {
+        await using var server = StartServerWithOkAcks();
+        using var sender = NewSender(server, "auto_flush=off;");
+        var ws = (IQwpWebSocketSender)sender;
+
+        sender.Table("t");
+        ws.ColumnDecimal64("p", unscaledValue: 1234567890123L, scale: 4);
+        sender.At(DateTime.UtcNow);
+        await sender.SendAsync();
+        await ws.PingAsync();
+
+        var payload = server.ReceivedFrames.First().AsSpan();
+        var typeCodeOffset = payload.IndexOf((byte)QwpTypeCode.Decimal64);
+        Assert.That(typeCodeOffset, Is.GreaterThan(0));
+        // After type code: TS col def (nameLen=0, type 0x10), then user col data: null flag + scale + 8-byte LE.
+        var scaleOffset = typeCodeOffset + 1 + 2 + 1;
+        Assert.That(payload[scaleOffset], Is.EqualTo((byte)4), "scale prefix");
+        Assert.That(System.Buffers.Binary.BinaryPrimitives.ReadInt64LittleEndian(payload.Slice(scaleOffset + 1, 8)),
+            Is.EqualTo(1234567890123L));
+    }
+
+    [Test]
+    public async Task ColumnDecimal128_LimbOverload_RoundTripsToServer()
+    {
+        await using var server = StartServerWithOkAcks();
+        using var sender = NewSender(server, "auto_flush=off;");
+        var ws = (IQwpWebSocketSender)sender;
+
+        sender.Table("t");
+        ws.ColumnDecimal128("p", lo: 0x0102030405060708L, hi: 0x1112131415161718L, scale: 6);
+        sender.At(DateTime.UtcNow);
+        await sender.SendAsync();
+        await ws.PingAsync();
+
+        var payload = server.ReceivedFrames.First().AsSpan();
+        var typeCodeOffset = payload.IndexOf((byte)QwpTypeCode.Decimal128);
+        Assert.That(typeCodeOffset, Is.GreaterThan(0));
+        var scaleOffset = typeCodeOffset + 1 + 2 + 1;
+        Assert.That(payload[scaleOffset], Is.EqualTo((byte)6), "scale prefix");
+        var unscaled = payload.Slice(scaleOffset + 1, 16);
+        Assert.That(System.Buffers.Binary.BinaryPrimitives.ReadInt64LittleEndian(unscaled.Slice(0, 8)),
+            Is.EqualTo(0x0102030405060708L));
+        Assert.That(System.Buffers.Binary.BinaryPrimitives.ReadInt64LittleEndian(unscaled.Slice(8, 8)),
+            Is.EqualTo(0x1112131415161718L));
+    }
+
+    [Test]
+    public async Task ColumnDecimal256_LimbOverload_RoundTripsToServer()
+    {
+        await using var server = StartServerWithOkAcks();
+        using var sender = NewSender(server, "auto_flush=off;");
+        var ws = (IQwpWebSocketSender)sender;
+
+        sender.Table("t");
+        ws.ColumnDecimal256("p",
+            l0: 0x0102030405060708L,
+            l1: 0x1112131415161718L,
+            l2: 0x2122232425262728L,
+            l3: 0x3132333435363738L,
+            scale: 12);
+        sender.At(DateTime.UtcNow);
+        await sender.SendAsync();
+        await ws.PingAsync();
+
+        var payload = server.ReceivedFrames.First().AsSpan();
+        var typeCodeOffset = payload.IndexOf((byte)QwpTypeCode.Decimal256);
+        Assert.That(typeCodeOffset, Is.GreaterThan(0));
+        var scaleOffset = typeCodeOffset + 1 + 2 + 1;
+        Assert.That(payload[scaleOffset], Is.EqualTo((byte)12), "scale prefix");
+        var unscaled = payload.Slice(scaleOffset + 1, 32);
+        Assert.That(System.Buffers.Binary.BinaryPrimitives.ReadInt64LittleEndian(unscaled.Slice(0, 8)), Is.EqualTo(0x0102030405060708L));
+        Assert.That(System.Buffers.Binary.BinaryPrimitives.ReadInt64LittleEndian(unscaled.Slice(8, 8)), Is.EqualTo(0x1112131415161718L));
+        Assert.That(System.Buffers.Binary.BinaryPrimitives.ReadInt64LittleEndian(unscaled.Slice(16, 8)), Is.EqualTo(0x2122232425262728L));
+        Assert.That(System.Buffers.Binary.BinaryPrimitives.ReadInt64LittleEndian(unscaled.Slice(24, 8)), Is.EqualTo(0x3132333435363738L));
+    }
+
+    [Test]
     public async Task ColumnBinary_RoundTripsToServer()
     {
         await using var server = StartServerWithOkAcks();
@@ -975,13 +1193,21 @@ public class QwpWebSocketSenderTests
         var ws = (IQwpWebSocketSender)sender;
 
         sender.Table("t");
-        ws.ColumnIPv4("ip", System.Net.IPAddress.Parse("1.2.3.4"));
+        ws.ColumnIPv4("ip", System.Net.IPAddress.Parse("192.168.1.1"));
         sender.At(DateTime.UtcNow);
         await sender.SendAsync();
         await ws.PingAsync();
 
-        var payload = server.ReceivedFrames.First().AsSpan();
-        Assert.That(payload.IndexOf((byte)QwpTypeCode.IPv4), Is.GreaterThan(0));
+        var payload = server.ReceivedFrames.First();
+        var typeCodeOffset = payload.AsSpan().IndexOf((byte)QwpTypeCode.IPv4);
+        Assert.That(typeCodeOffset, Is.GreaterThan(0));
+        // After the IPv4 type code: TS col def (nameLen=0, type 0x10), then data section:
+        // user col null_flag (0x00), then 4 bytes IPv4 value LE.
+        var valueOffset = typeCodeOffset + 1 + 2 + 1;
+        Assert.That(payload[valueOffset - 1], Is.EqualTo((byte)0x00), "user col null flag");
+        Assert.That(System.Buffers.Binary.BinaryPrimitives.ReadUInt32LittleEndian(payload.AsSpan(valueOffset, 4)),
+            Is.EqualTo(0xC0A80101u),
+            "192.168.1.1 must serialise as int 0xC0A80101 (octet 'a' is the MSB)");
     }
 
     [Test]
@@ -1015,6 +1241,27 @@ public class QwpWebSocketSenderTests
         var port = server.Uri.Port;
         var options = new SenderOptions($"ws::addr=127.0.0.1:{port};{extraOptions}");
         return new QwpWebSocketSender(options);
+    }
+
+    private static QwpWebSocketSender NewSenderWithListener(DummyQwpServer server, string extraOptions, ISenderConnectionListener listener)
+    {
+        var port = server.Uri.Port;
+        var options = new SenderOptions($"ws::addr=127.0.0.1:{port};{extraOptions}");
+        options.ConnectionListener = listener;
+        return new QwpWebSocketSender(options);
+    }
+
+    private sealed class CapturingListener : ISenderConnectionListener
+    {
+        private readonly List<SenderConnectionEvent> _events = new();
+        public IReadOnlyList<SenderConnectionEvent> Events
+        {
+            get { lock (_events) return _events.ToArray(); }
+        }
+        public void OnEvent(SenderConnectionEvent evt)
+        {
+            lock (_events) _events.Add(evt);
+        }
     }
 
     private static byte[] BuildOkAck(long sequence)

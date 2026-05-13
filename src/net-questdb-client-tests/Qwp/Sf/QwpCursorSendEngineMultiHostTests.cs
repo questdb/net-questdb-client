@@ -158,6 +158,105 @@ public class QwpCursorSendEngineMultiHostTests
     }
 
     [Test]
+    public async Task FailedOver_FiresWhenSuccessHostDiffersFromPrevious()
+    {
+        var hosts = new[] { "h1:9000", "h2:9000" };
+        var tracker = new QwpHostHealthTracker(hosts);
+        var rejectFirst = true;
+        var stubsByIdx = new MhStubTransport?[hosts.Length];
+
+        Func<IQwpCursorTransport> factory = () =>
+        {
+            var idx = tracker.PickNext();
+            if (idx < 0)
+            {
+                tracker.BeginRound(forgetClassifications: true);
+                idx = tracker.PickNext();
+            }
+            var rejectThis = idx == 0 && rejectFirst;
+            var stub = new MhStubTransport(rejectWithRole: rejectThis ? QwpConstants.RoleReplicaName : null, hosts[idx]);
+            stubsByIdx[idx] = stub;
+            return new QwpTrackedCursorTransport(stub, tracker, idx);
+        };
+
+        var events = new List<QuestDB.Senders.SenderConnectionEvent>();
+        var slotDir = Path.Combine(_root, "slot");
+        var slotLock = QwpSlotLock.Acquire(slotDir);
+        var ring = QwpSegmentRing.Open(slotDir, segmentCapacity: 4096);
+        var policy = new QwpReconnectPolicy(
+            TimeSpan.FromMilliseconds(10),
+            TimeSpan.FromMilliseconds(40),
+            TimeSpan.FromSeconds(5));
+        using var engine = new QwpCursorSendEngine(
+            slotLock, ring, factory, policy,
+            appendDeadline: TimeSpan.FromSeconds(5),
+            initialConnectMode: InitialConnectMode.async,
+            skipBackoffPredicate: () => !tracker.IsRoundExhausted,
+            connectionEventSink: evt => { lock (events) events.Add(evt); });
+
+        engine.Start();
+        engine.AppendBlocking(new byte[] { 1 });
+        await engine.FlushAsync(TimeSpan.FromSeconds(5));
+
+        QuestDB.Senders.SenderConnectionEvent[] snapshot;
+        lock (events) snapshot = events.ToArray();
+        Assert.That(snapshot, Has.Some.Matches<QuestDB.Senders.SenderConnectionEvent>(
+            e => e.Kind == QuestDB.Senders.SenderConnectionEventKind.EndpointAttemptFailed && e.Host == "h1"),
+            "must observe ENDPOINT_ATTEMPT_FAILED for the rejected first host");
+        Assert.That(snapshot, Has.Some.Matches<QuestDB.Senders.SenderConnectionEvent>(
+            e => e.Kind == QuestDB.Senders.SenderConnectionEventKind.Connected && e.Host == "h2"),
+            "first success on a different host than the original pick is still CONNECTED (no prior live endpoint)");
+    }
+
+    [Test]
+    public async Task AllEndpointsUnreachable_FiresPerSweepWhenAllHostsRejected()
+    {
+        var hosts = new[] { "r1:9000", "r2:9000" };
+        var tracker = new QwpHostHealthTracker(hosts);
+
+        Func<IQwpCursorTransport> factory = () =>
+        {
+            var idx = tracker.PickNext();
+            if (idx < 0)
+            {
+                tracker.BeginRound(forgetClassifications: true);
+                idx = tracker.PickNext();
+            }
+            var stub = new MhStubTransport(rejectWithRole: QwpConstants.RoleReplicaName, hosts[idx]);
+            return new QwpTrackedCursorTransport(stub, tracker, idx);
+        };
+
+        var events = new List<QuestDB.Senders.SenderConnectionEvent>();
+        var slotDir = Path.Combine(_root, "slot");
+        var slotLock = QwpSlotLock.Acquire(slotDir);
+        var ring = QwpSegmentRing.Open(slotDir, segmentCapacity: 4096);
+        var policy = new QwpReconnectPolicy(
+            TimeSpan.FromMilliseconds(5),
+            TimeSpan.FromMilliseconds(20),
+            TimeSpan.FromMilliseconds(400));
+        using var engine = new QwpCursorSendEngine(
+            slotLock, ring, factory, policy,
+            appendDeadline: TimeSpan.FromSeconds(5),
+            initialConnectMode: InitialConnectMode.async,
+            skipBackoffPredicate: () => !tracker.IsRoundExhausted,
+            connectionEventSink: evt => { lock (events) events.Add(evt); });
+
+        engine.Start();
+        engine.AppendBlocking(new byte[] { 1 });
+        Assert.ThrowsAsync<IngressError>(async () => await engine.FlushAsync(TimeSpan.FromSeconds(2)));
+
+        QuestDB.Senders.SenderConnectionEvent[] snapshot;
+        lock (events) snapshot = events.ToArray();
+        var allUnreachableCount = snapshot.Count(e =>
+            e.Kind == QuestDB.Senders.SenderConnectionEventKind.AllEndpointsUnreachable);
+        Assert.That(allUnreachableCount, Is.GreaterThanOrEqualTo(1),
+            "every failed sweep must fire ALL_ENDPOINTS_UNREACHABLE at least once");
+        Assert.That(snapshot, Has.Some.Matches<QuestDB.Senders.SenderConnectionEvent>(
+            e => e.Kind == QuestDB.Senders.SenderConnectionEventKind.ReconnectBudgetExhausted),
+            "budget exhaustion must surface a terminal event");
+    }
+
+    [Test]
     public async Task AllHostsReplica_ExhaustsOutageBudgetThenTerminal()
     {
         var hosts = new[] { "r1:9000", "r2:9000" };
@@ -208,6 +307,7 @@ public class QwpCursorSendEngineMultiHostTests
     {
         public string HostId { get; }
         public List<byte[]> Sent { get; } = new();
+        public (string Host, int Port)? Endpoint { get; }
 
         private readonly string? _rejectWithRole;
         private readonly Channel<byte[]> _acks = Channel.CreateUnbounded<byte[]>();
@@ -217,6 +317,10 @@ public class QwpCursorSendEngineMultiHostTests
         {
             _rejectWithRole = rejectWithRole;
             HostId = hostId;
+            var colon = hostId.IndexOf(':');
+            Endpoint = colon < 0
+                ? (hostId, 9000)
+                : (hostId.Substring(0, colon), int.Parse(hostId.Substring(colon + 1)));
         }
 
         public Task ConnectAsync(CancellationToken cancellationToken)

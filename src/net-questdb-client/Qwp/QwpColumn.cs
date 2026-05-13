@@ -485,6 +485,68 @@ internal sealed class QwpColumn
         AppendDecimalAtSize(QwpTypeCode.Decimal256, value, QwpConstants.Decimal256SizeBytes);
     }
 
+    public void AppendDecimal64(long unscaledValue, byte scale)
+    {
+        ValidateDecimalScale(scale, QwpConstants.MaxDecimal64Scale, "Decimal64");
+        AssertOrSetType(QwpTypeCode.Decimal64);
+        LockOrMatchDecimalScale(scale);
+        EnsureFixedCapacity(FixedLen + QwpConstants.Decimal64SizeBytes);
+        BinaryPrimitives.WriteInt64LittleEndian(FixedData.AsSpan(FixedLen, QwpConstants.Decimal64SizeBytes), unscaledValue);
+        FixedLen += QwpConstants.Decimal64SizeBytes;
+        AdvanceNonNull();
+    }
+
+    public void AppendDecimal128(long lo, long hi, byte scale)
+    {
+        ValidateDecimalScale(scale, QwpConstants.MaxDecimal128Scale, "Decimal128");
+        AssertOrSetType(QwpTypeCode.Decimal128);
+        LockOrMatchDecimalScale(scale);
+        EnsureFixedCapacity(FixedLen + QwpConstants.Decimal128SizeBytes);
+        var dest = FixedData.AsSpan(FixedLen, QwpConstants.Decimal128SizeBytes);
+        BinaryPrimitives.WriteInt64LittleEndian(dest.Slice(0, 8), lo);
+        BinaryPrimitives.WriteInt64LittleEndian(dest.Slice(8, 8), hi);
+        FixedLen += QwpConstants.Decimal128SizeBytes;
+        AdvanceNonNull();
+    }
+
+    public void AppendDecimal256(long l0, long l1, long l2, long l3, byte scale)
+    {
+        ValidateDecimalScale(scale, QwpConstants.MaxDecimal256Scale, "Decimal256");
+        AssertOrSetType(QwpTypeCode.Decimal256);
+        LockOrMatchDecimalScale(scale);
+        EnsureFixedCapacity(FixedLen + QwpConstants.Decimal256SizeBytes);
+        var dest = FixedData.AsSpan(FixedLen, QwpConstants.Decimal256SizeBytes);
+        BinaryPrimitives.WriteInt64LittleEndian(dest.Slice(0, 8), l0);
+        BinaryPrimitives.WriteInt64LittleEndian(dest.Slice(8, 8), l1);
+        BinaryPrimitives.WriteInt64LittleEndian(dest.Slice(16, 8), l2);
+        BinaryPrimitives.WriteInt64LittleEndian(dest.Slice(24, 8), l3);
+        FixedLen += QwpConstants.Decimal256SizeBytes;
+        AdvanceNonNull();
+    }
+
+    private void LockOrMatchDecimalScale(byte scale)
+    {
+        if (!DecimalScaleSet)
+        {
+            DecimalScale = scale;
+            DecimalScaleSet = true;
+        }
+        else if (DecimalScale != scale)
+        {
+            throw new IngressError(ErrorCode.InvalidApiCall,
+                $"column '{Name}' decimal scale locked at {DecimalScale}; got {scale}");
+        }
+    }
+
+    private static void ValidateDecimalScale(byte scale, int maxScale, string typeName)
+    {
+        if (scale > maxScale)
+        {
+            throw new IngressError(ErrorCode.InvalidApiCall,
+                $"{typeName} scale {scale} exceeds maximum {maxScale}");
+        }
+    }
+
     private void AppendDecimalAtSize(QwpTypeCode code, decimal value, int sizeBytes)
     {
         AssertOrSetType(code);

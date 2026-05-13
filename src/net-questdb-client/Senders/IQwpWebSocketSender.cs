@@ -67,11 +67,57 @@ public interface IQwpWebSocketSender : ISender
     /// <inheritdoc cref="Ping" />
     ValueTask PingAsync(CancellationToken ct = default);
 
+    /// <summary>
+    ///     Highest cursor frame sequence number (FSN) the server has acknowledged on the current
+    ///     connection. Returns <c>-1</c> when nothing has been ack'd yet. Snapshot accessor; pair
+    ///     with <see cref="AwaitAckedFsnAsync" /> for a bounded wait.
+    /// </summary>
+    long AckedFsn { get; }
+
+    /// <summary>
+    ///     Same as <see cref="ISender.SendAsync" /> but returns the FSN of the highest frame
+    ///     published into the cursor engine by this call. Pair with <see cref="AwaitAckedFsnAsync" />
+    ///     to confirm a specific publish has been acknowledged. Returns the current
+    ///     <see cref="AckedFsn" />-equivalent watermark when nothing was published.
+    /// </summary>
+    Task<long> FlushAndGetSequenceAsync(CancellationToken ct = default);
+
+    /// <summary>
+    ///     Blocks until <see cref="AckedFsn" /> reaches <paramref name="targetFsn" /> or
+    ///     <paramref name="timeout" /> elapses. Returns <c>true</c> if the watermark caught up,
+    ///     <c>false</c> on timeout. A non-positive <paramref name="targetFsn" /> returns <c>true</c>
+    ///     immediately.
+    /// </summary>
+    /// <exception cref="QuestDB.Utils.IngressError">if the I/O loop has latched a terminal failure.</exception>
+    Task<bool> AwaitAckedFsnAsync(long targetFsn, TimeSpan timeout, CancellationToken ct = default);
+
     /// <summary>Append a DECIMAL64 value to the named column (8-byte mantissa). First call locks the scale.</summary>
     IQwpWebSocketSender ColumnDecimal64(ReadOnlySpan<char> name, decimal value);
 
+    /// <summary>
+    ///     Append a DECIMAL64 value as the unscaled int64 mantissa with explicit scale (0–18). Locks
+    ///     the column scale on first call. Use this overload to access the full 18-digit range that
+    ///     <see cref="System.Decimal" /> cannot always represent.
+    /// </summary>
+    IQwpWebSocketSender ColumnDecimal64(ReadOnlySpan<char> name, long unscaledValue, byte scale);
+
     /// <summary>Append a DECIMAL256 value to the named column (32-byte mantissa). First call locks the scale.</summary>
     IQwpWebSocketSender ColumnDecimal256(ReadOnlySpan<char> name, decimal value);
+
+    /// <summary>
+    ///     Append a DECIMAL128 value as two 64-bit limbs (LSB first) with explicit scale (0–38).
+    ///     Locks the column scale on first call. Use this overload for the full 38-digit range
+    ///     beyond <see cref="System.Decimal" />'s ~28-digit limit.
+    /// </summary>
+    IQwpWebSocketSender ColumnDecimal128(ReadOnlySpan<char> name, long lo, long hi, byte scale);
+
+    /// <summary>
+    ///     Append a DECIMAL256 value as four 64-bit limbs (LSB first; the 256-bit unscaled integer
+    ///     is <c>l0 | l1≪64 | l2≪128 | l3≪192</c>) with explicit scale (0–76). Locks the column
+    ///     scale on first call. The <see cref="System.Decimal" /> overload is capped at ~28 digits;
+    ///     this overload exposes the full 76-digit DECIMAL256 range.
+    /// </summary>
+    IQwpWebSocketSender ColumnDecimal256(ReadOnlySpan<char> name, long l0, long l1, long l2, long l3, byte scale);
 
     /// <summary>Append a BINARY value to the named column (opaque bytes; no UTF-8 contract).</summary>
     IQwpWebSocketSender ColumnBinary(ReadOnlySpan<char> name, ReadOnlySpan<byte> value);
@@ -85,6 +131,14 @@ public interface IQwpWebSocketSender : ISender
     ///     keep up with the error rate. SF mode only; <c>0</c> otherwise.
     /// </summary>
     long DroppedErrorNotifications { get; }
+
+    /// <summary>
+    ///     Number of <see cref="SenderConnectionEvent" /> notifications dropped because the
+    ///     listener inbox was full. Non-zero indicates the registered
+    ///     <see cref="ISenderConnectionListener" /> can't keep up. <c>0</c> when no listener is
+    ///     registered.
+    /// </summary>
+    long DroppedConnectionNotifications { get; }
 
     /// <summary>
     ///     Total <see cref="QuestDB.Utils.SenderError" /> notifications delivered to the

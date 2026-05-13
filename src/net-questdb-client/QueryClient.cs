@@ -42,6 +42,23 @@ public static class QueryClient
         return New(new QueryOptions(connectionString));
     }
 
+    /// <summary>
+    ///     Creates an <see cref="IQwpQueryClient" /> from the connect-string stored in the
+    ///     <c>QDB_CLIENT_CONF</c> environment variable. Convenience for cloud and 12-factor
+    ///     deployments.
+    /// </summary>
+    /// <exception cref="IngressError">Thrown when <c>QDB_CLIENT_CONF</c> is unset or blank.</exception>
+    public static IQwpQueryClient FromEnv()
+    {
+        var confStr = Environment.GetEnvironmentVariable(Sender.EnvConfStr);
+        if (string.IsNullOrWhiteSpace(confStr))
+        {
+            throw new IngressError(ErrorCode.ConfigError,
+                $"{Sender.EnvConfStr} environment variable is not set");
+        }
+        return New(confStr);
+    }
+
     /// <summary>Builds a query client from a programmatically configured <see cref="QueryOptions" />.</summary>
     public static IQwpQueryClient New(QueryOptions options)
     {

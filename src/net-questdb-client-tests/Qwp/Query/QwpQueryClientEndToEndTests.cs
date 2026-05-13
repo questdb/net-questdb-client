@@ -602,7 +602,7 @@ public class QwpQueryClientEndToEndTests
         });
         await server.StartAsync();
 
-        var ex = Assert.Throws<IngressError>(() => QueryClient.New(BuildConnString(server)));
+        var ex = Assert.Catch<IngressError>(() => QueryClient.New(BuildConnString(server)));
         Assert.That(ex!.code, Is.EqualTo(ErrorCode.AuthError));
     }
 
@@ -1093,7 +1093,7 @@ public class QwpQueryClientEndToEndTests
                    "failover_backoff_initial_ms=10;failover_backoff_max_ms=20;";
         using var client = QueryClient.New(conn);
 
-        var ex = Assert.Throws<IngressError>(() => client.Execute("SELECT 1", new RecordingHandler()));
+        var ex = Assert.Catch<IngressError>(() => client.Execute("SELECT 1", new RecordingHandler()));
         Assert.That(ex!.code, Is.EqualTo(ErrorCode.AuthError));
     }
 

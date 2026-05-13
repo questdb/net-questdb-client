@@ -97,6 +97,25 @@ public static class Sender
         return new SenderOptions(confStr);
     }
 
+    /// <summary>
+    ///     Creates an <see cref="ISender" /> from the connect-string stored in the
+    ///     <c>QDB_CLIENT_CONF</c> environment variable. Convenience for cloud and 12-factor
+    ///     deployments where configuration lives in env, not in code.
+    /// </summary>
+    /// <exception cref="IngressError">Thrown when <c>QDB_CLIENT_CONF</c> is unset or blank.</exception>
+    public static ISender FromEnv()
+    {
+        var confStr = Environment.GetEnvironmentVariable(EnvConfStr);
+        if (string.IsNullOrWhiteSpace(confStr))
+        {
+            throw new IngressError(ErrorCode.ConfigError,
+                $"{EnvConfStr} environment variable is not set");
+        }
+        return New(confStr);
+    }
+
+    internal const string EnvConfStr = "QDB_CLIENT_CONF";
+
 #if NET7_0_OR_GREATER
     /// <summary>
     ///     Builds a ws::/wss:: sender and returns the QWP-specific interface so callers can use

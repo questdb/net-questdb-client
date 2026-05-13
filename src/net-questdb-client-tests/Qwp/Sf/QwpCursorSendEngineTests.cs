@@ -248,6 +248,51 @@ public class QwpCursorSendEngineTests
     }
 
     [Test]
+    public async Task AwaitAckedFsnAsync_TargetReached_ReturnsTrue()
+    {
+        using var engine = NewEngine(out _, factory: () => new StubTransport());
+        engine.Start();
+
+        engine.AppendBlocking(new byte[] { 1 });
+        engine.AppendBlocking(new byte[] { 2 });
+
+        var ok = await engine.AwaitAckedFsnAsync(targetFsn: 2L, TimeSpan.FromSeconds(5));
+        Assert.That(ok, Is.True);
+        Assert.That(engine.AckedFsn, Is.GreaterThanOrEqualTo(2L));
+    }
+
+    [Test]
+    public async Task AwaitAckedFsnAsync_TargetUnreached_ReturnsFalseOnTimeout()
+    {
+        using var sendGate = new SemaphoreSlim(0, int.MaxValue);
+        using var engine = NewEngine(out _,
+            factory: () => new StubTransport { OnSendGate = ct => sendGate.WaitAsync(ct) });
+        engine.Start();
+
+        engine.AppendBlocking(new byte[] { 1 });
+
+        var ok = await engine.AwaitAckedFsnAsync(targetFsn: 1L, TimeSpan.FromMilliseconds(200));
+        Assert.That(ok, Is.False);
+
+        sendGate.Release(8);
+    }
+
+    [Test]
+    public void AwaitAckedFsnAsync_Terminal_Throws()
+    {
+        using var engine = NewEngine(out _, factory: () => new StubTransport
+        {
+            OnConnect = _ => throw new IngressError(ErrorCode.AuthError, "401")
+        });
+        engine.Start();
+        AssertEventually(() => engine.IsTerminallyFailed, "engine never marked terminal");
+
+        var ex = Assert.ThrowsAsync<IngressError>(async () =>
+            await engine.AwaitAckedFsnAsync(targetFsn: 1L, TimeSpan.FromSeconds(1)));
+        Assert.That(ex!.code, Is.EqualTo(ErrorCode.AuthError));
+    }
+
+    [Test]
     public void AuthError_OnConnect_MarksTerminalAndThrowsOnAppend()
     {
         using var engine = NewEngine(out _, factory: () => new StubTransport
@@ -855,6 +900,7 @@ public class QwpCursorSendEngineTests
         public Func<byte[], Task<byte[]>>? OnSendAsync;
         public Func<CancellationToken, Task>? OnSendGate;
         public List<byte[]> Sent { get; } = new();
+        public (string Host, int Port)? Endpoint { get; set; } = ("stub", 0);
 
         private readonly Channel<byte[]> _acks = Channel.CreateUnbounded<byte[]>();
         private readonly object _sentLock = new();

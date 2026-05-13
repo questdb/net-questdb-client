@@ -327,6 +327,8 @@ public class QwpCursorEngineDurableAckFuzzTests
         private readonly Channel<byte[]> _sent = Channel.CreateUnbounded<byte[]>();
         private readonly Channel<byte[]> _responses = Channel.CreateUnbounded<byte[]>();
 
+        public (string Host, int Port)? Endpoint { get; } = ("stub", 0);
+
         public Task ConnectAsync(CancellationToken ct) => Task.CompletedTask;
 
         public async Task SendBinaryAsync(ReadOnlyMemory<byte> data, CancellationToken ct)

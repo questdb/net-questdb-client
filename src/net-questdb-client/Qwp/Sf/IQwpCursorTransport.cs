@@ -40,6 +40,12 @@ namespace QuestDB.Qwp.Sf;
 /// </remarks>
 internal interface IQwpCursorTransport : IDisposable
 {
+    /// <summary>
+    ///     The endpoint this transport will (or did) connect to. <c>null</c> when the transport
+    ///     is not bound to a specific endpoint (e.g. test stubs).
+    /// </summary>
+    (string Host, int Port)? Endpoint { get; }
+
     /// <summary>Connects to the server and completes the QWP upgrade.</summary>
     Task ConnectAsync(CancellationToken cancellationToken);
 

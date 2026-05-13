@@ -937,12 +937,7 @@ internal sealed class QwpCursorSendEngine : IDisposable
                                 $"internal: cursor at FSN {readFsn} fell out of segment range");
                         }
 
-                        // Optimistic advance under lock: receive pump's ack-clamp must not lag.
                         _cursorFsn = readFsn + 1;
-                        if (readFsn > _sentFsnHighWatermark)
-                        {
-                            _sentFsnHighWatermark = readFsn;
-                        }
                         break;
                     }
 
@@ -953,6 +948,13 @@ internal sealed class QwpCursorSendEngine : IDisposable
             }
 
             await transport.SendBinaryAsync(sendBuffer.AsMemory(0, frameLen), ct).ConfigureAwait(false);
+            lock (_stateLock)
+            {
+                if (readFsn > _sentFsnHighWatermark)
+                {
+                    _sentFsnHighWatermark = readFsn;
+                }
+            }
             Interlocked.Increment(ref _totalFramesSent);
         }
     }
@@ -1365,6 +1367,7 @@ internal sealed class QwpCursorSendEngine : IDisposable
         return ex is QwpException
             || ex is QwpProtocolViolationException
             || ex is HaltCarrier
+            || ex is InvalidDataException
             || (ex is IngressError ie && ie.code is ErrorCode.AuthError);
     }
 

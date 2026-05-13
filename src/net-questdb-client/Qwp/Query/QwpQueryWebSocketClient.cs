@@ -61,6 +61,7 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient
     private long _nextRequestId;
     private long _currentRequestId = -1;
     private long _pendingCreditBytes;
+    private long _expectedBatchSeq;
     private int _disposed;
     private int _terminal;
     private int _cancelRequested;
@@ -153,6 +154,8 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient
         _drainOkAfterHandlerThrow = false;
         Interlocked.Exchange(ref _cancelRequested, 0);
         _hostTracker.BeginRound(forgetClassifications: false);
+        var requestId = Interlocked.Increment(ref _nextRequestId);
+        Interlocked.Exchange(ref _currentRequestId, requestId);
         try
         {
             var attempt = 0;
@@ -166,9 +169,8 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient
                 : long.MaxValue;
             while (true)
             {
-                var requestId = Interlocked.Increment(ref _nextRequestId);
-                Interlocked.Exchange(ref _currentRequestId, requestId);
                 _pendingCreditBytes = 0;
+                _expectedBatchSeq = 0;
                 try
                 {
                     await SendQueryRequestAsync(requestId, sql, sqlByteCount, _options.initial_credit, bindBlob, bindCount, ct)
@@ -622,6 +624,12 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient
                     {
                         continue;
                     }
+                    if (_batch.BatchSeq != _expectedBatchSeq)
+                    {
+                        throw new IngressError(ErrorCode.ProtocolVersionError,
+                            $"out-of-order RESULT_BATCH for request_id={batchRid}: expected batch_seq={_expectedBatchSeq}, got {_batch.BatchSeq}");
+                    }
+                    _expectedBatchSeq++;
                     try
                     {
                         handler.OnBatch(_batch);
@@ -648,15 +656,15 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient
                 case QwpEgressMsgKind.ResultEnd:
                     var (endRid, endTotal) = DecodeResultEnd(payload);
                     if (endRid != activeRid) continue;
-                    try { handler.OnEnd(endTotal); } catch { MarkTerminal(); throw; }
                     _executeFinishedCleanly = true;
+                    handler.OnEnd(endTotal);
                     return;
 
                 case QwpEgressMsgKind.ExecDone:
                     var (execRid, opType, rowsAffected) = DecodeExecDone(payload);
                     if (execRid != activeRid) continue;
-                    try { handler.OnExecDone(opType, rowsAffected); } catch { MarkTerminal(); throw; }
                     _executeFinishedCleanly = true;
+                    handler.OnExecDone(opType, rowsAffected);
                     return;
 
                 case QwpEgressMsgKind.QueryError:
@@ -667,8 +675,11 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient
                         Interlocked.Exchange(ref _transport, null)?.Dispose();
                         MarkTerminal();
                     }
-                    try { handler.OnError(status, message); } catch { MarkTerminal(); throw; }
-                    _executeFinishedCleanly = true;
+                    else
+                    {
+                        _executeFinishedCleanly = true;
+                    }
+                    handler.OnError(status, message);
                     return;
 
                 case QwpEgressMsgKind.CacheReset:

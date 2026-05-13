@@ -907,8 +907,10 @@ public class QwpQueryClientEndToEndTests
         });
         await serverA.StartAsync();
 
-        var batchB = QwpEgressFrameBuilder.BuildResultBatch(2L, 0L, schema, data);
-        var endB = QwpEgressFrameBuilder.BuildResultEnd(2L, 0L, 1L);
+        // request_id is preserved across failover attempts; the second attempt against serverB
+        // carries the same rid=1 that was used against serverA.
+        var batchB = QwpEgressFrameBuilder.BuildResultBatch(1L, 0L, schema, data);
+        var endB = QwpEgressFrameBuilder.BuildResultEnd(1L, 0L, 1L);
         await using var serverB = new DummyQwpServer(new DummyQwpServerOptions
         {
             Path = QwpConstants.ReadPath,
@@ -1512,6 +1514,142 @@ public class QwpQueryClientEndToEndTests
         return payload;
     }
 
+    [Test]
+    public async Task BatchSeq_NonMonotonic_Rejected()
+    {
+        var schema = new ResultSchema
+        {
+            SchemaId = 1,
+            Columns = { new SchemaColumn("c", QwpTypeCode.Long) },
+        };
+        var data = new ResultBatchData
+        {
+            RowCount = 1,
+            Columns = { new FixedColumnData { DenseBytes = LongLe(1L) } },
+        };
+
+        // First batch is fine (seq 0), then jump to 2 instead of 1.
+        var batch0 = QwpEgressFrameBuilder.BuildResultBatch(1L, 0L, schema, data);
+        var batch2 = QwpEgressFrameBuilder.BuildResultBatch(1L, 2L, schema, data);
+
+        await using var server = new DummyQwpServer(new DummyQwpServerOptions
+        {
+            Path = QwpConstants.ReadPath,
+            NegotiatedVersion = "1",
+            FrameHandlerMulti = _ => new[] { batch0, batch2 },
+        });
+        await server.StartAsync();
+
+        using var client = QueryClient.New(BuildConnString(server, "failover=off;"));
+        var ex = Assert.Throws<IngressError>(() => client.Execute("SELECT c", new RecordingHandler()));
+        Assert.That(ex!.Message, Does.Contain("out-of-order"));
+        Assert.That(ex.Message, Does.Contain("expected batch_seq=1"));
+    }
+
+    [Test]
+    public async Task BatchSeq_StartsAtZero_FirstBatchOneRejected()
+    {
+        var schema = new ResultSchema
+        {
+            SchemaId = 1,
+            Columns = { new SchemaColumn("c", QwpTypeCode.Long) },
+        };
+        var data = new ResultBatchData
+        {
+            RowCount = 1,
+            Columns = { new FixedColumnData { DenseBytes = LongLe(1L) } },
+        };
+        var firstBatchSeqOne = QwpEgressFrameBuilder.BuildResultBatch(1L, 1L, schema, data);
+
+        await using var server = new DummyQwpServer(new DummyQwpServerOptions
+        {
+            Path = QwpConstants.ReadPath,
+            NegotiatedVersion = "1",
+            FrameHandlerMulti = _ => new[] { firstBatchSeqOne },
+        });
+        await server.StartAsync();
+
+        using var client = QueryClient.New(BuildConnString(server, "failover=off;"));
+        var ex = Assert.Throws<IngressError>(() => client.Execute("SELECT c", new RecordingHandler()));
+        Assert.That(ex!.Message, Does.Contain("expected batch_seq=0"));
+    }
+
+    [Test]
+    public async Task HandlerThrowOnExecDone_DoesNotMarkClientTerminal()
+    {
+        var done1 = QwpEgressFrameBuilder.BuildExecDone(1L, opType: 1, rowsAffected: 5L);
+        var done2 = QwpEgressFrameBuilder.BuildExecDone(2L, opType: 1, rowsAffected: 5L);
+
+        var responses = new Queue<byte[][]>(new[]
+        {
+            new[] { done1 },
+            new[] { done2 },
+        });
+
+        await using var server = new DummyQwpServer(new DummyQwpServerOptions
+        {
+            Path = QwpConstants.ReadPath,
+            NegotiatedVersion = "1",
+            FrameHandlerMulti = _ => responses.Dequeue(),
+        });
+        await server.StartAsync();
+
+        using var client = QueryClient.New(BuildConnString(server));
+
+        var throwing = new RecordingHandler();
+        throwing.OnExecDoneHook = () => throw new InvalidOperationException("exec handler boom");
+        Assert.Throws<InvalidOperationException>(() => client.Execute("INSERT ...", throwing));
+
+        var second = new RecordingHandler();
+        Assert.DoesNotThrow(() => client.Execute("INSERT ...", second));
+        Assert.That(second.LastExecRowsAffected, Is.EqualTo(5L));
+    }
+
+    [Test]
+    public async Task HandlerThrowOnEnd_DoesNotMarkClientTerminal()
+    {
+        var schema = new ResultSchema
+        {
+            SchemaId = 1,
+            Columns = { new SchemaColumn("c", QwpTypeCode.Long) },
+        };
+        var data = new ResultBatchData
+        {
+            RowCount = 1,
+            Columns = { new FixedColumnData { DenseBytes = LongLe(7L) } },
+        };
+        var batch = QwpEgressFrameBuilder.BuildResultBatch(1L, 0L, schema, data);
+        var end = QwpEgressFrameBuilder.BuildResultEnd(1L, 0L, 1L);
+        var batch2 = QwpEgressFrameBuilder.BuildResultBatch(2L, 0L, schema, data);
+        var end2 = QwpEgressFrameBuilder.BuildResultEnd(2L, 0L, 1L);
+
+        var responses = new Queue<byte[][]>(new[]
+        {
+            new[] { batch, end },
+            new[] { batch2, end2 },
+        });
+
+        await using var server = new DummyQwpServer(new DummyQwpServerOptions
+        {
+            Path = QwpConstants.ReadPath,
+            NegotiatedVersion = "1",
+            FrameHandlerMulti = _ => responses.Dequeue(),
+        });
+        await server.StartAsync();
+
+        using var client = QueryClient.New(BuildConnString(server));
+
+        var throwing = new RecordingHandler();
+        throwing.OnEndHook = () => throw new InvalidOperationException("handler boom");
+        Assert.Throws<InvalidOperationException>(() => client.Execute("SELECT c", throwing));
+
+        // Connection is wire-side healthy: subsequent Execute should succeed.
+        var second = new RecordingHandler();
+        Assert.DoesNotThrow(() => client.Execute("SELECT c", second));
+        Assert.That(second.Ended, Is.True);
+        Assert.That(second.TotalRows, Is.EqualTo(1L));
+    }
+
     private static string BuildConnString(DummyQwpServer server, string extra = "")
     {
         var addr = server.Uri.Authority;
@@ -1548,6 +1686,8 @@ public class QwpQueryClientEndToEndTests
         public long LastExecRowsAffected { get; private set; }
         public List<QwpServerInfo?> FailoverResets { get; } = new();
         public Action<QwpColumnBatch>? OnBatchHook { get; set; }
+        public Action? OnEndHook { get; set; }
+        public Action? OnExecDoneHook { get; set; }
 
         public override void OnBatch(QwpColumnBatch batch)
         {
@@ -1564,6 +1704,7 @@ public class QwpQueryClientEndToEndTests
         {
             Ended = true;
             TotalRows = totalRows;
+            OnEndHook?.Invoke();
         }
 
         public override void OnError(byte status, string message)
@@ -1576,6 +1717,7 @@ public class QwpQueryClientEndToEndTests
         {
             LastExecOpType = opType;
             LastExecRowsAffected = rowsAffected;
+            OnExecDoneHook?.Invoke();
         }
 
         public override void OnFailoverReset(QwpServerInfo? newNode)

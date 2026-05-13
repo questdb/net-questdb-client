@@ -264,14 +264,16 @@ internal sealed class QwpMmapSegment : IQwpSegment
         }
 
         // Layout: [crc(4)][len(4)][frame...]. CRC covers len+frame.
-        Span<byte> header = stackalloc byte[EnvelopeHeaderSize];
-        BinaryPrimitives.WriteUInt32LittleEndian(header.Slice(4, 4), (uint)frame.Length);
-        var crcOverLen = QwpCrc32C.Compute(header.Slice(4, 4));
-        var crc = QwpCrc32C.Compute(frame, crcOverLen);
-        BinaryPrimitives.WriteUInt32LittleEndian(header.Slice(0, 4), crc);
-
-        WriteSpan(envelopeStart, header);
+        // CRC is stamped last so any interrupted write is detected as a torn tail on reopen.
+        Span<byte> u32 = stackalloc byte[4];
+        BinaryPrimitives.WriteUInt32LittleEndian(u32, (uint)frame.Length);
+        WriteSpan(envelopeStart + 4, u32);
         WriteSpan(envelopeStart + EnvelopeHeaderSize, frame);
+
+        var crc = QwpCrc32C.Compute(u32);
+        crc = QwpCrc32C.Compute(frame, crc);
+        BinaryPrimitives.WriteUInt32LittleEndian(u32, crc);
+        WriteSpan(envelopeStart, u32);
 
         Volatile.Write(ref _writePosition, _writePosition + totalSize);
         AppendOffset(envelopeStart);

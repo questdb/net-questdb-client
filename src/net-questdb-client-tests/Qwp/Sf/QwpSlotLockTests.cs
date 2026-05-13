@@ -128,4 +128,24 @@ public class QwpSlotLockTests
         Assert.That(lockA.SlotDirectory, Is.EqualTo(slotA));
         Assert.That(lockB.SlotDirectory, Is.EqualTo(slotB));
     }
+
+    [Test]
+    public void RefreshHeartbeat_AdvancesMtime_OnAlreadyEmptyFile()
+    {
+        using var slotLock = QwpSlotLock.Acquire(_root);
+        var heartbeatPath = Path.Combine(_root, ".heartbeat");
+        Assert.That(File.Exists(heartbeatPath), Is.True);
+
+        // SetLength(0) is a no-op on an already-empty file on some filesystems; SetLastWriteTime
+        // is the reliable path. Backdate, refresh, and assert mtime moved forward.
+        var stale = DateTime.UtcNow.AddMinutes(-5);
+        File.SetLastWriteTimeUtc(heartbeatPath, stale);
+        Assert.That(File.GetLastWriteTimeUtc(heartbeatPath), Is.EqualTo(stale).Within(TimeSpan.FromSeconds(1)));
+
+        slotLock.RefreshHeartbeat();
+
+        var after = File.GetLastWriteTimeUtc(heartbeatPath);
+        Assert.That(after, Is.GreaterThan(stale.AddMinutes(1)),
+            "RefreshHeartbeat must advance mtime even when the heartbeat file is already empty");
+    }
 }

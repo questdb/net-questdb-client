@@ -32,6 +32,7 @@ namespace QuestDB.Qwp.Sf;
 internal sealed class QwpSenderErrorDispatcher : IDisposable
 {
     private readonly Channel<SenderError> _inbox;
+    private readonly int _capacity;
     private readonly SenderErrorHandler _handler;
     private readonly bool _hasCustomHandler;
     private readonly CancellationTokenSource _shutdown = new();
@@ -44,11 +45,12 @@ internal sealed class QwpSenderErrorDispatcher : IDisposable
     public QwpSenderErrorDispatcher(SenderErrorHandler? handler, int capacity)
     {
         if (capacity < 1) throw new ArgumentOutOfRangeException(nameof(capacity));
+        _capacity = capacity;
         _hasCustomHandler = handler != null;
         _handler = handler ?? DefaultHandler;
         _inbox = Channel.CreateBounded<SenderError>(new BoundedChannelOptions(capacity)
         {
-            FullMode = BoundedChannelFullMode.Wait,
+            FullMode = BoundedChannelFullMode.DropOldest,
             SingleReader = true,
             SingleWriter = false,
         });
@@ -63,12 +65,11 @@ internal sealed class QwpSenderErrorDispatcher : IDisposable
     public bool Offer(SenderError error)
     {
         if (Volatile.Read(ref _disposed) != 0) return false;
-        var written = _inbox.Writer.TryWrite(error);
-        if (!written)
+        if (_inbox.Reader.Count >= _capacity)
         {
             Interlocked.Increment(ref _dropped);
-            return false;
         }
+        _inbox.Writer.TryWrite(error);
         if (Interlocked.CompareExchange(ref _started, 1, 0) == 0)
         {
             _loop = Task.Run(DispatchLoopAsync);

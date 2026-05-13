@@ -1314,9 +1314,13 @@ public record SenderOptions
     }
 
     /// <summary>
-    ///     Cadence of WebSocket PING the I/O loop sends while there are pending durable-ack
-    ///     confirmations and <see cref="request_durable_ack" /> is on. Zero or negative disables
-    ///     the keepalive. Defaults to 200 ms.
+    ///     Cadence of WebSocket PING used to force the server to flush pending durable-ack frames.
+    ///     Zero or negative disables the keepalive. Defaults to 200 ms. Only consulted when
+    ///     <see cref="request_durable_ack" /> is on; in non-durable-ack mode no PING is sent
+    ///     regardless of this value. Note that
+    ///     <see cref="System.Net.WebSockets.ClientWebSocket" /> only exposes a fixed
+    ///     <see cref="System.Net.WebSockets.ClientWebSocketOptions.KeepAliveInterval" />, so the
+    ///     PING fires on any idle period — including when no durable-ack is pending.
     /// </summary>
     public TimeSpan durable_ack_keepalive_interval_millis
     {

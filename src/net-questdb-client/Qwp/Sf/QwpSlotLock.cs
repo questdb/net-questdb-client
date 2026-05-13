@@ -65,8 +65,12 @@ internal sealed class QwpSlotLock : IDisposable
     {
         try
         {
-            using var fs = new FileStream(_heartbeatPath, FileMode.OpenOrCreate, FileAccess.Write, FileShare.Read);
-            fs.SetLength(0);
+            if (!File.Exists(_heartbeatPath))
+            {
+                using var fs = new FileStream(_heartbeatPath, FileMode.CreateNew, FileAccess.Write, FileShare.Read);
+            }
+            // SetLength(0) is a no-op on an already-empty file on some filesystems.
+            File.SetLastWriteTimeUtc(_heartbeatPath, DateTime.UtcNow);
         }
         catch
         {

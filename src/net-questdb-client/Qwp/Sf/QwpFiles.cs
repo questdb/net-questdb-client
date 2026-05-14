@@ -280,7 +280,6 @@ internal static class QwpFiles
 
     private static string UnescapeMountField(string raw)
     {
-        // /proc/mounts escapes spaces / tabs / backslashes / newlines as octal: \040, \011, \134, \012.
         if (raw.IndexOf('\\') < 0) return raw;
         var sb = new System.Text.StringBuilder(raw.Length);
         for (var i = 0; i < raw.Length; i++)

@@ -307,6 +307,25 @@ public class QwpCursorSendEngineTests
     }
 
     [Test]
+    public async Task ReceivePump_ServerLiesAboutAckSequence_ClampsToHighestStaged()
+    {
+        using var engine = NewEngine(out _, factory: () =>
+            new StubTransport
+            {
+                OnSendAsync = _ => Task.FromResult(OkResponse(sequence: 1_000_000)),
+            });
+        engine.Start();
+
+        engine.AppendBlocking(new byte[] { 1 });
+        engine.AppendBlocking(new byte[] { 2 });
+        engine.AppendBlocking(new byte[] { 3 });
+
+        await engine.FlushAsync(TimeSpan.FromSeconds(5));
+
+        Assert.That(engine.AckedFsn, Is.EqualTo(3L));
+    }
+
+    [Test]
     public void InitialConnectFailure_NoRetry_Terminal()
     {
         using var engine = NewEngine(out _, factory: () => new StubTransport

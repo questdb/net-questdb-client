@@ -291,6 +291,97 @@ public class QuestDbWebSocketIntegrationTests
     }
 
     [Test]
+    public async Task Reconnect_WsCloseMidSession_SfReplaysQueuedRows()
+    {
+        await DropTableAsync("test_ws_close_sf");
+        var realEndpoint = _questDb!.GetWebSocketEndpoint();
+        using var proxy = new TcpProxy(realEndpoint);
+        await proxy.StartAsync();
+
+        var sfRoot = Path.Combine(Path.GetTempPath(), "qdb-int-wsclose-sf-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            using (var sender = Sender.New(
+                       $"ws::addr={proxy.LocalEndpoint};auto_flush=off;sf_dir={sfRoot};"
+                       + "sender_id=wsclose-sf-test;reconnect_max_duration_millis=60000;"
+                       + "reconnect_initial_backoff_millis=50;reconnect_max_backoff_millis=500;"))
+            {
+                var qwp = (IQwpWebSocketSender)sender;
+
+                for (var i = 0; i < 10; i++)
+                {
+                    sender.Table("test_ws_close_sf").Column("v", (long)i).At(DateTime.UtcNow);
+                }
+                await sender.SendAsync();
+                await qwp.PingAsync();
+
+                proxy.KillAllConnections();
+
+                for (var i = 10; i < 30; i++)
+                {
+                    sender.Table("test_ws_close_sf").Column("v", (long)i).At(DateTime.UtcNow);
+                }
+                await sender.SendAsync();
+
+                for (var i = 0; i < 200; i++)
+                {
+                    try { await qwp.PingAsync(); break; }
+                    catch { await Task.Delay(100); }
+                }
+            }
+
+            await VerifyTableRowCountAsync("test_ws_close_sf", expected: 30, maxAttempts: 150);
+        }
+        finally
+        {
+            if (Directory.Exists(sfRoot))
+            {
+                try { Directory.Delete(sfRoot, recursive: true); } catch { }
+            }
+        }
+    }
+
+    [Test]
+    public async Task Reconnect_WsCloseMidSession_NoSfDir_ReplaysFromRamRing()
+    {
+        await DropTableAsync("test_ws_close_ram");
+        var realEndpoint = _questDb!.GetWebSocketEndpoint();
+        using var proxy = new TcpProxy(realEndpoint);
+        await proxy.StartAsync();
+
+        using (var sender = Sender.New(
+                   $"ws::addr={proxy.LocalEndpoint};auto_flush=off;"
+                   + "reconnect_max_duration_millis=60000;"
+                   + "reconnect_initial_backoff_millis=50;reconnect_max_backoff_millis=500;"))
+        {
+            var qwp = (IQwpWebSocketSender)sender;
+
+            for (var i = 0; i < 10; i++)
+            {
+                sender.Table("test_ws_close_ram").Column("v", (long)i).At(DateTime.UtcNow);
+            }
+            await sender.SendAsync();
+            await qwp.PingAsync();
+
+            proxy.KillAllConnections();
+
+            for (var i = 10; i < 30; i++)
+            {
+                sender.Table("test_ws_close_ram").Column("v", (long)i).At(DateTime.UtcNow);
+            }
+            await sender.SendAsync();
+
+            for (var i = 0; i < 200; i++)
+            {
+                try { await qwp.PingAsync(); break; }
+                catch { await Task.Delay(100); }
+            }
+        }
+
+        await VerifyTableRowCountAsync("test_ws_close_ram", expected: 30, maxAttempts: 150);
+    }
+
+    [Test]
     public async Task SchemaCacheReuse_TwoFlushesSameTable_BothLand()
     {
         await DropTableAsync("test_ws_schema_reuse");

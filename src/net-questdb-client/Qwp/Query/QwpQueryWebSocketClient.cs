@@ -1082,7 +1082,13 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient
         if (s.Length < 1 + 8 + 1 + 1) throw new IngressError(ErrorCode.ProtocolVersionError, "EXEC_DONE too short");
         var requestId = BinaryPrimitives.ReadInt64LittleEndian(s.Slice(1, 8));
         byte opType = s[9];
-        var rowsAffected = (long)QwpVarint.Read(s.Slice(10), out var consumed);
+        var rowsAffectedRaw = QwpVarint.Read(s.Slice(10), out var consumed);
+        if (rowsAffectedRaw > long.MaxValue)
+        {
+            throw new IngressError(ErrorCode.ProtocolVersionError,
+                $"EXEC_DONE rows_affected {rowsAffectedRaw} exceeds Int64 range");
+        }
+        var rowsAffected = (long)rowsAffectedRaw;
         var p = 10 + consumed;
         if (p != s.Length)
         {

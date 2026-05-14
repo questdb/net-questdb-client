@@ -498,12 +498,12 @@ public record SenderOptions
         ValidateMultiAddressForTcp();
         ValidateStoreAndForwardOptions();
         ValidateGzipForWebSocket();
+        ApplyAutoFlushNormalisation();
         ValidateAutoFlushBytesForWebSocket();
         ValidateTimeouts();
         ValidateWebSocketKeys();
         ValidateWebSocketKeysAgainstDefaults();
         ValidateErrorInboxCapacity();
-        ApplyAutoFlushNormalisation();
     }
 
     private void ValidateErrorInboxCapacity()

@@ -557,6 +557,15 @@ internal sealed class QwpColumn
         var negative = (flags & unchecked((int)0x80000000)) != 0;
         var scale = (byte)((flags >> 16) & 0x7F);
 
+        var (maxScale, typeName) = code switch
+        {
+            QwpTypeCode.Decimal64 => (QwpConstants.MaxDecimal64Scale, "Decimal64"),
+            QwpTypeCode.Decimal128 => (QwpConstants.MaxDecimal128Scale, "Decimal128"),
+            QwpTypeCode.Decimal256 => (QwpConstants.MaxDecimal256Scale, "Decimal256"),
+            _ => (int.MaxValue, code.ToString()),
+        };
+        ValidateDecimalScale(scale, maxScale, typeName);
+
         byte targetScale;
         if (!DecimalScaleSet)
         {

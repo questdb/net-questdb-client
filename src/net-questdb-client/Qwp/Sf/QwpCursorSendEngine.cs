@@ -678,8 +678,7 @@ internal sealed class QwpCursorSendEngine : IDisposable
                     return;
                 }
                 catch (IngressError ex) when (
-                    ex.code is ErrorCode.AuthError or ErrorCode.DurableAckNotSupported
-                    && ex is not QwpIngressRoleRejectedException)
+                    ex.code is ErrorCode.AuthError or ErrorCode.DurableAckNotSupported)
                 {
                     if (ex.code is ErrorCode.AuthError)
                     {

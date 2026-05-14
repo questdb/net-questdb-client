@@ -216,7 +216,89 @@ internal static class QwpFiles
             return path.StartsWith(@"\\", StringComparison.Ordinal);
         }
 
-        // POSIX heuristic: NFS mounts typically live under /mnt or /net; not authoritative.
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Linux))
+        {
+            return IsLinuxNetworkMount(path);
+        }
+
         return false;
+    }
+
+    private static readonly string[] NetworkFsTypes =
+    {
+        "nfs", "nfs3", "nfs4", "cifs", "smbfs", "smb3", "smb2", "afpfs", "fuse.sshfs", "9p",
+    };
+
+    private static bool IsLinuxNetworkMount(string path)
+    {
+        string absolute;
+        try
+        {
+            absolute = Path.GetFullPath(path);
+        }
+        catch
+        {
+            return false;
+        }
+
+        try
+        {
+            string? bestMatch = null;
+            string? bestFsType = null;
+            foreach (var line in File.ReadLines("/proc/mounts"))
+            {
+                var firstSpace = line.IndexOf(' ');
+                if (firstSpace < 0) continue;
+                var afterDevice = firstSpace + 1;
+                var secondSpace = line.IndexOf(' ', afterDevice);
+                if (secondSpace < 0) continue;
+                var thirdSpace = line.IndexOf(' ', secondSpace + 1);
+                if (thirdSpace < 0) continue;
+
+                var mountPoint = UnescapeMountField(line.Substring(afterDevice, secondSpace - afterDevice));
+                var fsType = line.Substring(secondSpace + 1, thirdSpace - secondSpace - 1);
+
+                if (absolute == mountPoint ||
+                    absolute.StartsWith(mountPoint.TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar,
+                        StringComparison.Ordinal))
+                {
+                    if (bestMatch is null || mountPoint.Length > bestMatch.Length)
+                    {
+                        bestMatch = mountPoint;
+                        bestFsType = fsType;
+                    }
+                }
+            }
+
+            return bestFsType is not null && Array.IndexOf(NetworkFsTypes, bestFsType) >= 0;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static string UnescapeMountField(string raw)
+    {
+        // /proc/mounts escapes spaces / tabs / backslashes / newlines as octal: \040, \011, \134, \012.
+        if (raw.IndexOf('\\') < 0) return raw;
+        var sb = new System.Text.StringBuilder(raw.Length);
+        for (var i = 0; i < raw.Length; i++)
+        {
+            if (raw[i] == '\\' && i + 3 < raw.Length
+                && raw[i + 1] is >= '0' and <= '7'
+                && raw[i + 2] is >= '0' and <= '7'
+                && raw[i + 3] is >= '0' and <= '7')
+            {
+                var oct = ((raw[i + 1] - '0') << 6) | ((raw[i + 2] - '0') << 3) | (raw[i + 3] - '0');
+                sb.Append((char)oct);
+                i += 3;
+            }
+            else
+            {
+                sb.Append(raw[i]);
+            }
+        }
+        return sb.ToString();
     }
 }

@@ -76,10 +76,15 @@ internal sealed class QwpAckWatermark : IDisposable
             {
                 fs = new FileStream(path, FileMode.Open, FileAccess.ReadWrite, FileShare.Read);
             }
+            else if (existing < 0)
+            {
+                fs = new FileStream(path, FileMode.CreateNew, FileAccess.ReadWrite, FileShare.Read);
+                fs.SetLength(FileSize);
+            }
             else
             {
-                fs = new FileStream(path, FileMode.Create, FileAccess.ReadWrite, FileShare.Read);
-                fs.SetLength(FileSize);
+                // Preserve a wrong-sized file for diagnosis instead of truncating it.
+                return null;
             }
 
             mmf = MemoryMappedFile.CreateFromFile(

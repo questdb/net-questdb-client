@@ -114,9 +114,10 @@ internal sealed class QwpTableBuffer
     public int RowCount { get; private set; }
 
     /// <summary>
-    ///     Per-connection schema id; <c>-1</c> means "not yet allocated". The encoder assigns
-    ///     a fresh id on the next flush when this is <c>-1</c>, and emits the schema in full mode
-    ///     (otherwise reference mode is used).
+    ///     Per-connection schema id; <c>-1</c> means "not yet allocated". The production WS sender
+    ///     encodes every frame self-sufficient (full schema), so this is reset to <c>-1</c> after
+    ///     each successful flush. Only the standalone <c>QwpEncoder.Encode</c> entry-point exercises
+    ///     the reference-mode path keyed off this id.
     /// </summary>
     public int SchemaId { get; internal set; } = -1;
 
@@ -524,9 +525,14 @@ internal sealed class QwpTableBuffer
         {
             if (!_touchedInCurrentRow[i])
             {
+                SnapshotOnFirstTouch(i, _columns[i]);
+                MarkTouched(i);
                 _columns[i].AppendNull();
             }
+        }
 
+        for (var i = 0; i < _columns.Count; i++)
+        {
             _touchedInCurrentRow[i] = false;
         }
 

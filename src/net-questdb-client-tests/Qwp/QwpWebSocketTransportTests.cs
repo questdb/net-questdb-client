@@ -86,10 +86,8 @@ public class QwpWebSocketTransportTests
     }
 
     [Test]
-    public async Task Handshake_ServerOmitsVersionHeader_Rejected()
+    public async Task Handshake_ServerOmitsVersionHeader_DefaultsToVersion1()
     {
-        // A WebSocket service that doesn't surface X-QWP-Version isn't proven to be a QWP server;
-        // accepting the upgrade silently would deadlock on the first frame send.
         await using var server = new DummyQwpServer(new DummyQwpServerOptions
         {
             NegotiatedVersion = null,
@@ -101,8 +99,8 @@ public class QwpWebSocketTransportTests
             Uri = server.Uri,
         });
 
-        var ex = Assert.ThrowsAsync<IngressError>(async () => await transport.ConnectAsync());
-        Assert.That(ex!.code, Is.EqualTo(ErrorCode.ProtocolVersionError));
+        Assert.DoesNotThrowAsync(async () => await transport.ConnectAsync());
+        Assert.That(transport.NegotiatedVersion, Is.EqualTo(1));
     }
 
     [Test]

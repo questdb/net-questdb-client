@@ -265,16 +265,18 @@ segments are an abstraction (`IQwpSegment`) over either
 - `QwpMmapSegment.cs` — single mmap'd segment file with envelope frames
   `[u32 crc32c][u32 frame_len][frame bytes]`. Replays on open via
   `ScanForLastGoodEnvelope` to find the last good write position;
-  truncates torn tails. On `Seal()` writes a 16-byte trailer
-  (magic + last-good-offset) at the file's end; `Open()` reads the
-  trailer first and skips per-envelope CRC verification on the
-  walk-and-build-offsets pass when the trailer is consistent (falls
-  back to a full CRC scan when the trailer is missing, corrupt, or
-  doesn't match the envelope walk).
+  truncates torn tails. On `Seal()` writes a sibling `<segment>.sfa.seal`
+  file (16 bytes: magic `STLS` + reserved + i64 last-good-offset);
+  `Open()` reads the sidecar first and skips per-envelope CRC
+  verification on the walk-and-build-offsets pass when the sidecar is
+  consistent (falls back to a full CRC scan when the sidecar is missing,
+  corrupt, or doesn't match the envelope walk). Sidecar over in-file
+  trailer keeps the `.sfa` byte-identical to the spec layout so any
+  drainer (including non-.NET) reads it unchanged.
 - `QwpMemorySegment.cs` — RAM-backed segment via
   `NativeMemory.Alloc` / `Free`. Same envelope wire format as mmap
-  (preserves CRC verification on read), but no on-disk header /
-  trailer — recovery and replay don't apply.
+  (preserves CRC verification on read), but no on-disk sidecar —
+  recovery and replay don't apply.
 - `QwpSegmentRing.cs` — ring of active + sealed segments. File-backed
   rings (`Open`) use a hot-spare-path mechanism (manager pre-creates
   `.tmp` files, producer `File.Move`s them into place) so producer

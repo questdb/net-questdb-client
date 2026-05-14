@@ -27,7 +27,7 @@ using System.Runtime.CompilerServices;
 namespace QuestDB.Qwp;
 
 /// <summary>
-///     Writes a bit-packed stream LSB-first within each byte (specification §12).
+///     Writes a bit-packed stream LSB-first within each byte.
 /// </summary>
 /// <remarks>
 ///     The first written bit lands in bit 0 of byte 0; subsequent bits fill bit 1, bit 2, … of the

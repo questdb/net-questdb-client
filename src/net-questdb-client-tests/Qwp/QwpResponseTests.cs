@@ -84,7 +84,7 @@ public class QwpResponseTests
     [Test]
     public void Parse_OkResponse_TrailingGarbage_Throws()
     {
-        var frame = new byte[QwpConstants.OkAckMinSize + 1];
+        var frame = new byte[QwpConstants.OffsetTableCountInOkAck + 1];
         // OK status + sequence (zero) + extra byte.
         frame[0] = (byte)QwpStatusCode.Ok;
 
@@ -234,7 +234,7 @@ public class QwpResponseTests
     public void Parse_OkResponse_WithZeroEntriesViaTableCount_IsAccepted()
     {
         // status (1) + sequence (8) + tableCount=0 (2) = 11 bytes; valid extended OK with no entries.
-        var frame = new byte[QwpConstants.OkAckMinSize + 2];
+        var frame = new byte[QwpConstants.OffsetTableCountInOkAck + 2];
         frame[0] = (byte)QwpStatusCode.Ok;
         BinaryPrimitives.WriteInt64LittleEndian(frame.AsSpan(1, 8), 99L);
         // tableCount left at zero.
@@ -299,7 +299,7 @@ public class QwpResponseTests
 
     private static byte[] BuildOk(long sequence)
     {
-        var bytes = new byte[QwpConstants.OkAckMinSize + 2];
+        var bytes = new byte[QwpConstants.OffsetTableCountInOkAck + 2];
         bytes[0] = (byte)QwpStatusCode.Ok;
         BinaryPrimitives.WriteInt64LittleEndian(bytes.AsSpan(1, 8), sequence);
         BinaryPrimitives.WriteUInt16LittleEndian(bytes.AsSpan(9, 2), 0);
@@ -309,7 +309,7 @@ public class QwpResponseTests
     private static byte[] BuildOkWithEntries(long sequence, params (string Name, long SeqTxn)[] entries)
     {
         // status (1) + sequence (8) + tableCount (2) + entries
-        var size = QwpConstants.OkAckMinSize + 2;
+        var size = QwpConstants.OffsetTableCountInOkAck + 2;
         foreach (var e in entries)
         {
             size += 2 + Encoding.UTF8.GetByteCount(e.Name) + 8;
@@ -318,9 +318,9 @@ public class QwpResponseTests
         var frame = new byte[size];
         frame[0] = (byte)QwpStatusCode.Ok;
         BinaryPrimitives.WriteInt64LittleEndian(frame.AsSpan(1, 8), sequence);
-        BinaryPrimitives.WriteUInt16LittleEndian(frame.AsSpan(QwpConstants.OkAckMinSize, 2), (ushort)entries.Length);
+        BinaryPrimitives.WriteUInt16LittleEndian(frame.AsSpan(QwpConstants.OffsetTableCountInOkAck, 2), (ushort)entries.Length);
 
-        var pos = QwpConstants.OkAckMinSize + 2;
+        var pos = QwpConstants.OffsetTableCountInOkAck + 2;
         foreach (var e in entries)
         {
             var nameBytes = Encoding.UTF8.GetBytes(e.Name);

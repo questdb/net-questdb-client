@@ -264,7 +264,7 @@ internal sealed class QwpColumn
         AdvanceNonNull();
     }
 
-    /// <summary>Appends a UUID. Wire layout is low 8 bytes followed by high 8 bytes (per spec §10).</summary>
+    /// <summary>Appends a UUID. Wire layout is low 8 bytes followed by high 8 bytes.</summary>
     public void AppendUuid(Guid value)
     {
         AssertOrSetType(QwpTypeCode.Uuid);
@@ -386,6 +386,18 @@ internal sealed class QwpColumn
         IsTyped = sp.IsTyped;
         DecimalScaleSet = sp.DecimalScaleSet;
         GeohashPrecisionSet = sp.GeohashPrecisionSet;
+
+        // AppendBool ORs without clearing on non-aligned slots; mask off post-rollback tail.
+        if (BoolData is { Length: > 0 } boolData)
+        {
+            var nonNull = RowCount - NullCount;
+            var keepBits = nonNull & 7;
+            var byteIndex = nonNull >> 3;
+            if (keepBits != 0 && byteIndex < boolData.Length)
+            {
+                boolData[byteIndex] &= (byte)((1 << keepBits) - 1);
+            }
+        }
     }
 
     /// <summary>

@@ -25,7 +25,7 @@
 namespace QuestDB.Enums;
 
 /// <summary>
-///     QWP server response status codes (spec §13).
+///     QWP server response status codes.
 /// </summary>
 public enum QwpStatusCode : byte
 {

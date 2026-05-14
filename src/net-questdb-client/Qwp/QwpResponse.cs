@@ -87,8 +87,8 @@ internal readonly struct QwpResponse
     public string Message { get; }
 
     /// <summary>
-    ///     Per-table seqTxn watermarks when present. Empty for legacy 9-byte OK frames and for
-    ///     error frames.
+    ///     Per-table seqTxn watermarks when present. Empty for OK frames with <c>tableCount=0</c>
+    ///     and for error frames.
     /// </summary>
     public IReadOnlyList<QwpTableEntry> TableEntries { get; }
 
@@ -147,7 +147,7 @@ internal readonly struct QwpResponse
     private static QwpResponse ParseOk(ReadOnlySpan<byte> frame)
     {
         // Spec: status (1) + sequence (8) + tableCount (2) + entries. Minimum 11 bytes; matches Java.
-        const int headerSize = QwpConstants.OkAckMinSize + 2;
+        const int headerSize = QwpConstants.OffsetTableCountInOkAck + 2;
         if (frame.Length < headerSize)
         {
             throw new IngressError(ErrorCode.ProtocolVersionError,
@@ -155,7 +155,7 @@ internal readonly struct QwpResponse
         }
 
         var sequence = BinaryPrimitives.ReadInt64LittleEndian(frame.Slice(1, 8));
-        var tableCount = BinaryPrimitives.ReadUInt16LittleEndian(frame.Slice(QwpConstants.OkAckMinSize, 2));
+        var tableCount = BinaryPrimitives.ReadUInt16LittleEndian(frame.Slice(QwpConstants.OffsetTableCountInOkAck, 2));
         var entries = ParseTableEntries(frame.Slice(headerSize), tableCount);
         return new QwpResponse(QwpStatusCode.Ok, sequence, string.Empty, entries);
     }

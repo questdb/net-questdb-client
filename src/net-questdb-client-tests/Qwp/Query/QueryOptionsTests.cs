@@ -474,4 +474,20 @@ public class QueryOptionsTests
         var o = new QueryOptions { auth = "Bearer x", token = "t" };
         Assert.Throws<IngressError>(() => o.EnsureValid());
     }
+
+    [Test]
+    public void TokenXY_AreAcceptedForCrossClientInterop()
+    {
+        Assert.That(
+            () => new QueryOptions("ws::addr=localhost:9000;token_x=abc;token_y=def;"),
+            Throws.Nothing);
+    }
+
+    [Test]
+    public void InFlightWindow_IsAcceptedForCrossClientInterop()
+    {
+        Assert.That(
+            () => new QueryOptions("ws::addr=localhost:9000;in_flight_window=128;"),
+            Throws.Nothing);
+    }
 }

@@ -60,6 +60,8 @@ public sealed class QueryOptions
         "max_batch_rows",
         "client_id",
         "buffer_pool_size",
+        // Accepted but ignored — cross-client connect-string interop with Java/Rust senders.
+        "token_x", "token_y", "in_flight_window",
     };
 
     private List<string> _addresses = new();
@@ -309,7 +311,7 @@ public sealed class QueryOptions
         tls_roots = ReadString(builder, "tls_roots");
         tls_roots_password = ReadString(builder, "tls_roots_password");
 
-        compression = ReadEnum(builder, "compression", CompressionType.raw);
+        compression = ParseCompression(builder);
         compression_level = ReadInt(builder, "compression_level", 3);
 
         target = ReadEnum(builder, "target", TargetType.any);
@@ -476,6 +478,19 @@ public sealed class QueryOptions
         if (!int.TryParse(s, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed))
         {
             throw new IngressError(ErrorCode.ConfigError, $"`{key}` must be an integer, got `{s}`");
+        }
+        return parsed;
+    }
+
+    private static CompressionType ParseCompression(DbConnectionStringBuilder builder)
+    {
+        if (!builder.TryGetValue("compression", out var v)) return CompressionType.raw;
+        var s = (string)v;
+        if (string.Equals(s, "identity", StringComparison.OrdinalIgnoreCase)) return CompressionType.raw;
+        if (!Enum.TryParse<CompressionType>(s, ignoreCase: true, out var parsed))
+        {
+            throw new IngressError(ErrorCode.ConfigError,
+                $"`compression` must be one of: {string.Join(", ", Enum.GetNames<CompressionType>())}, got `{s}`");
         }
         return parsed;
     }

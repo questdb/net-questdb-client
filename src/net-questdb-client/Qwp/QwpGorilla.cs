@@ -29,7 +29,7 @@ using QuestDB.Utils;
 namespace QuestDB.Qwp;
 
 /// <summary>
-///     Gorilla delta-of-delta timestamp compression (specification §12).
+///     Gorilla delta-of-delta timestamp compression.
 /// </summary>
 /// <remarks>
 ///     Output layout when called with <c>FLAG_GORILLA</c> on:

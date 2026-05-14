@@ -1038,7 +1038,7 @@ public record SenderOptions
     /// <summary>
     ///     If <c>true</c>, the WebSocket sender enables Gorilla delta-of-delta compression for
     ///     timestamp columns. Falls back to uncompressed per column when DoDs overflow int32.
-    ///     Off by default.
+    ///     On by default.
     /// </summary>
     public bool gorilla
     {

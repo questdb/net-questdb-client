@@ -1047,6 +1047,8 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
         return (utc - DateTime.UnixEpoch).Ticks / TicksPerMicrosecond;
     }
 
+    // Same authHeader is forwarded to every failover host. Safe because ErrorCode.AuthError is
+    // terminal in QwpCursorSendEngine; auth rejection never reaches the host-rotation path.
     private static Func<IQwpCursorTransport> BuildHostRotatingFactory(
         SenderOptions options,
         QwpHostHealthTracker tracker,

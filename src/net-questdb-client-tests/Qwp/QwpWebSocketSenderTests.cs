@@ -1266,7 +1266,7 @@ public class QwpWebSocketSenderTests
 
     private static byte[] BuildOkAck(long sequence)
     {
-        var bytes = new byte[QwpConstants.OkAckMinSize + 2];
+        var bytes = new byte[QwpConstants.OffsetTableCountInOkAck + 2];
         bytes[0] = (byte)QwpStatusCode.Ok;
         BinaryPrimitives.WriteInt64LittleEndian(bytes.AsSpan(1, 8), sequence);
         BinaryPrimitives.WriteUInt16LittleEndian(bytes.AsSpan(9, 2), 0);
@@ -1275,15 +1275,15 @@ public class QwpWebSocketSenderTests
 
     private static byte[] BuildOkAckWithEntries(long sequence, params (string Name, long SeqTxn)[] entries)
     {
-        var size = QwpConstants.OkAckMinSize + 2;
+        var size = QwpConstants.OffsetTableCountInOkAck + 2;
         foreach (var e in entries) size += 2 + System.Text.Encoding.UTF8.GetByteCount(e.Name) + 8;
 
         var frame = new byte[size];
         frame[0] = (byte)QwpStatusCode.Ok;
         BinaryPrimitives.WriteInt64LittleEndian(frame.AsSpan(1, 8), sequence);
-        BinaryPrimitives.WriteUInt16LittleEndian(frame.AsSpan(QwpConstants.OkAckMinSize, 2), (ushort)entries.Length);
+        BinaryPrimitives.WriteUInt16LittleEndian(frame.AsSpan(QwpConstants.OffsetTableCountInOkAck, 2), (ushort)entries.Length);
 
-        var pos = QwpConstants.OkAckMinSize + 2;
+        var pos = QwpConstants.OffsetTableCountInOkAck + 2;
         foreach (var e in entries)
         {
             var nameBytes = System.Text.Encoding.UTF8.GetBytes(e.Name);

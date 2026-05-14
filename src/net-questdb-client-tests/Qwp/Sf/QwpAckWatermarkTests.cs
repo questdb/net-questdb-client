@@ -134,15 +134,16 @@ public class QwpAckWatermarkTests
     }
 
     [Test]
-    public void Open_RecreatesWrongSizedFile_AsInvalid()
+    public void Open_PreservesWrongSizedFile_ReturnsNull()
     {
         var path = Path.Combine(_tempDir, QwpAckWatermark.FileName);
-        File.WriteAllBytes(path, new byte[] { 0xFF, 0xFF, 0xFF, 0xFF }); // bogus 4-byte file
+        var bogus = new byte[] { 0xFF, 0xFF, 0xFF, 0xFF };
+        File.WriteAllBytes(path, bogus);
 
-        using var wm = QwpAckWatermark.Open(_tempDir)!;
-        Assert.That(wm, Is.Not.Null);
-        Assert.That(wm.Read(), Is.EqualTo(QwpAckWatermark.Invalid));
-        Assert.That(new FileInfo(path).Length, Is.EqualTo(QwpAckWatermark.FileSize));
+        var wm = QwpAckWatermark.Open(_tempDir);
+        Assert.That(wm, Is.Null);
+        Assert.That(new FileInfo(path).Length, Is.EqualTo(bogus.Length));
+        Assert.That(File.ReadAllBytes(path), Is.EqualTo(bogus));
     }
 
     [Test]

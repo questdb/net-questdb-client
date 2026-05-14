@@ -74,7 +74,7 @@ internal static class QwpConstants
     public const byte SchemaModeReference = 0x01;
 
     /// <summary>Byte offset of the <c>tableCount</c> field in an OK response (after status + sequence).</summary>
-    public const int OkAckMinSize = 9;
+    public const int OffsetTableCountInOkAck = 9;
 
     /// <summary>Size of an error response header: 1-byte status + 8-byte sequence + 2-byte message length.</summary>
     public const int ErrorAckHeaderSize = 11;

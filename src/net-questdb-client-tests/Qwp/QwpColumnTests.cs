@@ -148,6 +148,22 @@ public class QwpColumnTests
     }
 
     [Test]
+    public void AppendBool_SavepointRestore_ClearsStaleBitsInActiveByte()
+    {
+        var col = new QwpColumn("c", 0);
+        col.AppendBool(true);
+        col.AppendBool(true);
+
+        var sp = col.Snapshot();
+        col.AppendBool(true);
+        col.Restore(sp);
+        col.AppendBool(false);
+
+        Assert.That(col.NonNullCount, Is.EqualTo(3));
+        Assert.That(col.BoolData![0], Is.EqualTo(0x03));
+    }
+
+    [Test]
     public void AppendVarchar_OffsetsAndDataMatchSpecExample2()
     {
         // Spec §16 example 2: 4 rows, row 1 null, values "foo", "bar", "baz".

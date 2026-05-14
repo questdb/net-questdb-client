@@ -25,7 +25,8 @@
 namespace QuestDB.Qwp.Sf;
 
 /// <summary>
-///     Pure-function exponential-backoff math used by the SF reconnect loop.
+///     Pure-function exponential-backoff math used by the SF reconnect loop and the egress query
+///     client's failover loop.
 /// </summary>
 /// <remarks>
 ///     The policy doesn't perform any I/O or sleeping itself; the caller passes in elapsed times

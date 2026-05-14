@@ -34,7 +34,7 @@ namespace QuestDB.Qwp;
 /// <remarks>
 ///     Each unique symbol value is assigned a sequential 0-based integer id the first time it is
 ///     seen. On every flush only the *delta* (newly added entries since the last successful flush)
-///     is transmitted on the wire, per spec §7 (delta dictionary section). Symbol columns then
+///     is transmitted on the wire. Symbol columns then
 ///     reference values by their global id (varint) instead of carrying a per-table dictionary.
 ///     <para />
 ///     Lifecycle:

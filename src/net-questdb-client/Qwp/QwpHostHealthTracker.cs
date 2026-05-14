@@ -65,7 +65,7 @@ internal sealed class QwpHostHealthTracker
         QwpZoneTier.Other,
     };
 
-    // Shared between the SF reconnect thread and drainer-pool tasks; guards _states + _attemptedThisRound + _zoneTiers.
+    // Shared across SF reconnect + drainer pool + egress query client; guards _states + _attemptedThisRound + _zoneTiers.
     private readonly object _lock = new();
     private readonly bool[] _attemptedThisRound;
     private readonly string[] _hosts;

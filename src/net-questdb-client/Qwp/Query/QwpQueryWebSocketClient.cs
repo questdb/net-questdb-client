@@ -747,6 +747,7 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient
         }
 
         var flags = hdr[QwpConstants.OffsetFlags];
+        var tableCount = BinaryPrimitives.ReadUInt16LittleEndian(hdr.Slice(QwpConstants.OffsetTableCount, 2));
         var payloadLen = (int)BinaryPrimitives.ReadUInt32LittleEndian(hdr.Slice(QwpConstants.OffsetPayloadLength, 4));
         if (QwpConstants.HeaderSize + payloadLen != read)
         {
@@ -760,7 +761,14 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient
         }
 
         var payloadMem = buffer.AsMemory(QwpConstants.HeaderSize, payloadLen);
-        return ((QwpEgressMsgKind)payloadMem.Span[0], payloadMem, flags);
+        var kind = (QwpEgressMsgKind)payloadMem.Span[0];
+        var expectedTableCount = kind == QwpEgressMsgKind.ResultBatch ? 1 : 0;
+        if (tableCount != expectedTableCount)
+        {
+            throw new IngressError(ErrorCode.ProtocolVersionError,
+                $"table_count={tableCount} for msg_kind 0x{(byte)kind:X2}, expected {expectedTableCount}");
+        }
+        return (kind, payloadMem, flags);
     }
 
     private async Task SendQueryRequestAsync(
@@ -1124,6 +1132,11 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient
         {
             throw new IngressError(ErrorCode.ProtocolVersionError,
                 $"CACHE_RESET length mismatch: payload={s.Length}, expected 2");
+        }
+        if (s[0] != QwpConstants.MsgKindCacheReset)
+        {
+            throw new IngressError(ErrorCode.ProtocolVersionError,
+                $"CACHE_RESET has wrong msg_kind 0x{s[0]:X2}");
         }
         var mask = s[1];
         if ((mask & QwpConstants.ResetMaskDict) != 0) _connState.ResetSymbolDict();

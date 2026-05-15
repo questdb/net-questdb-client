@@ -500,54 +500,36 @@ internal sealed class QwpColumn
     public void AppendDecimal64(long unscaledValue, byte scale)
     {
         ValidateDecimalScale(scale, QwpConstants.MaxDecimal64Scale, "Decimal64");
-        AssertOrSetType(QwpTypeCode.Decimal64);
-        LockOrMatchDecimalScale(scale);
-        EnsureFixedCapacity(FixedLen + QwpConstants.Decimal64SizeBytes);
-        BinaryPrimitives.WriteInt64LittleEndian(FixedData.AsSpan(FixedLen, QwpConstants.Decimal64SizeBytes), unscaledValue);
-        FixedLen += QwpConstants.Decimal64SizeBytes;
-        AdvanceNonNull();
+        AppendDecimalFromMantissa(
+            QwpTypeCode.Decimal64,
+            new BigInteger(unscaledValue),
+            scale,
+            QwpConstants.Decimal64SizeBytes);
     }
 
     public void AppendDecimal128(long lo, long hi, byte scale)
     {
         ValidateDecimalScale(scale, QwpConstants.MaxDecimal128Scale, "Decimal128");
-        AssertOrSetType(QwpTypeCode.Decimal128);
-        LockOrMatchDecimalScale(scale);
-        EnsureFixedCapacity(FixedLen + QwpConstants.Decimal128SizeBytes);
-        var dest = FixedData.AsSpan(FixedLen, QwpConstants.Decimal128SizeBytes);
-        BinaryPrimitives.WriteInt64LittleEndian(dest.Slice(0, 8), lo);
-        BinaryPrimitives.WriteInt64LittleEndian(dest.Slice(8, 8), hi);
-        FixedLen += QwpConstants.Decimal128SizeBytes;
-        AdvanceNonNull();
+        var mantissa = (new BigInteger(hi) << 64) + new BigInteger((ulong)lo);
+        AppendDecimalFromMantissa(
+            QwpTypeCode.Decimal128,
+            mantissa,
+            scale,
+            QwpConstants.Decimal128SizeBytes);
     }
 
     public void AppendDecimal256(long l0, long l1, long l2, long l3, byte scale)
     {
         ValidateDecimalScale(scale, QwpConstants.MaxDecimal256Scale, "Decimal256");
-        AssertOrSetType(QwpTypeCode.Decimal256);
-        LockOrMatchDecimalScale(scale);
-        EnsureFixedCapacity(FixedLen + QwpConstants.Decimal256SizeBytes);
-        var dest = FixedData.AsSpan(FixedLen, QwpConstants.Decimal256SizeBytes);
-        BinaryPrimitives.WriteInt64LittleEndian(dest.Slice(0, 8), l0);
-        BinaryPrimitives.WriteInt64LittleEndian(dest.Slice(8, 8), l1);
-        BinaryPrimitives.WriteInt64LittleEndian(dest.Slice(16, 8), l2);
-        BinaryPrimitives.WriteInt64LittleEndian(dest.Slice(24, 8), l3);
-        FixedLen += QwpConstants.Decimal256SizeBytes;
-        AdvanceNonNull();
-    }
-
-    private void LockOrMatchDecimalScale(byte scale)
-    {
-        if (!DecimalScaleSet)
-        {
-            DecimalScale = scale;
-            DecimalScaleSet = true;
-        }
-        else if (DecimalScale != scale)
-        {
-            throw new IngressError(ErrorCode.InvalidApiCall,
-                $"column '{Name}' decimal scale locked at {DecimalScale}; got {scale}");
-        }
+        var mantissa = (new BigInteger(l3) << 192)
+            + (new BigInteger((ulong)l2) << 128)
+            + (new BigInteger((ulong)l1) << 64)
+            + new BigInteger((ulong)l0);
+        AppendDecimalFromMantissa(
+            QwpTypeCode.Decimal256,
+            mantissa,
+            scale,
+            QwpConstants.Decimal256SizeBytes);
     }
 
     private static void ValidateDecimalScale(byte scale, int maxScale, string typeName)
@@ -561,8 +543,6 @@ internal sealed class QwpColumn
 
     private void AppendDecimalAtSize(QwpTypeCode code, decimal value, int sizeBytes)
     {
-        AssertOrSetType(code);
-
         Span<int> bits = stackalloc int[4];
         decimal.GetBits(value, bits);
         var flags = bits[3];
@@ -578,11 +558,23 @@ internal sealed class QwpColumn
         };
         ValidateDecimalScale(scale, maxScale, typeName);
 
+        var mantissa = (new BigInteger((uint)bits[2]) << 64)
+            | (new BigInteger((uint)bits[1]) << 32)
+            | new BigInteger((uint)bits[0]);
+        if (negative) mantissa = -mantissa;
+
+        AppendDecimalFromMantissa(code, mantissa, scale, sizeBytes);
+    }
+
+    private void AppendDecimalFromMantissa(QwpTypeCode code, BigInteger mantissa, byte sourceScale, int sizeBytes)
+    {
+        AssertOrSetType(code);
+
         byte targetScale;
         if (!DecimalScaleSet)
         {
-            targetScale = scale;
-            DecimalScale = scale;
+            targetScale = sourceScale;
+            DecimalScale = sourceScale;
             DecimalScaleSet = true;
         }
         else
@@ -590,48 +582,37 @@ internal sealed class QwpColumn
             targetScale = DecimalScale;
         }
 
-        var mantissa = (new BigInteger((uint)bits[2]) << 64)
-            | (new BigInteger((uint)bits[1]) << 32)
-            | new BigInteger((uint)bits[0]);
-
-        if (scale != targetScale)
+        if (sourceScale != targetScale)
         {
-            if (scale < targetScale)
+            if (sourceScale < targetScale)
             {
-                mantissa *= BigInteger.Pow(10, targetScale - scale);
+                mantissa *= BigInteger.Pow(10, targetScale - sourceScale);
             }
             else
             {
-                var divisor = BigInteger.Pow(10, scale - targetScale);
+                var divisor = BigInteger.Pow(10, sourceScale - targetScale);
                 if (!(mantissa % divisor).IsZero)
                 {
                     throw new IngressError(ErrorCode.InvalidApiCall,
-                        $"column '{Name}' decimal value {value} cannot be losslessly represented at scale {targetScale}");
+                        $"column '{Name}' cannot rescale decimal from scale {sourceScale} to {targetScale} without precision loss");
                 }
                 mantissa /= divisor;
             }
         }
 
-        if (negative) mantissa = -mantissa;
-
         EnsureFixedCapacity(FixedLen + sizeBytes);
         var dest = FixedData.AsSpan(FixedLen, sizeBytes);
-        WriteSignedDecimalAtSize(dest, mantissa, value, sizeBytes);
-        FixedLen += sizeBytes;
-        AdvanceNonNull();
-    }
-
-    private void WriteSignedDecimalAtSize(Span<byte> dest, BigInteger value, decimal source, int sizeBytes)
-    {
-        var bytes = value.ToByteArray(isUnsigned: false, isBigEndian: false);
+        var bytes = mantissa.ToByteArray(isUnsigned: false, isBigEndian: false);
         if (bytes.Length > sizeBytes)
         {
             throw new IngressError(ErrorCode.InvalidApiCall,
-                $"column '{Name}' decimal value {source} at scale {DecimalScale} overflows {sizeBytes * 8}-bit decimal range");
+                $"column '{Name}' decimal at scale {targetScale} overflows {sizeBytes * 8}-bit decimal range");
         }
-        var fill = value.Sign < 0 ? (byte)0xFF : (byte)0x00;
+        var fill = mantissa.Sign < 0 ? (byte)0xFF : (byte)0x00;
         dest.Fill(fill);
         bytes.AsSpan().CopyTo(dest);
+        FixedLen += sizeBytes;
+        AdvanceNonNull();
     }
 
     /// <summary>Appends a BINARY value as length-prefixed opaque bytes (same wire layout as VARCHAR).</summary>

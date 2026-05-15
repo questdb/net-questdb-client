@@ -444,7 +444,7 @@ public class QwpColumnExtendedTypesTests
         var col = new QwpColumn("c", 0);
         col.AppendDecimal128(1.5m);
         var ex = Assert.Throws<IngressError>(() => col.AppendDecimal128(1.55m));
-        Assert.That(ex!.Message, Does.Contain("losslessly"));
+        Assert.That(ex!.Message, Does.Contain("precision loss"));
     }
 
     [Test]
@@ -631,11 +631,21 @@ public class QwpColumnExtendedTypesTests
     }
 
     [Test]
-    public void AppendDecimal64_Limbs_ScaleMismatch_Throws()
+    public void AppendDecimal64_Limbs_LosslessRescale_Allowed()
     {
         var col = new QwpColumn("p", 0);
         col.AppendDecimal64(100L, scale: 2);
-        Assert.Throws<IngressError>(() => col.AppendDecimal64(200L, scale: 3));
+        Assert.DoesNotThrow(() => col.AppendDecimal64(2000L, scale: 3));
+        Assert.That(col.DecimalScale, Is.EqualTo((byte)2));
+    }
+
+    [Test]
+    public void AppendDecimal64_Limbs_LossyRescale_Throws()
+    {
+        var col = new QwpColumn("p", 0);
+        col.AppendDecimal64(100L, scale: 2);
+        var ex = Assert.Throws<IngressError>(() => col.AppendDecimal64(201L, scale: 3));
+        Assert.That(ex!.Message, Does.Contain("precision loss"));
     }
 
     [Test]

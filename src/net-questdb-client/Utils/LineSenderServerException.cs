@@ -33,6 +33,7 @@ namespace QuestDB.Utils;
 /// </summary>
 public sealed class LineSenderServerException : IngressError
 {
+    /// <summary>Wraps a HALT-policy <see cref="SenderError" /> for rethrow on the producer thread.</summary>
     public LineSenderServerException(SenderError error)
         : base(MapErrorCode(error.Category), Format(error))
     {

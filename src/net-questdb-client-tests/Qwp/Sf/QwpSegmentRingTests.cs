@@ -225,4 +225,72 @@ public class QwpSegmentRingTests
             }
         }
     }
+
+    [Test]
+    public void OpenMemoryBacked_AppendsRotateAndRoundTrip()
+    {
+        using var ring = QwpSegmentRing.OpenMemoryBacked(segmentCapacity: 64);
+        Assert.That(ring.IsMemoryBacked, Is.True);
+
+        // Each envelope is 8 (header) + 24 (body) = 32 bytes; two fit per 64-byte RAM segment.
+        var bodies = new byte[5][];
+        for (var i = 0; i < bodies.Length; i++)
+        {
+            bodies[i] = new byte[24];
+            Array.Fill(bodies[i], (byte)(i + 1));
+            Assert.That(ring.TryAppend(bodies[i]), Is.True);
+        }
+
+        Assert.That(ring.SegmentCount, Is.EqualTo(3));
+        Assert.That(ring.NextFsn, Is.EqualTo(5L));
+
+        var dest = new byte[64];
+        for (var i = 0; i < bodies.Length; i++)
+        {
+            var n = ring.TryReadFrame(i, dest);
+            Assert.That(n, Is.EqualTo(24), $"frame {i}");
+            Assert.That(dest.AsSpan(0, n).ToArray(), Is.EqualTo(bodies[i]));
+        }
+    }
+
+    [Test]
+    public void OpenMemoryBacked_SetMaxTotalBytes_RejectsAppendBeyondCap()
+    {
+        using var ring = QwpSegmentRing.OpenMemoryBacked(segmentCapacity: 64);
+        ring.SetMaxTotalBytes(128); // room for exactly two 64-byte segments
+
+        // Two 32-byte envelopes per segment; four appends fill both segments.
+        for (var i = 0; i < 4; i++)
+        {
+            Assert.That(ring.TryAppend(new byte[24]), Is.True, $"append {i}");
+        }
+
+        // A fifth append would need a third segment, exceeding the 128-byte cap.
+        Assert.That(ring.TryAppend(new byte[24]), Is.False, "append past the cap must be refused");
+        Assert.That(ring.SegmentCount, Is.EqualTo(2));
+        Assert.That(ring.NextFsn, Is.EqualTo(4L), "the refused append must not advance the FSN");
+    }
+
+    [Test]
+    public void OpenMemoryBacked_DrainTrimmable_FreesSegmentsAndUnblocksAppend()
+    {
+        using var ring = QwpSegmentRing.OpenMemoryBacked(segmentCapacity: 64);
+        ring.SetMaxTotalBytes(128);
+
+        for (var i = 0; i < 4; i++)
+        {
+            Assert.That(ring.TryAppend(new byte[24]), Is.True);
+        }
+        Assert.That(ring.TryAppend(new byte[24]), Is.False, "cap reached");
+
+        // ACK the first segment's FSNs (0,1), trim it, and free its native memory.
+        ring.Acknowledge(1L);
+        var drained = ring.DrainTrimmable();
+        Assert.That(drained, Is.Not.Null);
+        Assert.That(drained!.Count, Is.EqualTo(1));
+        foreach (var s in drained) s.Dispose();
+
+        Assert.That(ring.SegmentCount, Is.EqualTo(1));
+        Assert.That(ring.TryAppend(new byte[24]), Is.True, "trimming a segment frees cap budget");
+    }
 }

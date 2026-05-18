@@ -22,6 +22,7 @@
  *
  ******************************************************************************/
 
+using System.Diagnostics;
 using System.IO.MemoryMappedFiles;
 using System.Runtime.InteropServices;
 
@@ -88,11 +89,17 @@ internal static class QwpFiles
             return true;
         }
 
-        // POSIX surfaces FileShare.None without a recognisable HResult; the type check above
-        // already excludes specific subclasses, so plain IOException is the residual signal.
-        // Errno-based narrowing is unreliable cross-platform (EAGAIN/EWOULDBLOCK = 11 on Linux,
-        // 35 on BSD/macOS) — keep the broad fallback.
-        return ex.GetType() == typeof(IOException);
+        // POSIX surfaces FileShare.None as a plain IOException with no recognisable HResult, and
+        // errno narrowing is unreliable cross-platform — so a real I/O fault (ENOSPC/EROFS/EIO) is
+        // indistinguishable from a lock collision. Treat it as locked (conservative: never
+        // double-claims a slot) but trace it so a masked fault stays diagnosable.
+        if (ex.GetType() != typeof(IOException))
+        {
+            return false;
+        }
+
+        Trace.TraceInformation($"QwpFiles: IOException treated as a slot-lock collision: {ex}");
+        return true;
     }
 
     /// <summary>

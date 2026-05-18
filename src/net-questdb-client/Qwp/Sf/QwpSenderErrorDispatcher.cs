@@ -32,6 +32,7 @@ namespace QuestDB.Qwp.Sf;
 internal sealed class QwpSenderErrorDispatcher : IDisposable
 {
     private readonly Channel<SenderError> _inbox;
+    private readonly object _offerLock = new();
     private readonly SenderErrorHandler _handler;
     private readonly bool _hasCustomHandler;
     private readonly CancellationTokenSource _shutdown = new();
@@ -48,10 +49,10 @@ internal sealed class QwpSenderErrorDispatcher : IDisposable
         _capacity = capacity;
         _hasCustomHandler = handler != null;
         _handler = handler ?? DefaultHandler;
-        _inbox = Channel.CreateBounded<SenderError>(new BoundedChannelOptions(capacity)
+        // Unbounded — capacity is enforced manually in Offer; both Offer and the loop read.
+        _inbox = Channel.CreateUnbounded<SenderError>(new UnboundedChannelOptions
         {
-            FullMode = BoundedChannelFullMode.DropOldest,
-            SingleReader = true,
+            SingleReader = false,
             SingleWriter = false,
         });
     }
@@ -65,11 +66,17 @@ internal sealed class QwpSenderErrorDispatcher : IDisposable
     public bool Offer(SenderError error)
     {
         if (Volatile.Read(ref _disposed) != 0) return false;
-        if (_inbox.Reader.Count >= _capacity)
+
+        // Manual DropOldest: evict-then-write under the lock keeps _dropped exact.
+        lock (_offerLock)
         {
-            Interlocked.Increment(ref _dropped);
+            while (_inbox.Reader.Count >= _capacity && _inbox.Reader.TryRead(out _))
+            {
+                Interlocked.Increment(ref _dropped);
+            }
+            _inbox.Writer.TryWrite(error);
         }
-        _inbox.Writer.TryWrite(error);
+
         if (Interlocked.CompareExchange(ref _started, 1, 0) == 0)
         {
             // Dispose may have run between the _disposed check above and winning this CAS;

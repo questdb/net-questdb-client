@@ -320,6 +320,10 @@ internal static class QwpGorilla
             throw new IngressError(ErrorCode.ProtocolVersionError,
                 $"uncompressed timestamp column truncated: need {expected} bytes, have {source.Length}");
         }
+        if (dest.Length < valueCount)
+        {
+            throw new ArgumentException("dest too small", nameof(dest));
+        }
 
         for (var i = 0; i < valueCount; i++)
         {
@@ -335,6 +339,10 @@ internal static class QwpGorilla
         {
             throw new IngressError(ErrorCode.ProtocolVersionError,
                 "Gorilla-encoded column requires at least two timestamps");
+        }
+        if (dest.Length < valueCount)
+        {
+            throw new ArgumentException("dest too small", nameof(dest));
         }
 
         if (source.Length < 17)

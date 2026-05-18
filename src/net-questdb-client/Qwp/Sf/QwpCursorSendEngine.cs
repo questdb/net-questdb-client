@@ -952,9 +952,11 @@ internal sealed class QwpCursorSendEngine : IDisposable
                         frameLen = _ring.TryReadFrame(readFsn, sendBuffer);
                         if (frameLen < 0)
                         {
-                            throw new IngressError(
-                                ErrorCode.ServerFlushError,
-                                $"internal: cursor at FSN {readFsn} fell out of segment range");
+                            // Terminal (not transient): an unreadable published FSN is corruption
+                            // that replaying cannot recover, so don't reconnect-loop over it.
+                            throw new InvalidDataException(
+                                $"QWP segment ring: published FSN {readFsn} is no longer readable " +
+                                "(corrupt or truncated segment)");
                         }
 
                         // Watermark must bump atomically with cursor; a fast server ACK racing ahead

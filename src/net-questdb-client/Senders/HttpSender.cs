@@ -108,16 +108,18 @@ internal class HttpSender : AbstractSender
             handler.SslOptions.TargetHost          = host;
             handler.SslOptions.EnabledSslProtocols = SslProtocols.Tls12 | SslProtocols.Tls13;
 
+            if (_trustRoot is null && !string.IsNullOrEmpty(Options.tls_roots))
+            {
+                _trustRoot = new Lazy<X509Certificate2>(
+                    () => QwpTlsAuth.LoadTrustRoot(Options.tls_roots!, Options.tls_roots_password));
+            }
+
             if (Options.tls_verify == TlsVerifyType.unsafe_off)
             {
                 handler.SslOptions.RemoteCertificateValidationCallback += (_, _, _, _) => true;
             }
             else
             {
-                if (_trustRoot is null && Options.tls_roots is not null)
-                {
-                    _trustRoot = new Lazy<X509Certificate2>(() => QwpTlsAuth.LoadTrustRoot(Options.tls_roots!, Options.tls_roots_password));
-                }
                 var trustRoot = _trustRoot;
                 handler.SslOptions.RemoteCertificateValidationCallback =
                     (_, certificate, chain, errors) =>
@@ -136,16 +138,17 @@ internal class HttpSender : AbstractSender
                             }
                         }
 
-                        return chain!.Build(new X509Certificate2(certificate!));
+                        using var serverCert = new X509Certificate2(certificate!);
+                        return chain!.Build(serverCert);
                     };
             }
 
-            // tls_roots also serves as the client identity for mTLS (PEM/PFX carrying a client key).
-            if (!string.IsNullOrEmpty(Options.tls_roots))
+            // tls_roots also serves as the client identity for mTLS; reuse the single _trustRoot
+            // instance rather than loading (and leaking) a fresh cert per handler.
+            if (_trustRoot is not null)
             {
                 handler.SslOptions.ClientCertificates ??= new X509Certificate2Collection();
-                handler.SslOptions.ClientCertificates.Add(
-                    QwpTlsAuth.LoadTrustRoot(Options.tls_roots!, Options.tls_roots_password));
+                handler.SslOptions.ClientCertificates.Add(_trustRoot.Value);
             }
 
             if (Options.client_cert is not null)

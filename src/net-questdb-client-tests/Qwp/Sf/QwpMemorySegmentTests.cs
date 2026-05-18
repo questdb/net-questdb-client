@@ -22,6 +22,7 @@
  *
  ******************************************************************************/
 
+using System.Reflection;
 using NUnit.Framework;
 using QuestDB.Qwp.Sf;
 
@@ -173,5 +174,21 @@ public class QwpMemorySegmentTests
         seg.Dispose();
 
         Assert.Throws<ObjectDisposedException>(() => seg.TryAppend(new byte[] { 1 }));
+    }
+
+    [Test]
+    public unsafe void TryReadFrame_VerifiesCrc_OnInMemoryCorruption()
+    {
+        using var seg = QwpMemorySegment.Allocate(4096, baseFsn: 0);
+        seg.TryAppend(new byte[] { 1, 2, 3, 4 });
+
+        // Flip the first body byte directly in the native buffer, leaving the stored CRC stale.
+        var basePtrField = typeof(QwpMemorySegment).GetField(
+            "_basePtr", BindingFlags.NonPublic | BindingFlags.Instance)!;
+        var basePtr = (byte*)Pointer.Unbox(basePtrField.GetValue(seg)!);
+        basePtr[EnvelopeHeaderSize] ^= 0x55;
+
+        var dest = new byte[64];
+        Assert.Throws<InvalidDataException>(() => seg.TryReadFrame(0, dest, out _));
     }
 }

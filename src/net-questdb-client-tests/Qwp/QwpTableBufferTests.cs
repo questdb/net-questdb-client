@@ -410,6 +410,75 @@ public class QwpTableBufferTests
         Assert.That(t.HasPendingRow, Is.False);
     }
 
+    [Test]
+    public void FailedAppendMidRow_RollsBackRow_NextRowCommitsClean()
+    {
+        var t = new QwpTableBuffer("t");
+        // Row 0 establishes three long columns.
+        t.AppendLong("a", 1);
+        t.AppendLong("b", 2);
+        t.AppendLong("c", 3);
+        t.At(1_000);
+
+        // Row 1: set a and b, then a type-mismatched append on c aborts the whole row.
+        t.AppendLong("a", 10);
+        t.AppendLong("b", 20);
+        Assert.Throws<IngressError>(() => t.AppendDouble("c", 9.9));
+        Assert.That(t.HasPendingRow, Is.False, "the failed row must be fully cancelled");
+        Assert.That(t.RowCount, Is.EqualTo(1), "no partial row may be committed");
+
+        // Retry row 1 cleanly.
+        t.AppendLong("a", 11);
+        t.AppendLong("b", 21);
+        t.AppendLong("c", 31);
+        t.At(2_000);
+
+        Assert.That(t.RowCount, Is.EqualTo(2));
+        Assert.That(t.Columns.Count, Is.EqualTo(3), "no orphan column from the failed row");
+
+        var a = t.Columns[0];
+        var b = t.Columns[1];
+        var c = t.Columns[2];
+        Assert.That(a.NullCount, Is.Zero);
+        Assert.That(b.NullCount, Is.Zero);
+        Assert.That(c.NullCount, Is.Zero);
+        // Row 1 carries the retry values, not the abandoned 10/20.
+        Assert.That(ReadLong(a, 1), Is.EqualTo(11L));
+        Assert.That(ReadLong(b, 1), Is.EqualTo(21L));
+        Assert.That(ReadLong(c, 1), Is.EqualTo(31L));
+    }
+
+    [Test]
+    public void FailedAppendMidRow_DropsColumnAddedInThatFailedRow()
+    {
+        var t = new QwpTableBuffer("t");
+        t.AppendLong("a", 1);
+        t.AppendLong("b", 2);
+        t.At(1_000);
+
+        // Row 1: touch a, add a brand-new column d, then fail on a type-mismatched b.
+        t.AppendLong("a", 10);
+        t.AppendLong("d", 99);
+        Assert.Throws<IngressError>(() => t.AppendDouble("b", 1.5));
+        Assert.That(t.HasPendingRow, Is.False);
+
+        // d existed only in the cancelled row, so it must not survive.
+        Assert.That(t.Columns.Count, Is.EqualTo(2), "column added in the failed row must be dropped");
+        Assert.That(t.Columns[0].Name, Is.EqualTo("a"));
+        Assert.That(t.Columns[1].Name, Is.EqualTo("b"));
+
+        // The buffer is still usable: a clean row 1 commits.
+        t.AppendLong("a", 11);
+        t.AppendLong("b", 21);
+        t.At(2_000);
+        Assert.That(t.RowCount, Is.EqualTo(2));
+        Assert.That(t.Columns[0].NullCount, Is.Zero);
+        Assert.That(t.Columns[1].NullCount, Is.Zero);
+    }
+
+    private static long ReadLong(QwpColumn col, int row) =>
+        System.Buffers.Binary.BinaryPrimitives.ReadInt64LittleEndian(col.FixedData!.AsSpan(row * 8, 8));
+
     private static void Append(QwpTableBuffer t, string col, string kind)
     {
         switch (kind)

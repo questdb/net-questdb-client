@@ -36,8 +36,11 @@ namespace QuestDB.Qwp.Sf;
 ///     Preallocation strategy:
 ///     <list type="bullet">
 ///         <item>Linux: <c>posix_fallocate</c> guarantees blocks for <c>[0, length)</c>.</item>
-///         <item>macOS: <c>fcntl(F_PREALLOCATE)</c> reserves blocks past the current EOF; size is
-///         then locked by the leading <see cref="FileStream.SetLength" />.</item>
+///         <item>macOS: <c>fcntl(F_PREALLOCATE)</c> with <c>F_PEOFPOSMODE</c> reserves blocks
+///         starting at the current physical EOF, so it runs <i>before</i>
+///         <see cref="FileStream.SetLength" /> grows the file — reserving the segment's actual
+///         <c>[0, length)</c> range — and <see cref="FileStream.SetLength" /> then sets the
+///         logical size.</item>
 ///         <item>Windows: <see cref="FileStream.SetLength" /> on NTFS / ReFS already extends with
 ///         allocated clusters.</item>
 ///     </list>
@@ -52,18 +55,25 @@ internal static class QwpFallocate
     public static void Reserve(FileStream fs, long length)
     {
         if (length <= 0) return;
-        if (fs.Length < length) fs.SetLength(length);
 
         var handle = fs.SafeFileHandle;
-        if (handle is null || handle.IsInvalid || handle.IsClosed) return;
+        var haveHandle = handle is not null && !handle.IsInvalid && !handle.IsClosed;
+
+        if (haveHandle && RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
+        {
+            // Must precede SetLength: F_PREALLOCATE reserves from the physical EOF (see remarks).
+            var toReserve = length - fs.Length;
+            if (toReserve > 0) TryApplePreallocate(handle!, toReserve);
+            if (fs.Length < length) fs.SetLength(length);
+            return;
+        }
+
+        if (fs.Length < length) fs.SetLength(length);
+        if (!haveHandle) return;
 
         if (RuntimeInformation.IsOSPlatform(OSPlatform.Linux))
         {
-            TryPosixFallocate(handle, length);
-        }
-        else if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
-        {
-            TryApplePreallocate(handle, length);
+            TryPosixFallocate(handle!, length);
         }
         // Windows / unknown: SetLength is sufficient.
     }
@@ -92,21 +102,21 @@ internal static class QwpFallocate
         throw new IOException($"posix_fallocate(length={length}) failed with errno {rc}");
     }
 
-    private static void TryApplePreallocate(SafeFileHandle handle, long length)
+    private static void TryApplePreallocate(SafeFileHandle handle, long bytesToReserve)
     {
         var size = Marshal.SizeOf<fstore_t>();
         var ptr = Marshal.AllocHGlobal(size);
         try
         {
             // Try a contiguous reservation first, then fall back to non-contiguous.
-            if (TryPreallocateOnce(handle, ptr, F_ALLOCATECONTIG, length)) return;
-            if (TryPreallocateOnce(handle, ptr, F_ALLOCATEALL, length)) return;
+            if (TryPreallocateOnce(handle, ptr, F_ALLOCATECONTIG, bytesToReserve)) return;
+            if (TryPreallocateOnce(handle, ptr, F_ALLOCATEALL, bytesToReserve)) return;
 
-            // Best-effort: SetLength has already sized the file. Surface the failure for
-            // diagnosis (e.g. genuine ENOSPC) but don't abort — a later write may still succeed.
+            // Best-effort: the caller still SetLength's the file afterwards. Surface the failure
+            // for diagnosis (e.g. genuine ENOSPC) but don't abort — a later write may succeed.
             System.Diagnostics.Trace.TraceWarning(
-                "QWP fallocate: F_PREALLOCATE (length={0}) did not reserve the requested blocks; " +
-                "block reservation skipped, relying on SetLength.", length);
+                "QWP fallocate: F_PREALLOCATE (bytes={0}) did not reserve the requested blocks; " +
+                "block reservation skipped, relying on SetLength.", bytesToReserve);
         }
         finally
         {
@@ -116,14 +126,14 @@ internal static class QwpFallocate
 
     // fcntl is variadic — .NET's fixed-arg P/Invoke can mis-pass the pointer on Apple Silicon and
     // return a false rc==0, so success is confirmed by reading fst_bytesalloc back, not by rc.
-    private static bool TryPreallocateOnce(SafeFileHandle handle, IntPtr ptr, uint flags, long length)
+    private static bool TryPreallocateOnce(SafeFileHandle handle, IntPtr ptr, uint flags, long bytesToReserve)
     {
         var fstore = new fstore_t
         {
             fst_flags = flags,
             fst_posmode = F_PEOFPOSMODE,
             fst_offset = 0,
-            fst_length = length,
+            fst_length = bytesToReserve,
             fst_bytesalloc = 0,
         };
         Marshal.StructureToPtr(fstore, ptr, fDeleteOld: false);
@@ -142,7 +152,7 @@ internal static class QwpFallocate
         }
 
         if (rc != 0) return false;
-        return Marshal.PtrToStructure<fstore_t>(ptr).fst_bytesalloc >= length;
+        return Marshal.PtrToStructure<fstore_t>(ptr).fst_bytesalloc >= bytesToReserve;
     }
 
     [DllImport("libc", SetLastError = false)]

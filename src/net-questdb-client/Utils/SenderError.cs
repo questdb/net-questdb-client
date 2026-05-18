@@ -41,6 +41,7 @@ public sealed class SenderError
     /// <summary>Sentinel for <see cref="ServerStatusByte" /> on <see cref="SenderErrorCategory.ProtocolViolation" />.</summary>
     public const int NoStatusByte = -1;
 
+    /// <summary>Creates an immutable error record. Constructed by the engine, not by user code.</summary>
     public SenderError(
         SenderErrorCategory category,
         SenderErrorPolicy appliedPolicy,
@@ -121,6 +122,7 @@ public sealed class SenderError
     /// </summary>
     public bool IsInitialConnect { get; }
 
+    /// <inheritdoc />
     public override string ToString()
     {
         return $"SenderError{{category={Category}, policy={AppliedPolicy}, " +

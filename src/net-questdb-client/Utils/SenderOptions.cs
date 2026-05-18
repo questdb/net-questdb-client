@@ -1512,26 +1512,53 @@ public record SenderOptions
 
     private static void SplitHostPort(string addr, out string host, out int port)
     {
-        var firstColon = addr.IndexOf(':');
-        if (firstColon < 0)
+        int colon;
+        if (addr.Length > 0 && addr[0] == '[')
         {
-            host = addr;
-            port = -1;
-            return;
+            var close = addr.IndexOf(']');
+            if (close < 0)
+            {
+                throw new IngressError(ErrorCode.ConfigError,
+                    $"malformed address `{addr}`: missing `]` in IPv6 literal");
+            }
+            host = addr.Substring(0, close + 1);
+            if (close + 1 == addr.Length)
+            {
+                port = -1;
+                return;
+            }
+            if (addr[close + 1] != ':')
+            {
+                throw new IngressError(ErrorCode.ConfigError,
+                    $"malformed address `{addr}`: expected `:` after `]`");
+            }
+            colon = close + 1;
+        }
+        else
+        {
+            var firstColon = addr.IndexOf(':');
+            if (firstColon < 0)
+            {
+                host = addr;
+                port = -1;
+                return;
+            }
+
+            if (addr.IndexOf(':', firstColon + 1) >= 0)
+            {
+                throw new IngressError(ErrorCode.ConfigError,
+                    $"malformed address `{addr}`: too many colons (bracket IPv6 literals as `[addr]:port`)");
+            }
+
+            colon = firstColon;
+            host = addr.Substring(0, firstColon);
         }
 
-        if (addr.IndexOf(':', firstColon + 1) >= 0)
-        {
-            throw new IngressError(ErrorCode.ConfigError,
-                $"malformed address `{addr}`: too many colons");
-        }
-
-        host = addr.Substring(0, firstColon);
         if (string.IsNullOrWhiteSpace(host))
         {
             throw new IngressError(ErrorCode.ConfigError, $"malformed address `{addr}`: empty host");
         }
-        var portStr = addr.Substring(firstColon + 1);
+        var portStr = addr.Substring(colon + 1);
         if (!int.TryParse(portStr, System.Globalization.NumberStyles.Integer,
                 System.Globalization.CultureInfo.InvariantCulture, out port)
             || port <= 0 || port > 65535)
@@ -1542,8 +1569,11 @@ public record SenderOptions
     }
 
     /// <summary>
-    ///     Specifies a client certificate to be used for TLS authentication.
+    ///     Specifies a client certificate to be used for TLS authentication. Set programmatically
+    ///     only; excluded from <see cref="ToString" /> (an <see cref="X509Certificate2" /> has no
+    ///     connect-string representation).
     /// </summary>
+    [JsonIgnore]
     public X509Certificate2? client_cert
     {
         get => _clientCert;

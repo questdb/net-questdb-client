@@ -66,7 +66,7 @@ internal sealed class QwpWebSocketTransport : IQwpCursorTransport
     private readonly ClientWebSocket _client;
     private readonly object _dumpLock = new();
 
-    private bool _disposed;
+    private int _disposed;
     private int _negotiatedVersion;
     private int _negotiatedMaxBatchSize;
 
@@ -361,7 +361,7 @@ internal sealed class QwpWebSocketTransport : IQwpCursorTransport
         string? description = null,
         CancellationToken ct = default)
     {
-        if (_disposed)
+        if (Volatile.Read(ref _disposed) != 0)
         {
             return;
         }
@@ -375,12 +375,11 @@ internal sealed class QwpWebSocketTransport : IQwpCursorTransport
     /// <inheritdoc />
     public void Dispose()
     {
-        if (_disposed)
+        if (Interlocked.Exchange(ref _disposed, 1) != 0)
         {
             return;
         }
 
-        _disposed = true;
         SfCleanup.Dispose(_client);
     }
 
@@ -456,7 +455,7 @@ internal sealed class QwpWebSocketTransport : IQwpCursorTransport
 
     private void ThrowIfDisposed()
     {
-        if (_disposed)
+        if (Volatile.Read(ref _disposed) != 0)
         {
             throw new ObjectDisposedException(nameof(QwpWebSocketTransport));
         }

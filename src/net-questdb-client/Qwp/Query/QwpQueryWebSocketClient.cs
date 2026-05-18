@@ -38,7 +38,6 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient
 {
     private static readonly UTF8Encoding StrictUtf8 = QwpConstants.StrictUtf8;
     private const int InitialReceiveBufferBytes = 64 * 1024;
-    private const int InitialDecompressBufferBytes = 256 * 1024;
     private static readonly TimeSpan ServerInfoReadTimeout = TimeSpan.FromSeconds(5);
 
     private readonly QueryOptions _options;
@@ -863,11 +862,11 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient
         }
 
         int attemptSize;
-        bool sizeKnown;
         if (declaredSize == ContentSizeUnknown)
         {
-            attemptSize = InitialDecompressBufferBytes;
-            sizeKnown = false;
+            // No declared size: decompress once into a worst-case destination. Oversized output
+            // overruns it and is rejected — no message-string-driven realloc retry loop.
+            attemptSize = QwpConstants.MaxResultBatchWireBytes;
         }
         else if (declaredSize > (ulong)QwpConstants.MaxResultBatchWireBytes)
         {
@@ -877,51 +876,28 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient
         else
         {
             attemptSize = (int)declaredSize;
-            sizeKnown = true;
         }
+
+        var needed = preludeLen + attemptSize;
+        if (_decompressBuffer.Length < needed)
+        {
+            _decompressBuffer = new byte[needed];
+        }
+        span.Slice(0, preludeLen).CopyTo(_decompressBuffer);
 
         var decompressor = _decompressor ??= new ZstdSharp.Decompressor();
-        while (true)
+        int written;
+        try
         {
-            var needed = preludeLen + attemptSize;
-            if (_decompressBuffer.Length < needed)
-            {
-                // Unknown-content-size retries would otherwise double the buffer each
-                // pass, orphaning a staircase of LOH arrays; allocate the worst case
-                // once so the reused field grows at most a single time.
-                var allocSize = sizeKnown
-                    ? needed
-                    : preludeLen + QwpConstants.MaxResultBatchWireBytes;
-                _decompressBuffer = new byte[allocSize];
-            }
-            span.Slice(0, preludeLen).CopyTo(_decompressBuffer);
-
-            int written;
-            try
-            {
-                written = decompressor.Unwrap(compressed, _decompressBuffer.AsSpan(preludeLen, attemptSize));
-                return _decompressBuffer.AsMemory(0, preludeLen + written);
-            }
-            catch (Exception ex) when (!sizeKnown && attemptSize < QwpConstants.MaxResultBatchWireBytes
-                && IsZstdDestinationTooSmall(ex))
-            {
-                attemptSize = (int)Math.Min((long)attemptSize * 2, QwpConstants.MaxResultBatchWireBytes);
-            }
-            catch (Exception ex)
-            {
-                throw new IngressError(ErrorCode.ProtocolVersionError,
-                    $"zstd RESULT_BATCH decompression failed (attemptSize={attemptSize}, sizeKnown={sizeKnown}): {ex.Message}",
-                    ex);
-            }
+            written = decompressor.Unwrap(compressed, _decompressBuffer.AsSpan(preludeLen, attemptSize));
         }
-    }
+        catch (Exception ex)
+        {
+            throw new IngressError(ErrorCode.ProtocolVersionError,
+                $"zstd RESULT_BATCH decompression failed (attemptSize={attemptSize}): {ex.Message}", ex);
+        }
 
-    private static bool IsZstdDestinationTooSmall(Exception ex)
-    {
-        var msg = ex.Message ?? string.Empty;
-        return msg.Contains("Destination", StringComparison.OrdinalIgnoreCase)
-            || msg.Contains("dstSize", StringComparison.Ordinal)
-            || msg.Contains("buffer too small", StringComparison.OrdinalIgnoreCase);
+        return _decompressBuffer.AsMemory(0, preludeLen + written);
     }
 
     private async Task SendCreditAsync(long requestId, long additionalBytes, CancellationToken ct)

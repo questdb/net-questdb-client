@@ -71,6 +71,10 @@ internal sealed class QwpConnectionEventDispatcher : IDisposable
             {
                 _loop = Task.Run(DispatchLoopAsync);
             }
+            else
+            {
+                Interlocked.Increment(ref _dropped);
+            }
         }
         return true;
     }

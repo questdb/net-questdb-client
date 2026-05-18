@@ -82,7 +82,6 @@ public class QuestDbEgressFailoverTests
         await DisposeServersAsync();
     }
 
-    // Mirrors the Python setUp: a previous test may have killed a server on purpose.
     [SetUp]
     public async Task EnsureServersUp()
     {
@@ -185,8 +184,7 @@ public class QuestDbEgressFailoverTests
     private int Server1HttpPort => int.Parse(_server1!.GetHttpEndpoint().Split(':')[^1]);
     private int Server2HttpPort => int.Parse(_server2!.GetHttpEndpoint().Split(':')[^1]);
 
-    // QuestDbManager.StopAsync is a hard process kill — exactly the crash (no graceful WS Close)
-    // the failover path must engage on.
+    // Hard process kill (no graceful WS close) — the crash the failover path must engage on.
     private static void Kill(QuestDbManager server) => server.StopAsync().GetAwaiter().GetResult();
 
     private async Task DisposeServersAsync()

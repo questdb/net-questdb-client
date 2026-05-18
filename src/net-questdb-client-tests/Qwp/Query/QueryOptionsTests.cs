@@ -42,7 +42,7 @@ public class QueryOptionsTests
         Assert.That(o.path, Is.EqualTo(QwpConstants.ReadPath));
         Assert.That(o.tls_verify, Is.EqualTo(TlsVerifyType.on));
         Assert.That(o.compression, Is.EqualTo(CompressionType.raw));
-        Assert.That(o.compression_level, Is.EqualTo(3));
+        Assert.That(o.compression_level, Is.EqualTo(1));
         Assert.That(o.target, Is.EqualTo(TargetType.any));
         Assert.That(o.failover, Is.True);
         Assert.That(o.failover_max_attempts, Is.EqualTo(8));
@@ -355,6 +355,12 @@ public class QueryOptionsTests
             "ws::addr=h:9000;compression=raw;compression_level=99;"));
     }
 
+    [Test]
+    public void Parse_BufferPoolSize_AcceptedForCrossClientInterop()
+    {
+        Assert.DoesNotThrow(() => new QueryOptions("ws::addr=h:9000;buffer_pool_size=4;"));
+    }
+
     [TestCase("Addr")]
     [TestCase("ADDR")]
     [TestCase("AdDr")]
@@ -480,14 +486,6 @@ public class QueryOptionsTests
     {
         Assert.That(
             () => new QueryOptions("ws::addr=localhost:9000;token_x=abc;token_y=def;"),
-            Throws.Nothing);
-    }
-
-    [Test]
-    public void InFlightWindow_IsAcceptedForCrossClientInterop()
-    {
-        Assert.That(
-            () => new QueryOptions("ws::addr=localhost:9000;in_flight_window=128;"),
             Throws.Nothing);
     }
 }

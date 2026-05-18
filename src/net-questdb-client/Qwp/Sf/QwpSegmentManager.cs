@@ -32,12 +32,13 @@ namespace QuestDB.Qwp.Sf;
 /// </summary>
 internal sealed class QwpSegmentManager : IDisposable
 {
-    public static readonly TimeSpan HeartbeatInterval = TimeSpan.FromSeconds(1);
+    public static readonly TimeSpan DefaultHeartbeatInterval = TimeSpan.FromSeconds(1);
     public static readonly TimeSpan DefaultShutdownWait = TimeSpan.FromSeconds(5);
 
     private readonly QwpSegmentRing _ring;
     private readonly long _maxTotalBytes;
     private readonly TimeSpan _shutdownWait;
+    private readonly TimeSpan _heartbeatInterval;
     private readonly SemaphoreSlim _wakeup = new(0, 1);
     private readonly CancellationTokenSource _cts = new();
 
@@ -49,7 +50,11 @@ internal sealed class QwpSegmentManager : IDisposable
     private QwpAckWatermark? _ackWatermark;
     private long _lastPersistedAck = long.MinValue;
 
-    public QwpSegmentManager(QwpSegmentRing ring, long maxTotalBytes, TimeSpan? shutdownWait = null)
+    public QwpSegmentManager(
+        QwpSegmentRing ring,
+        long maxTotalBytes,
+        TimeSpan? shutdownWait = null,
+        TimeSpan? heartbeatInterval = null)
     {
         try
         {
@@ -61,6 +66,7 @@ internal sealed class QwpSegmentManager : IDisposable
 
             _maxTotalBytes = maxTotalBytes;
             _shutdownWait = shutdownWait ?? DefaultShutdownWait;
+            _heartbeatInterval = heartbeatInterval ?? DefaultHeartbeatInterval;
             _committedBytes = ring.TotalCapacityBytes;
             ring.SetMaxTotalBytes(maxTotalBytes);
         }
@@ -74,6 +80,7 @@ internal sealed class QwpSegmentManager : IDisposable
 
     public long CommittedBytes => Volatile.Read(ref _committedBytes);
     public long MaxTotalBytes => _maxTotalBytes;
+    public TimeSpan HeartbeatInterval => _heartbeatInterval;
 
     public void SetHeartbeatCallback(Action? callback)
     {
@@ -169,7 +176,7 @@ internal sealed class QwpSegmentManager : IDisposable
 
             try
             {
-                await _wakeup.WaitAsync(HeartbeatInterval, ct).ConfigureAwait(false);
+                await _wakeup.WaitAsync(_heartbeatInterval, ct).ConfigureAwait(false);
             }
             catch (OperationCanceledException)
             {
@@ -304,7 +311,6 @@ internal sealed class QwpSegmentManager : IDisposable
             {
                 // File-mode: unlink failure leaves the file for next sender startup recovery.
                 SfCleanup.DeleteFile(path);
-                SfCleanup.DeleteFile(QwpMmapSegment.SidecarPath(path));
             }
             freed += size;
         }

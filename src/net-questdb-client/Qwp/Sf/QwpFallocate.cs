@@ -94,56 +94,55 @@ internal static class QwpFallocate
 
     private static void TryApplePreallocate(SafeFileHandle handle, long length)
     {
-        // fcntl on macOS is variadic; .NET P/Invoke uses the fixed-arg ABI which mis-passes the
-        // third arg on arm64 when the callee expects a stack slot. Marshal the struct via IntPtr
-        // and accept that fcntl may still return -1 on some Apple Silicon hosts — SetLength alone
-        // is then the best we can do without shipping a native shim.
         var size = Marshal.SizeOf<fstore_t>();
         var ptr = Marshal.AllocHGlobal(size);
         try
         {
-            var fstore = new fstore_t
-            {
-                fst_flags = F_ALLOCATECONTIG,
-                fst_posmode = F_PEOFPOSMODE,
-                fst_offset = 0,
-                fst_length = length,
-                fst_bytesalloc = 0,
-            };
-            Marshal.StructureToPtr(fstore, ptr, fDeleteOld: false);
-            int rc;
-            try
-            {
-                rc = fcntl(handle, F_PREALLOCATE, ptr);
-            }
-            catch (EntryPointNotFoundException)
-            {
-                return;
-            }
-            catch (DllNotFoundException)
-            {
-                return;
-            }
-            if (rc == 0) return;
+            // Try a contiguous reservation first, then fall back to non-contiguous.
+            if (TryPreallocateOnce(handle, ptr, F_ALLOCATECONTIG, length)) return;
+            if (TryPreallocateOnce(handle, ptr, F_ALLOCATEALL, length)) return;
 
-            // Contiguous reservation failed: retry asking for non-contiguous blocks.
-            fstore.fst_flags = F_ALLOCATEALL;
-            fstore.fst_bytesalloc = 0;
-            Marshal.StructureToPtr(fstore, ptr, fDeleteOld: false);
-            var retryRc = fcntl(handle, F_PREALLOCATE, ptr);
-            if (retryRc != 0)
-            {
-                // Best-effort: SetLength has already sized the file. Surface the failure for
-                // diagnosis (e.g. genuine ENOSPC) but don't abort — a later write may still succeed.
-                System.Diagnostics.Trace.TraceWarning(
-                    "QWP fallocate: F_PREALLOCATE retry (F_ALLOCATEALL, length={0}) failed; " +
-                    "block reservation skipped, relying on SetLength.", length);
-            }
+            // Best-effort: SetLength has already sized the file. Surface the failure for
+            // diagnosis (e.g. genuine ENOSPC) but don't abort — a later write may still succeed.
+            System.Diagnostics.Trace.TraceWarning(
+                "QWP fallocate: F_PREALLOCATE (length={0}) did not reserve the requested blocks; " +
+                "block reservation skipped, relying on SetLength.", length);
         }
         finally
         {
             Marshal.FreeHGlobal(ptr);
         }
+    }
+
+    // fcntl is variadic — .NET's fixed-arg P/Invoke can mis-pass the pointer on Apple Silicon and
+    // return a false rc==0, so success is confirmed by reading fst_bytesalloc back, not by rc.
+    private static bool TryPreallocateOnce(SafeFileHandle handle, IntPtr ptr, uint flags, long length)
+    {
+        var fstore = new fstore_t
+        {
+            fst_flags = flags,
+            fst_posmode = F_PEOFPOSMODE,
+            fst_offset = 0,
+            fst_length = length,
+            fst_bytesalloc = 0,
+        };
+        Marshal.StructureToPtr(fstore, ptr, fDeleteOld: false);
+        int rc;
+        try
+        {
+            rc = fcntl(handle, F_PREALLOCATE, ptr);
+        }
+        catch (EntryPointNotFoundException)
+        {
+            return false;
+        }
+        catch (DllNotFoundException)
+        {
+            return false;
+        }
+
+        if (rc != 0) return false;
+        return Marshal.PtrToStructure<fstore_t>(ptr).fst_bytesalloc >= length;
     }
 
     [DllImport("libc", SetLastError = false)]

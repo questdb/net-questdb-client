@@ -368,22 +368,6 @@ public class SenderOptionsTests
     }
 
     [Test]
-    public void InFlightWindow_IsAcceptedOnWebSocketForCrossClientInterop()
-    {
-        Assert.That(
-            () => new SenderOptions("ws::addr=localhost:9000;in_flight_window=128;"),
-            Throws.Nothing);
-    }
-
-    [Test]
-    public void InFlightWindow_IsRejectedOnNonWebSocket()
-    {
-        var ex = Assert.Throws<IngressError>(
-            () => new SenderOptions("http::addr=localhost:9000;in_flight_window=128;"));
-        Assert.That(ex!.Message, Does.Contain("in_flight_window"));
-    }
-
-    [Test]
     public void Ws_AuthTimeoutMs_AliasParses()
     {
         var withMs = new SenderOptions("ws::addr=localhost:9000;auth_timeout_ms=2500;");
@@ -460,6 +444,32 @@ public class SenderOptionsTests
     {
         var opts = new SenderOptions($"ws::addr=h:9000;initial_connect_retry={mode};");
         Assert.That(opts.initial_connect_retry, Is.True);
+    }
+
+    [TestCase("reconnect_max_duration_millis=60000")]
+    [TestCase("reconnect_initial_backoff_millis=200")]
+    [TestCase("reconnect_max_backoff_millis=5000")]
+    public void InitialConnectRetry_PromotedToOn_WhenReconnectKeyTuned(string reconnectKey)
+    {
+        var opts = new SenderOptions($"ws::addr=h:9000;{reconnectKey};");
+        Assert.That(opts.initial_connect_mode, Is.EqualTo(InitialConnectMode.on));
+    }
+
+    [Test]
+    public void InitialConnectRetry_ExplicitOff_SurvivesReconnectKeyTuning()
+    {
+        var opts = new SenderOptions(
+            "ws::addr=h:9000;reconnect_max_duration_millis=60000;initial_connect_retry=off;");
+        Assert.That(opts.initial_connect_mode, Is.EqualTo(InitialConnectMode.off));
+    }
+
+    [Test]
+    public void InitialConnectRetry_PromotedToOn_WhenReconnectKeyTunedProgrammatically()
+    {
+        var opts = new SenderOptions { protocol = ProtocolType.ws, addr = "h:9000" };
+        opts.reconnect_max_backoff_millis = TimeSpan.FromSeconds(10);
+        opts.EnsureValid();
+        Assert.That(opts.initial_connect_mode, Is.EqualTo(InitialConnectMode.on));
     }
 
     [Test]

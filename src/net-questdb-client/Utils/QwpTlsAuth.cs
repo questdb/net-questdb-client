@@ -92,6 +92,7 @@ internal static class QwpTlsAuth
 
             using var serverCert = new X509Certificate2(certificate!);
             chain!.ChainPolicy.TrustMode = X509ChainTrustMode.CustomRootTrust;
+            chain.ChainPolicy.RevocationMode = X509RevocationMode.NoCheck;
             if (chain.ChainPolicy.CustomTrustStore.Count == 0)
             {
                 chain.ChainPolicy.CustomTrustStore.Add(trustRoot.Value);

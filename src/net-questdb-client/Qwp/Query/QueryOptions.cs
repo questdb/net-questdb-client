@@ -60,8 +60,7 @@ public sealed class QueryOptions
         "max_batch_rows",
         "client_id",
         "buffer_pool_size",
-        // Accepted but ignored — cross-client connect-string interop with Java/Rust senders.
-        "token_x", "token_y", "in_flight_window",
+        "token_x", "token_y",
     };
 
     private List<string> _addresses = new();
@@ -163,7 +162,7 @@ public sealed class QueryOptions
     /// <summary>Frame-level compression policy applied to query payloads.</summary>
     public CompressionType compression { get; set; } = CompressionType.raw;
     /// <summary>Per-codec compression level; meaningful when <see cref="compression" /> is not <c>none</c>.</summary>
-    public int compression_level { get; set; } = 3;
+    public int compression_level { get; set; } = 1;
 
     /// <summary>Server-side target preference forwarded with the upgrade request.</summary>
     public TargetType target { get; set; } = TargetType.any;
@@ -312,7 +311,7 @@ public sealed class QueryOptions
         tls_roots_password = ReadString(builder, "tls_roots_password");
 
         compression = ParseCompression(builder);
-        compression_level = ReadInt(builder, "compression_level", 3);
+        compression_level = ReadInt(builder, "compression_level", 1);
 
         target = ReadEnum(builder, "target", TargetType.any);
         failover = ReadBoolOnOff(builder, "failover", true);

@@ -76,6 +76,13 @@ steps:
   condition: eq(variables['osName'], 'Linux')
 
 - script: |
+    df -h /
+    sudo rm -rf /usr/local/lib/android /opt/ghc /usr/share/swift /opt/hostedtoolcache/CodeQL 2>/dev/null || true
+    df -h /
+  displayName: 'Free agent disk space (Linux)'
+  condition: eq(variables['osName'], 'Linux')
+
+- script: |
     set -e
     git clone --depth 1 https://github.com/questdb/questdb.git questdb-src
     cd questdb-src

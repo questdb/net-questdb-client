@@ -365,13 +365,20 @@ internal sealed class QwpSegmentRing : IDisposable
         var offset = seg.OffsetOfEnvelope(envelopeIndex);
         if (offset is null) return -1;
 
-        // Defensive: cursor-pump and trim never overlap on the same FSN range, but a stale
-        // segment reference shouldn't crash a read.
+        // Corrupt envelope (CRC mismatch / bad frame_len) must read as -1, not throw into the pump.
         try
         {
             return seg.TryReadFrame(offset.Value, destination, out _);
         }
         catch (ObjectDisposedException)
+        {
+            return -1;
+        }
+        catch (InvalidDataException)
+        {
+            return -1;
+        }
+        catch (ArgumentException)
         {
             return -1;
         }
@@ -452,8 +459,16 @@ internal sealed class QwpSegmentRing : IDisposable
     public void FlushActive()
     {
         if (_closed) return;
-        try { Volatile.Read(ref _active)?.Flush(); }
-        catch (Exception) { }
+        try
+        {
+            Volatile.Read(ref _active)?.Flush();
+        }
+        catch (Exception ex)
+        {
+            // An msync/IO failure here defeats SF's on-disk durability promise — surface it.
+            System.Diagnostics.Trace.TraceWarning(
+                "QWP SF: flushing the active segment failed: {0}", ex);
+        }
     }
 
     /// <inheritdoc />

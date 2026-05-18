@@ -105,17 +105,21 @@ public interface IQwpWebSocketSender : ISender
     IQwpWebSocketSender ColumnDecimal256(ReadOnlySpan<char> name, decimal value);
 
     /// <summary>
-    ///     Append a DECIMAL128 value as two 64-bit limbs (LSB first) with explicit scale (0–38).
-    ///     Locks the column scale on first call. Use this overload for the full 38-digit range
-    ///     beyond <see cref="System.Decimal" />'s ~28-digit limit.
+    ///     Append a DECIMAL128 value as the two two's-complement 64-bit limbs of the unscaled
+    ///     integer: <paramref name="lo" /> is the low 64 bits (unsigned magnitude), <paramref name="hi" />
+    ///     is the signed high 64 bits — i.e. the value is <c>(hi ≪ 64) | (ulong)lo</c>. Explicit
+    ///     scale (0–38); locks the column scale on first call. Use this overload for the full
+    ///     38-digit range beyond <see cref="System.Decimal" />'s ~28-digit limit.
     /// </summary>
     IQwpWebSocketSender ColumnDecimal128(ReadOnlySpan<char> name, long lo, long hi, byte scale);
 
     /// <summary>
-    ///     Append a DECIMAL256 value as four 64-bit limbs (LSB first; the 256-bit unscaled integer
-    ///     is <c>l0 | l1≪64 | l2≪128 | l3≪192</c>) with explicit scale (0–76). Locks the column
-    ///     scale on first call. The <see cref="System.Decimal" /> overload is capped at ~28 digits;
-    ///     this overload exposes the full 76-digit DECIMAL256 range.
+    ///     Append a DECIMAL256 value as the four two's-complement 64-bit limbs of the unscaled
+    ///     integer: <c>l0</c>–<c>l2</c> are unsigned magnitude limbs and <c>l3</c> is the signed
+    ///     high limb — the value is <c>(ulong)l0 | (ulong)l1≪64 | (ulong)l2≪128 | l3≪192</c>.
+    ///     Explicit scale (0–76); locks the column scale on first call. The
+    ///     <see cref="System.Decimal" /> overload is capped at ~28 digits; this overload exposes
+    ///     the full 76-digit DECIMAL256 range.
     /// </summary>
     IQwpWebSocketSender ColumnDecimal256(ReadOnlySpan<char> name, long l0, long l1, long l2, long l3, byte scale);
 

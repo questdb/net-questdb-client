@@ -216,10 +216,12 @@ internal sealed class QwpHostHealthTracker
 
     /// <summary>
     ///     Clears the attempted-this-round flags. With <paramref name="forgetClassifications" />, also
-    ///     resets non-Healthy states to <see cref="QwpHostState.Unknown" /> while preserving the last
-    ///     same-zone <see cref="QwpHostState.Healthy" /> as sticky pick. <see cref="QwpHostState.TopologyReject" />
-    ///     is a permanent role mismatch and also survives the reset, so a wrong-role endpoint is ranked
-    ///     last rather than re-promoted to <see cref="QwpHostState.Unknown" /> and re-probed each round.
+    ///     resets every non-sticky host — including <see cref="QwpHostState.TopologyReject" /> — to
+    ///     <see cref="QwpHostState.Unknown" />, preserving only the most-recent same-zone
+    ///     <see cref="QwpHostState.Healthy" /> host as the sticky pick. Role-rejected hosts are
+    ///     deliberately re-probed on the next round: a replica can be promoted (or a primary demoted),
+    ///     so a stale role classification must not pin a host out permanently. Within a single round
+    ///     the <see cref="QwpHostState.TopologyReject" /> ranking still applies via <see cref="PickNext" />.
     /// </summary>
     public void BeginRound(bool forgetClassifications)
     {

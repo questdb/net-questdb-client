@@ -37,6 +37,7 @@ internal static class QwpErrorClassifier
             QwpStatusCode.InternalError => SenderErrorCategory.InternalError,
             QwpStatusCode.SecurityError => SenderErrorCategory.SecurityError,
             QwpStatusCode.WriteError => SenderErrorCategory.WriteError,
+            QwpStatusCode.LimitExceeded => SenderErrorCategory.LimitExceeded,
             _ => SenderErrorCategory.Unknown,
         };
 

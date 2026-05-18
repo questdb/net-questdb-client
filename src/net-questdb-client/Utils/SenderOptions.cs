@@ -171,6 +171,10 @@ public record SenderOptions
             ? (8 * 1024 * 1024).ToString(System.Globalization.CultureInfo.InvariantCulture)
             : int.MaxValue.ToString(System.Globalization.CultureInfo.InvariantCulture);
         var defaultAutoFlushIntervalMs = isWs ? "100" : "1000";
+        // Explicitness stops ApplyAutoFlushNormalisation overwriting a ws:: value equal to an HTTP default.
+        _autoFlushRowsUserSet = ReadOptionFromBuilder(nameof(auto_flush_rows)) is not null;
+        _autoFlushBytesUserSet = ReadOptionFromBuilder(nameof(auto_flush_bytes)) is not null;
+        _autoFlushIntervalUserSet = ReadOptionFromBuilder(nameof(auto_flush_interval)) is not null;
         ParseIntThatMayBeOff(nameof(auto_flush_rows), defaultAutoFlushRows, out _autoFlushRows,
             rejectLiteralZero: true);
         ParseIntThatMayBeOff(nameof(auto_flush_bytes), defaultAutoFlushBytes, out _autoFlushBytes);
@@ -286,7 +290,7 @@ public record SenderOptions
         "on_server_error", "on_schema_mismatch_error", "on_schema_error", "on_parse_error",
         "on_internal_error", "on_security_error", "on_write_error",
         "token_x", "token_y",
-        "zone", "in_flight_window",
+        "zone",
     };
 
     private void RejectUnknownConnectStringKeys()
@@ -503,8 +507,35 @@ public record SenderOptions
         ValidateTimeouts();
         ValidateWebSocketKeys();
         ValidateWebSocketKeysAgainstDefaults();
+        ApplyInitialConnectPromotion();
         ValidateErrorInboxCapacity();
         ValidateBufferSizes();
+    }
+
+    /// <summary>
+    ///     An explicit <c>initial_connect_retry</c> choice always wins. When the user left it unset
+    ///     but tuned any <c>reconnect_*</c> knob, promote to <see cref="InitialConnectMode.on" /> so
+    ///     the reconnect budget also covers the first connect — otherwise the budget would silently
+    ///     apply only to post-disconnect reconnects.
+    /// </summary>
+    private void ApplyInitialConnectPromotion()
+    {
+        if (_initialConnectMode != InitialConnectMode.off) return;
+
+        var fromString = _connectionStringBuilder is not null;
+        if (fromString && IsKeyExplicit(nameof(initial_connect_retry))) return;
+        if (!fromString && _initialConnectModeUserSet) return;
+
+        var reconnectTuned = fromString
+            ? IsKeyExplicit(nameof(reconnect_max_duration_millis))
+              || IsKeyExplicit(nameof(reconnect_initial_backoff_millis))
+              || IsKeyExplicit(nameof(reconnect_max_backoff_millis))
+            : _reconnectMaxDurationUserSet || _reconnectInitialBackoffUserSet || _reconnectMaxBackoffUserSet;
+
+        if (reconnectTuned)
+        {
+            _initialConnectMode = InitialConnectMode.on;
+        }
     }
 
     private void ValidateBufferSizes()
@@ -707,7 +738,6 @@ public record SenderOptions
         "error_handler", "error_policy_resolver", "error_inbox_capacity", "connection_listener_inbox_capacity",
         "on_server_error", "on_schema_mismatch_error", "on_schema_error", "on_parse_error", "on_internal_error",
         "on_security_error", "on_write_error",
-        "in_flight_window",
     };
 
     /// <summary>

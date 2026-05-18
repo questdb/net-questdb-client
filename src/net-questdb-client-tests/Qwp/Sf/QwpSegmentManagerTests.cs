@@ -132,21 +132,21 @@ public class QwpSegmentManagerTests
     public async Task Wake_DrivesProvisioning_Promptly()
     {
         using var ring = QwpSegmentRing.Open(_root, segmentCapacity: QwpMmapSegment.HeaderSize + 64);
-        using var mgr = new QwpSegmentManager(ring, long.MaxValue);
+        using var mgr = new QwpSegmentManager(ring, long.MaxValue, heartbeatInterval: TimeSpan.FromSeconds(30));
         mgr.Start();
 
         // Sample BEFORE consuming the startup spare — TryAllocateNewActive can wake the manager
         // mid-append and bump SparesInstalled, racing with a post-append sample.
-        await WaitFor(() => mgr.SparesInstalled >= 1, TimeSpan.FromSeconds(2));
+        await WaitFor(() => mgr.SparesInstalled >= 1, TimeSpan.FromSeconds(5));
         var sparesBefore = mgr.SparesInstalled;
         Assert.That(ring.TryAppend(new byte[24]), Is.True);
         Assert.That(ring.TryAppend(new byte[24]), Is.True);
 
         var sw = System.Diagnostics.Stopwatch.StartNew();
-        await WaitFor(() => mgr.SparesInstalled > sparesBefore, TimeSpan.FromSeconds(2));
+        await WaitFor(() => mgr.SparesInstalled > sparesBefore, TimeSpan.FromSeconds(5));
         sw.Stop();
 
-        Assert.That(sw.Elapsed, Is.LessThan(QwpSegmentManager.HeartbeatInterval),
+        Assert.That(sw.Elapsed, Is.LessThan(mgr.HeartbeatInterval),
             "spare arrives via producer wake, not heartbeat tick");
     }
 

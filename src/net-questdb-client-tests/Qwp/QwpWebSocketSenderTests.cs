@@ -650,7 +650,8 @@ public class QwpWebSocketSenderTests
             },
         });
         await server.StartAsync();
-        using var sender = NewSender(server, "auto_flush=off;request_durable_ack=on;");
+        // close_flush_timeout_millis=0: durable-ack deliberately lags OK-ack here, so a close drain would time out.
+        using var sender = NewSender(server, "auto_flush=off;request_durable_ack=on;close_flush_timeout_millis=0;");
 
         var ws = (IQwpWebSocketSender)sender;
         sender.Table("trades").Column("v", 1L).At(DateTime.UtcNow);

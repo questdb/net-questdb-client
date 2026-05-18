@@ -51,4 +51,7 @@ public enum SenderErrorCategory
 
     /// <summary>Status byte the client does not recognize — forward compatibility for new server codes.</summary>
     Unknown,
+
+    /// <summary>A protocol limit was exceeded by the batch. Wire 0x0B.</summary>
+    LimitExceeded,
 }

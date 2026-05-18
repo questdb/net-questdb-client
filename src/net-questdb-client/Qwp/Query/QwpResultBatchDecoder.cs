@@ -502,16 +502,14 @@ internal sealed class QwpResultBatchDecoder
         }
     }
 
+    // Plain arrays, not ArrayPool: the per-column scratch is grown-and-reused across every batch,
+    // so pooling buys almost nothing — and the final buffers are never returned, which would
+    // otherwise drain ArrayPool.Shared of large arrays for each disposed query client.
     private byte[] RentScratch(byte[] existing, int needed)
     {
         if (existing.Length >= needed) return existing;
         var cap = Math.Max(needed, Math.Max(64, existing.Length * 2));
-        var fresh = System.Buffers.ArrayPool<byte>.Shared.Rent(cap);
-        if (existing.Length > 0)
-        {
-            System.Buffers.ArrayPool<byte>.Shared.Return(existing);
-        }
-        return fresh;
+        return new byte[cap];
     }
 
     private static int BuildNonNullIndex(ReadOnlySpan<byte> bitmap, int rowCount, int[] index)

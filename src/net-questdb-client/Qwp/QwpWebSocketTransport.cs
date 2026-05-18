@@ -63,7 +63,7 @@ internal sealed class QwpWebSocketTransport : IQwpCursorTransport
     private static readonly string DefaultClientId = BuildDefaultClientId();
 
     private readonly QwpWebSocketTransportOptions _options;
-    private readonly ClientWebSocket _client = new();
+    private readonly ClientWebSocket _client;
     private readonly object _dumpLock = new();
 
     private bool _disposed;
@@ -80,7 +80,8 @@ internal sealed class QwpWebSocketTransport : IQwpCursorTransport
         }
 
         _options = options;
-        Endpoint = options.Uri is null ? null : (options.Uri.Host, options.Uri.Port);
+        Endpoint = (options.Uri.Host, options.Uri.Port);
+        _client = new ClientWebSocket();
 
         var ws = _client.Options;
         ws.KeepAliveInterval = options.KeepAliveInterval;

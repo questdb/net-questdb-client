@@ -1000,7 +1000,11 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
         if (timeoutMs <= 0) return null;
 
         try { drain(); }
-        catch (TimeoutException) { LogCloseFlushTimeoutWarn(timeoutMs); }
+        catch (TimeoutException ex)
+        {
+            LogCloseFlushTimeoutWarn(timeoutMs);
+            return CaptureTerminalForRethrow() ?? ExceptionDispatchInfo.Capture(ex);
+        }
         catch { }
 
         return CaptureTerminalForRethrow();
@@ -1012,7 +1016,11 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
         if (timeoutMs <= 0) return null;
 
         try { await drain().ConfigureAwait(false); }
-        catch (TimeoutException) { LogCloseFlushTimeoutWarn(timeoutMs); }
+        catch (TimeoutException ex)
+        {
+            LogCloseFlushTimeoutWarn(timeoutMs);
+            return CaptureTerminalForRethrow() ?? ExceptionDispatchInfo.Capture(ex);
+        }
         catch { }
 
         return CaptureTerminalForRethrow();
@@ -1113,7 +1121,9 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
         var cap = _engine.NegotiatedMaxBatchSize;
         if (cap <= 0) return;
         var rowBytes = t.GetBufferedBytes() - _currentTableSnapshotBytes;
-        if (rowBytes <= cap) return;
+        // 10% margin matches EffectiveAutoFlushBytes: framing overhead pushes a raw-cap-sized row over.
+        var safeBudget = (long)cap * 9 / 10;
+        if (rowBytes <= safeBudget) return;
         t.CancelCurrentRow();
         throw new IngressError(ErrorCode.InvalidApiCall,
             $"row too large for server batch cap [rowBytes={rowBytes}, serverMaxBatchSize={cap}]");

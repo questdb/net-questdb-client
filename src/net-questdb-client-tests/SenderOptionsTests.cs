@@ -368,6 +368,22 @@ public class SenderOptionsTests
     }
 
     [Test]
+    public void Target_IsSilentlyAcceptedOnIngress()
+    {
+        Assert.That(() => new SenderOptions("ws::addr=localhost:9000;target=replica;"), Throws.Nothing);
+        Assert.That(() => new SenderOptions("http::addr=localhost:9000;target=primary;"), Throws.Nothing);
+        Assert.That(() => new SenderOptions("tcp::addr=localhost:9009;target=any;"), Throws.Nothing);
+    }
+
+    [Test]
+    public void InitialCredit_IsSilentlyAcceptedOnIngress()
+    {
+        Assert.That(() => new SenderOptions("ws::addr=localhost:9000;initial_credit=1024;"), Throws.Nothing);
+        Assert.That(() => new SenderOptions("http::addr=localhost:9000;initial_credit=1024;"), Throws.Nothing);
+        Assert.That(() => new SenderOptions("tcp::addr=localhost:9009;initial_credit=1024;"), Throws.Nothing);
+    }
+
+    [Test]
     public void Ws_AuthTimeoutMs_AliasParses()
     {
         var withMs = new SenderOptions("ws::addr=localhost:9000;auth_timeout_ms=2500;");

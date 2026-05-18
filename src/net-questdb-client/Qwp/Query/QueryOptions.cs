@@ -44,7 +44,6 @@ namespace QuestDB.Qwp.Query;
 /// </remarks>
 public sealed class QueryOptions
 {
-    // `initial_credit` is intentionally not in this set; it's programmatic-only.
     private static readonly HashSet<string> KeySet = new(StringComparer.Ordinal)
     {
         "addr",
@@ -57,9 +56,10 @@ public sealed class QueryOptions
         "failover_max_duration_ms",
         "auth_timeout_ms",
         "zone",
-        "max_batch_rows",
+        "max_batch_rows", "initial_credit",
         "client_id",
         "buffer_pool_size",
+        "max_schemas_per_connection", "error_inbox_capacity",
         "token_x", "token_y",
     };
 
@@ -194,9 +194,9 @@ public sealed class QueryOptions
 
     /// <summary>
     ///     Per-query byte budget the server may emit before pausing for a <c>CREDIT</c> frame.
-    ///     <c>0</c> = unbounded. Programmatic-only (no connect-string key); set via object initializer.
+    ///     <c>0</c> = unbounded.
     /// </summary>
-    public long initial_credit { get; init; }
+    public long initial_credit { get; set; }
 
     /// <summary>
     ///     Validates the option set; called automatically by the connstring constructor and by the
@@ -335,6 +335,17 @@ public sealed class QueryOptions
                     $"`max_batch_rows` must be in [1, 1048576] (omit the key for server default), got {v}");
             }
             max_batch_rows = v;
+        }
+
+        if (builder.TryGetValue("initial_credit", out var icVal))
+        {
+            var s = (string)icVal;
+            if (!long.TryParse(s, NumberStyles.Integer, CultureInfo.InvariantCulture, out var ic))
+            {
+                throw new IngressError(ErrorCode.ConfigError,
+                    $"`initial_credit` must be an integer, got `{s}`");
+            }
+            initial_credit = ic;
         }
     }
 

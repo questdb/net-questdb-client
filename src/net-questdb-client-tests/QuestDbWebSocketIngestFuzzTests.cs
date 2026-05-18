@@ -1250,7 +1250,7 @@ public class QuestDbWebSocketIngestFuzzTests
 
             try
             {
-                await _questDb!.StopAsync();
+                await _questDb!.StopGracefulAsync();
                 await Task.Delay(20 + rng.NextInt(200));
                 await _questDb.StartAsync();
                 performed++;

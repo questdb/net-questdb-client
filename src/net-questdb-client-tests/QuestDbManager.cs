@@ -184,6 +184,71 @@ public class QuestDbManager : IAsyncDisposable
         }
     }
 
+    [System.Runtime.InteropServices.DllImport("libc", SetLastError = true)]
+    private static extern int kill(int pid, int sig);
+
+    /// <summary>
+    ///     Gracefully stops QuestDB: SIGTERM so the JVM runs shutdown hooks and closes the WAL
+    ///     cleanly (no torn writes, no mid-ack death). Falls back to a hard kill after 30s.
+    ///     Use this for restart scenarios; <see cref="StopAsync" /> hard-kills (crash simulation).
+    /// </summary>
+    public async Task StopGracefulAsync()
+    {
+        if (UseLiveServer)
+        {
+            IsRunning = false;
+            return;
+        }
+
+        var process = _process;
+        if (process is null)
+        {
+            IsRunning = false;
+            return;
+        }
+
+        Console.WriteLine("Stopping QuestDB (graceful)");
+        try
+        {
+            if (!process.HasExited)
+            {
+                if (OperatingSystem.IsWindows())
+                {
+                    process.Kill(entireProcessTree: true);
+                }
+                else
+                {
+                    const int sigterm = 15;
+                    kill(process.Id, sigterm);
+                }
+            }
+
+            try
+            {
+                await process.WaitForExitAsync(new CancellationTokenSource(TimeSpan.FromSeconds(30)).Token)
+                    .ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                if (!process.HasExited)
+                {
+                    process.Kill(entireProcessTree: true);
+                    await process.WaitForExitAsync().ConfigureAwait(false);
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Warning: failed to stop QuestDB gracefully: {ex.Message}");
+        }
+        finally
+        {
+            process.Dispose();
+            _process = null;
+            IsRunning = false;
+        }
+    }
+
     /// <inheritdoc />
     public async ValueTask DisposeAsync()
     {

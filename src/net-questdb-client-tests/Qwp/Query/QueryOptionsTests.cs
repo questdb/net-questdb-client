@@ -61,10 +61,10 @@ public class QueryOptionsTests
     }
 
     [Test]
-    public void Parse_InitialCredit_NotAcceptedAsConnectStringKey()
+    public void Parse_InitialCredit_AcceptedAsConnectStringKey()
     {
-        Assert.Throws<IngressError>(
-            () => new QueryOptions("ws::addr=h:9000;initial_credit=1024;"));
+        var o = new QueryOptions("ws::addr=h:9000;initial_credit=1024;");
+        Assert.That(o.initial_credit, Is.EqualTo(1024));
     }
 
     [Test]
@@ -359,6 +359,13 @@ public class QueryOptionsTests
     public void Parse_BufferPoolSize_AcceptedForCrossClientInterop()
     {
         Assert.DoesNotThrow(() => new QueryOptions("ws::addr=h:9000;buffer_pool_size=4;"));
+    }
+
+    [Test]
+    public void Parse_IngressOnlyKeys_AcceptedAndIgnoredOnEgress()
+    {
+        Assert.DoesNotThrow(() => new QueryOptions(
+            "ws::addr=h:9000;max_schemas_per_connection=100;error_inbox_capacity=64;"));
     }
 
     [TestCase("Addr")]

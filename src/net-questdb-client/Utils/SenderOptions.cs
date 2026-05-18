@@ -290,7 +290,7 @@ public record SenderOptions
         "on_server_error", "on_schema_mismatch_error", "on_schema_error", "on_parse_error",
         "on_internal_error", "on_security_error", "on_write_error",
         "token_x", "token_y",
-        "zone",
+        "zone", "target", "initial_credit",
     };
 
     private void RejectUnknownConnectStringKeys()

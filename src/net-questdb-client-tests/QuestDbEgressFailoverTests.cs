@@ -43,8 +43,7 @@ namespace net_questdb_client_tests;
 [TestFixture]
 public class QuestDbEgressFailoverTests
 {
-    // Large enough that the SELECT-after-failover spans many RESULT_BATCH frames.
-    private const int RowCount = 200_000;
+    private const int RowCount = 1_000_000;
     private const string Table = "failover_test";
 
     private QuestDbManager? _server1;

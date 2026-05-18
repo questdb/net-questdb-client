@@ -258,14 +258,12 @@ internal static class QwpGorilla
 
         var writer = new QwpBitWriter(dest, 17);
         var prevDelta = timestamps[1] - timestamps[0];
-        if (SubOverflowed(timestamps[1], timestamps[0], prevDelta)) return -1;
 
         for (var i = 2; i < timestamps.Length; i++)
         {
             var delta = timestamps[i] - timestamps[i - 1];
-            if (SubOverflowed(timestamps[i], timestamps[i - 1], delta)) return -1;
             var dod = delta - prevDelta;
-            if (SubOverflowed(delta, prevDelta, dod) || dod < int.MinValue || dod > int.MaxValue)
+            if (dod < int.MinValue || dod > int.MaxValue)
             {
                 return -1;
             }
@@ -276,8 +274,6 @@ internal static class QwpGorilla
 
         return 17 + writer.FinishToByteBoundary();
     }
-
-    private static bool SubOverflowed(long a, long b, long result) => ((a ^ b) & (a ^ result)) < 0;
 
     private static void EncodeDoD(ref QwpBitWriter writer, int dod)
     {

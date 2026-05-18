@@ -620,20 +620,7 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient
 
     private async Task DriveQueryLoopAsync(QwpColumnBatchHandler handler, CancellationToken ct)
     {
-        const int maxConsecutiveStaleFrames = 1024;
         var activeRid = Volatile.Read(ref _currentRequestId);
-        var staleFrames = 0;
-
-        // Bounds a server streaming only inactive-request-id frames; sync Execute has no ct escape.
-        void CountStaleFrame()
-        {
-            if (++staleFrames > maxConsecutiveStaleFrames)
-            {
-                throw new IngressError(ErrorCode.ProtocolVersionError,
-                    $"server sent {staleFrames} consecutive frames for inactive request ids");
-            }
-        }
-
         while (true)
         {
             var (kind, payload, headerFlags) = await ReadFrameAsync(ct).ConfigureAwait(false);
@@ -660,10 +647,8 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient
                             await SendCreditAsync(batchRid, batchBytes + QwpConstants.HeaderSize, ct)
                                 .ConfigureAwait(false);
                         }
-                        CountStaleFrame();
                         continue;
                     }
-                    staleFrames = 0;
                     if (_batch.BatchSeq != _expectedBatchSeq)
                     {
                         throw new IngressError(ErrorCode.ProtocolVersionError,
@@ -695,25 +680,21 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient
 
                 case QwpEgressMsgKind.ResultEnd:
                     var (endRid, endTotal) = DecodeResultEnd(payload);
-                    if (endRid != activeRid) { CountStaleFrame(); continue; }
+                    if (endRid != activeRid) continue;
                     _executeFinishedCleanly = true;
                     handler.OnEnd(endTotal);
                     return;
 
                 case QwpEgressMsgKind.ExecDone:
                     var (execRid, opType, rowsAffected) = DecodeExecDone(payload);
-                    if (execRid != activeRid) { CountStaleFrame(); continue; }
+                    if (execRid != activeRid) continue;
                     _executeFinishedCleanly = true;
                     handler.OnExecDone(opType, rowsAffected);
                     return;
 
                 case QwpEgressMsgKind.QueryError:
                     var (errRid, status, message) = DecodeQueryError(payload);
-                    if (errRid != activeRid && errRid != QwpConstants.RequestIdWildcard)
-                    {
-                        CountStaleFrame();
-                        continue;
-                    }
+                    if (errRid != activeRid && errRid != QwpConstants.RequestIdWildcard) continue;
                     if (errRid == QwpConstants.RequestIdWildcard)
                     {
                         Interlocked.Exchange(ref _transport, null)?.Dispose();
@@ -728,7 +709,6 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient
 
                 case QwpEgressMsgKind.CacheReset:
                     DecodeCacheReset(payload);
-                    staleFrames = 0;
                     break;
 
                 case QwpEgressMsgKind.ServerInfo:

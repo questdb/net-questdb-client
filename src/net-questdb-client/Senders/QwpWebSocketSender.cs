@@ -128,7 +128,7 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
 
             var authHeader = BuildAuthHeader(options);
             var certValidator = BuildCertificateValidator(options);
-            var tracker = new QwpHostHealthTracker(options.addresses);
+            var tracker = new QwpHostHealthTracker(options.addresses, clientZone: options.zone, targetIsPrimary: false);
             var transportFactory = BuildHostRotatingFactory(options, tracker, authHeader, certValidator);
 
             var policy = new QwpReconnectPolicy(
@@ -183,7 +183,7 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
                 var drainer = new QwpBackgroundDrainer(
                     contextBuilder: () =>
                     {
-                        var drainerTracker = new QwpHostHealthTracker(options.addresses);
+                        var drainerTracker = new QwpHostHealthTracker(options.addresses, clientZone: options.zone, targetIsPrimary: false);
                         var drainerFactory = BuildHostRotatingFactory(
                             options, drainerTracker, authHeader, certValidator);
                         return new Qwp.Sf.DrainContext(
@@ -539,6 +539,54 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
 
         var packed = System.Buffers.Binary.BinaryPrimitives.ReadUInt32BigEndian(octets);
         EnsureCurrentTable().AppendIPv4(name, packed);
+        return this;
+    }
+
+    /// <inheritdoc />
+    public IQwpWebSocketSender ColumnByte(ReadOnlySpan<char> name, sbyte value)
+    {
+        ThrowIfTerminal();
+        EnsureCurrentTable().AppendByte(name, value);
+        return this;
+    }
+
+    /// <inheritdoc />
+    public IQwpWebSocketSender ColumnShort(ReadOnlySpan<char> name, short value)
+    {
+        ThrowIfTerminal();
+        EnsureCurrentTable().AppendShort(name, value);
+        return this;
+    }
+
+    /// <inheritdoc />
+    public IQwpWebSocketSender ColumnFloat(ReadOnlySpan<char> name, float value)
+    {
+        ThrowIfTerminal();
+        EnsureCurrentTable().AppendFloat(name, value);
+        return this;
+    }
+
+    /// <inheritdoc />
+    public IQwpWebSocketSender ColumnDate(ReadOnlySpan<char> name, long millisSinceEpoch)
+    {
+        ThrowIfTerminal();
+        EnsureCurrentTable().AppendDateMillis(name, millisSinceEpoch);
+        return this;
+    }
+
+    /// <inheritdoc />
+    public IQwpWebSocketSender ColumnGeohash(ReadOnlySpan<char> name, ulong hash, int precisionBits)
+    {
+        ThrowIfTerminal();
+        EnsureCurrentTable().AppendGeohash(name, hash, precisionBits);
+        return this;
+    }
+
+    /// <inheritdoc />
+    public IQwpWebSocketSender ColumnLong256(ReadOnlySpan<char> name, System.Numerics.BigInteger value)
+    {
+        ThrowIfTerminal();
+        EnsureCurrentTable().AppendLong256(name, value);
         return this;
     }
 

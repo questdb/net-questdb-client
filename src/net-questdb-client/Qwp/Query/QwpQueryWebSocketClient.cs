@@ -640,6 +640,13 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient
                     var batchRid = _batch.RequestId;
                     if (batchRid != activeRid)
                     {
+                        // Return credit for a stale request_id directly so the server's
+                        // per-request window for that id is not leaked.
+                        if (_options.initial_credit > 0)
+                        {
+                            await SendCreditAsync(batchRid, batchBytes + QwpConstants.HeaderSize, ct)
+                                .ConfigureAwait(false);
+                        }
                         continue;
                     }
                     if (_batch.BatchSeq != _expectedBatchSeq)
@@ -879,7 +886,13 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient
             var needed = preludeLen + attemptSize;
             if (_decompressBuffer.Length < needed)
             {
-                _decompressBuffer = new byte[needed];
+                // Unknown-content-size retries would otherwise double the buffer each
+                // pass, orphaning a staircase of LOH arrays; allocate the worst case
+                // once so the reused field grows at most a single time.
+                var allocSize = sizeKnown
+                    ? needed
+                    : preludeLen + QwpConstants.MaxResultBatchWireBytes;
+                _decompressBuffer = new byte[allocSize];
             }
             span.Slice(0, preludeLen).CopyTo(_decompressBuffer);
 

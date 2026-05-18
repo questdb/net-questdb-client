@@ -125,6 +125,27 @@ public interface IQwpWebSocketSender : ISender
     /// <summary>Append an IPv4 address to the named column.</summary>
     IQwpWebSocketSender ColumnIPv4(ReadOnlySpan<char> name, System.Net.IPAddress addr);
 
+    /// <summary>Append a BYTE value (signed 8-bit integer) to the named column.</summary>
+    IQwpWebSocketSender ColumnByte(ReadOnlySpan<char> name, sbyte value);
+
+    /// <summary>Append a SHORT value (signed 16-bit integer) to the named column.</summary>
+    IQwpWebSocketSender ColumnShort(ReadOnlySpan<char> name, short value);
+
+    /// <summary>Append a FLOAT value (32-bit IEEE-754) to the named column.</summary>
+    IQwpWebSocketSender ColumnFloat(ReadOnlySpan<char> name, float value);
+
+    /// <summary>Append a DATE value as milliseconds since the Unix epoch to the named column.</summary>
+    IQwpWebSocketSender ColumnDate(ReadOnlySpan<char> name, long millisSinceEpoch);
+
+    /// <summary>
+    ///     Append a GEOHASH value to the named column. <paramref name="precisionBits" /> (1–60) is
+    ///     locked on the first non-null write; <paramref name="hash" /> carries that many low bits.
+    /// </summary>
+    IQwpWebSocketSender ColumnGeohash(ReadOnlySpan<char> name, ulong hash, int precisionBits);
+
+    /// <summary>Append a LONG256 value (256-bit unsigned integer) to the named column.</summary>
+    IQwpWebSocketSender ColumnLong256(ReadOnlySpan<char> name, System.Numerics.BigInteger value);
+
     /// <summary>
     ///     Number of <see cref="QuestDB.Utils.SenderError" /> notifications dropped because the
     ///     async error inbox was full. Non-zero indicates the user-supplied error_handler can't

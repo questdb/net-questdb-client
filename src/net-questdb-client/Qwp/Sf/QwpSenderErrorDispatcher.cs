@@ -32,10 +32,10 @@ namespace QuestDB.Qwp.Sf;
 internal sealed class QwpSenderErrorDispatcher : IDisposable
 {
     private readonly Channel<SenderError> _inbox;
-    private readonly int _capacity;
     private readonly SenderErrorHandler _handler;
     private readonly bool _hasCustomHandler;
     private readonly CancellationTokenSource _shutdown = new();
+    private readonly int _capacity;
     private long _dropped;
     private long _delivered;
     private Task? _loop;
@@ -72,7 +72,12 @@ internal sealed class QwpSenderErrorDispatcher : IDisposable
         _inbox.Writer.TryWrite(error);
         if (Interlocked.CompareExchange(ref _started, 1, 0) == 0)
         {
-            _loop = Task.Run(DispatchLoopAsync);
+            // Dispose may have run between the _disposed check above and winning this CAS;
+            // re-check so the loop never starts on an already-disposed _shutdown CTS.
+            if (Volatile.Read(ref _disposed) == 0)
+            {
+                _loop = Task.Run(DispatchLoopAsync);
+            }
         }
         return true;
     }
@@ -92,6 +97,9 @@ internal sealed class QwpSenderErrorDispatcher : IDisposable
             }
         }
         catch (OperationCanceledException) { }
+        // A racing Dispose can dispose _shutdown while WaitToReadAsync observes its token; treat
+        // the resulting ObjectDisposedException as a clean shutdown rather than a faulted task.
+        catch (ObjectDisposedException) { }
     }
 
     public void Dispose()

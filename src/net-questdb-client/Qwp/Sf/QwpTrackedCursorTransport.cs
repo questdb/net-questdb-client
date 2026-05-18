@@ -138,6 +138,20 @@ internal sealed class QwpTrackedCursorTransport : IQwpCursorTransport
         }
     }
 
+    public async Task<(int Read, byte[] Buffer)> ReceiveFrameAsync(
+        byte[] initialBuffer, int maxBytes, CancellationToken cancellationToken)
+    {
+        try
+        {
+            return await _inner.ReceiveFrameAsync(initialBuffer, maxBytes, cancellationToken).ConfigureAwait(false);
+        }
+        catch
+        {
+            _tracker.RecordMidStreamFailure(_hostIndex);
+            throw;
+        }
+    }
+
     public Task CloseAsync(CancellationToken cancellationToken)
         => _inner.CloseAsync(cancellationToken);
 

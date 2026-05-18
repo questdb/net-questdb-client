@@ -180,7 +180,7 @@ public class QuestDbEgressFuzzTests
             valuesClauses.Add($"({string.Join(",", lits)})");
         }
 
-        Exec(http, $"insert into \"{table}\" values {string.Join(",", valuesClauses)}");
+        ExecInsert(http, table, valuesClauses);
         WaitForRows(http, table, rowCount);
 
         var plan = PlanQuery(rng, table, colCount, rowCount, iter);
@@ -544,6 +544,32 @@ public class QuestDbEgressFuzzTests
             .GetAwaiter().GetResult();
         Assert.That((int)resp.StatusCode, Is.InRange(200, 399),
             $"exec failed ({(int)resp.StatusCode}): {(sql.Length > 200 ? sql.Substring(0, 200) + "…" : sql)}");
+    }
+
+    // QuestDB /exec only reads the query from the request URL, so one giant multi-row INSERT
+    // overflows the URL length limit. Split the rows into length-bounded batches.
+    private static void ExecInsert(string httpEndpoint, string table, List<string> valuesClauses)
+    {
+        const int maxBatchSqlLen = 12 * 1024;
+        var batch = new List<string>();
+        var batchLen = 0;
+        foreach (var clause in valuesClauses)
+        {
+            if (batch.Count > 0 && batchLen + clause.Length + 1 > maxBatchSqlLen)
+            {
+                Exec(httpEndpoint, $"insert into \"{table}\" values {string.Join(",", batch)}");
+                batch.Clear();
+                batchLen = 0;
+            }
+
+            batch.Add(clause);
+            batchLen += clause.Length + 1;
+        }
+
+        if (batch.Count > 0)
+        {
+            Exec(httpEndpoint, $"insert into \"{table}\" values {string.Join(",", batch)}");
+        }
     }
 
     private static void WaitForRows(string httpEndpoint, string table, int expected)

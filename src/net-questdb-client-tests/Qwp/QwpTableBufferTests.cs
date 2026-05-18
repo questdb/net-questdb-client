@@ -331,6 +331,63 @@ public class QwpTableBufferTests
         Assert.That(t.Columns[0].Name, Is.EqualTo("base"));
     }
 
+    [Test]
+    public void GetBufferedBytes_SumsAllColumnsIncludingDesignatedTimestamp()
+    {
+        var t = new QwpTableBuffer("t");
+        Assert.That(t.GetBufferedBytes(), Is.Zero);
+
+        t.AppendVarchar("ticker", "ETH");
+        t.AppendLong("volume", 1234);
+        t.At(1_700_000_000_000_000L);
+
+        // ticker (varchar) : 3 data bytes + 2 offset slots × uint = 11
+        // volume (long)    : 8
+        // designated TS    : 8
+        var ticker = t.Columns[0].BufferedBytes;
+        var volume = t.Columns[1].BufferedBytes;
+        var ts = t.DesignatedTimestampColumn!.BufferedBytes;
+
+        Assert.That(ticker, Is.EqualTo(3 + 2 * sizeof(uint)));
+        Assert.That(volume, Is.EqualTo(8));
+        Assert.That(ts, Is.EqualTo(8));
+        Assert.That(t.GetBufferedBytes(), Is.EqualTo(ticker + volume + ts));
+    }
+
+    [Test]
+    public void ColumnName_CaseInsensitive_FooAndfoo_ResolveToSameColumn()
+    {
+        var t = new QwpTableBuffer("t");
+        t.AppendLong("Foo", 1);
+        // "foo" differs only in case; first-value-wins means this is silently dropped,
+        // but it must NOT spawn a second column.
+        t.AppendLong("foo", 2);
+        t.At(0);
+
+        Assert.That(t.Columns.Count, Is.EqualTo(1), "case-only difference must not create a second column");
+        Assert.That(t.Columns[0].Name, Is.EqualTo("Foo"), "the first-seen casing is retained");
+        Assert.That(System.Buffers.Binary.BinaryPrimitives.ReadInt64LittleEndian(
+            t.Columns[0].FixedData!.AsSpan(0, 8)), Is.EqualTo(1L));
+    }
+
+    [Test]
+    public void ColumnName_CaseInsensitive_AcrossRows_KeepsSingleColumn()
+    {
+        var t = new QwpTableBuffer("t");
+        t.AppendLong("Price", 10);
+        t.At(0);
+        // Subsequent rows touch the index via the AlternateLookup span path on net9+.
+        t.AppendLong("PRICE", 20);
+        t.At(1);
+        t.AppendLong("price", 30);
+        t.At(2);
+
+        Assert.That(t.Columns.Count, Is.EqualTo(1), "all casings must map to the one column");
+        var price = t.Columns[0];
+        Assert.That(price.RowCount, Is.EqualTo(3));
+        Assert.That(price.NullCount, Is.Zero, "every row resolved the same column, so none null-padded");
+    }
+
     [TestCase("varchar")]
     [TestCase("symbol")]
     [TestCase("bool")]

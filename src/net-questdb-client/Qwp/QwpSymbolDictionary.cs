@@ -81,10 +81,6 @@ internal sealed class QwpSymbolDictionary
     /// </summary>
     public int Add(ReadOnlySpan<char> value)
     {
-        if (value.IsEmpty)
-        {
-            throw new IngressError(ErrorCode.InvalidApiCall, "symbol value must not be empty");
-        }
         int id;
 #if NET9_0_OR_GREATER
         if (_idsLookup.TryGetValue(value, out id))

@@ -452,7 +452,7 @@ internal sealed class QwpResultBatchDecoder
         var dictSize = _state.SymbolDict.Size;
         for (var i = 0; i < nonNull; i++)
         {
-            var id = (int)ReadVarint(payload, ref p);
+            var id = ReadBoundedVarintAsInt(payload, ref p, "symbol id");
             if ((uint)id >= (uint)dictSize)
             {
                 throw new QwpDecodeException(

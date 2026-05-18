@@ -97,6 +97,13 @@ public class AddressProvider
         if (string.IsNullOrEmpty(address))
             return address;
 
+        // Bracketed IPv6 literal: the host ends at ']'; an inner colon must not be mistaken for the port separator.
+        if (address[0] == '[')
+        {
+            var closeBracket = address.IndexOf(']');
+            return closeBracket > 0 ? address.Substring(0, closeBracket + 1) : address;
+        }
+
         var colonIndex = address.LastIndexOf(':');
         if (colonIndex > 0)
         {
@@ -112,7 +119,22 @@ public class AddressProvider
         if (string.IsNullOrEmpty(address))
             return -1;
 
-        var colonIndex = address.LastIndexOf(':');
+        int colonIndex;
+        if (address[0] == '[')
+        {
+            var closeBracket = address.IndexOf(']');
+            if (closeBracket < 0)
+                return -1;
+
+            colonIndex = closeBracket + 1 < address.Length && address[closeBracket + 1] == ':'
+                ? closeBracket + 1
+                : -1;
+        }
+        else
+        {
+            colonIndex = address.LastIndexOf(':');
+        }
+
         if (colonIndex >= 0 && colonIndex < address.Length - 1)
         {
             if (int.TryParse(address.Substring(colonIndex + 1), out var port))

@@ -202,9 +202,18 @@ internal sealed class QwpSegmentManager : IDisposable
         // OnSpareAdoptionFailed.
         var (capacity, hasSpare) = _ring.SnapshotCapacity();
         var snapshot = capacity + (hasSpare ? _ring.SegmentCapacity : 0);
-        var prev = Volatile.Read(ref _committedBytes);
-        var committed = snapshot > prev ? snapshot : prev;
-        Volatile.Write(ref _committedBytes, committed);
+        // CAS loop: a concurrent Interlocked.Add from OnSpareAdoptionFailed must not be lost
+        // to a non-atomic read-modify-write here.
+        long committed;
+        while (true)
+        {
+            var prev = Volatile.Read(ref _committedBytes);
+            committed = snapshot > prev ? snapshot : prev;
+            if (Interlocked.CompareExchange(ref _committedBytes, committed, prev) == prev)
+            {
+                break;
+            }
+        }
 
         if (_ring.NeedsHotSpare())
         {
@@ -214,9 +223,11 @@ internal sealed class QwpSegmentManager : IDisposable
             }
         }
 
-        PersistAckWatermark();
         DrainAndDisposeTrimmable();
         _ring.FlushActive();
+        // Persist the watermark only after segment data is flushed so the persisted point
+        // can only under-estimate (never claim more durable than is actually on disk).
+        PersistAckWatermark();
         try { Volatile.Read(ref _heartbeatCallback)?.Invoke(); }
         catch (Exception ex) { Volatile.Write(ref _lastServiceError, ex); }
     }
@@ -229,6 +240,7 @@ internal sealed class QwpSegmentManager : IDisposable
         if (currentAck > _lastPersistedAck)
         {
             watermark.Write(currentAck);
+            watermark.Flush();
             _lastPersistedAck = currentAck;
         }
     }

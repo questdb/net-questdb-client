@@ -62,6 +62,22 @@ internal interface IQwpCursorTransport : IDisposable
     /// <returns>The number of bytes written.</returns>
     Task<int> ReceiveFrameAsync(Memory<byte> destination, CancellationToken cancellationToken);
 
+    /// <summary>
+    ///     Reads the next QWP response frame into <paramref name="initialBuffer" />, growing it
+    ///     up to <paramref name="maxBytes" /> when the frame would otherwise overflow. A valid
+    ///     ACK can exceed any fixed buffer (one per-table entry per touched table), so the cursor
+    ///     receive path must use this growable form rather than treating overflow as a transient
+    ///     socket error. The default implementation falls back to the fixed overload for stubs
+    ///     that pre-size their buffer.
+    /// </summary>
+    /// <returns>The byte count along with the buffer actually used (== <paramref name="initialBuffer" /> unless grown).</returns>
+    async Task<(int Read, byte[] Buffer)> ReceiveFrameAsync(
+        byte[] initialBuffer, int maxBytes, CancellationToken cancellationToken)
+    {
+        var read = await ReceiveFrameAsync(initialBuffer.AsMemory(), cancellationToken).ConfigureAwait(false);
+        return (read, initialBuffer);
+    }
+
     /// <summary>Sends a graceful close. Must tolerate being called from any state.</summary>
     Task CloseAsync(CancellationToken cancellationToken);
 }

@@ -130,7 +130,15 @@ internal static class QwpFallocate
             fstore.fst_flags = F_ALLOCATEALL;
             fstore.fst_bytesalloc = 0;
             Marshal.StructureToPtr(fstore, ptr, fDeleteOld: false);
-            fcntl(handle, F_PREALLOCATE, ptr);
+            var retryRc = fcntl(handle, F_PREALLOCATE, ptr);
+            if (retryRc != 0)
+            {
+                // Best-effort: SetLength has already sized the file. Surface the failure for
+                // diagnosis (e.g. genuine ENOSPC) but don't abort — a later write may still succeed.
+                System.Diagnostics.Trace.TraceWarning(
+                    "QWP fallocate: F_PREALLOCATE retry (F_ALLOCATEALL, length={0}) failed; " +
+                    "block reservation skipped, relying on SetLength.", length);
+            }
         }
         finally
         {

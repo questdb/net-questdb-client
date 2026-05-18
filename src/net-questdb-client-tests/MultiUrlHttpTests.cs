@@ -319,6 +319,34 @@ public class MultiUrlHttpTests
         var provider2 = new AddressProvider(new[] { "example.com:8080", });
         Assert.That(provider2.CurrentHost, Is.EqualTo("example.com"));
         Assert.That(provider2.CurrentPort, Is.EqualTo(8080));
+
+        var provider3 = new AddressProvider(new[] { "[::1]:9000", });
+        Assert.That(provider3.CurrentHost, Is.EqualTo("[::1]"));
+        Assert.That(provider3.CurrentPort, Is.EqualTo(9000));
+    }
+
+    [Test]
+    public void AddressProvider_IPv6Parsing()
+    {
+        var provider1 = new AddressProvider(new[] { "[::1]:9000", });
+        Assert.That(provider1.CurrentHost, Is.EqualTo("[::1]"));
+        Assert.That(provider1.CurrentPort, Is.EqualTo(9000));
+
+        var provider2 = new AddressProvider(new[] { "[2001:db8::1]:9000", });
+        Assert.That(provider2.CurrentHost, Is.EqualTo("[2001:db8::1]"));
+        Assert.That(provider2.CurrentPort, Is.EqualTo(9000));
+
+        var provider3 = new AddressProvider(new[] { "[fe80::1:2:3:4]:8080", });
+        Assert.That(provider3.CurrentHost, Is.EqualTo("[fe80::1:2:3:4]"));
+        Assert.That(provider3.CurrentPort, Is.EqualTo(8080));
+
+        var provider4 = new AddressProvider(new[] { "[::1]", });
+        Assert.That(provider4.CurrentHost, Is.EqualTo("[::1]"));
+        Assert.That(provider4.CurrentPort, Is.EqualTo(-1));
+
+        var provider5 = new AddressProvider(new[] { "[::1]:29000", });
+        Assert.That(provider5.CurrentHost, Is.EqualTo("[::1]"));
+        Assert.That(provider5.CurrentPort, Is.EqualTo(29000));
     }
 
     [Test]

@@ -242,6 +242,56 @@ public class QwpColumnTests
     }
 
     [Test]
+    public void BufferedBytes_FixedWidthColumn_CountsStoredBytes()
+    {
+        var col = new QwpColumn("c", 0);
+        Assert.That(col.BufferedBytes, Is.Zero);
+
+        col.AppendLong(1);
+        col.AppendLong(2);
+        col.AppendNull();
+
+        // Two LONG values densely packed = 16 bytes; the null adds no fixed-width data.
+        Assert.That(col.BufferedBytes, Is.EqualTo(16));
+    }
+
+    [Test]
+    public void BufferedBytes_VarcharColumn_CountsDataAndOffsetSlots()
+    {
+        var col = new QwpColumn("s", 0);
+        col.AppendVarchar("foo");
+        col.AppendVarchar("bar");
+
+        // StrLen = 6 bytes of UTF-8 data + (NonNullCount + 1) = 3 uint offset slots.
+        Assert.That(col.BufferedBytes, Is.EqualTo(6 + 3 * sizeof(uint)));
+    }
+
+    [Test]
+    public void BufferedBytes_SymbolColumn_CountsIdWidths()
+    {
+        var col = new QwpColumn("ticker", 0);
+        col.AppendSymbol(0);
+        col.AppendSymbol(7);
+        col.AppendSymbol(3);
+
+        // 3 non-null ids, each accounted at sizeof(int).
+        Assert.That(col.BufferedBytes, Is.EqualTo(3 * sizeof(int)));
+    }
+
+    [Test]
+    public void BufferedBytes_BoolColumn_CountsBitPackedBytes()
+    {
+        var col = new QwpColumn("flag", 0);
+        for (var i = 0; i < 9; i++)
+        {
+            col.AppendBool(i % 2 == 0);
+        }
+
+        // 9 bit-packed booleans = ceil(9 / 8) = 2 bytes.
+        Assert.That(col.BufferedBytes, Is.EqualTo(2));
+    }
+
+    [Test]
     public void AppendLong_LargeRunGrowsBuffer()
     {
         var col = new QwpColumn("c", 0);

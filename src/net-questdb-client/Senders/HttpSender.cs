@@ -140,6 +140,14 @@ internal class HttpSender : AbstractSender
                     };
             }
 
+            // tls_roots also serves as the client identity for mTLS (PEM/PFX carrying a client key).
+            if (!string.IsNullOrEmpty(Options.tls_roots))
+            {
+                handler.SslOptions.ClientCertificates ??= new X509Certificate2Collection();
+                handler.SslOptions.ClientCertificates.Add(
+                    QwpTlsAuth.LoadTrustRoot(Options.tls_roots!, Options.tls_roots_password));
+            }
+
             if (Options.client_cert is not null)
             {
                 handler.SslOptions.ClientCertificates ??= new X509Certificate2Collection();

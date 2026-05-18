@@ -38,6 +38,11 @@ internal sealed class QwpCursorSendEngine : IDisposable
 {
     private const int AckBufferSize = 4096;
 
+    // A valid OK ACK is 11 + N*(10 + nameBytes); with up to 65535 touched tables and 127-byte
+    // names it can reach ~9 MiB, so the receive buffer grows on demand. The cap stays well above
+    // that worst case while still rejecting a genuinely malformed oversized frame.
+    private const int AckBufferMaxBytes = QwpConstants.MaxResultBatchWireBytes;
+
     private readonly QwpSlotLock? _slotLock;
     private readonly QwpSegmentRing _ring;
     private readonly QwpSegmentManager _segmentManager;
@@ -56,7 +61,8 @@ internal sealed class QwpCursorSendEngine : IDisposable
     private readonly QwpAckWatermark? _ackWatermark;
     private readonly object _stateLock = new();
     private readonly byte[] _sendBuffer;
-    private readonly byte[] _ackBuffer;
+    // Grows on demand for oversized-but-valid ACKs; reused across receive-pump iterations.
+    private byte[] _ackBuffer;
     private readonly bool _durableAckMode;
     private readonly Queue<PendingDurable> _pendingDurable = new();
     private readonly Dictionary<string, long> _durableTableWatermarks = new(StringComparer.Ordinal);
@@ -974,11 +980,12 @@ internal sealed class QwpCursorSendEngine : IDisposable
 
     private async Task ReceivePumpAsync(IQwpCursorTransport transport, long fsnAtZero, CancellationToken ct)
     {
-        var ackBuffer = _ackBuffer;
-
         while (!ct.IsCancellationRequested)
         {
-            var ackLen = await transport.ReceiveFrameAsync(ackBuffer, ct).ConfigureAwait(false);
+            var (ackLen, ackBuffer) = await transport
+                .ReceiveFrameAsync(_ackBuffer, AckBufferMaxBytes, ct).ConfigureAwait(false);
+            // Keep a grown buffer so the next iteration doesn't reallocate on a recurring wide ACK.
+            _ackBuffer = ackBuffer;
             var response = QwpResponse.Parse(ackBuffer.AsSpan(0, ackLen));
 
             if (!response.IsOk && !response.IsDurableAck)

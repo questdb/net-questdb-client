@@ -669,6 +669,60 @@ public class QwpEncoderTests
     }
 
     [Test]
+    public void EncodeInto_SelfSufficient_SymbolDeltaCount_EmitsOnlyDictPrefix()
+    {
+        var cache = new QwpSchemaCache();
+        var symbols = new QwpSymbolDictionary();
+        symbols.Add("us");
+        symbols.Add("eu");
+        symbols.Add("ap");
+
+        var t = new QwpTableBuffer("trades");
+        t.AppendSymbol("region", 0);
+        t.At(0);
+        t.AppendSymbol("region", 1);
+        t.At(1);
+
+        // Self-sufficient with an explicit prefix length of 2: only ids [0, 2) are restated.
+        var builder = new QwpEncoder.FrameBuilder(4096);
+        var len = QwpEncoder.EncodeInto(builder, new[] { t }, cache, symbols,
+            selfSufficient: true, gorillaEnabled: false, symbolDeltaCount: 2);
+        var bytes = builder.AsSpan(0, len).ToArray();
+
+        // Delta dict prelude follows the 12-byte header.
+        Assert.That(bytes[12], Is.EqualTo(0x00), "delta_start = 0");
+        Assert.That(bytes[13], Is.EqualTo(0x02), "delta_count = symbolDeltaCount, not full Count of 3");
+        Assert.That(bytes[14], Is.EqualTo(0x02), "len('us')");
+        Assert.That(bytes.AsSpan(15, 2).ToArray(), Is.EqualTo(Encoding.UTF8.GetBytes("us")));
+        Assert.That(bytes[17], Is.EqualTo(0x02), "len('eu')");
+        Assert.That(bytes.AsSpan(18, 2).ToArray(), Is.EqualTo(Encoding.UTF8.GetBytes("eu")));
+        // "ap" (id 2) lies beyond the prefix; byte 20 is the table-name varint, not another dict entry.
+        Assert.That(bytes[20], Is.EqualTo((byte)"trades".Length), "table block starts right after the 2-entry prefix");
+    }
+
+    [Test]
+    public void EncodeInto_SelfSufficient_SymbolDeltaCountZero_EmitsEmptyDict()
+    {
+        var cache = new QwpSchemaCache();
+        var symbols = new QwpSymbolDictionary();
+        symbols.Add("us");
+        symbols.Add("eu");
+
+        var t = new QwpTableBuffer("t");
+        t.AppendSymbol("region", 0);
+        t.At(0);
+
+        var builder = new QwpEncoder.FrameBuilder(4096);
+        var len = QwpEncoder.EncodeInto(builder, new[] { t }, cache, symbols,
+            selfSufficient: true, gorillaEnabled: false, symbolDeltaCount: 0);
+        var bytes = builder.AsSpan(0, len).ToArray();
+
+        Assert.That(bytes[12], Is.EqualTo(0x00), "delta_start = 0");
+        Assert.That(bytes[13], Is.EqualTo(0x00), "delta_count = 0 → no dict entries emitted");
+        Assert.That(bytes[14], Is.EqualTo((byte)1), "table block ('t') starts immediately after the empty dict");
+    }
+
+    [Test]
     public void Encode_SelfSufficient_TwoTablesInSameFrame_BothEmitFullSchema()
     {
         var cache = new QwpSchemaCache();

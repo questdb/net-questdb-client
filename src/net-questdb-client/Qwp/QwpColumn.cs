@@ -392,6 +392,7 @@ internal sealed class QwpColumn
 
     internal void Restore(Savepoint sp)
     {
+        var oldRowCount = RowCount;
         RowCount = sp.RowCount;
         NullCount = sp.NullCount;
         FixedLen = sp.FixedLen;
@@ -402,6 +403,16 @@ internal sealed class QwpColumn
         IsTyped = sp.IsTyped;
         DecimalScaleSet = sp.DecimalScaleSet;
         GeohashPrecisionSet = sp.GeohashPrecisionSet;
+
+        // MarkBit ORs null bits in by row index; clear any set by the rolled-back row so a later
+        // real value at the same dense index doesn't encode a spurious null.
+        if (NullBitmap is { } nullBitmap)
+        {
+            for (var r = RowCount; r < oldRowCount; r++)
+            {
+                nullBitmap[r >> 3] &= (byte)~(1 << (r & 7));
+            }
+        }
 
         // AppendBool ORs without clearing on non-aligned slots; mask off post-rollback tail.
         if (BoolData is { Length: > 0 } boolData)
@@ -875,13 +886,7 @@ internal sealed class QwpColumn
 
         if (FixedData.Length < required)
         {
-            var newSize = FixedData.Length;
-            while (newSize < required)
-            {
-                newSize *= 2;
-            }
-
-            Array.Resize(ref FixedData, newSize);
+            Array.Resize(ref FixedData, GrowTo(FixedData.Length, required, "fixed-width column"));
         }
     }
 
@@ -896,13 +901,7 @@ internal sealed class QwpColumn
 
         if (BoolData.Length < requiredBytes)
         {
-            var newSize = BoolData.Length;
-            while (newSize < requiredBytes)
-            {
-                newSize *= 2;
-            }
-
-            Array.Resize(ref BoolData, newSize);
+            Array.Resize(ref BoolData, GrowTo(BoolData.Length, requiredBytes, "boolean column"));
         }
     }
 
@@ -916,13 +915,7 @@ internal sealed class QwpColumn
 
         if (StrData.Length < required)
         {
-            var newSize = StrData.Length;
-            while (newSize < required)
-            {
-                newSize *= 2;
-            }
-
-            Array.Resize(ref StrData, newSize);
+            Array.Resize(ref StrData, GrowTo(StrData.Length, required, "string column"));
         }
     }
 
@@ -937,13 +930,7 @@ internal sealed class QwpColumn
 
         if (StrOffsets.Length < requiredCount)
         {
-            var newSize = StrOffsets.Length;
-            while (newSize < requiredCount)
-            {
-                newSize *= 2;
-            }
-
-            Array.Resize(ref StrOffsets, newSize);
+            Array.Resize(ref StrOffsets, GrowTo(StrOffsets.Length, requiredCount, "string-offset array"));
         }
     }
 
@@ -955,7 +942,7 @@ internal sealed class QwpColumn
             return;
         }
 
-        Array.Resize(ref SymbolIds, SymbolIds.Length * 2);
+        Array.Resize(ref SymbolIds, GrowTo(SymbolIds.Length, SymbolIds.Length + 1, "symbol-id array"));
     }
 
     private void EnsureBitmapCapacity(int rowCount)
@@ -968,13 +955,7 @@ internal sealed class QwpColumn
         var requiredBytes = (rowCount + 7) >> 3;
         if (NullBitmap.Length < requiredBytes)
         {
-            var newSize = NullBitmap.Length;
-            while (newSize < requiredBytes)
-            {
-                newSize *= 2;
-            }
-
-            Array.Resize(ref NullBitmap, newSize);
+            Array.Resize(ref NullBitmap, GrowTo(NullBitmap.Length, requiredBytes, "null bitmap"));
         }
     }
 
@@ -991,16 +972,40 @@ internal sealed class QwpColumn
             var requiredBytes = ((rowIndex + 1) + 7) >> 3;
             if (NullBitmap.Length < requiredBytes)
             {
-                var newSize = NullBitmap.Length;
-                while (newSize < requiredBytes)
-                {
-                    newSize *= 2;
-                }
-
-                Array.Resize(ref NullBitmap, newSize);
+                Array.Resize(ref NullBitmap, GrowTo(NullBitmap.Length, requiredBytes, "null bitmap"));
             }
         }
 
         NullBitmap[rowIndex >> 3] |= (byte)(1 << (rowIndex & 7));
+    }
+
+    // Doubles currentLength until it covers required, accumulating in long so the doubling
+    // can't overflow negative; clamps at int.MaxValue and rejects a genuinely oversized column.
+    private static int GrowTo(int currentLength, int required, string what)
+    {
+        if (required < 0)
+        {
+            throw new IngressError(ErrorCode.InvalidApiCall,
+                $"QWP {what} capacity requirement overflowed int.MaxValue");
+        }
+
+        var newSize = (long)currentLength;
+        while (newSize < required)
+        {
+            newSize *= 2;
+            if (newSize > int.MaxValue)
+            {
+                newSize = int.MaxValue;
+                break;
+            }
+        }
+
+        if (newSize < required)
+        {
+            throw new IngressError(ErrorCode.InvalidApiCall,
+                $"QWP {what} required size {required} exceeds the {int.MaxValue}-byte cap");
+        }
+
+        return (int)newSize;
     }
 }

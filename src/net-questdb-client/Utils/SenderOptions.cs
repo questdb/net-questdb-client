@@ -101,6 +101,7 @@ public record SenderOptions
     private TimeSpan _pingTimeout = TimeSpan.FromMilliseconds(5000);
     private TimeSpan _durableAckKeepaliveInterval = TimeSpan.FromMilliseconds(200);
     private string? _proxy;
+    private string? _zone;
     private SenderErrorHandler? _errorHandler;
     private SenderErrorPolicyResolver? _errorPolicyResolver;
     private int _errorInboxCapacity = 256;
@@ -249,6 +250,7 @@ public record SenderOptions
         ParseMillisecondsWithDefault(nameof(durable_ack_keepalive_interval_millis), "200",
             out _durableAckKeepaliveInterval);
         ParseStringWithDefault(nameof(proxy), null, out _proxy);
+        ParseStringWithDefault(nameof(zone), null, out _zone);
 
         ParseIntWithDefault(nameof(error_inbox_capacity), "256", out _errorInboxCapacity);
         ParseIntWithDefault(nameof(connection_listener_inbox_capacity), "256", out _connectionListenerInboxCapacity);
@@ -502,6 +504,44 @@ public record SenderOptions
         ValidateWebSocketKeys();
         ValidateWebSocketKeysAgainstDefaults();
         ValidateErrorInboxCapacity();
+        ValidateBufferSizes();
+    }
+
+    private void ValidateBufferSizes()
+    {
+        if (_maxNameLen <= 0)
+        {
+            throw new IngressError(ErrorCode.ConfigError,
+                $"`max_name_len` must be > 0; got {_maxNameLen}");
+        }
+        if (_initBufSize <= 0)
+        {
+            throw new IngressError(ErrorCode.ConfigError,
+                $"`init_buf_size` must be > 0; got {_initBufSize}");
+        }
+        if (_maxBufSize <= 0)
+        {
+            throw new IngressError(ErrorCode.ConfigError,
+                $"`max_buf_size` must be > 0; got {_maxBufSize}");
+        }
+        if (_maxBufSize < _initBufSize)
+        {
+            throw new IngressError(ErrorCode.ConfigError,
+                $"`max_buf_size` ({_maxBufSize}) must be >= `init_buf_size` ({_initBufSize})");
+        }
+        if (IsWebSocket())
+        {
+            if (_maxSchemasPerConnection < 1)
+            {
+                throw new IngressError(ErrorCode.ConfigError,
+                    $"`max_schemas_per_connection` must be >= 1; got {_maxSchemasPerConnection}");
+            }
+            if (_maxBackgroundDrainers < 1)
+            {
+                throw new IngressError(ErrorCode.ConfigError,
+                    $"`max_background_drainers` must be >= 1; got {_maxBackgroundDrainers}");
+            }
+        }
     }
 
     private void ValidateErrorInboxCapacity()
@@ -586,7 +626,9 @@ public record SenderOptions
             throw new IngressError(ErrorCode.ConfigError,
                 $"`sf_max_total_bytes` must be > 0; got {_sfMaxTotalBytes}");
         }
-        if (_sfMaxTotalBytes < 2 * _sfMaxBytes)
+        // Overflow-safe form of `_sfMaxTotalBytes < 2 * _sfMaxBytes`; the doubled multiply
+        // wraps negative for huge sf_max_bytes and would defeat the check.
+        if (_sfMaxTotalBytes / 2 < _sfMaxBytes)
         {
             throw new IngressError(ErrorCode.ConfigError,
                 $"`sf_max_total_bytes` ({_sfMaxTotalBytes}) must be >= 2 * `sf_max_bytes` ({_sfMaxBytes}) so the segment manager has room to provision a hot spare.");
@@ -1340,6 +1382,17 @@ public record SenderOptions
             _proxy = value;
             _proxyUserSet = true;
         }
+    }
+
+    /// <summary>
+    ///     Client zone identifier (opaque, case-insensitive; e.g. <c>eu-west-1a</c>). When set, the
+    ///     WebSocket sender prefers endpoints whose server-advertised <c>zone_id</c> matches when
+    ///     ranking multiple <see cref="addresses" /> for failover. Ignored on non-WS transports.
+    /// </summary>
+    public string? zone
+    {
+        get => _zone;
+        set => _zone = value;
     }
 
     /// <summary>

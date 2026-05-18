@@ -56,7 +56,7 @@ public class QuestDbManager : IAsyncDisposable
         _httpClient = new HttpClient { Timeout = TimeSpan.FromSeconds(5) };
     }
 
-    private bool UseLiveServer => !string.IsNullOrEmpty(_liveHttp);
+    public bool UseLiveServer => !string.IsNullOrEmpty(_liveHttp);
 
     public bool IsRunning { get; private set; }
 

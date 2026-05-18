@@ -146,6 +146,16 @@ internal sealed class QwpAckWatermark : IDisposable
         }
     }
 
+    /// <summary>
+    ///     Forces the mapped view to disk so a host crash cannot lose or tear the
+    ///     last <see cref="Write" />. Best-effort: a no-op once disposed.
+    /// </summary>
+    public void Flush()
+    {
+        if (_disposed) return;
+        _view.Flush();
+    }
+
     public void Dispose()
     {
         if (_disposed) return;

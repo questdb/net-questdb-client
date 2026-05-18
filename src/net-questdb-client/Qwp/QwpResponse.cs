@@ -54,7 +54,9 @@ internal readonly record struct QwpTableEntry(string TableName, long SeqTxn);
 ///         </item>
 ///         <item>
 ///             <b>Error</b> — 11 + <c>msg_len</c> bytes: status + sequence + uint16 msg_len + UTF-8
-///             message (capped at 1024 bytes).
+///             message. The decoded <see cref="Message" /> is truncated to 1024 bytes (with a
+///             trailing ellipsis) when the server sends a longer one; the frame still parses as
+///             a normal recoverable error.
 ///         </item>
 ///     </list>
 ///     <para />
@@ -186,12 +188,6 @@ internal readonly struct QwpResponse
         var seq = BinaryPrimitives.ReadInt64LittleEndian(frame.Slice(1, 8));
         var msgLen = BinaryPrimitives.ReadUInt16LittleEndian(frame.Slice(9, 2));
 
-        if (msgLen > QwpConstants.MaxErrorMessageBytes)
-        {
-            throw new IngressError(ErrorCode.ProtocolVersionError,
-                $"QWP error message length {msgLen} exceeds the {QwpConstants.MaxErrorMessageBytes}-byte cap");
-        }
-
         var expectedTotal = QwpConstants.ErrorAckHeaderSize + msgLen;
         if (frame.Length != expectedTotal)
         {
@@ -206,14 +202,37 @@ internal readonly struct QwpResponse
         }
         else
         {
+            // An over-cap message is a legitimate (recoverable) server error, not a protocol
+            // violation. Decode only the first MaxErrorMessageBytes; framing already consumed
+            // the full msgLen above.
+            var truncated = msgLen > QwpConstants.MaxErrorMessageBytes;
+            var msgBytes = frame.Slice(QwpConstants.ErrorAckHeaderSize, (int)msgLen);
+            if (truncated)
+            {
+                // Back the cut off any UTF-8 continuation bytes so the slice ends on a whole
+                // code point — otherwise strict decoding would misreport a clean truncation as
+                // an invalid-UTF-8 protocol error.
+                var decodeLen = QwpConstants.MaxErrorMessageBytes;
+                while (decodeLen > 0 && (msgBytes[decodeLen] & 0xC0) == 0x80)
+                {
+                    decodeLen--;
+                }
+                msgBytes = msgBytes.Slice(0, decodeLen);
+            }
+
             try
             {
-                message = StrictUtf8.GetString(frame.Slice(QwpConstants.ErrorAckHeaderSize, msgLen));
+                message = StrictUtf8.GetString(msgBytes);
             }
             catch (DecoderFallbackException ex)
             {
                 throw new IngressError(ErrorCode.InvalidUtf8,
                     "QWP error response: invalid UTF-8 in message bytes", ex);
+            }
+
+            if (truncated)
+            {
+                message += "…";
             }
         }
 

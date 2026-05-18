@@ -467,6 +467,8 @@ internal sealed class QwpMmapSegment : IQwpSegment
         }
 
         _disposed = true;
+        GC.SuppressFinalize(this);
+
         Exception? flushError = null;
         try
         {
@@ -478,7 +480,7 @@ internal sealed class QwpMmapSegment : IQwpSegment
             flushError = ex;
         }
 
-        SfCleanup.Run(() => _handle.ReleasePointer());
+        ReleaseUnmanaged();
         _view.Dispose();
         _mmap.Dispose();
         SfCleanup.Dispose(_fileStream);
@@ -487,6 +489,26 @@ internal sealed class QwpMmapSegment : IQwpSegment
         {
             throw flushError;
         }
+    }
+
+    // Backstop for an instance dropped without Dispose: releases the native pointer pin only.
+    // Managed members (_view/_mmap/_fileStream — themselves SafeHandle-backed) may already be
+    // finalized, so they are deliberately not touched here.
+    ~QwpMmapSegment()
+    {
+        if (_disposed)
+        {
+            return;
+        }
+
+        _disposed = true;
+        ReleaseUnmanaged();
+    }
+
+    // Idempotent: ReleasePointer is balanced against the single AcquirePointer in the ctor.
+    private void ReleaseUnmanaged()
+    {
+        SfCleanup.Run(() => _handle.ReleasePointer());
     }
 
     /// <summary>

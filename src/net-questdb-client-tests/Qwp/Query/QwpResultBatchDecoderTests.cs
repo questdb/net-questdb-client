@@ -766,6 +766,38 @@ public class QwpResultBatchDecoderTests
     }
 
     [Test]
+    public void Decode_RejectsSymbolIdVarintExceedingInt()
+    {
+        // Regression: an oversized symbol-id varint must be rejected, not silently truncated to
+        // a wrong (aliased) int32 id. The decoder reads symbol ids via ReadBoundedVarintAsInt.
+        var p = new List<byte> { QwpConstants.MsgKindResultBatch };
+        p.AddRange(new byte[8]); // requestId = 0
+        p.Add(0x00); // batch_seq = 0
+
+        // Delta symbol dict with one entry so the column has a non-empty dict to reference.
+        WriteVarintTo(p, 0); // deltaStart = 0
+        WriteVarintTo(p, 1); // deltaCount = 1
+        WriteVarintTo(p, 5); // entry length
+        for (var i = 0; i < 5; i++) p.Add((byte)('a' + i));
+
+        p.Add(0x00); // empty table name
+        p.Add(0x01); // row_count = 1
+        p.Add(0x01); // col_count = 1
+        p.Add(QwpConstants.SchemaModeFull);
+        p.Add(0x00); // schema_id = 0
+        p.Add(0x01); p.Add((byte)'s'); // column name "s"
+        p.Add((byte)QwpTypeCode.Symbol);
+        p.Add(0x00); // null_flag = 0
+        WriteVarintTo(p, ulong.MaxValue); // symbol id varint far beyond int.MaxValue
+
+        var decoder = new QwpResultBatchDecoder(new QwpEgressConnState());
+        var ex = Assert.Throws<QwpDecodeException>(() =>
+            decoder.Decode(p.ToArray(), QwpConstants.FlagDeltaSymbolDict, new QwpColumnBatch()));
+        StringAssert.Contains("symbol id", ex!.Message);
+        StringAssert.Contains("varint exceeds int.MaxValue", ex.Message);
+    }
+
+    [Test]
     public void Decode_BooleanWithNullFlagAllZeroBitmap_AcceptedAsNonNullRows()
     {
         // Spec §11.5: BOOLEAN/BYTE/SHORT/CHAR have no NULL sentinel. null_flag=1 with an

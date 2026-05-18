@@ -71,6 +71,35 @@ public class QwpAckWatermarkTests
     }
 
     [Test]
+    public void Flush_PersistsWrite_AcrossReopen()
+    {
+        using (var wm = QwpAckWatermark.Open(_tempDir)!)
+        {
+            wm.Write(987654321L);
+            wm.Flush();
+        }
+
+        using var reopened = QwpAckWatermark.Open(_tempDir)!;
+        Assert.That(reopened.Read(), Is.EqualTo(987654321L));
+    }
+
+    [Test]
+    public void Flush_OnFreshFile_DoesNotThrow()
+    {
+        using var wm = QwpAckWatermark.Open(_tempDir)!;
+        Assert.That(() => wm.Flush(), Throws.Nothing);
+    }
+
+    [Test]
+    public void Flush_AfterDispose_DoesNotThrow()
+    {
+        var wm = QwpAckWatermark.Open(_tempDir)!;
+        wm.Write(7L);
+        wm.Dispose();
+        Assert.That(() => wm.Flush(), Throws.Nothing);
+    }
+
+    [Test]
     public void Write_PersistsMonotonicAdvances()
     {
         using var wm = QwpAckWatermark.Open(_tempDir)!;

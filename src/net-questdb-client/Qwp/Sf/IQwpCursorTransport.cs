@@ -46,6 +46,12 @@ internal interface IQwpCursorTransport : IDisposable
     /// </summary>
     (string Host, int Port)? Endpoint { get; }
 
+    /// <summary>
+    ///     Server-advertised hard cap on QWP ingest payload bytes from the upgrade response;
+    ///     <c>0</c> when the server did not advertise it. Valid only after <see cref="ConnectAsync" />.
+    /// </summary>
+    int NegotiatedMaxBatchSize => 0;
+
     /// <summary>Connects to the server and completes the QWP upgrade.</summary>
     Task ConnectAsync(CancellationToken cancellationToken);
 

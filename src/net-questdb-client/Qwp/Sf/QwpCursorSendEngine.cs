@@ -69,6 +69,7 @@ internal sealed class QwpCursorSendEngine : IDisposable
     private long _totalServerErrors;
     private long _totalReconnectAttempts;
     private long _totalReconnectsSucceeded;
+    private int _negotiatedMaxBatchSize;
     private bool _terminal;
     private Exception? _terminalError;
     private bool _seenFirstConnect;
@@ -216,6 +217,12 @@ internal sealed class QwpCursorSendEngine : IDisposable
     public long TotalServerErrors => Volatile.Read(ref _totalServerErrors);
     public long TotalReconnectAttempts => Volatile.Read(ref _totalReconnectAttempts);
     public long TotalReconnectsSucceeded => Volatile.Read(ref _totalReconnectsSucceeded);
+
+    /// <summary>
+    ///     Server-advertised hard cap on QWP ingest payload bytes, refreshed on every successful
+    ///     (re)connect. <c>0</c> when the current server did not advertise it.
+    /// </summary>
+    public int NegotiatedMaxBatchSize => Volatile.Read(ref _negotiatedMaxBatchSize);
 
     /// <summary>True once the engine has hit a terminal failure.</summary>
     public bool IsTerminallyFailed
@@ -768,6 +775,7 @@ internal sealed class QwpCursorSendEngine : IDisposable
                 var prevEndpoint = _liveEndpoint;
                 _seenFirstConnect = true;
                 _liveEndpoint = newEndpoint;
+                Volatile.Write(ref _negotiatedMaxBatchSize, transport.NegotiatedMaxBatchSize);
                 Interlocked.Increment(ref _totalReconnectsSucceeded);
                 backoff.Reset();
                 FireFirstConnectSucceeded();

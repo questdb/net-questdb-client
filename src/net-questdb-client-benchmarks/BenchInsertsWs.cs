@@ -28,8 +28,12 @@ using System.Buffers.Binary;
 using System.Net;
 using System.Net.Sockets;
 using BenchmarkDotNet.Attributes;
+using BenchmarkDotNet.Columns;
 using BenchmarkDotNet.Configs;
+using BenchmarkDotNet.Diagnosers;
+using BenchmarkDotNet.Jobs;
 using BenchmarkDotNet.Order;
+using BenchmarkDotNet.Toolchains.InProcess.NoEmit;
 using QuestDB;
 using QuestDB.Senders;
 using dummy_http_server;
@@ -43,7 +47,7 @@ namespace net_questdb_client_benchmarks;
 ///     methods grouped by <see cref="BenchmarkCategoryAttribute" /> so BDN computes pairwise
 ///     ratios within the same workload.
 /// </summary>
-[MemoryDiagnoser]
+[Config(typeof(IngestThroughputConfig))]
 [CategoriesColumn]
 [GroupBenchmarksBy(BenchmarkLogicalGroupRule.ByCategory, BenchmarkLogicalGroupRule.ByParams)]
 [Orderer(SummaryOrderPolicy.FastestToSlowest)]
@@ -195,6 +199,31 @@ public class BenchInsertsWs
         var port = ((IPEndPoint)listener.LocalEndpoint).Port;
         listener.Stop();
         return port;
+    }
+}
+
+/// <summary>
+///     Job for the ingest-throughput benches (<see cref="BenchInsertsWs" /> and
+///     <see cref="BenchSfThroughput" />): 20 iterations × 5 warmup, one shot per invocation.
+///     Replaces the 3-iteration fast job, whose error bars routinely exceeded the means.
+/// </summary>
+public class IngestThroughputConfig : ManualConfig
+{
+    public IngestThroughputConfig()
+    {
+        Add(DefaultConfig.Instance);
+        WithUnionRule(ConfigUnionRule.AlwaysUseLocal);
+
+        AddJob(Job.Default
+            .WithLaunchCount(1)
+            .WithWarmupCount(5)
+            .WithIterationCount(20)
+            .WithInvocationCount(1)
+            .WithUnrollFactor(1)
+            .WithMinIterationTime(Perfolizer.Horology.TimeInterval.FromMilliseconds(10))
+            .WithToolchain(InProcessNoEmitToolchain.Instance));
+        AddColumn(StatisticColumn.Min, StatisticColumn.P95, StatisticColumn.Max);
+        AddDiagnoser(MemoryDiagnoser.Default);
     }
 }
 

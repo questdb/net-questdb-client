@@ -60,6 +60,8 @@ internal sealed class QwpTrackedCursorTransport : IQwpCursorTransport
 
     public (string Host, int Port)? Endpoint => _inner.Endpoint;
 
+    public int NegotiatedMaxBatchSize => _inner.NegotiatedMaxBatchSize;
+
     public async Task ConnectAsync(CancellationToken cancellationToken)
     {
         CancellationTokenSource? timeoutCts = null;

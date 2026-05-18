@@ -200,6 +200,9 @@ internal static class QwpConstants
     public const string HeaderContentEncoding = "X-QWP-Content-Encoding";
     public const string HeaderMaxBatchRows = "X-QWP-Max-Batch-Rows";
 
+    /// <summary>Server → client: hard cap on ingest QWP message payload bytes.</summary>
+    public const string HeaderMaxBatchSize = "X-QWP-Max-Batch-Size";
+
     /// <summary>QWP egress version handed out by Phase-1 servers.</summary>
     public const byte SupportedEgressVersion = 0x02;
 

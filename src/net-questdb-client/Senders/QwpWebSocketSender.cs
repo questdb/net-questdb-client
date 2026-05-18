@@ -70,6 +70,9 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
     private QwpTableBuffer? _currentTable;
     private int _disposed;
     private int _runningRowCount;
+    private long _pendingBytes;
+    private long _currentTableSnapshotBytes;
+    private int _currentBatchMaxSymbolId = -1;
 
     public QwpWebSocketSender(SenderOptions options)
     {
@@ -233,19 +236,7 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
     public SenderOptions Options { get; }
 
     /// <inheritdoc />
-    public int Length
-    {
-        get
-        {
-            var total = 0;
-            foreach (var t in _tables.Values)
-            {
-                total += EstimateTableSize(t);
-            }
-
-            return total;
-        }
-    }
+    public int Length => (int)Math.Min(_pendingBytes, int.MaxValue);
 
     /// <inheritdoc />
     public int RowCount => _runningRowCount;
@@ -301,6 +292,7 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
         }
 #endif
         _currentTable = t;
+        _currentTableSnapshotBytes = t.GetBufferedBytes();
         return this;
     }
 
@@ -313,6 +305,10 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
         try
         {
             EnsureCurrentTable().AppendSymbol(name, globalId);
+            if (globalId > _currentBatchMaxSymbolId)
+            {
+                _currentBatchMaxSymbolId = globalId;
+            }
         }
         catch
         {
@@ -571,8 +567,10 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
     {
         ThrowIfTerminal();
         GuardLastFlushNotSet();
-        EnsureCurrentTable().At(DateTimeToMicros(value));
-        _runningRowCount++;
+        var t = EnsureCurrentTable();
+        GuardRowSize(t);
+        t.At(DateTimeToMicros(value));
+        OnRowCommitted(t);
         return FlushIfNecessaryAsyncCore(ct);
     }
 
@@ -585,8 +583,10 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
     {
         ThrowIfTerminal();
         GuardLastFlushNotSet();
-        EnsureCurrentTable().At(value);
-        _runningRowCount++;
+        var t = EnsureCurrentTable();
+        GuardRowSize(t);
+        t.At(value);
+        OnRowCommitted(t);
         return FlushIfNecessaryAsyncCore(ct);
     }
 
@@ -599,8 +599,10 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
     {
         ThrowIfTerminal();
         GuardLastFlushNotSet();
-        EnsureCurrentTable().AtNanos(timestampNanos);
-        _runningRowCount++;
+        var t = EnsureCurrentTable();
+        GuardRowSize(t);
+        t.AtNanos(timestampNanos);
+        OnRowCommitted(t);
         return FlushIfNecessaryAsyncCore(ct);
     }
 
@@ -609,8 +611,10 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
     {
         ThrowIfTerminal();
         GuardLastFlushNotSet();
-        EnsureCurrentTable().At(DateTimeToMicros(value));
-        _runningRowCount++;
+        var t = EnsureCurrentTable();
+        GuardRowSize(t);
+        t.At(DateTimeToMicros(value));
+        OnRowCommitted(t);
         FlushIfNecessary(ct);
     }
 
@@ -625,8 +629,10 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
     {
         ThrowIfTerminal();
         GuardLastFlushNotSet();
-        EnsureCurrentTable().At(value);
-        _runningRowCount++;
+        var t = EnsureCurrentTable();
+        GuardRowSize(t);
+        t.At(value);
+        OnRowCommitted(t);
         FlushIfNecessary(ct);
     }
 
@@ -641,8 +647,10 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
     {
         ThrowIfTerminal();
         GuardLastFlushNotSet();
-        EnsureCurrentTable().AtNanos(timestampNanos);
-        _runningRowCount++;
+        var t = EnsureCurrentTable();
+        GuardRowSize(t);
+        t.AtNanos(timestampNanos);
+        OnRowCommitted(t);
         FlushIfNecessary(ct);
     }
 
@@ -693,13 +701,15 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
         return QwpEncoder.EncodeInto(
             _encoderBuffer, _flushBatch, _schemaCache, _symbolDictionary,
             selfSufficient: true,
-            gorillaEnabled: Options.gorilla);
+            gorillaEnabled: Options.gorilla,
+            symbolDeltaCount: _currentBatchMaxSymbolId + 1);
     }
 
     private void FlushSync(CancellationToken ct)
     {
         var len = EncodeBatch();
         if (len == 0) return;
+        GuardBatchSize(len);
         _engine.AppendBlocking(_encoderBuffer.AsSpan(0, len), ct);
         OnFlushSucceeded();
     }
@@ -708,6 +718,7 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
     {
         var len = EncodeBatch();
         if (len == 0) return;
+        GuardBatchSize(len);
         await _engine.AppendAsync(_encoderBuffer.WrittenMemory, ct).ConfigureAwait(false);
         OnFlushSucceeded();
     }
@@ -721,6 +732,7 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
         ThrowIfTerminal();
         var len = EncodeBatch();
         if (len == 0) return _engine.NextFsn - 1;
+        GuardBatchSize(len);
         await _engine.AppendAsync(_encoderBuffer.WrittenMemory, ct).ConfigureAwait(false);
         var publishedFsn = _engine.NextFsn - 1;
         OnFlushSucceeded();
@@ -737,7 +749,16 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
 
     private void OnFlushSucceeded()
     {
-        _symbolDictionary.Reset();
+        ResetPendingState();
+        LastFlush = DateTime.UtcNow;
+        _lastFlushTickCount = Environment.TickCount64;
+    }
+
+    private void ResetPendingState()
+    {
+        // Symbol ids must stay stable for the connection's lifetime; resetting the
+        // dictionary per flush makes the server serve stale symbol-cache hits.
+        _currentBatchMaxSymbolId = -1;
         foreach (var t in _flushBatch)
         {
             t.SchemaId = -1;
@@ -746,9 +767,9 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
 
         _flushBatch.Clear();
         _runningRowCount = 0;
+        _pendingBytes = 0;
+        _currentTableSnapshotBytes = 0;
         _currentTable = null;
-        LastFlush = DateTime.UtcNow;
-        _lastFlushTickCount = Environment.TickCount64;
     }
 
     /// <inheritdoc />
@@ -777,8 +798,11 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
             t.Clear();
         }
 
+        _currentBatchMaxSymbolId = -1;
         _currentTable = null;
         _runningRowCount = 0;
+        _pendingBytes = 0;
+        _currentTableSnapshotBytes = 0;
     }
 
     /// <inheritdoc />
@@ -1015,30 +1039,54 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
     {
         if (Options.auto_flush != AutoFlushType.on) return false;
 
+        var effectiveBytes = EffectiveAutoFlushBytes();
         var rowsTrigger = Options.auto_flush_rows > 0 && RowCount >= Options.auto_flush_rows;
-        var bytesTrigger = Options.auto_flush_bytes > 0 && Length >= Options.auto_flush_bytes;
+        var bytesTrigger = effectiveBytes > 0 && _pendingBytes >= effectiveBytes;
         var timeTrigger = Options.auto_flush_interval > TimeSpan.Zero
                           && Environment.TickCount64 - _lastFlushTickCount >= (long)Options.auto_flush_interval.TotalMilliseconds;
         return rowsTrigger || bytesTrigger || timeTrigger;
     }
 
-    private static int EstimateTableSize(QwpTableBuffer t)
+    // Clamps the configured byte budget to fit under the server-advertised batch cap minus a
+    // 10% margin for schema / dict-delta / framing overhead. auto_flush_bytes=off stays off
+    // even when a cap is advertised; a cap of 0 (server didn't advertise) keeps the configured value.
+    private int EffectiveAutoFlushBytes()
     {
-        // Rough byte budget per table for auto_flush_bytes accounting. We don't recompute the
-        // exact wire size on every row — that would be O(N) per append. Sum FixedLen + StrLen
-        // over all columns instead, which is a tight upper bound on the row-data portion.
-        var total = 0;
-        foreach (var col in t.Columns)
-        {
-            total += col.FixedLen + col.StrLen;
-        }
+        var configured = Options.auto_flush_bytes;
+        if (configured <= 0) return 0;
+        var cap = _engine.NegotiatedMaxBatchSize;
+        if (cap <= 0) return configured;
+        var safeBudget = (long)cap * 9 / 10;
+        return configured < safeBudget ? configured : (int)safeBudget;
+    }
 
-        if (t.DesignatedTimestampColumn is not null)
-        {
-            total += t.DesignatedTimestampColumn.FixedLen + t.DesignatedTimestampColumn.StrLen;
-        }
+    private void GuardRowSize(QwpTableBuffer t)
+    {
+        var cap = _engine.NegotiatedMaxBatchSize;
+        if (cap <= 0) return;
+        var rowBytes = t.GetBufferedBytes() - _currentTableSnapshotBytes;
+        if (rowBytes <= cap) return;
+        t.CancelCurrentRow();
+        throw new IngressError(ErrorCode.InvalidApiCall,
+            $"row too large for server batch cap [rowBytes={rowBytes}, serverMaxBatchSize={cap}]");
+    }
 
-        return total;
+    private void OnRowCommitted(QwpTableBuffer t)
+    {
+        _runningRowCount++;
+        var bufferedNow = t.GetBufferedBytes();
+        _pendingBytes += bufferedNow - _currentTableSnapshotBytes;
+        _currentTableSnapshotBytes = bufferedNow;
+    }
+
+    private void GuardBatchSize(int messageSize)
+    {
+        var cap = _engine.NegotiatedMaxBatchSize;
+        if (cap <= 0 || messageSize <= cap) return;
+        var droppedRows = _runningRowCount;
+        ResetPendingState();
+        throw new IngressError(ErrorCode.InvalidApiCall,
+            $"batch too large for server batch cap [messageSize={messageSize}, serverMaxBatchSize={cap}, droppedRows={droppedRows}]");
     }
 
     private static long DateTimeToMicros(DateTime value)

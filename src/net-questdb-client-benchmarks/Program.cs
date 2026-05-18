@@ -105,5 +105,10 @@ public class Program
     {
         BenchmarkRunner.Run<BenchQueryWs>(config);
     }
+
+    public static void RunQueryLatencyWsBench(ManualConfig config)
+    {
+        BenchmarkRunner.Run<BenchQueryLatencyWs>(config);
+    }
 #endif
 }

@@ -145,6 +145,22 @@ internal sealed class QwpColumn
     /// <summary>Whether <see cref="GeohashPrecisionBits" /> has been set by the first non-null append.</summary>
     public bool GeohashPrecisionSet;
 
+    /// <summary>
+    ///     Raw bytes accumulated across this column's backing buffers. A conservative proxy for the
+    ///     column's contribution to the wire payload, used for byte-based auto-flush accounting.
+    /// </summary>
+    public long BufferedBytes
+    {
+        get
+        {
+            long bytes = FixedLen + StrLen;
+            if (StrOffsets is not null) bytes += (long)(NonNullCount + 1) * sizeof(uint);
+            if (SymbolIds is not null) bytes += (long)NonNullCount * sizeof(int);
+            if (BoolData is not null) bytes += (NonNullCount + 7) >> 3;
+            return bytes;
+        }
+    }
+
     /// <summary>Appends a null marker for a single row.</summary>
     public void AppendNull()
     {

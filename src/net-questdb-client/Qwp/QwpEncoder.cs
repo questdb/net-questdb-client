@@ -40,19 +40,19 @@ namespace QuestDB.Qwp;
 ///     shared delta-symbol-dictionary prelude. The wire <c>tableCount</c> field is a uint16,
 ///     capped at <see cref="QwpConstants.MaxTablesPerMessage" />.
 ///     <para />
-///     <b>FLAG_DELTA_SYMBOL_DICT</b> is always set; symbol columns reference connection-global ids
-///     and the prelude carries only the delta since the last successful flush. When a frame
-///     contains no symbol columns, the delta is empty (<c>0x00 0x00</c>) but the prelude is still
-///     written.
+///     <b>FLAG_DELTA_SYMBOL_DICT</b> is always set; symbol columns reference connection-global ids.
+///     In self-sufficient mode the prelude carries the dictionary prefix from id 0 covering every
+///     id the frame references; in delta mode it carries only the delta since the last flush.
+///     When a frame references no symbols, the prelude is empty (<c>0x00 0x00</c>) but still written.
 ///     <para />
 ///     <b>FLAG_GORILLA</b> is set when <c>gorillaEnabled</c> is requested. Each TIMESTAMP /
 ///     TIMESTAMP_NANOS column body is then prefixed with an <c>encoding_flag</c> byte
 ///     (<c>0x00</c> uncompressed, <c>0x01</c> Gorilla DoD); the encoder transparently falls back to
 ///     uncompressed when DoDs overflow int32, and always emits the flag (even for all-null columns).
 ///     <para />
-///     The encoder reads the symbol dictionary and schema cache but does not advance their
-///     committed watermarks. The caller (<c>QwpWebSocketSender</c>) must call
-///     <see cref="QwpSymbolDictionary.Commit" /> after a successful flush.
+///     The encoder reads the symbol dictionary but never mutates it; in self-sufficient mode it
+///     re-emits the dictionary prefix from id 0 on every frame, so there is no per-flush watermark
+///     to advance.
 /// </remarks>
 internal static class QwpEncoder
 {
@@ -103,7 +103,8 @@ internal static class QwpEncoder
         QwpSchemaCache schemaCache,
         QwpSymbolDictionary symbolDictionary,
         bool selfSufficient = false,
-        bool gorillaEnabled = false)
+        bool gorillaEnabled = false,
+        int symbolDeltaCount = -1)
     {
         ArgumentNullException.ThrowIfNull(builder);
         ArgumentNullException.ThrowIfNull(tables);
@@ -121,7 +122,7 @@ internal static class QwpEncoder
         // Reserve the 12-byte header; we patch it at the end once the payload length is known.
         builder.Allocate(QwpConstants.HeaderSize);
 
-        WriteDeltaSymbolDict(builder, symbolDictionary, selfSufficient);
+        WriteDeltaSymbolDict(builder, symbolDictionary, selfSufficient, symbolDeltaCount);
 
         var emittedTableCount = 0;
         for (var i = 0; i < tables.Count; i++)
@@ -161,10 +162,24 @@ internal static class QwpEncoder
         return builder.Length;
     }
 
-    private static void WriteDeltaSymbolDict(FrameBuilder buf, QwpSymbolDictionary symbols, bool selfSufficient)
+    private static void WriteDeltaSymbolDict(FrameBuilder buf, QwpSymbolDictionary symbols, bool selfSufficient, int symbolDeltaCount)
     {
-        var deltaStart = selfSufficient ? 0 : symbols.DeltaStart;
-        var deltaCount = selfSufficient ? symbols.Count : symbols.DeltaCount;
+        int deltaStart, deltaCount;
+        if (selfSufficient)
+        {
+            // Re-emit the dictionary prefix [0, symbolDeltaCount) every frame;
+            // symbolDeltaCount < 0 means the whole dictionary.
+            deltaStart = 0;
+            deltaCount = symbolDeltaCount >= 0 ? symbolDeltaCount : symbols.Count;
+        }
+        else
+        {
+            deltaStart = symbols.DeltaStart;
+            deltaCount = symbols.DeltaCount;
+        }
+
+        Debug.Assert(deltaStart + deltaCount <= symbols.Count,
+            "symbol delta range must stay within the dictionary");
 
         buf.WriteVarint((ulong)deltaStart);
         buf.WriteVarint((ulong)deltaCount);

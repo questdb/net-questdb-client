@@ -201,7 +201,7 @@ public class QwpWebSocketSenderTests
     }
 
     [Test]
-    public async Task EndToEnd_SymbolDeltaIsResetEachFlush()
+    public async Task EndToEnd_SymbolDictAccumulatesAcrossFlushes()
     {
         await using var server = StartServerWithOkAcks();
         using var sender = NewSender(server, "auto_flush=off;");
@@ -214,11 +214,16 @@ public class QwpWebSocketSenderTests
         await WaitFor(() => server.ReceivedFrames.Count >= 2);
         var frames = server.ReceivedFrames.Take(2).ToList();
 
-        // Cursor engine emits self-sufficient frames: each restarts symbol-dict at delta_start=0.
+        // Frames stay self-sufficient (delta_start=0), but symbol ids accumulate: the
+        // second frame re-emits the full prefix ["us", "eu"] so a client symbol id
+        // always denotes the same value across flushes.
         Assert.That(frames[0][12], Is.EqualTo(0));
         Assert.That(frames[0][13], Is.EqualTo(1));
+
         Assert.That(frames[1][12], Is.EqualTo(0));
-        Assert.That(frames[1][13], Is.EqualTo(1));
+        Assert.That(frames[1][13], Is.EqualTo(2));
+        Assert.That(System.Text.Encoding.UTF8.GetString(frames[1], 15, 2), Is.EqualTo("us"));
+        Assert.That(System.Text.Encoding.UTF8.GetString(frames[1], 18, 2), Is.EqualTo("eu"));
     }
 
     [Test]
@@ -1219,6 +1224,80 @@ public class QwpWebSocketSenderTests
 
         sender.Table("t");
         Assert.Throws<IngressError>(() => ws.ColumnIPv4("ip", System.Net.IPAddress.Parse("::1")));
+    }
+
+    [Test]
+    public async Task OversizeRow_TripsPerRowGuard()
+    {
+        long nextSeq = 0;
+        await using var server = new DummyQwpServer(new DummyQwpServerOptions
+        {
+            MaxBatchSize = 4096,
+            FrameHandler = _ => BuildOkAck(Interlocked.Increment(ref nextSeq) - 1),
+        });
+        await server.StartAsync();
+        using var sender = NewSender(server, "auto_flush=off;");
+
+        sender.Table("t").Column("v", 1L).At(DateTime.UtcNow);
+        sender.Send();
+        await WaitFor(() => server.ReceivedFrames.Count >= 1);
+
+        var big = new string('x', 8192);
+        var ex = Assert.Throws<IngressError>(
+            () => sender.Table("t").Column("s", big).At(DateTime.UtcNow));
+        Assert.That(ex!.Message, Does.Contain("row too large for server batch cap"));
+
+        // The oversize row is rolled back; the sender stays usable for the next row.
+        sender.Table("t").Column("v", 2L).At(DateTime.UtcNow);
+        sender.Send();
+        await WaitFor(() => server.ReceivedFrames.Count >= 2);
+    }
+
+    [Test]
+    public async Task OversizeBatch_TripsFlushGuard()
+    {
+        long nextSeq = 0;
+        await using var server = new DummyQwpServer(new DummyQwpServerOptions
+        {
+            MaxBatchSize = 8192,
+            FrameHandler = _ => BuildOkAck(Interlocked.Increment(ref nextSeq) - 1),
+        });
+        await server.StartAsync();
+        using var sender = NewSender(server, "auto_flush=off;");
+
+        sender.Table("t").Column("v", 1L).At(DateTime.UtcNow);
+        sender.Send();
+        await WaitFor(() => server.ReceivedFrames.Count >= 1);
+
+        var chunk = new string('y', 2048);
+        for (var i = 0; i < 12; i++)
+        {
+            sender.Table("t").Column("s", chunk).At(DateTime.UtcNow);
+        }
+
+        var ex = Assert.Throws<IngressError>(() => sender.Send());
+        Assert.That(ex!.Message, Does.Contain("batch too large for server batch cap"));
+    }
+
+    [Test]
+    public async Task NoAdvertisedCap_LargeRowPassesThrough()
+    {
+        long nextSeq = 0;
+        await using var server = new DummyQwpServer(new DummyQwpServerOptions
+        {
+            FrameHandler = _ => BuildOkAck(Interlocked.Increment(ref nextSeq) - 1),
+        });
+        await server.StartAsync();
+        using var sender = NewSender(server, "auto_flush=off;");
+
+        sender.Table("t").Column("v", 1L).At(DateTime.UtcNow);
+        sender.Send();
+        await WaitFor(() => server.ReceivedFrames.Count >= 1);
+
+        var big = new string('x', 1024 * 1024);
+        Assert.DoesNotThrow(() => sender.Table("t").Column("s", big).At(DateTime.UtcNow));
+        sender.Send();
+        await WaitFor(() => server.ReceivedFrames.Count >= 2);
     }
 
     private static DummyQwpServer StartServerWithOkAcks()

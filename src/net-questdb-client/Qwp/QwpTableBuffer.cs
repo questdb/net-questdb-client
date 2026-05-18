@@ -55,7 +55,7 @@ internal static class QwpStrictUtf8
 /// </remarks>
 internal sealed class QwpTableBuffer
 {
-    private readonly Dictionary<string, int> _columnIndex = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, int> _columnIndex = new(StringComparer.OrdinalIgnoreCase);
 #if NET9_0_OR_GREATER
     private readonly Dictionary<string, int>.AlternateLookup<ReadOnlySpan<char>> _columnIndexLookup;
 #endif
@@ -138,6 +138,23 @@ internal sealed class QwpTableBuffer
 
     /// <summary>True when at least one column has been touched in the current row.</summary>
     public bool HasPendingRow { get; private set; }
+
+    /// <summary>Raw bytes accumulated across every column's backing buffers, including the designated timestamp.</summary>
+    public long GetBufferedBytes()
+    {
+        long bytes = 0;
+        for (var i = 0; i < _columns.Count; i++)
+        {
+            bytes += _columns[i].BufferedBytes;
+        }
+
+        if (DesignatedTimestampColumn is not null)
+        {
+            bytes += DesignatedTimestampColumn.BufferedBytes;
+        }
+
+        return bytes;
+    }
 
     /// <summary>Append a boolean value to the named column.</summary>
     public void AppendBool(ReadOnlySpan<char> columnName, bool value)

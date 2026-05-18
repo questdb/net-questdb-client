@@ -38,8 +38,9 @@ and TCP senders work on every supported target.
 # Build the whole solution.
 dotnet build net-questdb-client.sln -c Release
 
-# Full test pass excluding the three integration suites (which need Docker / live
-# QuestDB). Mirrors the CI filter applied to every leg except Linux + net9.0.
+# Full test pass excluding the three integration suites and the integration fuzz
+# (which need a live QuestDB). Mirrors the CI filter applied to every leg except
+# Linux + net9.0.
 dotnet test src/net-questdb-client-tests/net-questdb-client-tests.csproj \
   --framework net10.0 -c Release \
   --filter "FullyQualifiedName!~QuestDbIntegrationTests&FullyQualifiedName!~QuestDbWebSocketIntegrationTests&FullyQualifiedName!~QuestDbQueryIntegrationTests"
@@ -49,20 +50,21 @@ dotnet test src/net-questdb-client-tests/net-questdb-client-tests.csproj \
   --framework net10.0 -c Release \
   --filter "FullyQualifiedName~QwpEncoder"
 
-# Integration tests. All three suites (HTTP/TCP, WebSocket ingest, Egress query) are
-# plain `[TestFixture]` and lean on `QuestDbManager` to boot QuestDB. By default it
-# pulls `questdb/questdb:latest` via Docker; for WS / egress endpoints (`/write/v4`,
-# `/read/v1`) that only exist on master, override `QUESTDB_IMAGE=questdb/questdb:nightly`
-# (master-equivalent rolling tag; `:master` is not published). Switch back to `:latest`
-# once a stable release ships those endpoints. `QDB_LIVE_HTTP` / `QDB_LIVE_ILP` skip
-# Docker entirely when pointed at an existing instance.
-QUESTDB_IMAGE=questdb/questdb:nightly \
+# Integration tests. All three suites (HTTP/TCP, WebSocket ingest, Egress query)
+# plus the integration fuzz suites (FullyQualifiedName~QuestDb & ~Fuzz) are plain
+# `[TestFixture]` and lean on `QuestDbManager`, which boots QuestDB as a local
+# java process — no Docker. The WS / egress endpoints (`/write/v4`, `/read/v1`)
+# only exist on master, so point QuestDbManager at a built master repo via
+# `QUESTDB_REPO`, or a built jar via `QUESTDB_JAR`. `java` resolves from
+# `JAVA_HOME` or `PATH`. `QDB_LIVE_HTTP` / `QDB_LIVE_ILP` skip launching entirely
+# when pointed at an already-running instance.
+QUESTDB_REPO=/path/to/built/questdb \
   dotnet test src/net-questdb-client-tests/net-questdb-client-tests.csproj \
   --framework net10.0 -c Release \
   --filter "FullyQualifiedName~QuestDbIntegrationTests|FullyQualifiedName~QuestDbWebSocketIntegrationTests|FullyQualifiedName~QuestDbQueryIntegrationTests"
 
 # Single-suite drilldowns:
-QUESTDB_IMAGE=questdb/questdb:nightly \
+QUESTDB_REPO=/path/to/built/questdb \
   dotnet test ... --filter "FullyQualifiedName~QuestDbWebSocketIntegrationTests"
 QDB_LIVE_HTTP=127.0.0.1:9000 QDB_LIVE_ILP=127.0.0.1:9009 \
   dotnet test ... --filter "FullyQualifiedName~QuestDbQueryIntegrationTests"
@@ -336,9 +338,10 @@ behaviours:
   default-comparison heuristic).
 - `auto_flush=off` zeros `auto_flush_rows` / `auto_flush_bytes` /
   `auto_flush_interval` to `-1`. WS-specific defaults
-  (`auto_flush_rows=1000`, `auto_flush_bytes=0`, `auto_flush_interval=100ms`,
-  matching Java `DEFAULT_WS_AUTO_FLUSH_*`) only apply when
-  `auto_flush != off` — `auto_flush=off` is honoured even for ws.
+  (`auto_flush_rows=1000`, `auto_flush_bytes=8 MiB`, `auto_flush_interval=100ms`)
+  only apply when `auto_flush != off` — `auto_flush=off` is honoured even for ws.
+  The WS byte budget is further clamped at runtime to 90% of the server's
+  advertised `X-QWP-Max-Batch-Size` (when present).
 - `tls_verify=unsafe_off` accepts any server cert (dev / self-signed
   only — never ship to prod).
 - `tls_roots`, `tls_roots_password`: PFX path + optional password for
@@ -397,19 +400,29 @@ semantics in `HttpSender`. WS / SF manage their own concurrency model
     per wire type.
   - `Utils/QwpTlsAuthTests.cs` — auth / TLS helper unit tests shared
     by ingest and egress.
-- Integration tests — all three suites are plain `[TestFixture]` (no
-  `[Explicit]`), bootstrapped by `QuestDbManager`. CI excludes them by FQN
-  on every leg except Linux + net9.0, which runs them with
-  `QUESTDB_IMAGE=questdb/questdb:nightly` so the WS (`/write/v4`) and egress
-  (`/read/v1`) endpoints are present (master-equivalent rolling tag; switch
-  to `:latest` once a stable release ships those endpoints). `QDB_LIVE_HTTP` /
-  `QDB_LIVE_ILP` short-circuit Docker when pointed at an existing instance.
-  - `QuestDbIntegrationTests.cs` — HTTP/TCP integration via Docker container
-    provisioning.
+- Integration tests — the three suites plus the integration fuzz suites
+  (`QuestDb*FuzzTests`) are plain `[TestFixture]` (no `[Explicit]`),
+  bootstrapped by `QuestDbManager`, which launches QuestDB as a local java
+  process (`java -p questdb.jar -m io.questdb/io.questdb.ServerMain`) — no
+  Docker. CI excludes the three suites by FQN on every leg except Linux +
+  net9.0; the integration fuzz self-skips (`Assert.Ignore`) when no QuestDB
+  build is configured. The WS (`/write/v4`) and egress (`/read/v1`) endpoints
+  only exist on master, so the jar must be a master build: set `QUESTDB_REPO`
+  (a built QuestDB repo — `core/target/**/questdb*-SNAPSHOT.jar`) or
+  `QUESTDB_JAR` (a direct jar path); `java` resolves from `JAVA_HOME` / `PATH`.
+  `QDB_LIVE_HTTP` / `QDB_LIVE_ILP` skip launching when pointed at an existing
+  instance. CI clones + `mvn` builds QuestDB master (see `ci/azure-pipelines.yml`).
+  - `QuestDbIntegrationTests.cs` — HTTP/TCP integration.
   - `QuestDbWebSocketIntegrationTests.cs` — ingest WS/QWP integration.
   - `QuestDbQueryIntegrationTests.cs` — egress integration. `OneTimeSetUp`
     drops + re-seeds fixture tables so runs are idempotent against a
     long-lived master instance.
+  - `QuestDbWebSocketIngestFuzzTests.cs` + `QuestDbEgress{,Bind,Alter,Fragmentation}FuzzTests.cs`
+    — QWP ingress/egress fuzz suites (ports of the Rust client's fuzz tests).
+    Offline egress fuzz that needs no server lives in
+    `Qwp/Query/QwpEgress{Bounds,Fragmentation}FuzzTests.cs`. Seeds print to the
+    test output; reproduce via `QWP_FUZZ_SEED` / `QWP_WS_FUZZ_SEED` /
+    `QWP_EGRESS_FUZZ_SEED`.
 - `JsonSpecTestRunner.cs` — shared ILP conformance vectors
   (`Json/specs/*.json`) driven via the `RunHttp` / `RunTcp`
   `[TestCaseSource]` parameterisation.

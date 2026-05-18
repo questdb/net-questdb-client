@@ -195,12 +195,17 @@ public sealed class DummyQwpServer : IAsyncDisposable
             ctx.Response.Headers["X-QWP-Durable-Ack"] = "enabled";
         }
 
+        if (_options.MaxBatchSize is { } maxBatchSize)
+        {
+            ctx.Response.Headers["X-QWP-Max-Batch-Size"] =
+                maxBatchSize.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        }
+
         using var ws = await ctx.WebSockets.AcceptWebSocketAsync().ConfigureAwait(false);
 
         if (_options.InitialServerFrame is { Length: > 0 } initial)
         {
-            await ws.SendAsync(initial, WebSocketMessageType.Binary, endOfMessage: true, ctx.RequestAborted)
-                .ConfigureAwait(false);
+            await SendOutgoingAsync(ws, initial, ctx.RequestAborted).ConfigureAwait(false);
         }
 
         var receiveBuf = new byte[_options.ReceiveBufferSize];
@@ -251,8 +256,7 @@ public sealed class DummyQwpServer : IAsyncDisposable
                 {
                     if (response is not null && response.Length > 0)
                     {
-                        await ws.SendAsync(response, WebSocketMessageType.Binary, endOfMessage: true, ctx.RequestAborted)
-                            .ConfigureAwait(false);
+                        await SendOutgoingAsync(ws, response, ctx.RequestAborted).ConfigureAwait(false);
                     }
                 }
             }
@@ -261,8 +265,7 @@ public sealed class DummyQwpServer : IAsyncDisposable
                 var response = _options.FrameHandler?.Invoke(frame);
                 if (response is not null && response.Length > 0)
                 {
-                    await ws.SendAsync(response, WebSocketMessageType.Binary, endOfMessage: true, ctx.RequestAborted)
-                        .ConfigureAwait(false);
+                    await SendOutgoingAsync(ws, response, ctx.RequestAborted).ConfigureAwait(false);
                 }
             }
 
@@ -273,6 +276,33 @@ public sealed class DummyQwpServer : IAsyncDisposable
                     .ConfigureAwait(false);
                 return;
             }
+        }
+    }
+
+    /// <summary>
+    ///     Sends one QWP frame as a WebSocket binary message. When
+    ///     <see cref="DummyQwpServerOptions.OutgoingFragmentSize" /> is positive, the message is
+    ///     split into WebSocket frames of at most that many bytes so the client's receive loop
+    ///     must reassemble it across arbitrary boundaries.
+    /// </summary>
+    private async Task SendOutgoingAsync(WebSocket ws, byte[] payload, CancellationToken ct)
+    {
+        var chunk = _options.OutgoingFragmentSize;
+        if (chunk <= 0 || payload.Length <= chunk)
+        {
+            await ws.SendAsync(payload, WebSocketMessageType.Binary, endOfMessage: true, ct)
+                .ConfigureAwait(false);
+            return;
+        }
+
+        for (var offset = 0; offset < payload.Length; offset += chunk)
+        {
+            var len = Math.Min(chunk, payload.Length - offset);
+            var endOfMessage = offset + len >= payload.Length;
+            await ws.SendAsync(
+                    new ArraySegment<byte>(payload, offset, len),
+                    WebSocketMessageType.Binary, endOfMessage, ct)
+                .ConfigureAwait(false);
         }
     }
 }
@@ -297,6 +327,9 @@ public sealed class DummyQwpServerOptions
 
     /// <summary>Optional <c>X-QuestDB-Role</c> header value attached to a successful 101 response (diagnostic / tests).</summary>
     public string? RoleHeader { get; init; }
+
+    /// <summary>If set, the server advertises this value in the <c>X-QWP-Max-Batch-Size</c> response header.</summary>
+    public int? MaxBatchSize { get; init; }
 
     /// <summary>If set, Kestrel binds an HTTPS listener using this certificate; <see cref="DummyQwpServer.Uri" /> returns a <c>wss://</c> URI.</summary>
     public X509Certificate2? TlsCertificate { get; init; }
@@ -335,4 +368,12 @@ public sealed class DummyQwpServerOptions
 
     /// <summary>Buffer size for reading incoming WebSocket messages.</summary>
     public int ReceiveBufferSize { get; init; } = 64 * 1024;
+
+    /// <summary>
+    ///     If positive, every outgoing WebSocket message (the <see cref="InitialServerFrame" />
+    ///     and every response frame) is split into WebSocket frames of at most this many bytes,
+    ///     forcing the client to reassemble it across arbitrary boundaries. Zero (the default)
+    ///     sends each message as a single WebSocket frame.
+    /// </summary>
+    public int OutgoingFragmentSize { get; init; }
 }

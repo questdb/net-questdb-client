@@ -28,6 +28,7 @@ using System.Text.Json;
 using BenchmarkDotNet.Attributes;
 using BenchmarkDotNet.Columns;
 using BenchmarkDotNet.Configs;
+using BenchmarkDotNet.Diagnosers;
 using BenchmarkDotNet.Jobs;
 using BenchmarkDotNet.Order;
 using BenchmarkDotNet.Reports;
@@ -44,10 +45,10 @@ namespace net_questdb_client_benchmarks;
 ///     Requires <c>QDB_BENCH_ENDPOINT</c> pointing at a live QuestDB master (e.g. 127.0.0.1:9000) —
 ///     no dummy fallback because hand-rolling realistic <c>RESULT_BATCH</c> frames in the bench
 ///     setup would measure the test fixture, not the client. Both methods do equivalent work:
-///     WS decodes column-major and the handler walks every row; HTTP parses the JSON response and
-///     counts dataset rows so the comparison is apples-to-apples on extraction work, not just I/O.
+///     WS decodes column-major and the handler reads every cell through the typed accessors; HTTP
+///     streams the JSON response and extracts every cell value (numbers + strings), so the
+///     QWP-vs-HTTP ratio reflects decode cost on a matched workload, not just I/O.
 /// </summary>
-[MemoryDiagnoser]
 [Config(typeof(QueryThroughputConfig))]
 [CategoriesColumn]
 [GroupBenchmarksBy(BenchmarkLogicalGroupRule.ByCategory, BenchmarkLogicalGroupRule.ByParams)]
@@ -56,14 +57,17 @@ public class BenchQueryWs
 {
     private const string NarrowTable = "bench_egress_narrow";
     private const string WideTable = "bench_egress_wide";
-    private const int SeedRows = 1_000_000;
+    private const string NarrowColumns = "ts, id, price, sym, note";
+    private const string WideColumns = "ts, id, price, sym, note, d1, d2, d3, d4, d5, s1, s2, s3, s4, s5";
+    private const int SeedRows = 10_000_000;
 
     private string _endpoint = null!;
     private HttpClient _http = null!;
-    private IQwpQueryClient _ws = null!;
+    private IQwpQueryClient _wsNarrow = null!;
+    private IQwpQueryClient _wsWide = null!;
     private CountingHandler _handler = null!;
 
-    [Params(10_000, 100_000, 1_000_000)]
+    [Params(10_000, 100_000, 1_000_000, 10_000_000)]
     public int RowCount;
 
     [GlobalSetup]
@@ -74,11 +78,17 @@ public class BenchQueryWs
                 "BenchQueryWs requires QDB_BENCH_ENDPOINT (e.g. 127.0.0.1:9000) to be set — egress bench runs against a live QuestDB master.");
 
         _http = new HttpClient { Timeout = TimeSpan.FromMinutes(5) };
-        _ws = QueryClient.New($"ws::addr={_endpoint};");
+        _wsNarrow = QueryClient.New($"ws::addr={_endpoint};");
+        // The wide schema's high-cardinality symbol columns make a default-sized RESULT_BATCH
+        // (16384 rows) overflow the server's egress send buffer and abort the query, so cap the
+        // per-batch row count for wide. Narrow rows are small enough to stay uncapped.
+        _wsWide = QueryClient.New($"ws::addr={_endpoint};max_batch_rows=4096;");
         _handler = new CountingHandler();
 
         await DropAsync(NarrowTable);
         await DropAsync(WideTable);
+        await CreateNarrowTableAsync();
+        await CreateWideTableAsync();
         await SeedNarrowAsync(SeedRows);
         await SeedWideAsync(SeedRows);
         await WaitForRowsAsync(NarrowTable, SeedRows);
@@ -88,39 +98,53 @@ public class BenchQueryWs
     [GlobalCleanup]
     public async Task Cleanup()
     {
-        try { _ws?.Dispose(); } catch { }
+        try { _wsNarrow?.Dispose(); } catch { }
+        try { _wsWide?.Dispose(); } catch { }
         try { await DropAsync(NarrowTable); } catch { }
         try { await DropAsync(WideTable); } catch { }
         _http?.Dispose();
     }
 
     [Benchmark(Baseline = true), BenchmarkCategory("Narrow")]
-    public async Task<long> Http_NarrowSelect() => await HttpSelectCountRowsAsync(NarrowTable);
+    public async Task<long> Http_NarrowSelect() => await HttpSelectAsync(NarrowTable, NarrowColumns);
 
     [Benchmark, BenchmarkCategory("Narrow")]
-    public int Ws_NarrowSelect() => WsSelectCountRows(NarrowTable);
+    public long Ws_NarrowSelect() => WsSelect(_wsNarrow, NarrowTable, NarrowColumns);
 
     [Benchmark(Baseline = true), BenchmarkCategory("Wide")]
-    public async Task<long> Http_WideSelect() => await HttpSelectCountRowsAsync(WideTable);
+    public async Task<long> Http_WideSelect() => await HttpSelectAsync(WideTable, WideColumns);
 
     [Benchmark, BenchmarkCategory("Wide")]
-    public int Ws_WideSelect() => WsSelectCountRows(WideTable);
+    public long Ws_WideSelect() => WsSelect(_wsWide, WideTable, WideColumns);
 
-    private int WsSelectCountRows(string table)
+    private long WsSelect(IQwpQueryClient ws, string table, string columns)
     {
         _handler.Reset();
-        _ws.Execute($"SELECT * FROM {table} LIMIT {RowCount}", _handler);
-        return _handler.TotalRows;
+        ws.Execute($"SELECT {columns} FROM {table} LIMIT {RowCount}", _handler);
+        return _handler.TotalRows ^ _handler.Checksum;
     }
 
-    private async Task<long> HttpSelectCountRowsAsync(string table)
+    private async Task<long> HttpSelectAsync(string table, string columns)
     {
-        var url = $"http://{_endpoint}/exec?query={Uri.EscapeDataString($"SELECT * FROM {table} LIMIT {RowCount}")}";
+        var url = $"http://{_endpoint}/exec?query={Uri.EscapeDataString($"SELECT {columns} FROM {table} LIMIT {RowCount}")}";
         using var resp = await _http.GetAsync(url, HttpCompletionOption.ResponseHeadersRead);
         resp.EnsureSuccessStatusCode();
         await using var stream = await resp.Content.ReadAsStreamAsync();
-        return await CountRowsStreamingAsync(stream);
+        return await ParseRowsStreamingAsync(stream);
     }
+
+    private Task CreateNarrowTableAsync() =>
+        ExecAsync(
+            $"CREATE TABLE {NarrowTable} (ts TIMESTAMP, id LONG, price DOUBLE, sym SYMBOL, note VARCHAR) " +
+            "TIMESTAMP(ts) PARTITION BY HOUR WAL");
+
+    private Task CreateWideTableAsync() =>
+        ExecAsync(
+            $"CREATE TABLE {WideTable} (ts TIMESTAMP, id LONG, price DOUBLE, sym SYMBOL, note VARCHAR, " +
+            "d1 DOUBLE, d2 DOUBLE, d3 DOUBLE, d4 DOUBLE, d5 DOUBLE, " +
+            "s1 SYMBOL capacity 200000, s2 SYMBOL capacity 200000, s3 SYMBOL capacity 200000, " +
+            "s4 SYMBOL capacity 200000, s5 SYMBOL capacity 200000) " +
+            "TIMESTAMP(ts) PARTITION BY HOUR WAL");
 
     private async Task SeedNarrowAsync(int rows)
     {
@@ -130,8 +154,10 @@ public class BenchQueryWs
         for (var i = 0; i < rows; i++)
         {
             sender.Table(NarrowTable)
-                .Symbol("region", i % 2 == 0 ? "us" : "eu")
+                .Column("id", (long)i)
                 .Column("price", i * 1.5)
+                .Symbol("sym", i % 2 == 0 ? "us" : "eu")
+                .Column("note", "note-" + i)
                 .At(now);
         }
         await sender.SendAsync();
@@ -145,21 +171,25 @@ public class BenchQueryWs
         for (var i = 0; i < rows; i++)
         {
             sender.Table(WideTable)
-                .Symbol("a", "x").Symbol("b", "y").Symbol("c", "z")
-                .Column("d", (long)i).Column("e", i * 0.5)
-                .Column("f", i % 2 == 0).Column("g", "string-" + i)
-                .Column("h", now)
-                .Column("i", (long)(i + 1)).Column("j", i * 1.25)
-                .Column("k", "k-" + i).Column("l", i % 3 == 0)
-                .Column("m", (long)(i * 2)).Column("n", (i % 7) * 0.7)
+                .Column("id", (long)i)
+                .Column("price", i * 1.5)
+                .Symbol("sym", i % 2 == 0 ? "us" : "eu")
+                .Column("note", "note-" + i)
+                .Column("d1", i * 0.5).Column("d2", i * 1.25).Column("d3", (i % 7) * 0.7)
+                .Column("d4", i * 2.0).Column("d5", i * 0.25)
+                .Symbol("s1", "s1-" + (i % 100_000)).Symbol("s2", "s2-" + (i % 100_000))
+                .Symbol("s3", "s3-" + (i % 100_000)).Symbol("s4", "s4-" + (i % 100_000))
+                .Symbol("s5", "s5-" + (i % 100_000))
                 .At(now);
         }
         await sender.SendAsync();
     }
 
-    private async Task DropAsync(string table)
+    private Task DropAsync(string table) => ExecAsync($"DROP TABLE IF EXISTS {table}");
+
+    private async Task ExecAsync(string sql)
     {
-        var url = $"http://{_endpoint}/exec?query={Uri.EscapeDataString($"DROP TABLE IF EXISTS {table}")}";
+        var url = $"http://{_endpoint}/exec?query={Uri.EscapeDataString(sql)}";
         using var resp = await _http.GetAsync(url);
         resp.EnsureSuccessStatusCode();
     }
@@ -185,13 +215,15 @@ public class BenchQueryWs
         throw new TimeoutException($"table {table} did not reach {minimum} rows within seeding window");
     }
 
-    private static async Task<long> CountRowsStreamingAsync(Stream stream)
+    private static async Task<long> ParseRowsStreamingAsync(Stream stream)
     {
         // True streaming Utf8JsonReader walk — refill a buffer as the network feeds it. Avoids the
-        // CopyToAsync(MemoryStream) penalty that would charge HTTP an unfair allocator tax.
+        // CopyToAsync(MemoryStream) penalty that would charge HTTP an unfair allocator tax. Every
+        // cell value is extracted (not just counted) so the work matches the QWP typed accessors.
         var buffer = new byte[64 * 1024];
         var filled = 0;
         long count = 0;
+        long checksum = 0;
         var sawDataset = false;
         var depth = 0;
         var state = new JsonReaderState();
@@ -202,7 +234,7 @@ public class BenchQueryWs
             var read = await stream.ReadAsync(buffer.AsMemory(filled, buffer.Length - filled));
             var isFinal = read == 0;
             var consumed = ProcessChunk(buffer.AsSpan(0, filled + read), isFinal, ref state,
-                ref sawDataset, ref depth, ref count, out var datasetEnded);
+                ref sawDataset, ref depth, ref count, ref checksum, out var datasetEnded);
 
             if (datasetEnded || isFinal)
             {
@@ -227,12 +259,12 @@ public class BenchQueryWs
             filled = leftover;
         }
 
-        return count;
+        return count ^ checksum;
     }
 
     private static int ProcessChunk(
         ReadOnlySpan<byte> span, bool isFinal, ref JsonReaderState state,
-        ref bool sawDataset, ref int depth, ref long count, out bool datasetEnded)
+        ref bool sawDataset, ref int depth, ref long count, ref long checksum, out bool datasetEnded)
     {
         datasetEnded = false;
         var reader = new Utf8JsonReader(span, isFinal, state);
@@ -261,6 +293,20 @@ public class BenchQueryWs
                         state = reader.CurrentState;
                         return (int)reader.BytesConsumed;
                     }
+                    break;
+                case JsonTokenType.Number:
+                    // depth == 2 is a scalar cell inside a row array; extract it so HTTP does the
+                    // same per-value decode work as the QWP typed accessors.
+                    if (depth == 2)
+                        checksum ^= reader.TryGetInt64(out var l)
+                            ? l
+                            : BitConverter.DoubleToInt64Bits(reader.GetDouble());
+                    break;
+                case JsonTokenType.String:
+                    if (depth == 2) checksum ^= reader.ValueSpan.Length;
+                    break;
+                case JsonTokenType.True:
+                    if (depth == 2) checksum ^= 1;
                     break;
             }
         }
@@ -365,6 +411,9 @@ public class QueryThroughputConfig : ManualConfig
             .WithToolchain(InProcessNoEmitToolchain.Instance));
         AddColumn(StatisticColumn.Min, StatisticColumn.P95, StatisticColumn.Max);
         AddColumn(new RowsPerSecondColumn());
+        // Added explicitly: AlwaysUseLocal drops the [MemoryDiagnoser] attribute's diagnoser,
+        // so the Allocated column only appears if the local config carries it.
+        AddDiagnoser(MemoryDiagnoser.Default);
     }
 }
 

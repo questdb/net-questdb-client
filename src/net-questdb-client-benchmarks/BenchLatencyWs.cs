@@ -30,6 +30,7 @@ using System.Net.Sockets;
 using BenchmarkDotNet.Attributes;
 using BenchmarkDotNet.Columns;
 using BenchmarkDotNet.Configs;
+using BenchmarkDotNet.Diagnosers;
 using BenchmarkDotNet.Jobs;
 using BenchmarkDotNet.Toolchains.InProcess.NoEmit;
 using QuestDB;
@@ -39,13 +40,17 @@ using dummy_http_server;
 namespace net_questdb_client_benchmarks;
 
 /// <summary>
-///     Single-batch round-trip latency at the smallest valid pipeline depth (<c>in_flight_window=2</c>;
-///     <c>=1</c> is rejected by the WS sender). Each iteration is one full RTT (send + ack) —
-///     IterationCount = sample size for p50/p95/min/max. Override with <c>--iterationCount N</c>
-///     on the CLI when you need fewer/more samples.
+///     Single-batch send latency, two categories. <b>RoundTrip</b>: <c>SendAsync</c> plus an
+///     <see cref="IQwpWebSocketSender.PingAsync" /> ACK drain, so the measured time is a full
+///     send + server-process + ACK round-trip — directly comparable to the blocking HTTP baseline.
+///     <b>Handover</b>: bare <c>SendAsync</c>, which returns after the async enqueue, measuring
+///     caller-observed send latency without waiting for the server; the RAM and SF variants expose
+///     the mmap-staging cost that store-and-forward adds to that handover. IterationCount is the
+///     p50/p95/min/max sample size; override with <c>--iterationCount N</c> on the CLI.
 /// </summary>
-[MemoryDiagnoser]
 [Config(typeof(LatencySamplingConfig))]
+[CategoriesColumn]
+[GroupBenchmarksBy(BenchmarkLogicalGroupRule.ByCategory, BenchmarkLogicalGroupRule.ByParams)]
 public class BenchLatencyWs
 {
     private DummyQwpServer? _qwpServer;
@@ -53,10 +58,12 @@ public class BenchLatencyWs
     private string _httpEndpoint = null!;
     private string _wsEndpoint = null!;
     private ISender _wsSender = null!;
+    private ISender _wsSenderSf = null!;
     private ISender _httpSender = null!;
+    private string _sfRoot = null!;
     private long _rowSeq;
 
-    [Params(1, 100, 10_000)]
+    [Params(1, 100)]
     public int RowsPerBatch;
 
     [GlobalSetup]
@@ -92,7 +99,10 @@ public class BenchLatencyWs
             _wsEndpoint = $"127.0.0.1:{_qwpServer.Uri.Port}";
         }
 
-        _wsSender = Sender.New($"ws::addr={_wsEndpoint};in_flight_window=2;auto_flush=off;");
+        _sfRoot = Path.Combine(Path.GetTempPath(), "qdb-sf-bench-lat-" + Guid.NewGuid().ToString("N"));
+        _wsSender = Sender.New($"ws::addr={_wsEndpoint};auto_flush=off;");
+        _wsSenderSf = Sender.New(
+            $"ws::addr={_wsEndpoint};sf_dir={_sfRoot};sender_id=latbench;auto_flush=off;");
         _httpSender = Sender.New($"http::addr={_httpEndpoint};auto_flush=off;");
     }
 
@@ -100,35 +110,59 @@ public class BenchLatencyWs
     public async Task Cleanup()
     {
         try { _wsSender?.Dispose(); } catch { }
+        try { _wsSenderSf?.Dispose(); } catch { }
         try { _httpSender?.Dispose(); } catch { }
         if (_qwpServer is not null) await _qwpServer.DisposeAsync();
         _httpServer?.Dispose();
+        if (_sfRoot is not null && Directory.Exists(_sfRoot))
+        {
+            try { Directory.Delete(_sfRoot, recursive: true); } catch { }
+        }
     }
 
-    [Benchmark(Baseline = true)]
+    [Benchmark(Baseline = true), BenchmarkCategory("RoundTrip")]
     public async Task Http_Roundtrip()
     {
-        for (var i = 0; i < RowsPerBatch; i++)
-        {
-            _httpSender.Table("lat")
-                .Column("v", Interlocked.Increment(ref _rowSeq))
-                .At(DateTime.UtcNow);
-        }
-
+        AppendRows(_httpSender);
         await _httpSender.SendAsync();
     }
 
-    [Benchmark]
+    [Benchmark, BenchmarkCategory("RoundTrip")]
     public async Task Ws_SyncRoundtrip()
+    {
+        AppendRows(_wsSender);
+        await _wsSender.SendAsync();
+        // SendAsync returns after the async enqueue; PingAsync drains the in-flight ACK window so
+        // the measured interval is a full server round-trip, not just caller-side handover.
+        await ((IQwpWebSocketSender)_wsSender).PingAsync();
+    }
+
+    [Benchmark(Baseline = true), BenchmarkCategory("Handover")]
+    public async Task Ws_HandoverRam()
+    {
+        AppendRows(_wsSender);
+        // Bare SendAsync returns after the async enqueue into the RAM segment ring with no ACK
+        // wait — caller-observed send latency, the Handover-category baseline.
+        await _wsSender.SendAsync();
+    }
+
+    [Benchmark, BenchmarkCategory("Handover")]
+    public async Task Ws_HandoverSf()
+    {
+        AppendRows(_wsSenderSf);
+        // Same handover measurement against an sf_dir-backed sender; the delta over Ws_HandoverRam
+        // is the mmap-staging cost store-and-forward adds to the caller's send path.
+        await _wsSenderSf.SendAsync();
+    }
+
+    private void AppendRows(ISender sender)
     {
         for (var i = 0; i < RowsPerBatch; i++)
         {
-            _wsSender.Table("lat")
+            sender.Table("lat")
                 .Column("v", Interlocked.Increment(ref _rowSeq))
                 .At(DateTime.UtcNow);
         }
-
-        await _wsSender.SendAsync();
     }
 
     private static int GetFreeTcpPort()
@@ -143,17 +177,21 @@ public class BenchLatencyWs
 
 /// <summary>
 ///     Sampling-oriented job for <see cref="BenchLatencyWs" />: every iteration is one RTT, so
-///     IterationCount is the sample size feeding p50 / p95 / p99 / min / max. Defaults to 100k
-///     for stable p99; override with <c>--iterationCount N</c> on the CLI for quick local runs.
+///     IterationCount is the sample size feeding p50 / p95 / min / max. Defaults to 20k — solid
+///     for p50–p95 and quick to run; pass <c>--iterationCount 100000</c> on the CLI when a stable
+///     p99 / p99.9 tail is needed.
 /// </summary>
 public class LatencySamplingConfig : ManualConfig
 {
     public LatencySamplingConfig()
     {
+        Add(DefaultConfig.Instance);
+        WithUnionRule(ConfigUnionRule.AlwaysUseLocal);
+
         AddJob(Job.Default
             .WithLaunchCount(1)
             .WithWarmupCount(5)
-            .WithIterationCount(100_000)
+            .WithIterationCount(20_000)
             .WithInvocationCount(1)
             .WithUnrollFactor(1)
             .WithToolchain(InProcessNoEmitToolchain.Instance));
@@ -166,8 +204,10 @@ public class LatencySamplingConfig : ManualConfig
             StatisticColumn.P95,
             StatisticColumn.P100,
             StatisticColumn.Max);
-        // BDN 0.13 has no named P99 column. The CSV report contains every raw iteration time;
-        // post-process the *-report.csv if a strict p99 figure is needed.
+        // Added explicitly: AlwaysUseLocal drops the [MemoryDiagnoser] attribute's diagnoser,
+        // so the Allocated column only appears if the local config carries it.
+        AddDiagnoser(MemoryDiagnoser.Default);
+        
     }
 }
 

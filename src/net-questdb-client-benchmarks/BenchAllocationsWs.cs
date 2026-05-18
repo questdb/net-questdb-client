@@ -69,7 +69,7 @@ public class BenchAllocationsWs
         _wsEndpoint = $"127.0.0.1:{_qwpServer.Uri.Port}";
 
         _wsSender = Sender.New(
-            $"ws::addr={_wsEndpoint};in_flight_window=128;auto_flush=off;");
+            $"ws::addr={_wsEndpoint};auto_flush=off;");
     }
 
     [GlobalCleanup]

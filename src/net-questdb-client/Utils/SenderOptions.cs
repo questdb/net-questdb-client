@@ -167,14 +167,12 @@ public record SenderOptions
         var isWs = IsWebSocket();
         var defaultAutoFlushRows = isWs ? "1000" : "75000";
         var defaultAutoFlushBytes = isWs
-            ? "0"
+            ? (8 * 1024 * 1024).ToString(System.Globalization.CultureInfo.InvariantCulture)
             : int.MaxValue.ToString(System.Globalization.CultureInfo.InvariantCulture);
         var defaultAutoFlushIntervalMs = isWs ? "100" : "1000";
         ParseIntThatMayBeOff(nameof(auto_flush_rows), defaultAutoFlushRows, out _autoFlushRows,
             rejectLiteralZero: true);
-        var bytesProvided = ReadOptionFromBuilder(nameof(auto_flush_bytes)) is not null;
         ParseIntThatMayBeOff(nameof(auto_flush_bytes), defaultAutoFlushBytes, out _autoFlushBytes);
-        if (isWs && !bytesProvided) _autoFlushBytes = 0;
         ParseMillisecondsThatMayBeOff(nameof(auto_flush_interval), defaultAutoFlushIntervalMs,
             out _autoFlushInterval, rejectLiteralZero: true);
         ParseBoolWithDefault(nameof(gzip), "false", out _gzip);
@@ -643,7 +641,7 @@ public record SenderOptions
         if (IsWebSocket())
         {
             if (!_autoFlushRowsUserSet && _autoFlushRows == 75000) _autoFlushRows = 1000;
-            if (!_autoFlushBytesUserSet && _autoFlushBytes == int.MaxValue) _autoFlushBytes = 0;
+            if (!_autoFlushBytesUserSet && _autoFlushBytes == int.MaxValue) _autoFlushBytes = 8 * 1024 * 1024;
             if (!_autoFlushIntervalUserSet && _autoFlushInterval == TimeSpan.FromMilliseconds(1000))
                 _autoFlushInterval = TimeSpan.FromMilliseconds(100);
         }

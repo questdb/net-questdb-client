@@ -37,7 +37,7 @@ namespace net_questdb_client_benchmarks;
 ///     is row-encoding + frame I/O + ACK wait, not slot-lock acquire / mmap setup / engine spin-up.
 ///     Acceptance: SF overhead should stay within ~30% of non-SF.
 /// </summary>
-[MemoryDiagnoser]
+[Config(typeof(IngestThroughputConfig))]
 public class BenchSfThroughput
 {
     private DummyQwpServer? _qwpServer;
@@ -46,7 +46,7 @@ public class BenchSfThroughput
     private ISender _wsNoSf = null!;
     private ISender _wsWithSf = null!;
 
-    [Params(10_000, 100_000)]
+    [Params(200_000, 500_000)]
     public int Rows;
 
     [GlobalSetup]

@@ -335,7 +335,7 @@ public class SenderOptionsTests
     {
         var opts = new SenderOptions("ws::addr=localhost:9000;");
         Assert.That(opts.auto_flush_rows, Is.EqualTo(1000));
-        Assert.That(opts.auto_flush_bytes, Is.EqualTo(0));
+        Assert.That(opts.auto_flush_bytes, Is.EqualTo(8 * 1024 * 1024));
         Assert.That(opts.auto_flush_interval, Is.EqualTo(TimeSpan.FromMilliseconds(100)));
         Assert.That(opts.Port, Is.EqualTo(9000));
         Assert.That(opts.max_schemas_per_connection, Is.EqualTo(65535));

@@ -67,6 +67,23 @@ steps:
     version: '10.0.x'
     installationPath: $(Agent.ToolsDirectory)/dotnet
 
+- task: JavaToolInstaller@0
+  displayName: 'Install JDK 17 (to build QuestDB)'
+  inputs:
+    versionSpec: '17'
+    jdkArchitectureOption: 'x64'
+    jdkSourceOption: 'PreInstalled'
+  condition: eq(variables['osName'], 'Linux')
+
+- script: |
+    set -e
+    git clone --depth 1 https://github.com/questdb/questdb.git questdb-src
+    cd questdb-src
+    mvn -q -pl core -am -DskipTests -P build-binaries package
+    echo "##vso[task.setvariable variable=QUESTDB_REPO]$(pwd)"
+  displayName: 'Clone + build QuestDB master'
+  condition: eq(variables['osName'], 'Linux')
+
 - task: DotNetCoreCLI@2
   displayName: 'Restore dependencies'
   inputs:
@@ -95,11 +112,8 @@ steps:
     projects: 'src/net-questdb-client-tests/net-questdb-client-tests.csproj'
     arguments: '--configuration $(buildConfiguration) --framework net9.0 --no-build --verbosity normal --logger trx --blame-hang --blame-hang-timeout 120s --blame-hang-dump-type mini --collect:"XPlat Code Coverage"'
     publishTestResults: true
-  # Linux net9.0 is the only leg that runs the integration suites. The WS (/write/v4) and
-  # egress (/read/v1) endpoints currently only ship on master, so point QuestDbManager at the
-  # nightly tag. Switch back to questdb/questdb:latest once a stable release ships those endpoints.
   env:
-    QUESTDB_IMAGE: 'questdb/questdb:nightly'
+    QUESTDB_REPO: $(QUESTDB_REPO)
   condition: eq(variables['osName'], 'Linux')
 
 - task: DotNetCoreCLI@2

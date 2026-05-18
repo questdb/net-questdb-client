@@ -104,6 +104,39 @@ public class QwpWebSocketTransportTests
     }
 
     [Test]
+    public async Task Handshake_ParsesMaxBatchSize()
+    {
+        await using var server = new DummyQwpServer(new DummyQwpServerOptions
+        {
+            MaxBatchSize = 131058,
+        });
+        await server.StartAsync();
+
+        using var transport = new QwpWebSocketTransport(new QwpWebSocketTransportOptions
+        {
+            Uri = server.Uri,
+        });
+
+        await transport.ConnectAsync();
+        Assert.That(transport.NegotiatedMaxBatchSize, Is.EqualTo(131058));
+    }
+
+    [Test]
+    public async Task Handshake_NoMaxBatchSizeHeader_DefaultsToZero()
+    {
+        await using var server = new DummyQwpServer(new DummyQwpServerOptions());
+        await server.StartAsync();
+
+        using var transport = new QwpWebSocketTransport(new QwpWebSocketTransportOptions
+        {
+            Uri = server.Uri,
+        });
+
+        await transport.ConnectAsync();
+        Assert.That(transport.NegotiatedMaxBatchSize, Is.EqualTo(0));
+    }
+
+    [Test]
     public async Task Handshake_ServerRejectsUpgrade_Throws()
     {
         await using var server = new DummyQwpServer(new DummyQwpServerOptions

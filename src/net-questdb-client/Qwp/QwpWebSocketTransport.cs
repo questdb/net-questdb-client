@@ -68,6 +68,7 @@ internal sealed class QwpWebSocketTransport : IQwpCursorTransport
 
     private bool _disposed;
     private int _negotiatedVersion;
+    private int _negotiatedMaxBatchSize;
 
     /// <summary>Constructs a transport. <see cref="ConnectAsync" /> must be called before any I/O.</summary>
     public QwpWebSocketTransport(QwpWebSocketTransportOptions options)
@@ -126,6 +127,9 @@ internal sealed class QwpWebSocketTransport : IQwpCursorTransport
     ///     <c>"zstd;level=3"</c>); <c>null</c> when omitted (= raw) or before <see cref="ConnectAsync" />.
     /// </summary>
     public string? NegotiatedContentEncoding { get; private set; }
+
+    /// <inheritdoc />
+    public int NegotiatedMaxBatchSize => _negotiatedMaxBatchSize;
 
     /// <inheritdoc />
     public (string Host, int Port)? Endpoint { get; }
@@ -192,6 +196,13 @@ internal sealed class QwpWebSocketTransport : IQwpCursorTransport
         }
 
         NegotiatedContentEncoding = ReadOptionalHeader(QwpConstants.HeaderContentEncoding);
+
+        var maxBatch = ReadOptionalHeader(QwpConstants.HeaderMaxBatchSize);
+        _negotiatedMaxBatchSize = maxBatch is not null
+            && int.TryParse(maxBatch, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed)
+            && parsed > 0
+                ? parsed
+                : 0;
     }
 
     private string? ReadOptionalHeader(string name)

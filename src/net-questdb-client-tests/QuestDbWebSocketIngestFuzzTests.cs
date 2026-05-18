@@ -1152,13 +1152,13 @@ public class QuestDbWebSocketIngestFuzzTests
             }
             catch (Exception e)
             {
-                if (IsTransientNetworkError(e))
+                var classification = ClassifyAlterError(e);
+                if (classification == AlterErrorClass.Transient)
                 {
                     return false;
                 }
 
-                var message = e.Message.ToLowerInvariant();
-                if (AlterToleratedPatterns.Any(p => message.Contains(p)))
+                if (classification == AlterErrorClass.Tolerated)
                 {
                     continue;
                 }
@@ -1203,7 +1203,27 @@ public class QuestDbWebSocketIngestFuzzTests
         return colType;
     }
 
-    private static bool IsTransientNetworkError(Exception ex)
+    internal enum AlterErrorClass
+    {
+        Transient,
+        Tolerated,
+        Fatal,
+    }
+
+    internal static AlterErrorClass ClassifyAlterError(Exception e)
+    {
+        if (IsTransientNetworkError(e))
+        {
+            return AlterErrorClass.Transient;
+        }
+
+        var message = e.Message.ToLowerInvariant();
+        return AlterToleratedPatterns.Any(p => message.Contains(p))
+            ? AlterErrorClass.Tolerated
+            : AlterErrorClass.Fatal;
+    }
+
+    internal static bool IsTransientNetworkError(Exception ex)
     {
         for (var e = ex; e is not null; e = e.InnerException!)
         {

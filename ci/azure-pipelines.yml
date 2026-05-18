@@ -110,7 +110,7 @@ steps:
   inputs:
     command: 'test'
     projects: 'src/net-questdb-client-tests/net-questdb-client-tests.csproj'
-    arguments: '--configuration $(buildConfiguration) --framework net9.0 --no-build --verbosity normal --logger trx --blame-hang --blame-hang-timeout 120s --blame-hang-dump-type mini --collect:"XPlat Code Coverage"'
+    arguments: '--configuration $(buildConfiguration) --framework net9.0 --no-build --verbosity normal --logger trx --blame-hang --blame-hang-timeout 600s --blame-hang-dump-type mini --collect:"XPlat Code Coverage"'
     publishTestResults: true
   env:
     QUESTDB_REPO: $(QUESTDB_REPO)

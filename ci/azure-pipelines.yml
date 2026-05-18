@@ -68,9 +68,9 @@ steps:
     installationPath: $(Agent.ToolsDirectory)/dotnet
 
 - task: JavaToolInstaller@0
-  displayName: 'Install JDK 17 (to build QuestDB)'
+  displayName: 'Install JDK 25 (to build QuestDB)'
   inputs:
-    versionSpec: '17'
+    versionSpec: '25'
     jdkArchitectureOption: 'x64'
     jdkSourceOption: 'PreInstalled'
   condition: eq(variables['osName'], 'Linux')

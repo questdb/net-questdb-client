@@ -37,6 +37,10 @@ internal sealed class QwpMemorySegment : IQwpSegment
     public const int EnvelopeHeaderSize = QwpMmapSegment.EnvelopeHeaderSize;
     public const int DefaultMaxFrameLength = QwpMmapSegment.DefaultMaxFrameLength;
 
+    // A single RAM-backed segment is malloc'd up front; cap it so an absurd configured capacity
+    // surfaces as a clear config error instead of an opaque NativeMemory.Alloc OOM.
+    public const long MaxCapacity = 4L * 1024 * 1024 * 1024;
+
     private readonly unsafe byte* _basePtr;
     private readonly long _capacity;
     private readonly int _maxFrameLength;
@@ -61,6 +65,12 @@ internal sealed class QwpMemorySegment : IQwpSegment
         if (capacity <= EnvelopeHeaderSize)
         {
             throw new ArgumentOutOfRangeException(nameof(capacity), "capacity must exceed envelope header size");
+        }
+
+        if (capacity > MaxCapacity)
+        {
+            throw new ArgumentOutOfRangeException(nameof(capacity),
+                $"capacity {capacity} exceeds the {MaxCapacity}-byte memory-segment cap");
         }
 
         var ptr = (byte*)NativeMemory.Alloc((nuint)capacity);

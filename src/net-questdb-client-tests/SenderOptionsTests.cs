@@ -149,6 +149,26 @@ public class SenderOptionsTests
     }
 
     [Test]
+    public void ToString_RoundTrips_WithProgrammaticConnectionListener()
+    {
+        var opts = new SenderOptions("ws::addr=localhost:9000;")
+        {
+            ConnectionListener = new NoopConnectionListener(),
+        };
+
+        var serialised = opts.ToString();
+        Assert.That(serialised, Does.Not.Contain("ConnectionListener"));
+        Assert.DoesNotThrow(() => _ = new SenderOptions(serialised));
+    }
+
+    private sealed class NoopConnectionListener : QuestDB.Senders.ISenderConnectionListener
+    {
+        public void OnEvent(QuestDB.Senders.SenderConnectionEvent evt)
+        {
+        }
+    }
+
+    [Test]
     public void Format_OmitsSecrets()
     {
         var opts = new SenderOptions(

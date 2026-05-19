@@ -597,6 +597,15 @@ internal sealed class QwpResultBatchDecoder
                 throw new QwpDecodeException("truncated array row: values overflow");
             }
             p += (int)valueBytes;
+
+            // The span accessors read [u8 nDims][i32 dims][values]; assert the row carries at
+            // least the nDims byte + dim header so a later MemoryMarshal.Cast can't underflow.
+            var rowLen = (p - heapStart) - offsets[i];
+            if (rowLen < 1 + nDims * 4)
+            {
+                throw new QwpDecodeException(
+                    $"array row {i} shorter than its header: {rowLen} bytes, need {1 + nDims * 4}");
+            }
         }
         offsets[nonNull] = p - heapStart;
 

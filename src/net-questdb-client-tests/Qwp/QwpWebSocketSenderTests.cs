@@ -1281,6 +1281,50 @@ public class QwpWebSocketSenderTests
     }
 
     [Test]
+    public async Task AutoFlushBytes_ClampedToServerMaxBatchSize()
+    {
+        const int serverCap = 16 * 1024;
+        var clampBudget = (long)serverCap * 9 / 10;
+
+        long nextSeq = 0;
+        await using var server = new DummyQwpServer(new DummyQwpServerOptions
+        {
+            MaxBatchSize = serverCap,
+            FrameHandler = _ => BuildOkAck(Interlocked.Increment(ref nextSeq) - 1),
+        });
+        await server.StartAsync();
+
+        using var sender = NewSender(server,
+            "auto_flush_bytes=262144;auto_flush_rows=off;auto_flush_interval=off;");
+
+        var chunk = new string('z', 512);
+        for (var i = 0; i < 200; i++)
+        {
+            sender.Table("t").Column("s", chunk).At(DateTime.UtcNow);
+        }
+
+        sender.Send();
+        ((IQwpWebSocketSender)sender).Ping();
+
+        await WaitFor(() => server.ReceivedFrames.Count >= 2);
+
+        Assert.That(server.ReceivedFrames.Count, Is.GreaterThan(1),
+            "auto-flush must fire at the clamped budget, not the configured 256 KiB budget");
+        var configuredBudget = 262144;
+        foreach (var frame in server.ReceivedFrames)
+        {
+            Assert.That(frame.Length, Is.LessThanOrEqualTo(serverCap),
+                "every frame must stay within the server-advertised batch cap");
+            Assert.That(frame.Length, Is.LessThan(configuredBudget),
+                "no frame may reach the unclamped configured budget");
+        }
+
+        var largest = server.ReceivedFrames.Max(f => f.Length);
+        Assert.That(largest, Is.GreaterThan(clampBudget / 2),
+            "a flush should occur close to the clamped budget, confirming the clamp drives it");
+    }
+
+    [Test]
     public async Task NoAdvertisedCap_LargeRowPassesThrough()
     {
         long nextSeq = 0;

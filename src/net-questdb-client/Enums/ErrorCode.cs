@@ -99,9 +99,11 @@ public enum ErrorCode
     InvalidArrayShapeError,
 
     /// <summary>
-    ///     The server closed the WebSocket with a protocol-violation code
-    ///     (RFC 6455 1002 / 1003 / 1007 / 1008 / 1009 / 1010). Terminal; the
-    ///     cursor engine must not reconnect.
+    ///     A structurally corrupt or malformed wire frame was received, or the
+    ///     server closed the WebSocket with a protocol-violation code
+    ///     (RFC 6455 1002 / 1003 / 1007 / 1008 / 1009 / 1010). Terminal; this is
+    ///     not a connectivity fault, so the cursor engine / failover must not
+    ///     reconnect or re-issue the query.
     /// </summary>
     ProtocolViolation,
 

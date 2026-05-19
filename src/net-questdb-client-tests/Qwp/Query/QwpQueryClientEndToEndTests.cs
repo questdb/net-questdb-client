@@ -781,7 +781,7 @@ public class QwpQueryClientEndToEndTests
     }
 
     [Test]
-    public async Task SliceFrame_BadMagic_ThrowsProtocolVersionError()
+    public async Task SliceFrame_BadMagic_ThrowsProtocolViolation()
     {
         var bogus = new byte[QwpConstants.HeaderSize + 1];
         bogus[0] = (byte)'X'; bogus[1] = bogus[2] = bogus[3] = 0;
@@ -799,12 +799,12 @@ public class QwpQueryClientEndToEndTests
 
         using var client = QueryClient.New(BuildConnString(server, "failover=off;"));
         var ex = Assert.Throws<IngressError>(() => client.Execute("SELECT 1", new RecordingHandler()));
-        Assert.That(ex!.code, Is.EqualTo(ErrorCode.ProtocolVersionError));
+        Assert.That(ex!.code, Is.EqualTo(ErrorCode.ProtocolViolation));
         StringAssert.Contains("magic", ex.Message);
     }
 
     [Test]
-    public async Task SliceFrame_PayloadLengthMismatch_ThrowsProtocolVersionError()
+    public async Task SliceFrame_PayloadLengthMismatch_ThrowsProtocolViolation()
     {
         var hdr = new byte[QwpConstants.HeaderSize + 5];
         BinaryPrimitives.WriteUInt32LittleEndian(hdr.AsSpan(0, 4), QwpConstants.Magic);
@@ -824,11 +824,11 @@ public class QwpQueryClientEndToEndTests
 
         using var client = QueryClient.New(BuildConnString(server, "failover=off;"));
         var ex = Assert.Throws<IngressError>(() => client.Execute("SELECT 1", new RecordingHandler()));
-        Assert.That(ex!.code, Is.EqualTo(ErrorCode.ProtocolVersionError));
+        Assert.That(ex!.code, Is.EqualTo(ErrorCode.ProtocolViolation));
     }
 
     [Test]
-    public async Task UnknownMsgKind_ThrowsProtocolVersionError()
+    public async Task UnknownMsgKind_ThrowsProtocolViolation()
     {
         var hdr = new byte[QwpConstants.HeaderSize + 1];
         BinaryPrimitives.WriteUInt32LittleEndian(hdr.AsSpan(0, 4), QwpConstants.Magic);
@@ -847,7 +847,7 @@ public class QwpQueryClientEndToEndTests
 
         using var client = QueryClient.New(BuildConnString(server, "failover=off;"));
         var ex = Assert.Throws<IngressError>(() => client.Execute("SELECT 1", new RecordingHandler()));
-        Assert.That(ex!.code, Is.EqualTo(ErrorCode.ProtocolVersionError));
+        Assert.That(ex!.code, Is.EqualTo(ErrorCode.ProtocolViolation));
         StringAssert.Contains("unknown egress frame", ex.Message);
     }
 
@@ -1003,7 +1003,7 @@ public class QwpQueryClientEndToEndTests
         Assert.That(handler1.Ended, Is.True);
 
         var ex = Assert.Throws<IngressError>(() => client.Execute("SELECT 1", new RecordingHandler()));
-        Assert.That(ex!.code, Is.EqualTo(ErrorCode.ProtocolVersionError));
+        Assert.That(ex!.code, Is.EqualTo(ErrorCode.ProtocolViolation));
     }
 
     [Test]
@@ -1370,7 +1370,7 @@ public class QwpQueryClientEndToEndTests
 
         using var client = QueryClient.New(BuildConnString(server, "compression=zstd;failover=off;"));
         var ex = Assert.Throws<IngressError>(() => client.Execute("SELECT 1", new RecordingHandler()));
-        Assert.That(ex!.code, Is.EqualTo(ErrorCode.ProtocolVersionError));
+        Assert.That(ex!.code, Is.EqualTo(ErrorCode.ProtocolViolation));
         StringAssert.Contains("missing prelude", ex.Message);
     }
 
@@ -1402,7 +1402,7 @@ public class QwpQueryClientEndToEndTests
 
         using var client = QueryClient.New(BuildConnString(server, "compression=zstd;failover=off;"));
         var ex = Assert.Throws<IngressError>(() => client.Execute("SELECT 1", new RecordingHandler()));
-        Assert.That(ex!.code, Is.EqualTo(ErrorCode.ProtocolVersionError));
+        Assert.That(ex!.code, Is.EqualTo(ErrorCode.ProtocolViolation));
         StringAssert.Contains("empty compressed body", ex.Message);
     }
 
@@ -1432,7 +1432,7 @@ public class QwpQueryClientEndToEndTests
 
         using var client = QueryClient.New(BuildConnString(server, "compression=zstd;failover=off;"));
         var ex = Assert.Throws<IngressError>(() => client.Execute("SELECT 1", new RecordingHandler()));
-        Assert.That(ex!.code, Is.EqualTo(ErrorCode.ProtocolVersionError));
+        Assert.That(ex!.code, Is.EqualTo(ErrorCode.ProtocolViolation));
         StringAssert.Contains("exceeds", ex.Message);
     }
 

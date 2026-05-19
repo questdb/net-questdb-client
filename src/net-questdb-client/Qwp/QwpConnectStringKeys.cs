@@ -32,11 +32,28 @@ namespace QuestDB.Qwp;
 /// </summary>
 internal static class QwpConnectStringKeys
 {
-    /// <summary>Ingress-sender-only keys. The egress query client accepts and ignores these.</summary>
+    /// <summary>
+    ///     Keys both the ingress sender and the egress query client recognise (auth, TLS,
+    ///     addressing and other transport-level knobs). Each side honours the ones it acts on
+    ///     and ignores the rest.
+    /// </summary>
+    internal static readonly string[] Shared =
+    {
+        "addr", "protocol", "tls_verify", "tls_roots", "tls_roots_password",
+        "username", "user", "password", "pass", "token", "token_x", "token_y",
+        "auth_timeout", "auth_timeout_ms",
+        "zone", "target", "initial_credit",
+    };
+
+    /// <summary>
+    ///     Ingress-sender-only keys. The egress query client accepts and ignores these.
+    /// </summary>
     internal static readonly string[] IngressOnly =
     {
+        "protocol_version", "gzip",
         "auto_flush", "auto_flush_rows", "auto_flush_bytes", "auto_flush_interval",
         "init_buf_size", "max_buf_size", "max_name_len",
+        "request_min_throughput", "request_timeout", "retry_timeout", "pool_timeout", "own_socket",
         "max_schemas_per_connection", "request_durable_ack", "gorilla",
         "sf_dir", "sender_id", "sf_max_bytes", "sf_max_total_bytes", "sf_durability",
         "sf_append_deadline_millis",

@@ -53,6 +53,13 @@ public class QwpMemorySegmentTests
     }
 
     [Test]
+    public void Allocate_CapacityAboveCap_Throws()
+    {
+        Assert.Throws<ArgumentOutOfRangeException>(
+            () => QwpMemorySegment.Allocate(capacity: QwpMemorySegment.MaxCapacity + 1, baseFsn: 0));
+    }
+
+    [Test]
     public void Append_OneFrame_RoundTrips()
     {
         using var seg = QwpMemorySegment.Allocate(4096, baseFsn: 100);

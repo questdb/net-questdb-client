@@ -388,19 +388,20 @@ public class QwpCursorSendEngineTests
         });
         engine.Start();
 
+        engine.AppendBlocking(new byte[] { 0 });
         engine.AppendBlocking(new byte[] { 1 });
         engine.AppendBlocking(new byte[] { 2 });
-        engine.AppendBlocking(new byte[] { 3 });
 
         await engine.FlushAsync(TimeSpan.FromSeconds(5));
 
         Assert.That(connectCount, Is.GreaterThanOrEqualTo(2), "reconnect did not occur");
         // Frame at FSN 0 was acked on the first connection; FSN 1 + 2 replayed on the second.
         Assert.That(engine.AckedFsn, Is.EqualTo(3L));
-        var allSent = stubs.SelectMany(s => s.Sent.Select(b => b[0])).ToArray();
-        Assert.That(allSent, Does.Contain((byte)1));
-        Assert.That(allSent, Does.Contain((byte)2));
-        Assert.That(allSent, Does.Contain((byte)3));
+
+        var perTransport = stubs
+            .Select(s => (IReadOnlyList<int>)s.Sent.Select(b => (int)b[0]).ToList())
+            .ToList();
+        AssertAtLeastOnceDelivery(perTransport, expectedCount: 3);
     }
 
     [Test]
@@ -838,12 +839,43 @@ public class QwpCursorSendEngineTests
 
         for (var i = 0; i < totalFrames; i++)
         {
-            engine.AppendBlocking(new byte[] { (byte)(i & 0xFF) });
+            var payload = new byte[4];
+            BinaryPrimitives.WriteInt32LittleEndian(payload, i);
+            engine.AppendBlocking(payload);
         }
 
         await engine.FlushAsync(TimeSpan.FromSeconds(60));
         Assert.That(engine.AckedFsn, Is.EqualTo((long)totalFrames));
         Assert.That(stubs.Count, Is.GreaterThan(1), "synthetic flaps must have triggered at least one reconnect");
+
+        var perTransport = stubs
+            .Select(s => (IReadOnlyList<int>)s.Sent.Select(b => BinaryPrimitives.ReadInt32LittleEndian(b)).ToList())
+            .ToList();
+        AssertAtLeastOnceDelivery(perTransport, expectedCount: totalFrames);
+    }
+
+    // At-least-once: each connection sends frames in strictly ascending FSN order (no in-connection
+    // reorder), and the union across all connections covers every sequence 0..expectedCount-1 with
+    // no extras. Cross-connection duplicates are tolerated — replay is at-least-once.
+    private static void AssertAtLeastOnceDelivery(IEnumerable<IReadOnlyList<int>> perTransport, int expectedCount)
+    {
+        var union = new HashSet<int>();
+        foreach (var sent in perTransport)
+        {
+            for (var i = 1; i < sent.Count; i++)
+            {
+                Assert.That(sent[i], Is.GreaterThan(sent[i - 1]),
+                    "a single connection must send frames in strictly ascending FSN order");
+            }
+
+            foreach (var seq in sent)
+            {
+                union.Add(seq);
+            }
+        }
+
+        Assert.That(union, Is.EquivalentTo(Enumerable.Range(0, expectedCount)),
+            "every expected sequence number must appear at least once across all connections, with no extras");
     }
 
 

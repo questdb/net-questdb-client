@@ -33,6 +33,7 @@ internal sealed class QwpConnectionEventDispatcher : IDisposable
     private readonly Channel<SenderConnectionEvent> _inbox;
     private readonly ISenderConnectionListener _listener;
     private readonly CancellationTokenSource _shutdown = new();
+    private readonly object _lifecycleLock = new();
     private long _dropped;
     private long _delivered;
     private Task? _loop;
@@ -65,15 +66,18 @@ internal sealed class QwpConnectionEventDispatcher : IDisposable
         }
         if (Interlocked.CompareExchange(ref _started, 1, 0) == 0)
         {
-            // Dispose may have run between the _disposed check above and winning this CAS;
-            // re-check so the loop never starts on an already-disposed _shutdown CTS.
-            if (Volatile.Read(ref _disposed) == 0)
+            // _lifecycleLock pairs with Dispose's _loop read: Dispose joins this loop, or this
+            // branch sees the disposal first and never starts on an already-disposed CTS.
+            lock (_lifecycleLock)
             {
-                _loop = Task.Run(DispatchLoopAsync);
-            }
-            else
-            {
-                Interlocked.Increment(ref _dropped);
+                if (Volatile.Read(ref _disposed) == 0)
+                {
+                    _loop = Task.Run(DispatchLoopAsync);
+                }
+                else
+                {
+                    Interlocked.Increment(ref _dropped);
+                }
             }
         }
         return true;
@@ -104,7 +108,12 @@ internal sealed class QwpConnectionEventDispatcher : IDisposable
         if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
         _inbox.Writer.TryComplete();
         try { _shutdown.Cancel(); } catch { }
-        try { _loop?.Wait(TimeSpan.FromSeconds(2)); } catch { }
+        Task? loop;
+        lock (_lifecycleLock)
+        {
+            loop = _loop;
+        }
+        try { loop?.Wait(TimeSpan.FromSeconds(2)); } catch { }
         _shutdown.Dispose();
     }
 }

@@ -43,6 +43,8 @@ internal sealed class QwpAckWatermark : IDisposable
 
     private const uint MagicValue = 0x31574B41u;
     private const long MagicOffset = 0;
+    // Crash-atomicity relies on the 8-byte-aligned FSN residing within a single disk sector, so a
+    // host crash mid-write either leaves the old value intact or commits the new one — never a tear.
     private const long FsnOffset = 8;
 
     private readonly MemoryMappedFile _mmf;

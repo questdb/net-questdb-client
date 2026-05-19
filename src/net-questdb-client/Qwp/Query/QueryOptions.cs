@@ -48,23 +48,9 @@ public sealed class QueryOptions
 
     private static HashSet<string> BuildKeySet()
     {
-        var keys = new HashSet<string>(StringComparer.Ordinal)
-        {
-            "addr",
-            "path",
-            "auth", "username", "password", "token",
-            "tls_verify", "tls_roots", "tls_roots_password",
-            "compression", "compression_level",
-            "target", "failover", "failover_max_attempts",
-            "failover_backoff_initial_ms", "failover_backoff_max_ms",
-            "failover_max_duration_ms",
-            "auth_timeout_ms",
-            "zone",
-            "max_batch_rows", "initial_credit",
-            "client_id",
-            "buffer_pool_size",
-            "token_x", "token_y",
-        };
+        var keys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var k in QwpConnectStringKeys.Shared) keys.Add(k);
+        foreach (var k in QwpConnectStringKeys.EgressOnly) keys.Add(k);
         // The connect string is one shared input; accept (and ignore) the ingress sender's keys.
         foreach (var k in QwpConnectStringKeys.IngressOnly) keys.Add(k);
         return keys;

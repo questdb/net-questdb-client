@@ -66,8 +66,7 @@ public class QwpCursorEngineDurableModeTests
         transport.Push(OkAck(seq: 1, ("trades", 20)));
         transport.Push(OkAck(seq: 2, ("trades", 30)));
 
-        // No durable-ack issued ⇒ trim must stay put.
-        await Task.Delay(80);
+        await WaitFor(() => engine.TotalAcks == 3, "engine consumed all 3 OK frames");
         Assert.That(engine.AckedFsn, Is.EqualTo(0L), "OK frames alone must not advance trim in durable mode");
     }
 
@@ -158,7 +157,7 @@ public class QwpCursorEngineDurableModeTests
 
         transport.Push(OkAck(seq: 0, ("trades", 10)));   // needs watermark
         transport.Push(OkAck(seq: 1));                    // trivially durable
-        await Task.Delay(50);
+        await WaitFor(() => engine.TotalAcks == 2, "engine consumed both OK frames");
         Assert.That(engine.AckedFsn, Is.EqualTo(0L), "head not yet covered, FIFO stalls behind it");
 
         transport.Push(DurableAck(("trades", 10)));
@@ -175,9 +174,10 @@ public class QwpCursorEngineDurableModeTests
         AppendFrames(engine, 1);
         await transport.WaitSent(1);
 
-        transport.Push(OkAck(seq: 0, ("trades", 100), ("fills", 200)));
         transport.Push(DurableAck(("trades", 100)));
-        await Task.Delay(50);
+        transport.Push(OkAck(seq: 0, ("trades", 100), ("fills", 200)));
+        // DurableAck queued before the OK on one FIFO channel: consuming the OK proves it landed too.
+        await WaitFor(() => engine.TotalAcks == 1, "engine consumed the OK frame");
         Assert.That(engine.AckedFsn, Is.EqualTo(0L), "fills not yet covered");
 
         transport.Push(DurableAck(("fills", 200)));
@@ -191,17 +191,20 @@ public class QwpCursorEngineDurableModeTests
         using var engine = NewEngine(out _, transport, durableAckMode: true);
         engine.Start();
 
-        AppendFrames(engine, 1);
-        await transport.WaitSent(1);
+        AppendFrames(engine, 2);
+        await transport.WaitSent(2);
 
         transport.Push(OkAck(seq: 0, ("trades", 100)));
         transport.Push(DurableAck(("trades", 100)));
         await WaitFor(() => engine.AckedFsn == 1);
 
-        // A stale durable-ack for an older watermark MUST NOT regress state.
+        // Stale ack queued before the second frame's acks; reaching AckedFsn==2 proves it was
+        // consumed without regressing state.
         transport.Push(DurableAck(("trades", 50)));
-        await Task.Delay(50);
-        Assert.That(engine.AckedFsn, Is.EqualTo(1L));
+        transport.Push(OkAck(seq: 1, ("trades", 150)));
+        transport.Push(DurableAck(("trades", 150)));
+        await WaitFor(() => engine.AckedFsn == 2, "second frame drains; stale ack did not regress state");
+        Assert.That(engine.AckedFsn, Is.EqualTo(2L));
     }
 
     [Test]

@@ -364,10 +364,11 @@ public class QwpResponseTests
     }
 
     [Test]
-    public void Parse_ErrorResponse_InvalidUtf8Message_ThrowsProtocolError()
+    public void Parse_ErrorResponse_InvalidUtf8Message_DecodesLossily()
     {
-        // 0xC3 0x28 is a malformed two-byte sequence. Per-table names already throw on bad UTF-8;
-        // the error-message path must match (otherwise a buggy server smuggles U+FFFD into logs).
+        // 0xC3 0x28 is a malformed two-byte sequence. The free-form diagnostic message decodes
+        // leniently — a recoverable server error must not be escalated into a terminal UTF-8
+        // protocol error just because its message text is slightly malformed.
         var msgBytes = new byte[] { 0xC3, 0x28 };
         var frame = new byte[QwpConstants.ErrorAckHeaderSize + msgBytes.Length];
         frame[0] = (byte)QwpStatusCode.WriteError;
@@ -375,8 +376,10 @@ public class QwpResponseTests
         BinaryPrimitives.WriteUInt16LittleEndian(frame.AsSpan(9, 2), (ushort)msgBytes.Length);
         msgBytes.CopyTo(frame, QwpConstants.ErrorAckHeaderSize);
 
-        var ex = Assert.Throws<IngressError>(() => QwpResponse.Parse(frame));
-        Assert.That(ex!.code, Is.EqualTo(ErrorCode.InvalidUtf8));
+        var r = QwpResponse.Parse(frame);
+        Assert.That(r.Status, Is.EqualTo(QwpStatusCode.WriteError));
+        Assert.That(r.Sequence, Is.EqualTo(5L));
+        Assert.That(r.Message, Does.Contain("�"));
     }
 
     [Test]

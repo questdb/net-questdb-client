@@ -52,6 +52,9 @@ internal sealed class QwpBackgroundDrainerPool : IDisposable
     private readonly object _trackingLock = new();
     private readonly List<Task> _runningTasks = new();
     private readonly HashSet<QwpSlotLock> _liveLocks = new();
+    // Per-Enqueue linked CTS keyed by its task; pruned alongside _runningTasks so the non-wedge
+    // path never leaks. The task's own finally also disposes its CTS (idempotent).
+    private readonly Dictionary<Task, CancellationTokenSource> _linkedCtsByTask = new();
     private readonly CancellationTokenSource _shutdownCts = new();
     private readonly TimeSpan _shutdownWait;
     private bool _disposed;
@@ -102,6 +105,7 @@ internal sealed class QwpBackgroundDrainerPool : IDisposable
                 }
             });
             _runningTasks.Add(task);
+            _linkedCtsByTask[task] = linked;
         }
 
         // Schedule a continuation that prunes the completed task from the tracking list, bounded
@@ -112,6 +116,7 @@ internal sealed class QwpBackgroundDrainerPool : IDisposable
             lock (self._trackingLock)
             {
                 self._runningTasks.Remove(t);
+                self._linkedCtsByTask.Remove(t);
             }
         }, this, CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
     }
@@ -176,7 +181,28 @@ internal sealed class QwpBackgroundDrainerPool : IDisposable
             SfCleanup.Dispose(l);
         }
 
-        // On wedge, leak _shutdownCts and _slots so a still-running drainer can't NRE on them.
+        // Non-wedge path: every task has finished, so dispose all linked CTSs (re-dispose is a
+        // no-op). On the wedge path they are left to leak with _shutdownCts/_slots below, since a
+        // still-running task may touch its CTS.
+        CancellationTokenSource[] linkedCtsSnapshot;
+        lock (_trackingLock)
+        {
+            linkedCtsSnapshot = _linkedCtsByTask.Values.ToArray();
+            if (allJoined)
+            {
+                _linkedCtsByTask.Clear();
+            }
+        }
+        if (allJoined)
+        {
+            foreach (var cts in linkedCtsSnapshot)
+            {
+                SfCleanup.Dispose(cts);
+            }
+        }
+
+        // On wedge, leak _shutdownCts, _slots, and the still-running tasks' linked CTSs so a
+        // still-running drainer can't fault on a disposed dependency.
         if (allJoined)
         {
             SfCleanup.Dispose(_shutdownCts);

@@ -427,10 +427,9 @@ public sealed class QwpColumnBatch
     {
         var (heap, start, end, nDims) = ArraySpan(col, row);
         if (nDims < 0) return ReadOnlySpan<double>.Empty;
-        var valuesStart = start + 1 + nDims * 4;
-        var valueByteCount = end - valuesStart;
+        var valueByteCount = ArrayValueByteCount(start, end, nDims, elementBytes: 8);
         return System.Runtime.InteropServices.MemoryMarshal
-            .Cast<byte, double>(heap.AsSpan(valuesStart, valueByteCount));
+            .Cast<byte, double>(heap.AsSpan(start + 1 + nDims * 4, valueByteCount));
     }
 
     /// <summary>Returns the LONG_ARRAY element bytes as a span over the column scratch; valid only for the duration of the handler.</summary>
@@ -438,10 +437,21 @@ public sealed class QwpColumnBatch
     {
         var (heap, start, end, nDims) = ArraySpan(col, row);
         if (nDims < 0) return ReadOnlySpan<long>.Empty;
+        var valueByteCount = ArrayValueByteCount(start, end, nDims, elementBytes: 8);
+        return System.Runtime.InteropServices.MemoryMarshal
+            .Cast<byte, long>(heap.AsSpan(start + 1 + nDims * 4, valueByteCount));
+    }
+
+    private static int ArrayValueByteCount(int start, int end, int nDims, int elementBytes)
+    {
         var valuesStart = start + 1 + nDims * 4;
         var valueByteCount = end - valuesStart;
-        return System.Runtime.InteropServices.MemoryMarshal
-            .Cast<byte, long>(heap.AsSpan(valuesStart, valueByteCount));
+        if (valueByteCount < 0 || valueByteCount % elementBytes != 0)
+        {
+            throw new QwpDecodeException(
+                $"array value bytes {valueByteCount} not a whole multiple of element size {elementBytes}");
+        }
+        return valueByteCount;
     }
 
     /// <summary>Allocates and returns the elements of a DOUBLE_ARRAY value; empty array for NULL. Prefer <see cref="GetDoubleArraySpan" /> on hot paths.</summary>
@@ -478,6 +488,11 @@ public sealed class QwpColumnBatch
         if (i < 0) return (Array.Empty<byte>(), 0, 0, -1);
         var start = c.StringOffsets![i];
         var end = c.StringOffsets[i + 1];
+        if (start < 0 || start >= end || end > c.ValueBytes.Length)
+        {
+            throw new QwpDecodeException(
+                $"array row offsets out of range: start={start} end={end} heapLen={c.ValueBytes.Length}");
+        }
         return (c.ValueBytes, start, end, c.ValueBytes[start]);
     }
 

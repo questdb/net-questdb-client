@@ -33,6 +33,7 @@ internal sealed class QwpSenderErrorDispatcher : IDisposable
 {
     private readonly Channel<SenderError> _inbox;
     private readonly object _offerLock = new();
+    private readonly object _lifecycleLock = new();
     private readonly SenderErrorHandler _handler;
     private readonly bool _hasCustomHandler;
     private readonly CancellationTokenSource _shutdown = new();
@@ -79,11 +80,14 @@ internal sealed class QwpSenderErrorDispatcher : IDisposable
 
         if (Interlocked.CompareExchange(ref _started, 1, 0) == 0)
         {
-            // Dispose may have run between the _disposed check above and winning this CAS;
-            // re-check so the loop never starts on an already-disposed _shutdown CTS.
-            if (Volatile.Read(ref _disposed) == 0)
+            // _lifecycleLock pairs with Dispose's _loop read: Dispose joins this loop, or this
+            // branch sees the disposal first and never starts on an already-disposed CTS.
+            lock (_lifecycleLock)
             {
-                _loop = Task.Run(DispatchLoopAsync);
+                if (Volatile.Read(ref _disposed) == 0)
+                {
+                    _loop = Task.Run(DispatchLoopAsync);
+                }
             }
         }
         return true;
@@ -114,7 +118,12 @@ internal sealed class QwpSenderErrorDispatcher : IDisposable
         if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
         _inbox.Writer.TryComplete();
         try { _shutdown.Cancel(); } catch { }
-        try { _loop?.Wait(TimeSpan.FromMilliseconds(200)); } catch { }
+        Task? loop;
+        lock (_lifecycleLock)
+        {
+            loop = _loop;
+        }
+        try { loop?.Wait(TimeSpan.FromMilliseconds(200)); } catch { }
         _shutdown.Dispose();
     }
 

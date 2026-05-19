@@ -22,6 +22,7 @@
  *
  ******************************************************************************/
 
+using System.Diagnostics;
 using System.Globalization;
 using QuestDB.Enums;
 using QuestDB.Utils;
@@ -60,6 +61,9 @@ internal sealed class QwpSegmentRing : IDisposable
     private Action? _spareAdoptionFailed;
     private bool _wakeRequestedForActive;
     private volatile bool _closed;
+    // Debug-only producer-in-flight counter: a non-zero value during Dispose means TryAppend is
+    // running concurrently with disposal, which can free a segment out from under the producer.
+    private int _appendsInFlight;
 
     private QwpSegmentRing(string? directory, long segmentCapacity, int maxFrameLength)
     {
@@ -305,6 +309,12 @@ internal sealed class QwpSegmentRing : IDisposable
         Volatile.Write(ref _spareAdoptionFailed, callback);
     }
 
+    /// <summary>
+    ///     Appends a frame for the single producer thread. Must not run concurrently with
+    ///     <see cref="Dispose" />: a stale <c>_active</c> local could otherwise write into a segment
+    ///     freed by disposal (native-memory corruption). The producer is single-threaded by
+    ///     contract; a Debug-build guard in <see cref="Dispose" /> fails loudly on violation.
+    /// </summary>
     public bool TryAppend(ReadOnlySpan<byte> frame)
     {
         if (frame.Length == 0)
@@ -319,35 +329,43 @@ internal sealed class QwpSegmentRing : IDisposable
                 nameof(frame));
         }
 
-        EnsureNotClosed();
-
-        // Seal-before-rotate (independent of spare availability) so trim → cap-free → spare-install
-        // can make progress when the disk cap is tight.
-        var active = Volatile.Read(ref _active);
-        if (active is not null && !active.IsSealed && active.WritePosition + QwpMmapSegment.EnvelopeHeaderSize + frame.Length > active.Capacity)
+        Interlocked.Increment(ref _appendsInFlight);
+        try
         {
-            SealAndAddCurrentToSealed();
-            active = null;
-        }
+            EnsureNotClosed();
 
-        if (active is null)
-        {
-            if (!TryAllocateNewActive())
+            // Seal-before-rotate (independent of spare availability) so trim → cap-free → spare-install
+            // can make progress when the disk cap is tight.
+            var active = Volatile.Read(ref _active);
+            if (active is not null && !active.IsSealed && active.WritePosition + QwpMmapSegment.EnvelopeHeaderSize + frame.Length > active.Capacity)
             {
-                return false;
+                SealAndAddCurrentToSealed();
+                active = null;
             }
 
-            active = Volatile.Read(ref _active)!;
-        }
+            if (active is null)
+            {
+                if (!TryAllocateNewActive())
+                {
+                    return false;
+                }
 
-        if (!active.TryAppend(frame))
+                active = Volatile.Read(ref _active)!;
+            }
+
+            if (!active.TryAppend(frame))
+            {
+                throw new InvalidOperationException("freshly allocated segment cannot accommodate the frame");
+            }
+
+            BumpPublishedFsn();
+            CheckHighWaterAndWakeManager(active);
+            return true;
+        }
+        finally
         {
-            throw new InvalidOperationException("freshly allocated segment cannot accommodate the frame");
+            Interlocked.Decrement(ref _appendsInFlight);
         }
-
-        BumpPublishedFsn();
-        CheckHighWaterAndWakeManager(active);
-        return true;
     }
 
     public int TryReadFrame(long fsn, Span<byte> destination)
@@ -483,6 +501,10 @@ internal sealed class QwpSegmentRing : IDisposable
             {
                 return;
             }
+
+            // The single producer must not be inside TryAppend while we free segments here.
+            Debug.Assert(Volatile.Read(ref _appendsInFlight) == 0,
+                "QwpSegmentRing.Dispose ran concurrently with TryAppend: the producer is not single-threaded");
 
             _closed = true;
             active = Volatile.Read(ref _active);

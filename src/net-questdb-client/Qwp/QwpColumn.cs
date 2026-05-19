@@ -73,7 +73,6 @@ internal sealed class QwpColumn
 
         if (initialNullRows > 0)
         {
-            EnsureBitmapCapacity(initialNullRows);
             for (var r = 0; r < initialNullRows; r++)
             {
                 MarkBit(r);

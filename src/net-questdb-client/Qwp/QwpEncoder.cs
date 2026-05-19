@@ -178,8 +178,11 @@ internal static class QwpEncoder
             deltaCount = symbols.DeltaCount;
         }
 
-        Debug.Assert(deltaStart + deltaCount <= symbols.Count,
-            "symbol delta range must stay within the dictionary");
+        if (deltaStart + deltaCount > symbols.Count)
+        {
+            throw new IngressError(ErrorCode.InvalidApiCall,
+                $"symbol delta range [{deltaStart}, {deltaStart + deltaCount}) exceeds dictionary size {symbols.Count}");
+        }
 
         buf.WriteVarint((ulong)deltaStart);
         buf.WriteVarint((ulong)deltaCount);
@@ -252,6 +255,12 @@ internal static class QwpEncoder
 
     private static void WriteColumnData(FrameBuilder buf, QwpColumn col, int rowCount, bool gorillaEnabled)
     {
+        // An untyped column has no per-type metadata to emit; a short body would desync the wire.
+        if (!col.IsTyped)
+        {
+            throw new IngressError(ErrorCode.InvalidApiCall, $"column '{col.Name}' has no type assigned");
+        }
+
         // Null flag + optional bitmap
         if (col.NullCount == 0)
         {

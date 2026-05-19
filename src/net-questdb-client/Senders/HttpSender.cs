@@ -143,14 +143,6 @@ internal class HttpSender : AbstractSender
                     };
             }
 
-            // tls_roots also serves as the client identity for mTLS; reuse the single _trustRoot
-            // instance rather than loading (and leaking) a fresh cert per handler.
-            if (_trustRoot is not null)
-            {
-                handler.SslOptions.ClientCertificates ??= new X509Certificate2Collection();
-                handler.SslOptions.ClientCertificates.Add(_trustRoot.Value);
-            }
-
             if (Options.client_cert is not null)
             {
                 handler.SslOptions.ClientCertificates ??= new X509Certificate2Collection();

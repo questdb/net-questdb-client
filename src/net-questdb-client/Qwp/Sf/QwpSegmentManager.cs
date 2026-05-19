@@ -44,7 +44,7 @@ internal sealed class QwpSegmentManager : IDisposable
 
     private Task? _workerTask;
     private long _committedBytes;
-    private bool _disposed;
+    private volatile bool _disposed;
     private Exception? _lastServiceError;
     private Action? _heartbeatCallback;
     private QwpAckWatermark? _ackWatermark;
@@ -89,7 +89,7 @@ internal sealed class QwpSegmentManager : IDisposable
 
     public void SetAckWatermark(QwpAckWatermark? watermark)
     {
-        _ackWatermark = watermark;
+        Volatile.Write(ref _ackWatermark, watermark);
     }
     internal long TrimCycles { get; private set; }
     internal long SparesInstalled { get; private set; }
@@ -241,7 +241,7 @@ internal sealed class QwpSegmentManager : IDisposable
 
     private void PersistAckWatermark()
     {
-        var watermark = _ackWatermark;
+        var watermark = Volatile.Read(ref _ackWatermark);
         if (watermark is null) return;
         var currentAck = _ring.AckedFsn;
         if (currentAck > _lastPersistedAck)

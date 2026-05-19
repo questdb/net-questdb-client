@@ -29,6 +29,12 @@ namespace QuestDB.Qwp.Sf;
 ///     <see cref="QwpMmapSegment" /> (file-backed, persistent across restarts when sf_dir is set)
 ///     and <see cref="QwpMemorySegment" /> (malloc-backed, RAM only, used when sf_dir is null).
 /// </summary>
+/// <remarks>
+///     <b>Dispose may throw.</b> A file-backed segment flushes on <see cref="IDisposable.Dispose" />
+///     and rethrows a flush <see cref="System.IO.IOException" /> — SF's data-on-disk promise depends
+///     on observing msync failures rather than swallowing them. Callers must wrap <c>Dispose</c>
+///     (e.g. via <see cref="SfCleanup" />) rather than relying on it being exception-free.
+/// </remarks>
 internal interface IQwpSegment : IDisposable
 {
     string Path { get; }

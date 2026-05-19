@@ -387,6 +387,21 @@ public class QueryOptionsTests
         Assert.That(query.target, Is.EqualTo(TargetType.replica));
     }
 
+    [Test]
+    public void ConnectString_WithFullUnionOfBothSidesKeys_ParsesOnBothClients()
+    {
+        const string shared =
+            "ws::addr=localhost:9000;user=admin;pass=secret;" +
+            "protocol_version=2;gzip=off;request_timeout=5000;retry_timeout=10000;" +
+            "pool_timeout=30000;request_min_throughput=1024;own_socket=on;" +
+            "auth_timeout=15000;init_buf_size=65536;max_buf_size=1048576;max_name_len=127;" +
+            "sf_dir=/tmp/qdb;auto_flush_rows=5000;reconnect_max_backoff_millis=3000;" +
+            "compression=zstd;failover=on;max_batch_rows=10000;target=replica;path=/read/v1;";
+
+        Assert.DoesNotThrow(() => _ = new SenderOptions(shared));
+        Assert.DoesNotThrow(() => _ = new QueryOptions(shared));
+    }
+
     [TestCase("Addr")]
     [TestCase("ADDR")]
     [TestCase("AdDr")]

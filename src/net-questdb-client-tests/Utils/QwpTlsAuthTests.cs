@@ -22,6 +22,9 @@
  *
  ******************************************************************************/
 
+using System.Net.Security;
+using System.Security.Cryptography;
+using System.Security.Cryptography.X509Certificates;
 using NUnit.Framework;
 using QuestDB.Enums;
 using QuestDB.Utils;
@@ -127,9 +130,77 @@ public class QwpTlsAuthTests
     }
 
     [Test]
-    public void BuildCertificateValidator_VerifyOn_WithCustomRoots_ReturnsCallback()
+    public void BuildCertificateValidator_VerifyOn_WithCustomRoots_AcceptsChainedRejectsUnrelated()
     {
-        var cb = QwpTlsAuth.BuildCertificateValidator(TlsVerifyType.on, "/some/path/ca.pem", null);
-        Assert.That(cb, Is.Not.Null);
+        using var ca = NewCertificateAuthority("CN=qwp-test-ca");
+        using var leaf = NewLeafCertificate("CN=leaf.qwp.test", ca);
+        using var unrelated = NewSelfSigned("CN=stranger.qwp.test");
+
+        var pfxPath = Path.Combine(Path.GetTempPath(), "qwp-ca-" + Guid.NewGuid().ToString("N") + ".pfx");
+#pragma warning disable SYSLIB0057
+        File.WriteAllBytes(pfxPath, ca.Export(X509ContentType.Pfx));
+#pragma warning restore SYSLIB0057
+        try
+        {
+            var cb = QwpTlsAuth.BuildCertificateValidator(TlsVerifyType.on, pfxPath, null);
+            Assert.That(cb, Is.Not.Null);
+
+            using (var chainForLeaf = new X509Chain())
+            {
+                Assert.That(
+                    cb!(this, leaf, chainForLeaf, SslPolicyErrors.RemoteCertificateChainErrors),
+                    Is.True,
+                    "a cert chained to the pinned custom CA must validate");
+            }
+
+            using (var chainForStranger = new X509Chain())
+            {
+                Assert.That(
+                    cb!(this, unrelated, chainForStranger, SslPolicyErrors.RemoteCertificateChainErrors),
+                    Is.False,
+                    "a cert not chained to the pinned CA must be rejected");
+            }
+
+            using (var chainForLeaf2 = new X509Chain())
+            {
+                Assert.That(
+                    cb!(this, leaf, chainForLeaf2, SslPolicyErrors.RemoteCertificateNameMismatch),
+                    Is.False,
+                    "a name mismatch must be rejected even for a CA-chained cert");
+            }
+        }
+        finally
+        {
+            try { File.Delete(pfxPath); } catch { }
+        }
+    }
+
+    private static X509Certificate2 NewCertificateAuthority(string subject)
+    {
+        using var rsa = RSA.Create(2048);
+        var req = new CertificateRequest(subject, rsa, HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1);
+        req.CertificateExtensions.Add(new X509BasicConstraintsExtension(true, false, 0, true));
+        req.CertificateExtensions.Add(new X509KeyUsageExtension(
+            X509KeyUsageFlags.KeyCertSign | X509KeyUsageFlags.DigitalSignature, true));
+        return req.CreateSelfSigned(DateTimeOffset.UtcNow.AddMinutes(-5), DateTimeOffset.UtcNow.AddHours(1));
+    }
+
+    private static X509Certificate2 NewLeafCertificate(string subject, X509Certificate2 issuer)
+    {
+        using var rsa = RSA.Create(2048);
+        var req = new CertificateRequest(subject, rsa, HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1);
+        req.CertificateExtensions.Add(new X509BasicConstraintsExtension(false, false, 0, false));
+        var serial = new byte[8];
+        RandomNumberGenerator.Fill(serial);
+        using var signed = req.Create(issuer, DateTimeOffset.UtcNow.AddMinutes(-5),
+            DateTimeOffset.UtcNow.AddHours(1), serial);
+        return signed.CopyWithPrivateKey(rsa);
+    }
+
+    private static X509Certificate2 NewSelfSigned(string subject)
+    {
+        using var rsa = RSA.Create(2048);
+        var req = new CertificateRequest(subject, rsa, HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1);
+        return req.CreateSelfSigned(DateTimeOffset.UtcNow.AddMinutes(-5), DateTimeOffset.UtcNow.AddHours(1));
     }
 }

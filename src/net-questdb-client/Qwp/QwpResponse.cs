@@ -56,7 +56,8 @@ internal readonly record struct QwpTableEntry(string TableName, long SeqTxn);
 ///             <b>Error</b> — 11 + <c>msg_len</c> bytes: status + sequence + uint16 msg_len + UTF-8
 ///             message. The decoded <see cref="Message" /> is truncated to 1024 bytes (with a
 ///             trailing ellipsis) when the server sends a longer one; the frame still parses as
-///             a normal recoverable error.
+///             a normal recoverable error. The free-form message is decoded leniently —
+///             malformed bytes become U+FFFD rather than failing the parse.
 ///         </item>
 ///     </list>
 ///     <para />
@@ -67,6 +68,8 @@ internal readonly struct QwpResponse
 {
     private static readonly QwpTableEntry[] EmptyEntries = Array.Empty<QwpTableEntry>();
     private static readonly UTF8Encoding StrictUtf8 = new(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true);
+    // Lossy: a malformed byte in the free-form error message must not escalate a recoverable error.
+    private static readonly UTF8Encoding LossyUtf8 = new(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: false);
 
     public QwpResponse(QwpStatusCode status, long sequence, string message, QwpTableEntry[] tableEntries)
     {
@@ -209,26 +212,10 @@ internal readonly struct QwpResponse
             var msgBytes = frame.Slice(QwpConstants.ErrorAckHeaderSize, (int)msgLen);
             if (truncated)
             {
-                // Back the cut off any UTF-8 continuation bytes so the slice ends on a whole
-                // code point — otherwise strict decoding would misreport a clean truncation as
-                // an invalid-UTF-8 protocol error.
-                var decodeLen = QwpConstants.MaxErrorMessageBytes;
-                while (decodeLen > 0 && (msgBytes[decodeLen] & 0xC0) == 0x80)
-                {
-                    decodeLen--;
-                }
-                msgBytes = msgBytes.Slice(0, decodeLen);
+                msgBytes = msgBytes.Slice(0, QwpConstants.MaxErrorMessageBytes);
             }
 
-            try
-            {
-                message = StrictUtf8.GetString(msgBytes);
-            }
-            catch (DecoderFallbackException ex)
-            {
-                throw new IngressError(ErrorCode.InvalidUtf8,
-                    "QWP error response: invalid UTF-8 in message bytes", ex);
-            }
+            message = LossyUtf8.GetString(msgBytes);
 
             if (truncated)
             {

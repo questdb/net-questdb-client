@@ -192,8 +192,7 @@ public class QwpTlsAuthTests
         req.CertificateExtensions.Add(new X509BasicConstraintsExtension(false, false, 0, false));
         var serial = new byte[8];
         RandomNumberGenerator.Fill(serial);
-        using var signed = req.Create(issuer, DateTimeOffset.UtcNow.AddMinutes(-5),
-            DateTimeOffset.UtcNow.AddHours(1), serial);
+        using var signed = req.Create(issuer, issuer.NotBefore, issuer.NotAfter, serial);
         return signed.CopyWithPrivateKey(rsa);
     }
 

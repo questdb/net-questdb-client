@@ -32,6 +32,7 @@ using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using System.Text.Json.Serialization;
 using QuestDB.Enums;
+using QuestDB.Qwp;
 using QuestDB.Qwp.Sf;
 using QuestDB.Senders;
 
@@ -270,8 +271,12 @@ public record SenderOptions
         EnsureValid();
     }
 
-    private static readonly HashSet<string> KnownConnectStringKeys = new(StringComparer.OrdinalIgnoreCase)
+    private static readonly HashSet<string> KnownConnectStringKeys = BuildKnownConnectStringKeys();
+
+    private static HashSet<string> BuildKnownConnectStringKeys()
     {
+        var keys = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
         "protocol", "protocol_version", "addr",
         "auto_flush", "auto_flush_rows", "auto_flush_bytes", "auto_flush_interval",
         "gzip", "init_buf_size", "max_buf_size", "max_name_len",
@@ -291,7 +296,11 @@ public record SenderOptions
         "on_internal_error", "on_security_error", "on_write_error",
         "token_x", "token_y",
         "zone", "target", "initial_credit",
-    };
+        };
+        // The connect string is one shared input; accept (and ignore) the egress query client's keys.
+        foreach (var k in QwpConnectStringKeys.EgressOnly) keys.Add(k);
+        return keys;
+    }
 
     private void RejectUnknownConnectStringKeys()
     {
@@ -726,19 +735,27 @@ public record SenderOptions
         }
     }
 
-    private static readonly string[] WebSocketOnlyKeys =
+    private static readonly string[] WebSocketOnlyKeys = BuildWebSocketOnlyKeys();
+
+    private static string[] BuildWebSocketOnlyKeys()
     {
-        "max_schemas_per_connection",
-        "gorilla", "request_durable_ack",
-        "sf_dir", "sender_id", "sf_max_bytes", "sf_max_total_bytes", "sf_durability",
-        "sf_append_deadline_millis", "reconnect_max_duration_millis", "reconnect_initial_backoff_millis",
-        "reconnect_max_backoff_millis", "initial_connect_retry", "initial_connect_mode",
-        "close_flush_timeout_millis", "drain_orphans", "max_background_drainers", "ping_timeout",
-        "durable_ack_keepalive_interval_millis", "proxy",
-        "error_handler", "error_policy_resolver", "error_inbox_capacity", "connection_listener_inbox_capacity",
-        "on_server_error", "on_schema_mismatch_error", "on_schema_error", "on_parse_error", "on_internal_error",
-        "on_security_error", "on_write_error",
-    };
+        var keys = new List<string>
+        {
+            "max_schemas_per_connection",
+            "gorilla", "request_durable_ack",
+            "sf_dir", "sender_id", "sf_max_bytes", "sf_max_total_bytes", "sf_durability",
+            "sf_append_deadline_millis", "reconnect_max_duration_millis", "reconnect_initial_backoff_millis",
+            "reconnect_max_backoff_millis", "initial_connect_retry", "initial_connect_mode",
+            "close_flush_timeout_millis", "drain_orphans", "max_background_drainers", "ping_timeout",
+            "durable_ack_keepalive_interval_millis", "proxy",
+            "error_handler", "error_policy_resolver", "error_inbox_capacity", "connection_listener_inbox_capacity",
+            "on_server_error", "on_schema_mismatch_error", "on_schema_error", "on_parse_error", "on_internal_error",
+            "on_security_error", "on_write_error",
+        };
+        // Egress query-client keys are ws-only too: accepted-and-ignored on ws/wss, rejected on http/tcp.
+        keys.AddRange(QwpConnectStringKeys.EgressOnly);
+        return keys.ToArray();
+    }
 
     /// <summary>
     ///     Protocol type for the sender to use.

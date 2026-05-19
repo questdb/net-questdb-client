@@ -365,7 +365,26 @@ public class QueryOptionsTests
     public void Parse_IngressOnlyKeys_AcceptedAndIgnoredOnEgress()
     {
         Assert.DoesNotThrow(() => new QueryOptions(
-            "ws::addr=h:9000;max_schemas_per_connection=100;error_inbox_capacity=64;"));
+            "ws::addr=h:9000;sf_dir=/tmp/x;auto_flush_rows=5000;gorilla=on;" +
+            "reconnect_max_backoff_millis=3000;drain_orphans=on;request_durable_ack=on;" +
+            "on_server_error=halt;max_schemas_per_connection=100;error_inbox_capacity=64;"));
+    }
+
+    [Test]
+    public void ConnectString_WithBothIngressAndEgressKeys_ParsesOnBothClients()
+    {
+        const string shared =
+            "ws::addr=localhost:9000;username=admin;password=secret;" +
+            "sf_dir=/tmp/qdb;auto_flush_rows=5000;reconnect_max_backoff_millis=3000;" +
+            "compression=zstd;failover=on;max_batch_rows=10000;target=replica;";
+
+        var sender = new SenderOptions(shared);
+        Assert.That(sender.sf_dir, Is.EqualTo("/tmp/qdb"));
+        Assert.That(sender.auto_flush_rows, Is.EqualTo(5000));
+
+        var query = new QueryOptions(shared);
+        Assert.That(query.compression, Is.EqualTo(CompressionType.zstd));
+        Assert.That(query.target, Is.EqualTo(TargetType.replica));
     }
 
     [TestCase("Addr")]

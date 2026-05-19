@@ -384,6 +384,23 @@ public class SenderOptionsTests
     }
 
     [Test]
+    public void EgressKeys_SilentlyAcceptedOnWebSocket()
+    {
+        Assert.That(() => new SenderOptions(
+            "ws::addr=localhost:9000;compression=zstd;compression_level=6;failover=on;" +
+            "failover_max_attempts=4;max_batch_rows=5000;client_id=app-1;buffer_pool_size=8;" +
+            "auth=xyz;path=/read/v1;"), Throws.Nothing);
+    }
+
+    [Test]
+    public void EgressKeys_RejectedOnNonWebSocketScheme()
+    {
+        var ex = Assert.Throws<IngressError>(
+            () => new SenderOptions("http::addr=localhost:9000;compression=zstd;"));
+        Assert.That(ex!.Message, Does.Contain("compression"));
+    }
+
+    [Test]
     public void Ws_AuthTimeoutMs_AliasParses()
     {
         var withMs = new SenderOptions("ws::addr=localhost:9000;auth_timeout_ms=2500;");

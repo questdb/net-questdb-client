@@ -422,7 +422,13 @@ public sealed class QwpColumnBatch
         return c.ValueBytes[start];
     }
 
-    /// <summary>Returns the DOUBLE_ARRAY element bytes as a span over the column scratch; valid only for the duration of the handler.</summary>
+    /// <summary>
+    /// Returns the DOUBLE_ARRAY element bytes as a span over the column scratch; valid only for the duration of the handler.
+    /// <para><b>Alignment:</b> the underlying byte offset is not guaranteed to be aligned to <c>sizeof(double)</c>.
+    /// Indexing the span (<c>span[i]</c>) works on x86_64 and ARM64 (unaligned loads are single-cycle) but is undefined
+    /// behaviour on strict-alignment targets. For portable bulk consumption copy via <c>span.ToArray()</c> or read with
+    /// <c>BinaryPrimitives.ReadDoubleLittleEndian</c> on the underlying byte span.</para>
+    /// </summary>
     public ReadOnlySpan<double> GetDoubleArraySpan(int col, int row)
     {
         var (heap, start, end, nDims) = ArraySpan(col, row);
@@ -432,7 +438,12 @@ public sealed class QwpColumnBatch
             .Cast<byte, double>(heap.AsSpan(start + 1 + nDims * 4, valueByteCount));
     }
 
-    /// <summary>Returns the LONG_ARRAY element bytes as a span over the column scratch; valid only for the duration of the handler.</summary>
+    /// <summary>
+    /// Returns the LONG_ARRAY element bytes as a span over the column scratch; valid only for the duration of the handler.
+    /// <para><b>Alignment:</b> same caveat as <see cref="GetDoubleArraySpan"/> — the span start may not be aligned to
+    /// <c>sizeof(long)</c>; safe on x86_64 / ARM64, UB on strict-alignment targets. Use <c>span.ToArray()</c> or
+    /// <c>BinaryPrimitives.ReadInt64LittleEndian</c> for portable reads.</para>
+    /// </summary>
     public ReadOnlySpan<long> GetLongArraySpan(int col, int row)
     {
         var (heap, start, end, nDims) = ArraySpan(col, row);

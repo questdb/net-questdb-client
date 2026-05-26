@@ -30,7 +30,7 @@ while ((line = Console.In.ReadLine()) != null)
             case "CONNECT":
             {
                 var connectString = line[parts[0].Length..].Trim();
-                sender?.Dispose();
+                await DisposeSenderAsync(sender);
                 sender = Sender.New(connectString);
                 Reply("OK");
                 break;
@@ -50,7 +50,7 @@ while ((line = Console.In.ReadLine()) != null)
                     var idx = startIndex + i;
                     sender!.Table(table)
                         .Symbol("tag", $"test_{idx}")
-                        .Column("value", (long)idx)
+                        .Column("v", (long)idx)
                         .At(DateTime.UtcNow);
                 }
 
@@ -117,7 +117,7 @@ while ((line = Console.In.ReadLine()) != null)
 
             case "CLOSE":
             {
-                sender?.Dispose();
+                await DisposeSenderAsync(sender);
                 sender = null;
                 Reply("OK");
                 break;
@@ -125,7 +125,7 @@ while ((line = Console.In.ReadLine()) != null)
 
             case "EXIT":
             {
-                sender?.Dispose();
+                await DisposeSenderAsync(sender);
                 sender = null;
                 Reply("OK");
                 return;
@@ -142,8 +142,20 @@ while ((line = Console.In.ReadLine()) != null)
     }
 }
 
-sender?.Dispose();
+await DisposeSenderAsync(sender);
 return;
+
+static async Task DisposeSenderAsync(ISender? s)
+{
+    if (s == null) return;
+    using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+    try
+    {
+        await s.DisposeAsync();
+    }
+    catch (OperationCanceledException) { }
+    catch (Exception) { }
+}
 
 static void Reply(string msg)
 {

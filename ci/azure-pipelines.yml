@@ -165,3 +165,79 @@ steps:
     summaryFileLocation: '$(Agent.TempDirectory)/**/coverage.cobertura.xml'
     codecoverageTool: 'cobertura'
   condition: succeededOrFailed()
+
+# Cross-repo trigger: fire the questdb-enterprise
+# build-and-test-e2e-net-client pipeline with this build's SHA so
+# the net_client-marked failover tests run against an Enterprise
+# primary. The Enterprise pipeline posts a status check back on the
+# PR (`enterprise-e2e-net-client` context); this step fire-and-forgets.
+#
+# Prerequisites (one-time, in the Azure DevOps UI):
+#   1. Register ci/build-and-test-e2e-net-client.yaml in the
+#      `questdb-enterprise` ADO project as a pipeline named
+#      `build-and-test-e2e-net-client`.
+#   2. Create a PAT in the `questdb-enterprise` ADO project with
+#      `Build (Read & execute)` scope. Add it as a secret variable
+#      on THIS pipeline named ENT_DISPATCH_PAT.
+- bash: |
+    set -euo pipefail
+
+    ORG_URL="$(System.TeamFoundationCollectionUri)"
+    PROJECT="questdb-enterprise"
+    PIPELINE_NAME="build-and-test-e2e-net-client"
+
+    if [ -z "${ENT_DISPATCH_PAT:-}" ]; then
+      echo "ENT_DISPATCH_PAT not set; skipping enterprise e2e dispatch."
+      exit 0
+    fi
+
+    echo "Looking up '${PIPELINE_NAME}' in '${PROJECT}'..."
+    PIPELINES=$(curl -fsS -u ":${ENT_DISPATCH_PAT}" \
+      "${ORG_URL}${PROJECT}/_apis/pipelines?api-version=7.0")
+    PIPELINE_ID=$(echo "$PIPELINES" | jq -r --arg n "$PIPELINE_NAME" \
+      '.value[] | select(.name == $n) | .id' | head -1)
+
+    if [ -z "$PIPELINE_ID" ] || [ "$PIPELINE_ID" = "null" ]; then
+      echo "Pipeline '${PIPELINE_NAME}' not found in '${PROJECT}'; skipping."
+      exit 0
+    fi
+
+    CLIENT_PR_NUMBER="$(System.PullRequest.PullRequestNumber)"
+    if [ -z "${CLIENT_PR_NUMBER}" ] || [ "${CLIENT_PR_NUMBER}" = "None" ]; then
+      CLIENT_PR_NUMBER=""
+    fi
+
+    if [ "$(Build.Reason)" = "PullRequest" ]; then
+      CLIENT_BRANCH="$(System.PullRequest.SourceBranch)"
+      CLIENT_BRANCH="${CLIENT_BRANCH#refs/heads/}"
+    else
+      CLIENT_BRANCH="$(Build.SourceBranchName)"
+    fi
+
+    BODY=$(jq -n \
+      --arg commit "$(Build.SourceVersion)" \
+      --arg pr "${CLIENT_PR_NUMBER}" \
+      --arg branch "${CLIENT_BRANCH}" \
+      '{
+        templateParameters: {
+          netClientCommit: $commit,
+          netClientPrNumber: $pr,
+          clientBranch: $branch
+        },
+        resources: { repositories: { self: { refName: "refs/heads/main" } } }
+      }')
+
+    echo "Dispatching enterprise e2e: commit=$(Build.SourceVersion) PR=${CLIENT_PR_NUMBER} branch=${CLIENT_BRANCH}"
+
+    RESPONSE=$(curl -fsS -u ":${ENT_DISPATCH_PAT}" \
+      -H "Content-Type: application/json" \
+      -X POST \
+      -d "$BODY" \
+      "${ORG_URL}${PROJECT}/_apis/pipelines/${PIPELINE_ID}/runs?api-version=7.0")
+
+    RUN_URL=$(echo "$RESPONSE" | jq -r '._links.web.href // ""')
+    echo "Enterprise build queued: ${RUN_URL}"
+  displayName: 'Dispatch Enterprise e2e pipeline'
+  condition: and(succeeded(), eq(variables['osName'], 'Linux'))
+  env:
+    ENT_DISPATCH_PAT: $(ENT_DISPATCH_PAT)

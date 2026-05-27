@@ -104,68 +104,6 @@ steps:
     projects: 'net-questdb-client.sln'
     arguments: '--configuration $(buildConfiguration) --no-restore'
 
-- task: DotNetCoreCLI@2
-  displayName: 'Run all tests on $(osName) (net8.0)'
-  inputs:
-    command: 'test'
-    projects: 'src/net-questdb-client-tests/net-questdb-client-tests.csproj'
-    arguments: '--configuration $(buildConfiguration) --framework net8.0 --no-build --verbosity normal --logger trx --blame-hang --blame-hang-timeout 600s --blame-hang-dump-type mini --filter "FullyQualifiedName!~QuestDbIntegrationTests&FullyQualifiedName!~QuestDbWebSocketIntegrationTests&FullyQualifiedName!~QuestDbQueryIntegrationTests"'
-    publishTestResults: true
-
-- task: DotNetCoreCLI@2
-  displayName: 'Run all tests on $(osName) (net9.0, with coverage)'
-  inputs:
-    command: 'test'
-    projects: 'src/net-questdb-client-tests/net-questdb-client-tests.csproj'
-    arguments: '--configuration $(buildConfiguration) --framework net9.0 --no-build --verbosity normal --logger trx --blame-hang --blame-hang-timeout 600s --blame-hang-dump-type mini --collect:"XPlat Code Coverage"'
-    publishTestResults: true
-  env:
-    QUESTDB_REPO: $(QUESTDB_REPO)
-  condition: eq(variables['osName'], 'Linux')
-
-- task: DotNetCoreCLI@2
-  displayName: 'Run tests on $(osName) (net9.0, excluding integration tests)'
-  inputs:
-    command: 'test'
-    projects: 'src/net-questdb-client-tests/net-questdb-client-tests.csproj'
-    arguments: '--configuration $(buildConfiguration) --framework net9.0 --no-build --verbosity normal --logger trx --blame-hang --blame-hang-timeout 600s --blame-hang-dump-type mini --collect:"XPlat Code Coverage" --filter "FullyQualifiedName!~QuestDbIntegrationTests&FullyQualifiedName!~QuestDbWebSocketIntegrationTests&FullyQualifiedName!~QuestDbQueryIntegrationTests"'
-    publishTestResults: true
-  condition: ne(variables['osName'], 'Linux')
-
-- task: DotNetCoreCLI@2
-  displayName: 'Run all tests on $(osName) (net10.0)'
-  inputs:
-    command: 'test'
-    projects: 'src/net-questdb-client-tests/net-questdb-client-tests.csproj'
-    arguments: '--configuration $(buildConfiguration) --framework net10.0 --no-build --verbosity normal --logger trx --blame-hang --blame-hang-timeout 600s --blame-hang-dump-type mini --filter "FullyQualifiedName!~QuestDbIntegrationTests&FullyQualifiedName!~QuestDbWebSocketIntegrationTests&FullyQualifiedName!~QuestDbQueryIntegrationTests"'
-    publishTestResults: true
-
-- task: CopyFiles@2
-  displayName: 'Stage hang dumps + trx ($(osName))'
-  condition: always()
-  inputs:
-    sourceFolder: '$(Agent.TempDirectory)'
-    contents: |
-      **/*.dmp
-      **/*Sequence*.xml
-      **/*.trx
-    targetFolder: '$(Build.ArtifactStagingDirectory)/TestArtifacts'
-
-- task: PublishPipelineArtifact@1
-  displayName: 'Publish hang dumps + trx ($(osName))'
-  condition: always()
-  inputs:
-    targetPath: '$(Build.ArtifactStagingDirectory)/TestArtifacts'
-    artifact: 'TestArtifacts-$(osName)-$(Build.BuildId)'
-    publishLocation: 'pipeline'
-
-- task: PublishCodeCoverageResults@2
-  displayName: 'Publish code coverage'
-  inputs:
-    summaryFileLocation: '$(Agent.TempDirectory)/**/coverage.cobertura.xml'
-    codecoverageTool: 'cobertura'
-  condition: succeededOrFailed()
-
 # Cross-repo trigger: fire the questdb-enterprise
 # build-and-test-e2e-net-client pipeline with this build's SHA so
 # the net_client-marked failover tests run against an Enterprise
@@ -241,3 +179,65 @@ steps:
   condition: and(succeeded(), eq(variables['osName'], 'Linux'))
   env:
     ENT_DISPATCH_PAT: $(ENT_DISPATCH_PAT)
+
+- task: DotNetCoreCLI@2
+  displayName: 'Run all tests on $(osName) (net8.0)'
+  inputs:
+    command: 'test'
+    projects: 'src/net-questdb-client-tests/net-questdb-client-tests.csproj'
+    arguments: '--configuration $(buildConfiguration) --framework net8.0 --no-build --verbosity normal --logger trx --blame-hang --blame-hang-timeout 600s --blame-hang-dump-type mini --filter "FullyQualifiedName!~QuestDbIntegrationTests&FullyQualifiedName!~QuestDbWebSocketIntegrationTests&FullyQualifiedName!~QuestDbQueryIntegrationTests"'
+    publishTestResults: true
+
+- task: DotNetCoreCLI@2
+  displayName: 'Run all tests on $(osName) (net9.0, with coverage)'
+  inputs:
+    command: 'test'
+    projects: 'src/net-questdb-client-tests/net-questdb-client-tests.csproj'
+    arguments: '--configuration $(buildConfiguration) --framework net9.0 --no-build --verbosity normal --logger trx --blame-hang --blame-hang-timeout 600s --blame-hang-dump-type mini --collect:"XPlat Code Coverage"'
+    publishTestResults: true
+  env:
+    QUESTDB_REPO: $(QUESTDB_REPO)
+  condition: eq(variables['osName'], 'Linux')
+
+- task: DotNetCoreCLI@2
+  displayName: 'Run tests on $(osName) (net9.0, excluding integration tests)'
+  inputs:
+    command: 'test'
+    projects: 'src/net-questdb-client-tests/net-questdb-client-tests.csproj'
+    arguments: '--configuration $(buildConfiguration) --framework net9.0 --no-build --verbosity normal --logger trx --blame-hang --blame-hang-timeout 600s --blame-hang-dump-type mini --collect:"XPlat Code Coverage" --filter "FullyQualifiedName!~QuestDbIntegrationTests&FullyQualifiedName!~QuestDbWebSocketIntegrationTests&FullyQualifiedName!~QuestDbQueryIntegrationTests"'
+    publishTestResults: true
+  condition: ne(variables['osName'], 'Linux')
+
+- task: DotNetCoreCLI@2
+  displayName: 'Run all tests on $(osName) (net10.0)'
+  inputs:
+    command: 'test'
+    projects: 'src/net-questdb-client-tests/net-questdb-client-tests.csproj'
+    arguments: '--configuration $(buildConfiguration) --framework net10.0 --no-build --verbosity normal --logger trx --blame-hang --blame-hang-timeout 600s --blame-hang-dump-type mini --filter "FullyQualifiedName!~QuestDbIntegrationTests&FullyQualifiedName!~QuestDbWebSocketIntegrationTests&FullyQualifiedName!~QuestDbQueryIntegrationTests"'
+    publishTestResults: true
+
+- task: CopyFiles@2
+  displayName: 'Stage hang dumps + trx ($(osName))'
+  condition: always()
+  inputs:
+    sourceFolder: '$(Agent.TempDirectory)'
+    contents: |
+      **/*.dmp
+      **/*Sequence*.xml
+      **/*.trx
+    targetFolder: '$(Build.ArtifactStagingDirectory)/TestArtifacts'
+
+- task: PublishPipelineArtifact@1
+  displayName: 'Publish hang dumps + trx ($(osName))'
+  condition: always()
+  inputs:
+    targetPath: '$(Build.ArtifactStagingDirectory)/TestArtifacts'
+    artifact: 'TestArtifacts-$(osName)-$(Build.BuildId)'
+    publishLocation: 'pipeline'
+
+- task: PublishCodeCoverageResults@2
+  displayName: 'Publish code coverage'
+  inputs:
+    summaryFileLocation: '$(Agent.TempDirectory)/**/coverage.cobertura.xml'
+    codecoverageTool: 'cobertura'
+  condition: succeededOrFailed()

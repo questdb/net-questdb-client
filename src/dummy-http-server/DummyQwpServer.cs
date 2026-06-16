@@ -207,6 +207,13 @@ public sealed class DummyQwpServer : IAsyncDisposable
         {
             await SendOutgoingAsync(ws, initial, ctx.RequestAborted).ConfigureAwait(false);
         }
+        else if (_options.Path == "/read/v1")
+        {
+            // QWP egress contract: every server emits SERVER_INFO as the first frame after the
+            // upgrade. Auto-emit a minimal STANDALONE/no-zone/no-cluster-id frame so egress tests
+            // that don't care about server identity don't have to wire one up themselves.
+            await SendOutgoingAsync(ws, DefaultServerInfoFrame, ctx.RequestAborted).ConfigureAwait(false);
+        }
 
         var receiveBuf = new byte[_options.ReceiveBufferSize];
         var framesHandled = 0;
@@ -285,6 +292,19 @@ public sealed class DummyQwpServer : IAsyncDisposable
     ///     split into WebSocket frames of at most that many bytes so the client's receive loop
     ///     must reassemble it across arbitrary boundaries.
     /// </summary>
+    private static readonly byte[] DefaultServerInfoFrame = BuildDefaultServerInfoFrame();
+
+    private static byte[] BuildDefaultServerInfoFrame()
+    {
+        const int payloadLen = 26;
+        var frame = new byte[12 + payloadLen];
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(frame.AsSpan(0, 4), 0x31_50_57_51u);
+        frame[4] = 0x01;
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(frame.AsSpan(8, 4), payloadLen);
+        frame[12] = 0x18;
+        return frame;
+    }
+
     private async Task SendOutgoingAsync(WebSocket ws, byte[] payload, CancellationToken ct)
     {
         var chunk = _options.OutgoingFragmentSize;

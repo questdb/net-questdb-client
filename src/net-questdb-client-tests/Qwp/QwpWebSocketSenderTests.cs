@@ -80,7 +80,7 @@ public class QwpWebSocketSenderTests
 
         // Header sanity.
         Assert.That(BinaryPrimitives.ReadUInt32LittleEndian(frame.AsSpan(0, 4)), Is.EqualTo(QwpConstants.Magic));
-        Assert.That(frame[QwpConstants.OffsetVersion], Is.EqualTo(QwpConstants.SupportedIngestVersion));
+        Assert.That(frame[QwpConstants.OffsetVersion], Is.EqualTo(QwpConstants.SupportedVersion));
         Assert.That(frame[QwpConstants.OffsetFlags],
             Is.EqualTo((byte)(QwpConstants.FlagDeltaSymbolDict | QwpConstants.FlagGorilla)));
         Assert.That(BinaryPrimitives.ReadUInt16LittleEndian(frame.AsSpan(QwpConstants.OffsetTableCount, 2)),
@@ -175,13 +175,14 @@ public class QwpWebSocketSenderTests
         await WaitFor(() => server.ReceivedFrames.Count >= 2);
         var frames = server.ReceivedFrames.Take(2).ToList();
 
-        // Cursor-engine path emits self-sufficient frames; both frames carry the full schema.
-        Assert.That(frames[0][18], Is.EqualTo(QwpConstants.SchemaModeFull));
-        Assert.That(frames[1][18], Is.EqualTo(QwpConstants.SchemaModeFull));
+        // Schemas always travel inline; both frames carry the same column count and column-defs.
+        // Byte 17 is col_count (= 2: user column "v" + designated TS).
+        Assert.That(frames[0][17], Is.EqualTo((byte)2));
+        Assert.That(frames[1][17], Is.EqualTo((byte)2));
     }
 
     [Test]
-    public async Task EndToEnd_NewColumnMidStream_ResetsToFullSchema()
+    public async Task EndToEnd_NewColumnMidStream_GrowsInlineSchema()
     {
         await using var server = StartServerWithOkAcks();
         using var sender = NewSender(server, "auto_flush=off;");
@@ -194,10 +195,9 @@ public class QwpWebSocketSenderTests
         await WaitFor(() => server.ReceivedFrames.Count >= 2);
         var frames = server.ReceivedFrames.Take(2).ToList();
 
-        Assert.That(frames[0][18], Is.EqualTo(QwpConstants.SchemaModeFull));
-        // Second frame: column count is 3 (v, w, designated TS) so column count varint at offset 17 = 0x03.
-        // Schema mode is now at offset 18 again, FULL because the column-set changed.
-        Assert.That(frames[1][18], Is.EqualTo(QwpConstants.SchemaModeFull));
+        // col_count grew from 2 → 3 (the new "w" column plus the designated TS).
+        Assert.That(frames[0][17], Is.EqualTo((byte)2));
+        Assert.That(frames[1][17], Is.EqualTo((byte)3));
     }
 
     [Test]
@@ -820,11 +820,8 @@ public class QwpWebSocketSenderTests
             }
 
             Assert.That(server.ReceivedFrames.Count, Is.EqualTo(3));
-            const int schemaModeOffset = 12 + 2 + 8 + 1 + 6 + 1 + 1;
             foreach (var frame in server.ReceivedFrames)
             {
-                Assert.That(frame[schemaModeOffset], Is.EqualTo(QwpConstants.SchemaModeFull),
-                    "every SF frame must carry full schema");
                 Assert.That(frame[12], Is.EqualTo(0x00), "delta_start = 0 in self-sufficient mode");
                 Assert.That(frame[13], Is.EqualTo(0x01), "delta_count = 1 (single symbol re-emitted each flush)");
             }
@@ -858,14 +855,8 @@ public class QwpWebSocketSenderTests
             Assert.That(server.ReceivedFrames.Count, Is.EqualTo(1));
             var frame = server.ReceivedFrames.First();
 
-            // SF frames must always be in self-sufficient form: schema mode = Full.
-            // Header(12) + delta dict prelude(2 + "ETH-USD"=8) + table name varint(1) + "trades"(6)
-            // + rowCount(1) + colCount(1) + schemaMode(1) = byte index 32.
-            const int schemaModeOffset = 12 + 2 + 8 + 1 + 6 + 1 + 1;
-            Assert.That(frame[schemaModeOffset], Is.EqualTo(QwpConstants.SchemaModeFull),
-                "SF frame must carry full schema (replayable against fresh server state)");
-
-            // Delta dict starts at id 0 with the full known set, even after the engine commits.
+            // SF frames are self-sufficient: delta dict starts at id 0 with the full known set,
+            // even after the engine commits. (The inline schema travels with every frame anyway.)
             Assert.That(frame[12], Is.EqualTo(0x00), "delta_start = 0 in self-sufficient mode");
             Assert.That(frame[13], Is.EqualTo(0x01), "delta_count = 1 (single symbol 'ETH-USD')");
         }

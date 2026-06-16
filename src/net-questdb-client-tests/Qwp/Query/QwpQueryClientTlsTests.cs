@@ -48,7 +48,6 @@ public class QwpQueryClientTlsTests
 
         var schema = new ResultSchema
         {
-            SchemaId = 1,
             Columns = { new SchemaColumn("c", QwpTypeCode.Long) },
         };
         var data = new ResultBatchData

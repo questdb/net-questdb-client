@@ -43,9 +43,28 @@ internal sealed class QwpResultBatchDecoder
 
     private readonly QwpEgressConnState _state;
 
+    // Per-query column schema captured from the first batch (batch_seq == 0). Continuation
+    // batches bind rows to it. Reused across queries by reassignment; ResetQuerySchema()
+    // invalidates it so a stray continuation can't bind to a stale schema after a new
+    // query starts. Single slot is correct because the query client serialises queries
+    // (one in-flight at a time); if pipelining is ever added this must become per-request_id.
+    private EgressSchema? _querySchema;
+    private bool _querySchemaValid;
+
     public QwpResultBatchDecoder(QwpEgressConnState state)
     {
         _state = state;
+    }
+
+    /// <summary>
+    ///     Invalidates the schema captured from the last <c>batch_seq == 0</c>. The query client
+    ///     calls this when a new query starts so the next query's continuation batches can't bind
+    ///     rows to a stale schema.
+    /// </summary>
+    public void ResetQuerySchema()
+    {
+        _querySchemaValid = false;
+        _querySchema = null;
     }
 
     public void Decode(ReadOnlySpan<byte> payload, byte headerFlags, QwpColumnBatch batch)
@@ -67,8 +86,8 @@ internal sealed class QwpResultBatchDecoder
         var batchSeq = ReadVarint(payload, ref p);
 
         var preDictSize = _state.SymbolDict.Size;
-        var stagedSchemaId = (ulong?)null;
-        EgressSchema? stagedSchema = null;
+        var preSchemaValid = _querySchemaValid;
+        var preSchema = _querySchema;
         var commit = false;
         try
         {
@@ -81,18 +100,13 @@ internal sealed class QwpResultBatchDecoder
             batch.RequestId = requestId;
             batch.BatchSeq = (long)batchSeq;
 
-            DecodeTableBlock(payload, ref p, headerFlags, batch, out stagedSchemaId, out stagedSchema);
+            DecodeTableBlock(payload, ref p, headerFlags, batch, (long)batchSeq);
 
             if (p != payload.Length)
             {
                 throw new QwpDecodeException($"trailing bytes after RESULT_BATCH: consumed {p}, payload {payload.Length}");
             }
 
-            // Inside try so a RegisterSchema throw still rewinds the symbol dict.
-            if (stagedSchemaId is { } id && stagedSchema is { } sc)
-            {
-                _state.RegisterSchema(id, sc);
-            }
             commit = true;
         }
         finally
@@ -101,6 +115,10 @@ internal sealed class QwpResultBatchDecoder
             {
                 // Symbols already appended into the dict; rewind to the pre-batch cursor on failure.
                 _state.SymbolDict.TruncateTo(preDictSize);
+                // Same for the per-query schema slot: a partial parse of a batch_seq==0 must not
+                // leave the decoder with a half-built schema bound for subsequent continuation batches.
+                _querySchemaValid = preSchemaValid;
+                _querySchema = preSchema;
             }
         }
     }
@@ -149,12 +167,8 @@ internal sealed class QwpResultBatchDecoder
     }
 
     private void DecodeTableBlock(
-        ReadOnlySpan<byte> payload, ref int p, byte headerFlags, QwpColumnBatch batch,
-        out ulong? stagedSchemaId, out EgressSchema? stagedSchema)
+        ReadOnlySpan<byte> payload, ref int p, byte headerFlags, QwpColumnBatch batch, long batchSeq)
     {
-        stagedSchemaId = null;
-        stagedSchema = null;
-
         var nameLen = ReadBoundedVarintAsInt(payload, ref p, "table name length");
         if (nameLen > QwpConstants.MaxNameLengthBytes)
         {
@@ -167,31 +181,23 @@ internal sealed class QwpResultBatchDecoder
         p += nameLen;
 
         var rowCount = ReadBoundedVarintAsInt(payload, ref p, "row_count");
-        var colCount = ReadBoundedVarintAsInt(payload, ref p, "col_count");
         if (rowCount > QwpConstants.MaxRowsPerTable)
         {
             throw new QwpDecodeException($"row_count out of range: {rowCount}");
         }
 
-        if (colCount > QwpConstants.MaxColumnsPerTable)
-        {
-            throw new QwpDecodeException($"col_count out of range: {colCount}");
-        }
-
-        if (p >= payload.Length)
-        {
-            throw new QwpDecodeException("truncated before schema_mode");
-        }
-        var schemaMode = payload[p++];
-        var schemaId = ReadVarint(payload, ref p);
-        if (schemaId >= (ulong)QwpConstants.MaxSchemasPerConnection)
-        {
-            throw new QwpDecodeException($"schema_id {schemaId} exceeds {QwpConstants.MaxSchemasPerConnection}");
-        }
-
         EgressSchema schema;
-        if (schemaMode == QwpConstants.SchemaModeFull)
+        int colCount;
+        if (batchSeq == 0)
         {
+            // First batch of a query carries the inline schema: col_count then one
+            // (name_length, name, wire_type) descriptor per column.
+            colCount = ReadBoundedVarintAsInt(payload, ref p, "col_count");
+            if (colCount > QwpConstants.MaxColumnsPerTable)
+            {
+                throw new QwpDecodeException($"col_count out of range: {colCount}");
+            }
+
             var defs = new EgressColumnDef[colCount];
             for (var i = 0; i < colCount; i++)
             {
@@ -214,24 +220,21 @@ internal sealed class QwpResultBatchDecoder
                 defs[i] = new EgressColumnDef(name, typeCode);
             }
             schema = new EgressSchema(defs);
-            stagedSchemaId = schemaId;
-            stagedSchema = schema;
-        }
-        else if (schemaMode == QwpConstants.SchemaModeReference)
-        {
-            if (!_state.TryGetSchema(schemaId, out schema))
-            {
-                throw new QwpDecodeException($"unknown schema_id {schemaId} in REFERENCE mode");
-            }
-            if (schema.Columns.Length != colCount)
-            {
-                throw new QwpDecodeException(
-                    $"schema_id {schemaId} has {schema.Columns.Length} cols but RESULT_BATCH says {colCount}");
-            }
+            _querySchema = schema;
+            _querySchemaValid = true;
         }
         else
         {
-            throw new QwpDecodeException($"unknown schema_mode 0x{schemaMode:X2}");
+            // Continuation batch: bind rows to the schema delivered on batch_seq == 0.
+            // A continuation arriving before any schema-bearing batch (malformed or hostile
+            // server) must not be allowed to bind rows to a stale schema.
+            if (!_querySchemaValid || _querySchema is null)
+            {
+                throw new QwpDecodeException(
+                    $"RESULT_BATCH batch_seq={batchSeq} arrived before the schema-bearing batch_seq=0");
+            }
+            schema = _querySchema;
+            colCount = schema.Columns.Length;
         }
 
         batch.RowCount = rowCount;

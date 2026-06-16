@@ -55,8 +55,8 @@ internal static class QwpConstants
     /// <summary>Byte offset of the 32-bit payload length within the header.</summary>
     public const int OffsetPayloadLength = 8;
 
-    /// <summary>The only ingest protocol version this client speaks.</summary>
-    public const byte SupportedIngestVersion = 0x01;
+    /// <summary>The single QWP protocol version this client speaks. Ingress and egress share it.</summary>
+    public const byte SupportedVersion = 0x01;
 
     /// <summary>Timestamp columns may use Gorilla delta-of-delta encoding.</summary>
     public const byte FlagGorilla = 0x04;
@@ -66,12 +66,6 @@ internal static class QwpConstants
     ///     The WebSocket sender always sets this flag.
     /// </summary>
     public const byte FlagDeltaSymbolDict = 0x08;
-
-    /// <summary>Schema-id followed by inline column definitions.</summary>
-    public const byte SchemaModeFull = 0x00;
-
-    /// <summary>Schema-id only; the server resolves columns from its registry.</summary>
-    public const byte SchemaModeReference = 0x01;
 
     /// <summary>Byte offset of the <c>tableCount</c> field in an OK response (after status + sequence).</summary>
     public const int OffsetTableCountInOkAck = 9;
@@ -150,9 +144,8 @@ internal static class QwpConstants
     public const byte MsgKindCacheReset = 0x17;
     public const byte MsgKindServerInfo = 0x18;
 
-    /// <summary>CACHE_RESET reset_mask bits.</summary>
+    /// <summary>CACHE_RESET reset_mask bits. Bit 0 = SYMBOL dict is the only bit defined.</summary>
     public const byte ResetMaskDict = 0x01;
-    public const byte ResetMaskSchemas = 0x02;
 
     /// <summary>SERVER_INFO role bytes.</summary>
     public const byte RoleStandalone = 0x00;
@@ -184,12 +177,10 @@ internal static class QwpConstants
     /// <summary>Server soft caps; clients must accept any policy and tolerate <c>CACHE_RESET</c> at any query boundary.</summary>
     public const int SymbolDictEntriesSoftCap = 100_000;
     public const int SymbolDictHeapBytesSoftCap = 8 * 1024 * 1024;
-    public const int SchemaRegistrySoftCap = 4096;
 
     /// <summary>Client-side hard caps to bound resource use against a hostile or buggy server.</summary>
     public const int MaxConnSymbolDictEntries = 8 * 1024 * 1024;
     public const int MaxConnSymbolDictHeapBytes = 256 * 1024 * 1024;
-    public const int MaxSchemasPerConnection = 65_535;
 
     /// <summary>Inclusive zstd compression level range. Server clamps anything higher to 9 silently.</summary>
     public const int ZstdLevelMin = 1;
@@ -203,17 +194,11 @@ internal static class QwpConstants
     /// <summary>Server → client: hard cap on ingest QWP message payload bytes.</summary>
     public const string HeaderMaxBatchSize = "X-QWP-Max-Batch-Size";
 
-    /// <summary>QWP egress version handed out by Phase-1 servers.</summary>
-    public const byte SupportedEgressVersion = 0x02;
-
     /// <summary>Default auto-flush threshold by row count.</summary>
     public const int DefaultAutoFlushRows = 1000;
 
     /// <summary>Default auto-flush interval, in milliseconds.</summary>
     public const int DefaultAutoFlushIntervalMs = 100;
-
-    /// <summary>Default cap on per-connection schema slots; matches the wire schema-id range.</summary>
-    public const int DefaultMaxSchemasPerConnection = 65535;
 
     /// <summary>Default close-drain timeout, in milliseconds.</summary>
     public const int DefaultCloseTimeoutMs = 5000;

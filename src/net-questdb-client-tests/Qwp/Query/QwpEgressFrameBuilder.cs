@@ -65,7 +65,7 @@ internal static class QwpEgressFrameBuilder
             WriteVarint(payload, 0);
         }
 
-        WriteTableBlock(payload, schema, data, gorillaEnabled);
+        WriteTableBlock(payload, schema, data, gorillaEnabled, batchSeq);
 
         return WrapFrame(flags, tableCount: 1, payload.ToArray());
     }
@@ -165,7 +165,7 @@ internal static class QwpEgressFrameBuilder
     {
         var frame = new byte[QwpConstants.HeaderSize + payload.Length];
         BinaryPrimitives.WriteUInt32LittleEndian(frame.AsSpan(QwpConstants.OffsetMagic, 4), QwpConstants.Magic);
-        frame[QwpConstants.OffsetVersion] = QwpConstants.SupportedEgressVersion;
+        frame[QwpConstants.OffsetVersion] = QwpConstants.SupportedVersion;
         frame[QwpConstants.OffsetFlags] = flags;
         BinaryPrimitives.WriteUInt16LittleEndian(frame.AsSpan(QwpConstants.OffsetTableCount, 2), tableCount);
         BinaryPrimitives.WriteUInt32LittleEndian(frame.AsSpan(QwpConstants.OffsetPayloadLength, 4), (uint)payload.Length);
@@ -174,16 +174,15 @@ internal static class QwpEgressFrameBuilder
     }
 
     private static void WriteTableBlock(
-        MemoryStream payload, ResultSchema schema, ResultBatchData data, bool gorillaEnabled)
+        MemoryStream payload, ResultSchema schema, ResultBatchData data, bool gorillaEnabled, long batchSeq)
     {
         WriteVarint(payload, 0); // empty table name
         WriteVarint(payload, (ulong)data.RowCount);
-        WriteVarint(payload, (ulong)schema.Columns.Count);
 
-        if (schema.Mode == QwpConstants.SchemaModeFull)
+        // batch_seq == 0 carries the inline schema; continuation batches carry only rows.
+        if (batchSeq == 0)
         {
-            payload.WriteByte(QwpConstants.SchemaModeFull);
-            WriteVarint(payload, (ulong)schema.SchemaId);
+            WriteVarint(payload, (ulong)schema.Columns.Count);
             foreach (var c in schema.Columns)
             {
                 var nameBytes = Encoding.UTF8.GetBytes(c.Name);
@@ -191,11 +190,6 @@ internal static class QwpEgressFrameBuilder
                 payload.Write(nameBytes, 0, nameBytes.Length);
                 payload.WriteByte((byte)c.TypeCode);
             }
-        }
-        else
-        {
-            payload.WriteByte(QwpConstants.SchemaModeReference);
-            WriteVarint(payload, (ulong)schema.SchemaId);
         }
 
         for (var i = 0; i < schema.Columns.Count; i++)
@@ -242,8 +236,6 @@ internal static class QwpEgressFrameBuilder
 
 internal sealed class ResultSchema
 {
-    public byte Mode { get; init; } = QwpConstants.SchemaModeFull;
-    public long SchemaId { get; init; }
     public List<SchemaColumn> Columns { get; init; } = new();
 }
 

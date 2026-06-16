@@ -82,7 +82,6 @@ public record SenderOptions
     private X509Certificate2? _clientCert;
 
     // WebSocket / QWP knobs.
-    private int _maxSchemasPerConnection = 65535;
     private bool _requestDurableAck;
     private bool _gorilla = true;
 
@@ -115,7 +114,6 @@ public record SenderOptions
     private SenderErrorPolicy? _onSecurityError;
     private SenderErrorPolicy? _onWriteError;
 
-    private bool _maxSchemasPerConnectionUserSet;
     private bool _requestDurableAckUserSet;
     private bool _gorillaUserSet;
     private bool _sfDirUserSet;
@@ -219,7 +217,6 @@ public record SenderOptions
 
         // WebSocket / QWP knobs. Parsed unconditionally; ValidateWebSocketKeys throws if any
         // appear with a non-WebSocket scheme.
-        ParseIntWithDefault(nameof(max_schemas_per_connection), "65535", out _maxSchemasPerConnection);
         ParseBoolOnOff(nameof(request_durable_ack), "off", out _requestDurableAck);
         ParseBoolOnOff(nameof(gorilla), "on", out _gorilla);
 
@@ -552,11 +549,6 @@ public record SenderOptions
         }
         if (IsWebSocket())
         {
-            if (_maxSchemasPerConnection < 1)
-            {
-                throw new IngressError(ErrorCode.ConfigError,
-                    $"`max_schemas_per_connection` must be >= 1; got {_maxSchemasPerConnection}");
-            }
             if (_maxBackgroundDrainers < 1)
             {
                 throw new IngressError(ErrorCode.ConfigError,
@@ -663,7 +655,6 @@ public record SenderOptions
             return;
         }
 
-        if (_maxSchemasPerConnectionUserSet) Throw(nameof(max_schemas_per_connection));
         if (_gorillaUserSet) Throw(nameof(gorilla));
         if (_requestDurableAckUserSet) Throw(nameof(request_durable_ack));
         if (_sfDirUserSet) Throw(nameof(sf_dir));
@@ -722,7 +713,6 @@ public record SenderOptions
     {
         var keys = new List<string>
         {
-            "max_schemas_per_connection",
             "gorilla", "request_durable_ack",
             "sf_dir", "sender_id", "sf_max_bytes", "sf_max_total_bytes", "sf_durability",
             "sf_append_deadline_millis", "reconnect_max_duration_millis", "reconnect_initial_backoff_millis",
@@ -1081,16 +1071,6 @@ public record SenderOptions
     {
         get => _poolTimeout;
         set => _poolTimeout = value;
-    }
-
-    /// <summary>
-    ///     Hard cap on the number of distinct schemas (column-set permutations) registered on a
-    ///     single WebSocket connection. Defaults to <c>65535</c>, matching the wire schema-id range.
-    /// </summary>
-    public int max_schemas_per_connection
-    {
-        get => _maxSchemasPerConnection;
-        set { _maxSchemasPerConnection = value; _maxSchemasPerConnectionUserSet = true; }
     }
 
     /// <summary>

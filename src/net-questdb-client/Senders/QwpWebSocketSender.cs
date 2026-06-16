@@ -52,7 +52,6 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
 #if NET9_0_OR_GREATER
     private readonly Dictionary<string, QwpTableBuffer>.AlternateLookup<ReadOnlySpan<char>> _tablesLookup;
 #endif
-    private readonly QwpSchemaCache _schemaCache;
     private readonly QwpSymbolDictionary _symbolDictionary;
     private readonly List<QwpTableBuffer> _flushBatch = new();
     private readonly QwpEncoder.FrameBuilder _encoderBuffer;
@@ -83,7 +82,6 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
                 $"protocol must be ws or wss for {nameof(QwpWebSocketSender)}, got {options.protocol}");
         }
 
-        _schemaCache = new QwpSchemaCache(options.max_schemas_per_connection);
         _symbolDictionary = new QwpSymbolDictionary();
 #if NET9_0_OR_GREATER
         _tablesLookup = _tables.GetAlternateLookup<ReadOnlySpan<char>>();
@@ -747,7 +745,7 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
         }
 
         return QwpEncoder.EncodeInto(
-            _encoderBuffer, _flushBatch, _schemaCache, _symbolDictionary,
+            _encoderBuffer, _flushBatch, _symbolDictionary,
             selfSufficient: true,
             gorillaEnabled: Options.gorilla,
             symbolDeltaCount: _currentBatchMaxSymbolId + 1);
@@ -809,7 +807,6 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
         _currentBatchMaxSymbolId = -1;
         foreach (var t in _flushBatch)
         {
-            t.SchemaId = -1;
             t.Clear();
         }
 

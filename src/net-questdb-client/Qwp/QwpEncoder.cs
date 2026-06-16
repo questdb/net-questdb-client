@@ -40,6 +40,9 @@ namespace QuestDB.Qwp;
 ///     shared delta-symbol-dictionary prelude. The wire <c>tableCount</c> field is a uint16,
 ///     capped at <see cref="QwpConstants.MaxTablesPerMessage" />.
 ///     <para />
+///     <b>Inline schemas only.</b> Each table block carries its column definitions inline; the wire
+///     no longer has a schema-mode byte or schema-id. The encoder is stateless across flushes.
+///     <para />
 ///     <b>FLAG_DELTA_SYMBOL_DICT</b> is always set; symbol columns reference connection-global ids.
 ///     In self-sufficient mode the prelude carries the dictionary prefix from id 0 covering every
 ///     id the frame references; in delta mode it carries only the delta since the last flush.
@@ -62,12 +65,11 @@ internal static class QwpEncoder
     ///     Encodes the supplied tables into a single QWP frame.
     /// </summary>
     /// <param name="tables">Non-empty tables to include. The caller is expected to filter out tables with zero rows.</param>
-    /// <param name="schemaCache">Per-connection schema id allocator and reuse cache.</param>
     /// <param name="symbolDictionary">Connection-global symbol dictionary; only the delta is emitted.</param>
     /// <param name="selfSufficient">
-    ///     If <c>true</c>, the frame emits every table's schema in full mode and the symbol delta
-    ///     starts at id 0 — the receiver needs no prior connection state. Required by store-and-forward
-    ///     mode where each frame must be replayable in isolation. Defaults to <c>false</c>.
+    ///     If <c>true</c>, the symbol delta prelude starts at id 0 — the receiver needs no prior
+    ///     connection state. Required by store-and-forward mode where each frame must be replayable
+    ///     in isolation. Column schemas always travel inline regardless of this flag. Defaults to <c>false</c>.
     /// </param>
     /// <param name="gorillaEnabled">
     ///     If <c>true</c>, the frame's flags byte carries <c>FLAG_GORILLA</c> and every TIMESTAMP /
@@ -79,13 +81,12 @@ internal static class QwpEncoder
     /// <remarks>Allocates per call. Production paths use <see cref="EncodeInto" /> directly.</remarks>
     internal static byte[] Encode(
         IReadOnlyList<QwpTableBuffer> tables,
-        QwpSchemaCache schemaCache,
         QwpSymbolDictionary symbolDictionary,
         bool selfSufficient = false,
         bool gorillaEnabled = false)
     {
         var builder = new FrameBuilder(InitialCapacity);
-        var len = EncodeInto(builder, tables, schemaCache, symbolDictionary, selfSufficient, gorillaEnabled);
+        var len = EncodeInto(builder, tables, symbolDictionary, selfSufficient, gorillaEnabled);
         var result = new byte[len];
         builder.AsSpan(0, len).CopyTo(result);
         return result;
@@ -100,7 +101,6 @@ internal static class QwpEncoder
     internal static int EncodeInto(
         FrameBuilder builder,
         IReadOnlyList<QwpTableBuffer> tables,
-        QwpSchemaCache schemaCache,
         QwpSymbolDictionary symbolDictionary,
         bool selfSufficient = false,
         bool gorillaEnabled = false,
@@ -108,7 +108,6 @@ internal static class QwpEncoder
     {
         ArgumentNullException.ThrowIfNull(builder);
         ArgumentNullException.ThrowIfNull(tables);
-        ArgumentNullException.ThrowIfNull(schemaCache);
         ArgumentNullException.ThrowIfNull(symbolDictionary);
 
         if (tables.Count > QwpConstants.MaxTablesPerMessage)
@@ -133,8 +132,7 @@ internal static class QwpEncoder
                 continue;
             }
 
-            var localSchemaId = selfSufficient ? emittedTableCount : -1;
-            WriteTableBlock(builder, t, schemaCache, selfSufficient, gorillaEnabled, localSchemaId);
+            WriteTableBlock(builder, t, gorillaEnabled);
             emittedTableCount++;
         }
 
@@ -148,7 +146,7 @@ internal static class QwpEncoder
         // Patch header.
         var header = builder.AsSpan(0, QwpConstants.HeaderSize);
         BinaryPrimitives.WriteUInt32LittleEndian(header.Slice(QwpConstants.OffsetMagic, 4), QwpConstants.Magic);
-        header[QwpConstants.OffsetVersion] = QwpConstants.SupportedIngestVersion;
+        header[QwpConstants.OffsetVersion] = QwpConstants.SupportedVersion;
         var flags = QwpConstants.FlagDeltaSymbolDict;
         if (gorillaEnabled)
         {
@@ -194,40 +192,21 @@ internal static class QwpEncoder
         }
     }
 
-    private static void WriteTableBlock(FrameBuilder buf, QwpTableBuffer table, QwpSchemaCache schemaCache, bool selfSufficient, bool gorillaEnabled, int localSchemaId)
+    private static void WriteTableBlock(FrameBuilder buf, QwpTableBuffer table, bool gorillaEnabled)
     {
         WriteString(buf, table.TableName);
         buf.WriteVarint((ulong)table.RowCount);
         buf.WriteVarint((ulong)table.TotalColumnCount);
 
-        byte mode;
-        int schemaId;
-        if (selfSufficient)
+        // Column definitions are always inline. User columns first, designated timestamp last.
+        for (var i = 0; i < table.Columns.Count; i++)
         {
-            // Frame-local id, FULL schema, no schemaCache mutation. Each SF frame is replayable
-            // standalone — no per-connection counter dependency.
-            schemaId = localSchemaId;
-            mode = QwpConstants.SchemaModeFull;
-        }
-        else
-        {
-            (mode, schemaId) = schemaCache.PrepareSchema(table);
+            WriteColumnDef(buf, table.Columns[i]);
         }
 
-        buf.WriteByte(mode);
-        buf.WriteVarint((ulong)schemaId);
-
-        if (mode == QwpConstants.SchemaModeFull)
+        if (table.DesignatedTimestampColumn is not null)
         {
-            for (var i = 0; i < table.Columns.Count; i++)
-            {
-                WriteColumnDef(buf, table.Columns[i]);
-            }
-
-            if (table.DesignatedTimestampColumn is not null)
-            {
-                WriteColumnDef(buf, table.DesignatedTimestampColumn);
-            }
+            WriteColumnDef(buf, table.DesignatedTimestampColumn);
         }
 
         // Column data sections (in the same order as definitions: user columns first, designated TS last).

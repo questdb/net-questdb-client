@@ -36,11 +36,6 @@ public class QwpEncoderTests
     [Test]
     public void Encode_SingleTable_NoSymbols_ProducesByteExactFrame()
     {
-        // Spec §16 example 1 adapted for the .NET WebSocket sender:
-        //   table "sensors" with 2 rows; columns id (LONG), value (DOUBLE), and a designated TS.
-        //   Wire differences from the spec example: FLAG_DELTA_SYMBOL_DICT is always set, so the
-        //   payload begins with an empty delta-dict prelude (0x00 0x00); and the third column is
-        //   the designated timestamp (empty wire name).
         var t = new QwpTableBuffer("sensors");
         t.AppendLong("id", 1);
         t.AppendDouble("value", 1.3);
@@ -50,44 +45,23 @@ public class QwpEncoderTests
         t.AppendDouble("value", 2.2);
         t.At(400_000L);
 
-        var bytes = QwpEncoder.Encode(new[] { t }, new QwpSchemaCache(), new QwpSymbolDictionary());
+        var bytes = QwpEncoder.Encode(new[] { t }, new QwpSymbolDictionary());
 
-        // Expected payload layout (78 bytes = 0x4E):
-        //   delta dict       : 00 00
-        //   table name len/bytes: 07 'sensors'
-        //   row count        : 02
-        //   column count     : 03
-        //   schema mode/id   : 00 00
-        //   col defs         : 02 'id' 05 | 05 'value' 07 | 00 0A
-        //   col0 (LONG)      : 00 | 01 00 00 00 00 00 00 00 | 02 00 00 00 00 00 00 00
-        //   col1 (DOUBLE)    : 00 | <1.3 LE>                 | <2.2 LE>
-        //   col2 (TIMESTAMP) : 00 | <1e10 LE>                | <400000 LE>
         var expected = ConcatBytes(
-            // header
-            new byte[] { 0x51, 0x57, 0x50, 0x31, 0x01, 0x08, 0x01, 0x00, 0x4E, 0x00, 0x00, 0x00 },
-            // delta symbol dict prelude (empty)
+            new byte[] { 0x51, 0x57, 0x50, 0x31, 0x01, 0x08, 0x01, 0x00, 0x4C, 0x00, 0x00, 0x00 },
             new byte[] { 0x00, 0x00 },
-            // table header
             new byte[] { 0x07 },
             Encoding.UTF8.GetBytes("sensors"),
             new byte[] { 0x02, 0x03 },
-            // schema
-            new byte[] { 0x00, 0x00 },
-            // column 0 def: "id" LONG
             new byte[] { 0x02 }, Encoding.UTF8.GetBytes("id"), new byte[] { 0x05 },
-            // column 1 def: "value" DOUBLE
             new byte[] { 0x05 }, Encoding.UTF8.GetBytes("value"), new byte[] { 0x07 },
-            // column 2 def: designated TS (empty name) TIMESTAMP
             new byte[] { 0x00, 0x0A },
-            // column 0 data (LONG, no nulls)
             new byte[] { 0x00 },
             LittleEndianInt64(1L),
             LittleEndianInt64(2L),
-            // column 1 data (DOUBLE, no nulls)
             new byte[] { 0x00 },
             LittleEndianDouble(1.3),
             LittleEndianDouble(2.2),
-            // column 2 data (TIMESTAMP, no nulls)
             new byte[] { 0x00 },
             LittleEndianInt64(10_000_000_000L),
             LittleEndianInt64(400_000L));
@@ -97,66 +71,61 @@ public class QwpEncoderTests
     }
 
     [Test]
-    public void Encode_SecondCallSameSchema_UsesReferenceMode()
+    public void Encode_SecondCallSameSchema_StillEmitsInlineSchema()
     {
-        var cache = new QwpSchemaCache();
+        // Schemas always travel inline now; encoding the same buffer twice produces frames whose
+        // table-block schema sections are byte-identical (modulo row data).
         var symbols = new QwpSymbolDictionary();
 
         var t = new QwpTableBuffer("t");
         t.AppendLong("x", 1);
         t.At(0);
 
-        // First encode → full schema, id 0.
-        var first = QwpEncoder.Encode(new[] { t }, cache, symbols);
-        Assert.That(t.SchemaId, Is.EqualTo(0));
+        var first = QwpEncoder.Encode(new[] { t }, symbols);
 
-        // Recycle the buffer: drop row data but preserve column structure and schema id.
         t.Clear();
-        Assert.That(t.SchemaId, Is.EqualTo(0), "schema id survives Clear()");
-
         t.AppendLong("x", 2);
         t.At(1);
 
-        var second = QwpEncoder.Encode(new[] { t }, cache, symbols);
+        var second = QwpEncoder.Encode(new[] { t }, symbols);
 
-        // Locate the schema-mode byte in each frame:
-        //   header (12) + delta dict (2) + table name varint (1) + "t" (1) + row count (1) + column count (1) = 18
-        Assert.That(first[18], Is.EqualTo(QwpConstants.SchemaModeFull), "first batch sends full schema");
-        Assert.That(second[18], Is.EqualTo(QwpConstants.SchemaModeReference),
-            "second batch references schema 0 instead of resending");
-        Assert.That(second[19], Is.EqualTo((byte)0), "schema id preserved at 0");
+        // Both frames must start with the same prelude+table-name+row_count+col_count+column-defs
+        // prefix — i.e. the schema is re-emitted inline on every call.
+        //   header (12) + delta dict (2) + table name varint (1) + "t" (1)
+        //   + row count (1) + col count (1) + col name varint (1) + "x" (1) + type code (1) = 21
+        const int schemaPrefixEnd = 21;
+        Assert.That(first.AsSpan(14, schemaPrefixEnd - 14).ToArray(),
+            Is.EqualTo(second.AsSpan(14, schemaPrefixEnd - 14).ToArray()),
+            "table-block schema section must be byte-identical when re-encoded");
     }
 
     [Test]
-    public void Encode_NewColumnMidStream_ResetsSchemaToFull()
+    public void Encode_NewColumnMidStream_ReEmitsFullSchema()
     {
-        var cache = new QwpSchemaCache();
+        // A new column changes the inline schema; the next frame's column-defs section grows
+        // accordingly. (There is no schema-id machinery to invalidate.)
         var symbols = new QwpSymbolDictionary();
 
         var t = new QwpTableBuffer("t");
         t.AppendLong("x", 1);
         t.At(0);
-        QwpEncoder.Encode(new[] { t }, cache, symbols); // schema id 0 allocated and sent.
+        var first = QwpEncoder.Encode(new[] { t }, symbols);
 
-        // Recycle and add a new column: SchemaId should be invalidated and a fresh id allocated.
         t.Clear();
         t.AppendLong("x", 2);
-        t.AppendDouble("y", 3.14); // new column → invalidates schema id (back to -1)
+        t.AppendDouble("y", 3.14);
         t.At(1);
 
-        Assert.That(t.SchemaId, Is.EqualTo(-1), "adding a column resets the schema id");
+        var second = QwpEncoder.Encode(new[] { t }, symbols);
 
-        var second = QwpEncoder.Encode(new[] { t }, cache, symbols);
-
-        Assert.That(second[18], Is.EqualTo(QwpConstants.SchemaModeFull));
-        Assert.That(second[19], Is.EqualTo((byte)1), "fresh schema id allocated");
-        Assert.That(t.SchemaId, Is.EqualTo(1));
+        // Second frame must be longer (extra column def + extra column-data section).
+        Assert.That(second.Length, Is.GreaterThan(first.Length),
+            "adding a column grows the next frame's inline schema and data sections");
     }
 
     [Test]
     public void Encode_WithSymbols_EmitsDeltaDictAndVarintIds()
     {
-        var cache = new QwpSchemaCache();
         var symbols = new QwpSymbolDictionary();
 
         var idUs = symbols.Add("us");
@@ -170,10 +139,10 @@ public class QwpEncoderTests
         t.AppendSymbol("region", idUs);
         t.At(2);
 
-        var bytes = QwpEncoder.Encode(new[] { t }, cache, symbols);
+        var bytes = QwpEncoder.Encode(new[] { t }, symbols);
 
         // Header at bytes 0..11:
-        Assert.That(bytes[QwpConstants.OffsetVersion], Is.EqualTo(QwpConstants.SupportedIngestVersion));
+        Assert.That(bytes[QwpConstants.OffsetVersion], Is.EqualTo(QwpConstants.SupportedVersion));
         Assert.That(bytes[QwpConstants.OffsetFlags], Is.EqualTo(QwpConstants.FlagDeltaSymbolDict));
         Assert.That(BinaryPrimitives.ReadUInt16LittleEndian(bytes.AsSpan(QwpConstants.OffsetTableCount, 2)), Is.EqualTo(1));
 
@@ -193,7 +162,6 @@ public class QwpEncoderTests
     [Test]
     public void Encode_WithCommittedSymbols_EmitsOnlyDelta()
     {
-        var cache = new QwpSchemaCache();
         var symbols = new QwpSymbolDictionary();
 
         // First batch: add "us", emit, commit.
@@ -201,7 +169,7 @@ public class QwpEncoderTests
         var t = new QwpTableBuffer("trades");
         t.AppendSymbol("region", 0);
         t.At(0);
-        QwpEncoder.Encode(new[] { t }, cache, symbols);
+        QwpEncoder.Encode(new[] { t }, symbols);
         symbols.Commit(); // server ACKed.
 
         // Second batch: add "eu" (delta is just "eu").
@@ -210,7 +178,7 @@ public class QwpEncoderTests
         t.AppendSymbol("region", 1);
         t.At(1);
 
-        var bytes = QwpEncoder.Encode(new[] { t }, cache, symbols);
+        var bytes = QwpEncoder.Encode(new[] { t }, symbols);
 
         // Expect delta_start = 1, delta_count = 1, single entry "eu".
         Assert.That(bytes[12], Is.EqualTo(0x01), "delta_start = 1 (committed_count)");
@@ -232,13 +200,13 @@ public class QwpEncoderTests
         t.AppendVarchar("note", "baz");
         t.At(3);
 
-        var bytes = QwpEncoder.Encode(new[] { t }, new QwpSchemaCache(), new QwpSymbolDictionary());
+        var bytes = QwpEncoder.Encode(new[] { t }, new QwpSymbolDictionary());
 
         // Find the column-data section. Layout:
-        //   header (12) + delta dict (2) + table header (1+5+1+1=8) + schema (2)
+        //   header (12) + delta dict (2) + table header (1+5+1+1=8)
         //   + col defs: "note" varchar (1+4+1=6) + "" timestamp (1+1=2)
-        //   = 12 + 2 + 8 + 2 + 6 + 2 = 32 → first col data at offset 32.
-        var pos = 32;
+        //   = 12 + 2 + 8 + 6 + 2 = 30 → first col data at offset 30.
+        var pos = 30;
 
         // Null flag: 0x01 (bitmap follows)
         Assert.That(bytes[pos++], Is.EqualTo(0x01));
@@ -260,7 +228,6 @@ public class QwpEncoderTests
     [Test]
     public void Encode_MultipleTables_EmitsOneFrameWithBothBlocks()
     {
-        var cache = new QwpSchemaCache();
         var symbols = new QwpSymbolDictionary();
 
         var t1 = new QwpTableBuffer("a");
@@ -271,20 +238,16 @@ public class QwpEncoderTests
         t2.AppendDouble("v", 2.0);
         t2.At(0);
 
-        var bytes = QwpEncoder.Encode(new[] { t1, t2 }, cache, symbols);
+        var bytes = QwpEncoder.Encode(new[] { t1, t2 }, symbols);
 
         Assert.That(BinaryPrimitives.ReadUInt16LittleEndian(bytes.AsSpan(QwpConstants.OffsetTableCount, 2)),
             Is.EqualTo(2), "two tables in one frame");
-
-        // Both tables get distinct, sequential schema ids.
-        Assert.That(t1.SchemaId, Is.EqualTo(0));
-        Assert.That(t2.SchemaId, Is.EqualTo(1));
     }
 
     [Test]
     public void Encode_EmptyTablesList_ProducesValidEmptyFrame()
     {
-        var bytes = QwpEncoder.Encode(Array.Empty<QwpTableBuffer>(), new QwpSchemaCache(), new QwpSymbolDictionary());
+        var bytes = QwpEncoder.Encode(Array.Empty<QwpTableBuffer>(), new QwpSymbolDictionary());
 
         Assert.That(bytes.Length, Is.EqualTo(QwpConstants.HeaderSize + 2),
             "header + empty delta dict (00 00)");
@@ -295,7 +258,7 @@ public class QwpEncoderTests
     [Test]
     public void Encode_MagicBytesAreCorrect()
     {
-        var bytes = QwpEncoder.Encode(Array.Empty<QwpTableBuffer>(), new QwpSchemaCache(), new QwpSymbolDictionary());
+        var bytes = QwpEncoder.Encode(Array.Empty<QwpTableBuffer>(), new QwpSymbolDictionary());
         Assert.That(bytes[0], Is.EqualTo((byte)'Q'));
         Assert.That(bytes[1], Is.EqualTo((byte)'W'));
         Assert.That(bytes[2], Is.EqualTo((byte)'P'));
@@ -310,7 +273,7 @@ public class QwpEncoderTests
         t.AppendDecimal128("price", 12.34m);
         t.At(0);
 
-        var bytes = QwpEncoder.Encode(new[] { t }, new QwpSchemaCache(), new QwpSymbolDictionary());
+        var bytes = QwpEncoder.Encode(new[] { t }, new QwpSymbolDictionary());
 
         // Column-data offset: header (12) + delta (2) + table header "t" 1+1+1+1 = 4
         // + schema 2 + col defs: "price" 1+5+1=7 + "" timestamp 1+1=2 = 29.
@@ -337,7 +300,7 @@ public class QwpEncoderTests
         t.AppendChar("c", '中');
         t.At(1);
 
-        var bytes = QwpEncoder.Encode(new[] { t }, new QwpSchemaCache(), new QwpSymbolDictionary());
+        var bytes = QwpEncoder.Encode(new[] { t }, new QwpSymbolDictionary());
         var pos = FindFirstColumnDataOffset(bytes, tableNameLen: 1, userColCount: 1, userColDefSize: 1 + 1 + 1);
 
         Assert.That(bytes[pos++], Is.EqualTo(0x00), "null flag");
@@ -352,7 +315,7 @@ public class QwpEncoderTests
         t.AppendDecimal64("p", 12.34m);
         t.At(0);
 
-        var bytes = QwpEncoder.Encode(new[] { t }, new QwpSchemaCache(), new QwpSymbolDictionary());
+        var bytes = QwpEncoder.Encode(new[] { t }, new QwpSymbolDictionary());
         var pos = FindFirstColumnDataOffset(bytes, tableNameLen: 1, userColCount: 1, userColDefSize: 1 + 1 + 1);
 
         Assert.That(bytes[pos++], Is.EqualTo(0x00), "null flag");
@@ -367,7 +330,7 @@ public class QwpEncoderTests
         t.AppendDecimal256("p", -1m);
         t.At(0);
 
-        var bytes = QwpEncoder.Encode(new[] { t }, new QwpSchemaCache(), new QwpSymbolDictionary());
+        var bytes = QwpEncoder.Encode(new[] { t }, new QwpSymbolDictionary());
         var pos = FindFirstColumnDataOffset(bytes, tableNameLen: 1, userColCount: 1, userColDefSize: 1 + 1 + 1);
 
         Assert.That(bytes[pos++], Is.EqualTo(0x00), "null flag");
@@ -385,7 +348,7 @@ public class QwpEncoderTests
         t.AppendDecimal64("p", 1234567890123L, scale: 4);
         t.At(0);
 
-        var bytes = QwpEncoder.Encode(new[] { t }, new QwpSchemaCache(), new QwpSymbolDictionary());
+        var bytes = QwpEncoder.Encode(new[] { t }, new QwpSymbolDictionary());
         var pos = FindFirstColumnDataOffset(bytes, tableNameLen: 1, userColCount: 1, userColDefSize: 1 + 1 + 1);
 
         Assert.That(bytes[pos++], Is.EqualTo(0x00), "null flag");
@@ -401,7 +364,7 @@ public class QwpEncoderTests
         t.AppendDecimal128("p", lo: 0x0102030405060708L, hi: 0x1112131415161718L, scale: 6);
         t.At(0);
 
-        var bytes = QwpEncoder.Encode(new[] { t }, new QwpSchemaCache(), new QwpSymbolDictionary());
+        var bytes = QwpEncoder.Encode(new[] { t }, new QwpSymbolDictionary());
         var pos = FindFirstColumnDataOffset(bytes, tableNameLen: 1, userColCount: 1, userColDefSize: 1 + 1 + 1);
 
         Assert.That(bytes[pos++], Is.EqualTo(0x00), "null flag");
@@ -423,7 +386,7 @@ public class QwpEncoderTests
             scale: 12);
         t.At(0);
 
-        var bytes = QwpEncoder.Encode(new[] { t }, new QwpSchemaCache(), new QwpSymbolDictionary());
+        var bytes = QwpEncoder.Encode(new[] { t }, new QwpSymbolDictionary());
         var pos = FindFirstColumnDataOffset(bytes, tableNameLen: 1, userColCount: 1, userColDefSize: 1 + 1 + 1);
 
         Assert.That(bytes[pos++], Is.EqualTo(0x00), "null flag");
@@ -444,7 +407,7 @@ public class QwpEncoderTests
         t.AppendBinary("blob", new byte[] { 0x30 });
         t.At(1);
 
-        var bytes = QwpEncoder.Encode(new[] { t }, new QwpSchemaCache(), new QwpSymbolDictionary());
+        var bytes = QwpEncoder.Encode(new[] { t }, new QwpSymbolDictionary());
         var pos = FindFirstColumnDataOffset(bytes, tableNameLen: 1, userColCount: 1, userColDefSize: 1 + 4 + 1);
 
         Assert.That(bytes[pos++], Is.EqualTo(0x00), "null flag");
@@ -465,7 +428,7 @@ public class QwpEncoderTests
         t.AppendIPv4("ip", 0x04030201u);
         t.At(0);
 
-        var bytes = QwpEncoder.Encode(new[] { t }, new QwpSchemaCache(), new QwpSymbolDictionary());
+        var bytes = QwpEncoder.Encode(new[] { t }, new QwpSymbolDictionary());
         var pos = FindFirstColumnDataOffset(bytes, tableNameLen: 1, userColCount: 1, userColDefSize: 1 + 2 + 1);
 
         Assert.That(bytes[pos++], Is.EqualTo(0x00), "null flag");
@@ -479,7 +442,7 @@ public class QwpEncoderTests
         t.AppendLong256("hash", new BigInteger(0xCAFEBABEUL));
         t.At(0);
 
-        var bytes = QwpEncoder.Encode(new[] { t }, new QwpSchemaCache(), new QwpSymbolDictionary());
+        var bytes = QwpEncoder.Encode(new[] { t }, new QwpSymbolDictionary());
         var pos = FindFirstColumnDataOffset(bytes, tableNameLen: 1, userColCount: 1, userColDefSize: 1 + 4 + 1);
 
         Assert.That(bytes[pos++], Is.EqualTo(0x00), "null flag");
@@ -499,7 +462,7 @@ public class QwpEncoderTests
         t.AppendGeohash("loc", 0x123456, 24);
         t.At(1);
 
-        var bytes = QwpEncoder.Encode(new[] { t }, new QwpSchemaCache(), new QwpSymbolDictionary());
+        var bytes = QwpEncoder.Encode(new[] { t }, new QwpSymbolDictionary());
         var pos = FindFirstColumnDataOffset(bytes, tableNameLen: 1, userColCount: 1, userColDefSize: 1 + 3 + 1);
 
         Assert.That(bytes[pos++], Is.EqualTo(0x00), "null flag");
@@ -523,7 +486,7 @@ public class QwpEncoderTests
         t.AppendDoubleArray("vec", new double[] { 9.0 }, new[] { 1 });
         t.At(1);
 
-        var bytes = QwpEncoder.Encode(new[] { t }, new QwpSchemaCache(), new QwpSymbolDictionary());
+        var bytes = QwpEncoder.Encode(new[] { t }, new QwpSymbolDictionary());
         var pos = FindFirstColumnDataOffset(bytes, tableNameLen: 1, userColCount: 1, userColDefSize: 1 + 3 + 1);
 
         Assert.That(bytes[pos++], Is.EqualTo(0x00), "null flag");
@@ -552,17 +515,14 @@ public class QwpEncoderTests
         t.AppendLong("v", 3L);
         t.At(1_000_002L);
 
-        var bytes = QwpEncoder.Encode(new[] { t }, new QwpSchemaCache(), new QwpSymbolDictionary(), gorillaEnabled: true);
+        var bytes = QwpEncoder.Encode(new[] { t }, new QwpSymbolDictionary(), gorillaEnabled: true);
 
-        // Header flags must include FLAG_GORILLA on top of FLAG_DELTA_SYMBOL_DICT.
         var expectedFlags = (byte)(QwpConstants.FlagDeltaSymbolDict | QwpConstants.FlagGorilla);
         Assert.That(bytes[QwpConstants.OffsetFlags], Is.EqualTo(expectedFlags));
 
-        // Layout to the long column data:
-        //   header(12) + delta(2) + tableNameLen(1) + "t"(1) + rowCount(1) + colCount(1) + schema(2)
-        //   + col defs: "v" LONG (1+1+1=3) + "" TIMESTAMP (1+1=2) = 25.
-        // The long column is fixed-width (LONG, not TIMESTAMP), so no encoding-flag byte for it.
-        var pos = 25;
+        // header(12) + delta(2) + tableNameLen(1) + "t"(1) + rowCount(1) + colCount(1)
+        // + col defs: "v" LONG (1+1+1=3) + "" TIMESTAMP (1+1=2) = 23.
+        var pos = 23;
         Assert.That(bytes[pos++], Is.EqualTo(0x00), "long col null flag");
         // 3 longs = 24 bytes
         pos += 24;
@@ -581,14 +541,13 @@ public class QwpEncoderTests
         t.AppendLong("v", 1L);
         t.At(1_000_000L);
 
-        var bytes = QwpEncoder.Encode(new[] { t }, new QwpSchemaCache(), new QwpSymbolDictionary(), gorillaEnabled: false);
+        var bytes = QwpEncoder.Encode(new[] { t }, new QwpSymbolDictionary(), gorillaEnabled: false);
 
         Assert.That(bytes[QwpConstants.OffsetFlags], Is.EqualTo(QwpConstants.FlagDeltaSymbolDict));
 
-        // Timestamp column data starts at the same offset; first byte is null flag (0), then 8 bytes of TS.
-        // Layout: header(12) + delta(2) + tableHeader(1+1+1+1=4) + schema(2) + col defs(3+2=5) = 25.
-        // long col data: null flag (1) + 8 bytes = 9. Then ts col data starts at 25 + 9 = 34.
-        var pos = 25 + 9;
+        // header(12) + delta(2) + tableHeader(1+1+1+1=4) + col defs(3+2=5) = 23.
+        // long col data: null flag (1) + 8 bytes = 9. Then ts col data starts at 23 + 9 = 32.
+        var pos = 23 + 9;
         Assert.That(bytes[pos++], Is.EqualTo(0x00), "ts null flag");
         // Next 8 bytes should be the timestamp directly (no encoding flag preamble).
         var ts = BinaryPrimitives.ReadInt64LittleEndian(bytes.AsSpan(pos, 8));
@@ -602,7 +561,7 @@ public class QwpEncoderTests
         t.AppendLongArray("v", new long[] { -7, 7 }, new[] { 2 });
         t.At(0);
 
-        var bytes = QwpEncoder.Encode(new[] { t }, new QwpSchemaCache(), new QwpSymbolDictionary());
+        var bytes = QwpEncoder.Encode(new[] { t }, new QwpSymbolDictionary());
         var pos = FindFirstColumnDataOffset(bytes, tableNameLen: 1, userColCount: 1, userColDefSize: 1 + 1 + 1);
 
         Assert.That(bytes[pos++], Is.EqualTo(0x00), "null flag");
@@ -615,35 +574,32 @@ public class QwpEncoderTests
     [Test]
     public void Encode_SelfSufficient_AlwaysEmitsFullSchema()
     {
-        var cache = new QwpSchemaCache();
         var symbols = new QwpSymbolDictionary();
 
         var t = new QwpTableBuffer("t");
         t.AppendLong("x", 1);
         t.At(0);
 
-        var first = QwpEncoder.Encode(new[] { t }, cache, symbols, selfSufficient: true);
-        // SF mode uses frame-local schema ids (0..tables-1) and never mutates the per-connection
-        // schemaCache; the table buffer's SchemaId stays unassigned.
-        Assert.That(t.SchemaId, Is.EqualTo(QwpSchemaCache.UnassignedSchemaId));
-        Assert.That(cache.AllocatedCount, Is.EqualTo(0), "SF must not bump the connection counter");
+        var first = QwpEncoder.Encode(new[] { t }, symbols, selfSufficient: true);
 
         t.Clear();
         t.AppendLong("x", 2);
         t.At(1);
 
-        var second = QwpEncoder.Encode(new[] { t }, cache, symbols, selfSufficient: true);
+        var second = QwpEncoder.Encode(new[] { t }, symbols, selfSufficient: true);
 
-        // Both frames must carry the full schema; receiver may have no prior connection state.
-        Assert.That(first[18], Is.EqualTo(QwpConstants.SchemaModeFull), "first frame: full");
-        Assert.That(second[18], Is.EqualTo(QwpConstants.SchemaModeFull), "second frame: still full in SF mode");
-        Assert.That(second[19], Is.EqualTo((byte)0), "schema id reused");
+        // Both frames carry the same inline schema; receiver needs no prior connection state.
+        // Schema spans header (12) + dict (2) + name varint (1) + "t" (1) + row count (1)
+        // + col count (1) + col name varint (1) + "x" (1) + type code (1) = 21.
+        const int schemaPrefixEnd = 21;
+        Assert.That(first.AsSpan(14, schemaPrefixEnd - 14).ToArray(),
+            Is.EqualTo(second.AsSpan(14, schemaPrefixEnd - 14).ToArray()),
+            "SF frames must re-emit identical inline schemas every time");
     }
 
     [Test]
     public void Encode_SelfSufficient_EmitsFullSymbolDictAfterCommit()
     {
-        var cache = new QwpSchemaCache();
         var symbols = new QwpSymbolDictionary();
 
         symbols.Add("us");
@@ -657,7 +613,7 @@ public class QwpEncoderTests
         t.AppendSymbol("region", 1);
         t.At(1);
 
-        var bytes = QwpEncoder.Encode(new[] { t }, cache, symbols, selfSufficient: true);
+        var bytes = QwpEncoder.Encode(new[] { t }, symbols, selfSufficient: true);
 
         // SF replay: every frame restates the dictionary from id 0.
         Assert.That(bytes[12], Is.EqualTo(0x00), "delta_start = 0 in SF mode (committed watermark ignored)");
@@ -671,7 +627,6 @@ public class QwpEncoderTests
     [Test]
     public void EncodeInto_SelfSufficient_SymbolDeltaCount_EmitsOnlyDictPrefix()
     {
-        var cache = new QwpSchemaCache();
         var symbols = new QwpSymbolDictionary();
         symbols.Add("us");
         symbols.Add("eu");
@@ -685,7 +640,7 @@ public class QwpEncoderTests
 
         // Self-sufficient with an explicit prefix length of 2: only ids [0, 2) are restated.
         var builder = new QwpEncoder.FrameBuilder(4096);
-        var len = QwpEncoder.EncodeInto(builder, new[] { t }, cache, symbols,
+        var len = QwpEncoder.EncodeInto(builder, new[] { t }, symbols,
             selfSufficient: true, gorillaEnabled: false, symbolDeltaCount: 2);
         var bytes = builder.AsSpan(0, len).ToArray();
 
@@ -703,7 +658,6 @@ public class QwpEncoderTests
     [Test]
     public void EncodeInto_SelfSufficient_SymbolDeltaCountZero_EmitsEmptyDict()
     {
-        var cache = new QwpSchemaCache();
         var symbols = new QwpSymbolDictionary();
         symbols.Add("us");
         symbols.Add("eu");
@@ -713,7 +667,7 @@ public class QwpEncoderTests
         t.At(0);
 
         var builder = new QwpEncoder.FrameBuilder(4096);
-        var len = QwpEncoder.EncodeInto(builder, new[] { t }, cache, symbols,
+        var len = QwpEncoder.EncodeInto(builder, new[] { t }, symbols,
             selfSufficient: true, gorillaEnabled: false, symbolDeltaCount: 0);
         var bytes = builder.AsSpan(0, len).ToArray();
 
@@ -725,7 +679,6 @@ public class QwpEncoderTests
     [Test]
     public void Encode_SelfSufficient_TwoTablesInSameFrame_BothEmitFullSchema()
     {
-        var cache = new QwpSchemaCache();
         var symbols = new QwpSymbolDictionary();
 
         var ta = new QwpTableBuffer("a");
@@ -737,7 +690,7 @@ public class QwpEncoderTests
         tb.At(0);
 
         // Encode once first to push schemas into the cache, then a second time in self-sufficient mode.
-        QwpEncoder.Encode(new[] { ta, tb }, cache, symbols);
+        QwpEncoder.Encode(new[] { ta, tb }, symbols);
         ta.Clear();
         tb.Clear();
         ta.AppendLong("v", 11);
@@ -745,23 +698,23 @@ public class QwpEncoderTests
         tb.AppendDouble("v", 22.0);
         tb.At(1);
 
-        var bytes = QwpEncoder.Encode(new[] { ta, tb }, cache, symbols, selfSufficient: true);
+        var bytes = QwpEncoder.Encode(new[] { ta, tb }, symbols, selfSufficient: true);
 
-        // Walk to each table's schema-mode byte and assert Full. Layout per table:
-        //   tableName varint(1) + name(1) + rowCount(1) + colCount(1) + schemaMode(1) + schemaId(1)
+        // Layout per table block (no schema_mode / schema_id any more):
+        //   tableName varint(1) + name(1) + rowCount(1) + colCount(1)
         //   + columnDef("v"): nameLen(1) + "v"(1) + type(1) = 3
         //   + designatedTsColDef: nameLen(1)=0 + type(1) = 2
         //   + colData("v"): nullFlag(1) + 8 bytes value = 9
         //   + colData(""): nullFlag(1) + 8 bytes value = 9
-        //   = 1+1+1+1+1+1+3+2+9+9 = 29 bytes per table block
-        // First table starts at offset 14 (header 12 + delta 2). Schema mode byte is at +4 inside the
-        // table block (after name varint + name + rowCount + colCount).
+        //   = 1+1+1+1+3+2+9+9 = 27 bytes per table block.
+        // First table starts at offset 14 (header 12 + delta 2). The name varint of the second
+        // table is the byte immediately after the first table block.
         const int firstTableStart = 14;
-        const int schemaModeOffsetInTable = 4;
-        const int tableBlockSize = 29;
-
-        Assert.That(bytes[firstTableStart + schemaModeOffsetInTable], Is.EqualTo(QwpConstants.SchemaModeFull), "table A: full");
-        Assert.That(bytes[firstTableStart + tableBlockSize + schemaModeOffsetInTable], Is.EqualTo(QwpConstants.SchemaModeFull), "table B: full");
+        const int tableBlockSize = 27;
+        Assert.That(bytes[firstTableStart], Is.EqualTo((byte)"a".Length),
+            "table A name length leads the first table block");
+        Assert.That(bytes[firstTableStart + tableBlockSize], Is.EqualTo((byte)"b".Length),
+            "table B name length leads the second table block (no shared schema-id between them)");
     }
 
     /// <summary>
@@ -781,8 +734,8 @@ public class QwpEncoderTests
         _ = frame;
 
         // 12 (header) + 2 (delta dict) + 1 (table name varint) + tableNameLen + 1 (rowCount) + 1 (colCount)
-        // + 2 (schema mode + id) + userColDefSize + 2 (designated TS def: empty name varint=0 + TIMESTAMP)
-        return 12 + 2 + 1 + tableNameLen + 1 + 1 + 2 + userColDefSize + 2;
+        // + userColDefSize + 2 (designated TS def: empty name varint=0 + TIMESTAMP)
+        return 12 + 2 + 1 + tableNameLen + 1 + 1 + userColDefSize + 2;
     }
 
     private static byte[] ConcatBytes(params byte[][] parts)

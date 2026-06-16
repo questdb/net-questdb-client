@@ -102,7 +102,7 @@ public class QwpEgressFragmentationFuzzTests
         var server = new DummyQwpServer(new DummyQwpServerOptions
         {
             Path = QwpConstants.ReadPath,
-            NegotiatedVersion = "2",
+            NegotiatedVersion = "1",
             InitialServerFrame = serverInfo,
             OutgoingFragmentSize = fragmentSize,
             FrameHandlerMulti = frame =>
@@ -131,7 +131,6 @@ public class QwpEgressFragmentationFuzzTests
     {
         var schema = new ResultSchema
         {
-            SchemaId = 1,
             Columns = { new SchemaColumn("id", QwpTypeCode.Long) },
         };
         var dense = new byte[rowCount * 8];

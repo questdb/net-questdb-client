@@ -173,13 +173,13 @@ internal sealed class QwpWebSocketTransport : IQwpCursorTransport
         }
 
         _negotiatedVersion = ReadNegotiatedVersion();
-        if (_negotiatedVersion < 1 || _negotiatedVersion > _options.ClientMaxVersion)
+        if (_negotiatedVersion != QwpConstants.SupportedVersion)
         {
             await TryCloseAsync(WebSocketCloseStatus.ProtocolError, "unsupported QWP version", ct)
                 .ConfigureAwait(false);
             throw new IngressError(
                 ErrorCode.ProtocolVersionError,
-                $"server negotiated QWP version {_negotiatedVersion}; this client supports v1..v{_options.ClientMaxVersion}");
+                $"server negotiated QWP version {_negotiatedVersion}; this client only speaks v{QwpConstants.SupportedVersion}");
         }
 
         if (_options.RequestDurableAck)
@@ -495,7 +495,7 @@ internal sealed class QwpWebSocketTransportOptions
     public Stream? DumpStream { get; init; }
 
     /// <summary>Maximum QWP version this client speaks. The wire pins ingest to 1; exposing the knob is for forward-compat tests.</summary>
-    public int ClientMaxVersion { get; init; } = QwpConstants.SupportedIngestVersion;
+    public int ClientMaxVersion { get; init; } = QwpConstants.SupportedVersion;
 
     /// <summary>Free-form client identifier used for the <c>X-QWP-Client-Id</c> header.</summary>
     public string? ClientId { get; init; }

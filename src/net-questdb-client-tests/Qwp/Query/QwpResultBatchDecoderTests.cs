@@ -39,7 +39,6 @@ public class QwpResultBatchDecoderTests
     {
         var schema = new ResultSchema
         {
-            SchemaId = 7,
             Columns = { new SchemaColumn("id", QwpTypeCode.Long) },
         };
         var data = new ResultBatchData
@@ -65,7 +64,6 @@ public class QwpResultBatchDecoderTests
     {
         var schema = new ResultSchema
         {
-            SchemaId = 1,
             Columns = { new SchemaColumn("v", QwpTypeCode.Int) },
         };
         var data = new ResultBatchData
@@ -91,7 +89,6 @@ public class QwpResultBatchDecoderTests
     {
         var schema = new ResultSchema
         {
-            SchemaId = 2,
             Columns = { new SchemaColumn("s", QwpTypeCode.Varchar) },
         };
         var data = new ResultBatchData
@@ -114,7 +111,6 @@ public class QwpResultBatchDecoderTests
     {
         var schema = new ResultSchema
         {
-            SchemaId = 3,
             Columns = { new SchemaColumn("sym", QwpTypeCode.Symbol) },
         };
         var data = new ResultBatchData
@@ -139,7 +135,6 @@ public class QwpResultBatchDecoderTests
     {
         var schema = new ResultSchema
         {
-            SchemaId = 4,
             Columns = { new SchemaColumn("ts", QwpTypeCode.Timestamp) },
         };
         var values = new[] { 1_700_000_000_000_000L, 1_700_000_000_000_100L, 1_700_000_000_000_200L, 1_700_000_000_000_300L };
@@ -158,32 +153,21 @@ public class QwpResultBatchDecoderTests
     }
 
     [Test]
-    public void Decode_ReferenceMode_ReusesPriorSchema()
+    public void Decode_ContinuationBatch_ReusesSchemaFromBatch0()
     {
         var state = new QwpEgressConnState();
         var decoder = new QwpResultBatchDecoder(state);
 
-        var schemaFull = new ResultSchema
-        {
-            Mode = QwpConstants.SchemaModeFull,
-            SchemaId = 11,
-            Columns = { new SchemaColumn("c", QwpTypeCode.Long) },
-        };
+        var schema = new ResultSchema { Columns = { new SchemaColumn("c", QwpTypeCode.Long) } };
         var dataA = new ResultBatchData { RowCount = 1, Columns = { new FixedColumnData { DenseBytes = LongsLe(7L) } } };
-        var frameA = QwpEgressFrameBuilder.BuildResultBatch(1L, 0L, schemaFull, dataA);
+        var frameA = QwpEgressFrameBuilder.BuildResultBatch(1L, 0L, schema, dataA);
 
         var batchA = new QwpColumnBatch();
         decoder.Decode(PayloadOf(frameA).Span, HeaderFlagsOf(frameA), batchA);
         Assert.That(batchA.GetLongValue(0, 0), Is.EqualTo(7L));
 
-        var schemaRef = new ResultSchema
-        {
-            Mode = QwpConstants.SchemaModeReference,
-            SchemaId = 11,
-            Columns = schemaFull.Columns,
-        };
         var dataB = new ResultBatchData { RowCount = 1, Columns = { new FixedColumnData { DenseBytes = LongsLe(42L) } } };
-        var frameB = QwpEgressFrameBuilder.BuildResultBatch(1L, 1L, schemaRef, dataB);
+        var frameB = QwpEgressFrameBuilder.BuildResultBatch(1L, 1L, schema, dataB);
 
         var batchB = new QwpColumnBatch();
         decoder.Decode(PayloadOf(frameB).Span, HeaderFlagsOf(frameB), batchB);
@@ -192,19 +176,38 @@ public class QwpResultBatchDecoderTests
     }
 
     [Test]
-    public void Decode_UnknownSchemaIdInReferenceMode_Throws()
+    public void Decode_ContinuationBeforeBatch0_Throws()
     {
         var state = new QwpEgressConnState();
         var decoder = new QwpResultBatchDecoder(state);
 
-        var schemaRef = new ResultSchema
-        {
-            Mode = QwpConstants.SchemaModeReference,
-            SchemaId = 999,
-            Columns = { new SchemaColumn("c", QwpTypeCode.Long) },
-        };
+        // No batch_seq=0 has been delivered; a continuation batch must be rejected rather
+        // than binding rows to a stale schema.
+        var schema = new ResultSchema { Columns = { new SchemaColumn("c", QwpTypeCode.Long) } };
         var data = new ResultBatchData { RowCount = 1, Columns = { new FixedColumnData { DenseBytes = LongsLe(1L) } } };
-        var frame = QwpEgressFrameBuilder.BuildResultBatch(1L, 0L, schemaRef, data);
+        var frame = QwpEgressFrameBuilder.BuildResultBatch(1L, 5L, schema, data);
+
+        Assert.Throws<QwpDecodeException>(() => decoder.Decode(PayloadOf(frame).Span, HeaderFlagsOf(frame), new QwpColumnBatch()));
+    }
+
+    [Test]
+    public void ResetQuerySchema_InvalidatesPriorBatch0Schema()
+    {
+        var state = new QwpEgressConnState();
+        var decoder = new QwpResultBatchDecoder(state);
+
+        // Query 1 starts: batch_seq=0 carries the schema.
+        var schema = new ResultSchema { Columns = { new SchemaColumn("c", QwpTypeCode.Long) } };
+        var dataA = new ResultBatchData { RowCount = 1, Columns = { new FixedColumnData { DenseBytes = LongsLe(1L) } } };
+        decoder.Decode(PayloadOf(QwpEgressFrameBuilder.BuildResultBatch(1L, 0L, schema, dataA)).Span,
+            HeaderFlagsOf(QwpEgressFrameBuilder.BuildResultBatch(1L, 0L, schema, dataA)),
+            new QwpColumnBatch());
+
+        // Query 2 starts: query schema invalidated, a continuation batch from the new request
+        // must NOT bind to query 1's schema.
+        decoder.ResetQuerySchema();
+        var dataB = new ResultBatchData { RowCount = 1, Columns = { new FixedColumnData { DenseBytes = LongsLe(2L) } } };
+        var frame = QwpEgressFrameBuilder.BuildResultBatch(2L, 1L, schema, dataB);
 
         Assert.Throws<QwpDecodeException>(() => decoder.Decode(PayloadOf(frame).Span, HeaderFlagsOf(frame), new QwpColumnBatch()));
     }
@@ -214,7 +217,6 @@ public class QwpResultBatchDecoderTests
     {
         var schema = new ResultSchema
         {
-            SchemaId = 5,
             Columns = { new SchemaColumn("c", QwpTypeCode.Long) },
         };
         var data = new ResultBatchData { RowCount = 2, Columns = { new FixedColumnData { DenseBytes = LongsLe(1L, 2L) } } };
@@ -232,7 +234,6 @@ public class QwpResultBatchDecoderTests
     {
         var schema = new ResultSchema
         {
-            SchemaId = 6,
             Columns = { new SchemaColumn("d", QwpTypeCode.Decimal64) },
         };
         var dense = LongsLe(12345L);
@@ -253,7 +254,6 @@ public class QwpResultBatchDecoderTests
     {
         var schema = new ResultSchema
         {
-            SchemaId = 9,
             Columns = { new SchemaColumn("a", QwpTypeCode.DoubleArray) },
         };
         var data = new ResultBatchData
@@ -288,7 +288,6 @@ public class QwpResultBatchDecoderTests
     {
         var schema = new ResultSchema
         {
-            SchemaId = 10,
             Columns = { new SchemaColumn("la", QwpTypeCode.LongArray) },
         };
         var data = new ResultBatchData
@@ -312,7 +311,6 @@ public class QwpResultBatchDecoderTests
     {
         var schema = new ResultSchema
         {
-            SchemaId = 8,
             Columns = { new SchemaColumn("g", QwpTypeCode.Geohash) },
         };
         var dense = new byte[] { 0xAB, 0xCD, 0xEF }; // 24 bits = 3 bytes per row, little-endian
@@ -333,7 +331,6 @@ public class QwpResultBatchDecoderTests
     {
         var schema = new ResultSchema
         {
-            SchemaId = 81,
             Columns = { new SchemaColumn("g", QwpTypeCode.Geohash) },
         };
         var data = new ResultBatchData
@@ -370,7 +367,6 @@ public class QwpResultBatchDecoderTests
 
         var schema = new ResultSchema
         {
-            SchemaId = 41,
             Columns =
             {
                 new SchemaColumn("id", QwpTypeCode.Long),
@@ -436,12 +432,7 @@ public class QwpResultBatchDecoderTests
         };
         var frameB = QwpEgressFrameBuilder.BuildResultBatch(
             1L, 1L,
-            new ResultSchema
-            {
-                Mode = QwpConstants.SchemaModeReference,
-                SchemaId = 41,
-                Columns = schema.Columns,
-            },
+            new ResultSchema { Columns = schema.Columns },
             dataB);
         decoder.Decode(PayloadOf(frameB).Span, HeaderFlagsOf(frameB), target);
 
@@ -476,7 +467,6 @@ public class QwpResultBatchDecoderTests
     {
         var schema = new ResultSchema
         {
-            SchemaId = 11,
             Columns = { new SchemaColumn("ip", QwpTypeCode.IPv4) },
         };
         var data = new ResultBatchData
@@ -500,7 +490,6 @@ public class QwpResultBatchDecoderTests
     {
         var schema = new ResultSchema
         {
-            SchemaId = 12,
             Columns = { new SchemaColumn("blob", QwpTypeCode.Binary) },
         };
         var values = new[]
@@ -535,7 +524,6 @@ public class QwpResultBatchDecoderTests
 
         var schema = new ResultSchema
         {
-            SchemaId = 21,
             Columns = { new SchemaColumn("u", QwpTypeCode.Uuid) },
         };
         var data = new ResultBatchData
@@ -563,7 +551,6 @@ public class QwpResultBatchDecoderTests
     {
         var schema = new ResultSchema
         {
-            SchemaId = 13,
             Columns = { new SchemaColumn("v", QwpTypeCode.Long) },
         };
         var data = new ResultBatchData
@@ -590,8 +577,6 @@ public class QwpResultBatchDecoderTests
         p.Add(0x00); // empty table name
         p.Add(0x01); // row_count
         p.Add(0x01); // col_count
-        p.Add(QwpConstants.SchemaModeFull);
-        p.Add(0x00); // schema_id
         // column name length varint (int.MaxValue)
         WriteVarintTo(p, 0x7FFFFFFFUL);
 
@@ -613,8 +598,6 @@ public class QwpResultBatchDecoderTests
         p.Add(0x00); // empty table name
         p.Add(0x01); // row_count = 1
         p.Add(0x01); // col_count = 1
-        p.Add(QwpConstants.SchemaModeFull);
-        p.Add(0x00); // schema_id
         p.Add(0x01); // col name len = 1
         p.Add((byte)'a');
         p.Add((byte)QwpTypeCode.DoubleArray);
@@ -638,8 +621,6 @@ public class QwpResultBatchDecoderTests
         p.Add(0x00); // empty table name
         p.Add(0x01); // row_count
         p.Add(0x01); // col_count
-        p.Add(QwpConstants.SchemaModeFull);
-        p.Add(0x00); // schema_id
         p.Add(0x01); p.Add((byte)'v');
         p.Add((byte)QwpTypeCode.Varchar);
         p.Add(0x00); // null_flag = 0
@@ -665,8 +646,6 @@ public class QwpResultBatchDecoderTests
         p.Add(0x00);
         p.Add(0x02); // row_count = 2
         p.Add(0x01);
-        p.Add(QwpConstants.SchemaModeFull);
-        p.Add(0x00);
         p.Add(0x01); p.Add((byte)'v');
         p.Add((byte)QwpTypeCode.Varchar);
         p.Add(0x00);
@@ -689,8 +668,6 @@ public class QwpResultBatchDecoderTests
         p.Add(0x00); // empty table name
         p.Add(0x01); // row_count
         p.Add(0x01); // col_count
-        p.Add(QwpConstants.SchemaModeFull);
-        p.Add(0x00);
         p.Add(0x01); p.Add((byte)'a');
         p.Add((byte)QwpTypeCode.DoubleArray);
         p.Add(0x00); // null_flag = 0
@@ -712,8 +689,6 @@ public class QwpResultBatchDecoderTests
         p.Add(0x00);
         p.Add(0x01);
         p.Add(0x01);
-        p.Add(QwpConstants.SchemaModeFull);
-        p.Add(0x00);
         p.Add(0x01); p.Add((byte)'a');
         p.Add((byte)QwpTypeCode.DoubleArray);
         p.Add(0x00);
@@ -738,8 +713,6 @@ public class QwpResultBatchDecoderTests
         p.Add(0x00);
         p.Add(0x01);
         p.Add(0x01);
-        p.Add(QwpConstants.SchemaModeFull);
-        p.Add(0x00);
         p.Add(0x01); p.Add((byte)'v');
         p.Add((byte)QwpTypeCode.Varchar);
         p.Add(0x00);
@@ -783,8 +756,6 @@ public class QwpResultBatchDecoderTests
         p.Add(0x00); // empty table name
         p.Add(0x01); // row_count = 1
         p.Add(0x01); // col_count = 1
-        p.Add(QwpConstants.SchemaModeFull);
-        p.Add(0x00); // schema_id = 0
         p.Add(0x01); p.Add((byte)'s'); // column name "s"
         p.Add((byte)QwpTypeCode.Symbol);
         p.Add(0x00); // null_flag = 0
@@ -808,8 +779,6 @@ public class QwpResultBatchDecoderTests
         p.Add(0x00);
         p.Add(0x01);
         p.Add(0x01);
-        p.Add(QwpConstants.SchemaModeFull);
-        p.Add(0x00);
         p.Add(0x01); p.Add((byte)'b');
         p.Add((byte)QwpTypeCode.Boolean);
         p.Add(0x01); // null_flag = 1
@@ -825,7 +794,7 @@ public class QwpResultBatchDecoderTests
     [Test]
     public void Decode_FailedBatch_DoesNotPersistSymbolDictAdditions()
     {
-        var schema = new ResultSchema { SchemaId = 1, Columns = { new SchemaColumn("s", QwpTypeCode.Symbol) } };
+        var schema = new ResultSchema { Columns = { new SchemaColumn("s", QwpTypeCode.Symbol) } };
 
         var p = new List<byte> { QwpConstants.MsgKindResultBatch };
         p.AddRange(new byte[8]);
@@ -838,8 +807,6 @@ public class QwpResultBatchDecoderTests
         p.Add(0x00);
         p.Add(0x01);
         p.Add(0x01);
-        p.Add(QwpConstants.SchemaModeFull);
-        p.Add(0x01);
         p.Add(0x01); p.Add((byte)'s');
         p.Add((byte)QwpTypeCode.Symbol);
         p.Add(0x00);
@@ -849,13 +816,12 @@ public class QwpResultBatchDecoderTests
         Assert.Throws<QwpDecodeException>(() =>
             decoder.Decode(p.ToArray(), QwpConstants.FlagDeltaSymbolDict, new QwpColumnBatch()));
         Assert.That(state.SymbolDict.Size, Is.EqualTo(0));
-        Assert.That(state.TryGetSchema(1, out _), Is.False);
     }
 
     [Test]
     public void Decode_RejectsSymbolDictDeltaStartMismatch()
     {
-        var schema = new ResultSchema { SchemaId = 1, Columns = { new SchemaColumn("s", QwpTypeCode.Symbol) } };
+        var schema = new ResultSchema { Columns = { new SchemaColumn("s", QwpTypeCode.Symbol) } };
         var dict1 = new DeltaSymbolDict { DeltaStart = 0, Entries = { "alpha", "beta" } };
         var data1 = new ResultBatchData { RowCount = 1, Columns = { new SymbolColumnData { DenseDictIds = new[] { 0 } } } };
         var batch1 = QwpEgressFrameBuilder.BuildResultBatch(1L, 0L, schema, data1, dict1);
@@ -923,7 +889,7 @@ public class QwpResultBatchDecoderTests
     [Test]
     public void Decode_FloatColumn_RoundTrips()
     {
-        var schema = new ResultSchema { SchemaId = 30, Columns = { new SchemaColumn("f", QwpTypeCode.Float) } };
+        var schema = new ResultSchema { Columns = { new SchemaColumn("f", QwpTypeCode.Float) } };
         var bytes = new byte[8];
         BinaryPrimitives.WriteInt32LittleEndian(bytes.AsSpan(0, 4), BitConverter.SingleToInt32Bits(3.14f));
         BinaryPrimitives.WriteInt32LittleEndian(bytes.AsSpan(4, 4), BitConverter.SingleToInt32Bits(-2.5f));
@@ -937,7 +903,7 @@ public class QwpResultBatchDecoderTests
     [Test]
     public void Decode_DoubleColumn_RoundTrips()
     {
-        var schema = new ResultSchema { SchemaId = 31, Columns = { new SchemaColumn("d", QwpTypeCode.Double) } };
+        var schema = new ResultSchema { Columns = { new SchemaColumn("d", QwpTypeCode.Double) } };
         var bytes = new byte[16];
         BinaryPrimitives.WriteInt64LittleEndian(bytes.AsSpan(0, 8), BitConverter.DoubleToInt64Bits(1.234));
         BinaryPrimitives.WriteInt64LittleEndian(bytes.AsSpan(8, 8), BitConverter.DoubleToInt64Bits(-9.87e10));
@@ -951,7 +917,7 @@ public class QwpResultBatchDecoderTests
     [Test]
     public void Decode_DateColumn_RoundTrips()
     {
-        var schema = new ResultSchema { SchemaId = 32, Columns = { new SchemaColumn("d", QwpTypeCode.Date) } };
+        var schema = new ResultSchema { Columns = { new SchemaColumn("d", QwpTypeCode.Date) } };
         var values = new[] { 1_700_000_000_000L, 1_700_000_000_500L, 1_700_000_001_000L };
         var data = new ResultBatchData
         {
@@ -969,7 +935,7 @@ public class QwpResultBatchDecoderTests
     [Test]
     public void Decode_TimestampNanosColumn_RoundTrips()
     {
-        var schema = new ResultSchema { SchemaId = 33, Columns = { new SchemaColumn("ts", QwpTypeCode.TimestampNanos) } };
+        var schema = new ResultSchema { Columns = { new SchemaColumn("ts", QwpTypeCode.TimestampNanos) } };
         var values = new[]
         {
             1_700_000_000_000_000_000L,
@@ -994,7 +960,6 @@ public class QwpResultBatchDecoderTests
     {
         var schema = new ResultSchema
         {
-            SchemaId = 34,
             Columns =
             {
                 new SchemaColumn("b", QwpTypeCode.Byte),
@@ -1031,7 +996,7 @@ public class QwpResultBatchDecoderTests
     [Test]
     public void Decode_Long256Column_RoundTrips()
     {
-        var schema = new ResultSchema { SchemaId = 35, Columns = { new SchemaColumn("l", QwpTypeCode.Long256) } };
+        var schema = new ResultSchema { Columns = { new SchemaColumn("l", QwpTypeCode.Long256) } };
         var dense = LongsLe(0x1111111111111111L, 0x2222222222222222L,
             0x3333333333333333L, 0x4444444444444444L);
         var data = new ResultBatchData { RowCount = 1, Columns = { new FixedColumnData { DenseBytes = dense } } };
@@ -1048,7 +1013,7 @@ public class QwpResultBatchDecoderTests
     [Test]
     public void Decode_Long256Column_NullRow_AllZero()
     {
-        var schema = new ResultSchema { SchemaId = 351, Columns = { new SchemaColumn("l", QwpTypeCode.Long256) } };
+        var schema = new ResultSchema { Columns = { new SchemaColumn("l", QwpTypeCode.Long256) } };
         var data = new ResultBatchData
         {
             RowCount = 1,
@@ -1064,7 +1029,7 @@ public class QwpResultBatchDecoderTests
     [Test]
     public void Decode_Decimal128Column_CarriesScale()
     {
-        var schema = new ResultSchema { SchemaId = 36, Columns = { new SchemaColumn("d", QwpTypeCode.Decimal128) } };
+        var schema = new ResultSchema { Columns = { new SchemaColumn("d", QwpTypeCode.Decimal128) } };
         var dense = new byte[16];
         BinaryPrimitives.WriteInt64LittleEndian(dense.AsSpan(0, 8), 0x0123456789ABCDEFL);
         BinaryPrimitives.WriteInt64LittleEndian(dense.AsSpan(8, 8), 0x0L);
@@ -1083,7 +1048,7 @@ public class QwpResultBatchDecoderTests
     [Test]
     public void Decode_Decimal128Column_TwoRows_ReadsLoHiPerRow()
     {
-        var schema = new ResultSchema { SchemaId = 360, Columns = { new SchemaColumn("d", QwpTypeCode.Decimal128) } };
+        var schema = new ResultSchema { Columns = { new SchemaColumn("d", QwpTypeCode.Decimal128) } };
         var dense = new byte[32];
         BinaryPrimitives.WriteInt64LittleEndian(dense.AsSpan(0, 8), 0x1111111111111111L);
         BinaryPrimitives.WriteInt64LittleEndian(dense.AsSpan(8, 8), 0x2222222222222222L);
@@ -1105,7 +1070,7 @@ public class QwpResultBatchDecoderTests
     [Test]
     public void Decode_Decimal256Column_CarriesScale()
     {
-        var schema = new ResultSchema { SchemaId = 37, Columns = { new SchemaColumn("d", QwpTypeCode.Decimal256) } };
+        var schema = new ResultSchema { Columns = { new SchemaColumn("d", QwpTypeCode.Decimal256) } };
         var dense = LongsLe(1L, 2L, 3L, 4L);
         var data = new ResultBatchData
         {
@@ -1125,7 +1090,7 @@ public class QwpResultBatchDecoderTests
     [Test]
     public void Decode_LongNullSentinel_VisibleAsIsNullAndZeroValue()
     {
-        var schema = new ResultSchema { SchemaId = 40, Columns = { new SchemaColumn("v", QwpTypeCode.Long) } };
+        var schema = new ResultSchema { Columns = { new SchemaColumn("v", QwpTypeCode.Long) } };
         // bitmap byte 0b01: row 0 null, row 1 non-null
         var data = new ResultBatchData
         {
@@ -1141,67 +1106,9 @@ public class QwpResultBatchDecoderTests
     }
 
     [Test]
-    public void Decode_RejectsUnknownSchemaMode()
-    {
-        var p = new List<byte> { QwpConstants.MsgKindResultBatch };
-        p.AddRange(new byte[8]);
-        p.Add(0x00);
-        p.Add(0x00);
-        p.Add(0x00);
-        p.Add(0x01);
-        p.Add(0x77); // unknown schema_mode
-        p.Add(0x00);
-
-        var decoder = new QwpResultBatchDecoder(new QwpEgressConnState());
-        var ex = Assert.Throws<QwpDecodeException>(() => decoder.Decode(p.ToArray(), 0, new QwpColumnBatch()));
-        StringAssert.Contains("schema_mode", ex!.Message);
-    }
-
-    [Test]
-    public void Decode_RejectsReferenceModeForUnknownSchemaId()
-    {
-        var p = new List<byte> { QwpConstants.MsgKindResultBatch };
-        p.AddRange(new byte[8]);
-        p.Add(0x00);
-        p.Add(0x00);
-        p.Add(0x00);
-        p.Add(0x01);
-        p.Add(QwpConstants.SchemaModeReference);
-        p.Add(99);
-
-        var decoder = new QwpResultBatchDecoder(new QwpEgressConnState());
-        var ex = Assert.Throws<QwpDecodeException>(() => decoder.Decode(p.ToArray(), 0, new QwpColumnBatch()));
-        StringAssert.Contains("unknown schema_id", ex!.Message);
-    }
-
-    [Test]
-    public void Decode_RejectsReferenceModeColumnCountMismatch()
-    {
-        var schema = new ResultSchema { SchemaId = 50, Columns = { new SchemaColumn("a", QwpTypeCode.Long) } };
-        var data = new ResultBatchData { RowCount = 1, Columns = { new FixedColumnData { DenseBytes = LongsLe(1L) } } };
-        var fullFrame = QwpEgressFrameBuilder.BuildResultBatch(1L, 0L, schema, data);
-
-        var state = new QwpEgressConnState();
-        var decoder = new QwpResultBatchDecoder(state);
-        decoder.Decode(PayloadOf(fullFrame).Span, HeaderFlagsOf(fullFrame), new QwpColumnBatch());
-
-        var p = new List<byte> { QwpConstants.MsgKindResultBatch };
-        p.AddRange(new byte[8]);
-        p.Add(0x01);
-        p.Add(0x00);
-        p.Add(0x01);
-        p.Add(0x05); // col_count = 5, but registered schema has 1
-        p.Add(QwpConstants.SchemaModeReference);
-        p.Add(50);
-
-        var ex = Assert.Throws<QwpDecodeException>(() => decoder.Decode(p.ToArray(), 0, new QwpColumnBatch()));
-        StringAssert.Contains("col", ex!.Message);
-    }
-
-    [Test]
     public void Decode_RejectsTrailingBytesAfterTableBlock()
     {
-        var schema = new ResultSchema { SchemaId = 60, Columns = { new SchemaColumn("a", QwpTypeCode.Long) } };
+        var schema = new ResultSchema { Columns = { new SchemaColumn("a", QwpTypeCode.Long) } };
         var data = new ResultBatchData { RowCount = 1, Columns = { new FixedColumnData { DenseBytes = LongsLe(1L) } } };
         var frame = QwpEgressFrameBuilder.BuildResultBatch(1L, 0L, schema, data);
 
@@ -1220,7 +1127,6 @@ public class QwpResultBatchDecoderTests
     {
         var schema = new ResultSchema
         {
-            SchemaId = 90,
             Columns = { new SchemaColumn("id", QwpTypeCode.Long), new SchemaColumn("name", QwpTypeCode.Varchar) },
         };
         var data = new ResultBatchData
@@ -1238,7 +1144,7 @@ public class QwpResultBatchDecoderTests
     [Test]
     public void Decode_Decimal128_HighScale_DecodesAsByteValue()
     {
-        var schema = new ResultSchema { SchemaId = 80, Columns = { new SchemaColumn("d", QwpTypeCode.Decimal128) } };
+        var schema = new ResultSchema { Columns = { new SchemaColumn("d", QwpTypeCode.Decimal128) } };
         var data = new ResultBatchData
         {
             RowCount = 1,
@@ -1251,7 +1157,7 @@ public class QwpResultBatchDecoderTests
     [Test]
     public void Decode_Decimal64_HighScale_DecodesAsByteValue()
     {
-        var schema = new ResultSchema { SchemaId = 81, Columns = { new SchemaColumn("d", QwpTypeCode.Decimal64) } };
+        var schema = new ResultSchema { Columns = { new SchemaColumn("d", QwpTypeCode.Decimal64) } };
         var data = new ResultBatchData
         {
             RowCount = 1,
@@ -1264,7 +1170,7 @@ public class QwpResultBatchDecoderTests
     [Test]
     public void Decode_Decimal256_MaxScale_DecodesAsByteValue()
     {
-        var schema = new ResultSchema { SchemaId = 82, Columns = { new SchemaColumn("d", QwpTypeCode.Decimal256) } };
+        var schema = new ResultSchema { Columns = { new SchemaColumn("d", QwpTypeCode.Decimal256) } };
         var data = new ResultBatchData
         {
             RowCount = 1,
@@ -1275,12 +1181,13 @@ public class QwpResultBatchDecoderTests
     }
 
     [Test]
-    public void Decode_RegisterSchemaCollision_RewindsSymbolDict()
+    public void Decode_FailedBatch_RewindsSymbolDict()
     {
         var state = new QwpEgressConnState();
         var decoder = new QwpResultBatchDecoder(state);
 
-        var schemaA = new ResultSchema { SchemaId = 99, Columns = { new SchemaColumn("a", QwpTypeCode.Long) } };
+        // Seed batch_seq=0 with no symbols.
+        var schemaA = new ResultSchema { Columns = { new SchemaColumn("a", QwpTypeCode.Long) } };
         var frameA = QwpEgressFrameBuilder.BuildResultBatch(1L, 0L, schemaA, new ResultBatchData
         {
             RowCount = 1,
@@ -1289,25 +1196,24 @@ public class QwpResultBatchDecoderTests
         decoder.Decode(PayloadOf(frameA).Span, HeaderFlagsOf(frameA), new QwpColumnBatch());
         Assert.That(state.SymbolDict.Size, Is.EqualTo(0));
 
-        var schemaB = new ResultSchema
-        {
-            SchemaId = 99,
-            Columns = { new SchemaColumn("a", QwpTypeCode.Long), new SchemaColumn("b", QwpTypeCode.Symbol) },
-        };
-        var dictB = new DeltaSymbolDict { DeltaStart = 0, Entries = { "newSym" } };
-        var frameB = QwpEgressFrameBuilder.BuildResultBatch(1L, 1L, schemaB, new ResultBatchData
-        {
-            RowCount = 1,
-            Columns =
-            {
-                new FixedColumnData { DenseBytes = LongsLe(7L) },
-                new SymbolColumnData { DenseDictIds = new[] { 0 } },
-            },
-        }, dictB);
+        // Hand-craft a malformed frame that grows the symbol dict in its prelude, then truncates
+        // the table body so decoding fails. The decoder must roll the dict back to size 0.
+        var p = new List<byte> { QwpConstants.MsgKindResultBatch };
+        p.AddRange(new byte[8]); // request_id
+        p.Add(0x01);             // batch_seq = 1 (continuation)
+        // Symbol dict prelude: deltaStart=0, deltaCount=1, entry "newSym"
+        p.Add(0x00);
+        p.Add(0x01);
+        p.Add((byte)"newSym".Length);
+        p.AddRange(Encoding.UTF8.GetBytes("newSym"));
+        // Table block (continuation, so just name + row_count, then truncate)
+        p.Add(0x00); // empty table name
+        p.Add(0x01); // row_count = 1
+        // Missing column data → decoder throws
 
         Assert.Throws<QwpDecodeException>(() =>
-            decoder.Decode(PayloadOf(frameB).Span, HeaderFlagsOf(frameB), new QwpColumnBatch()));
-        // Symbol dict rolled back so the next batch sees the pre-failure cursor.
-        Assert.That(state.SymbolDict.Size, Is.EqualTo(0));
+            decoder.Decode(p.ToArray(), QwpConstants.FlagDeltaSymbolDict, new QwpColumnBatch()));
+        Assert.That(state.SymbolDict.Size, Is.EqualTo(0),
+            "symbol dict must rewind to pre-batch cursor when decoding fails mid-frame");
     }
 }

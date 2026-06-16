@@ -39,8 +39,7 @@ internal static class QwpStrictUtf8
 ///     Per-table columnar buffer used by the WebSocket sender.
 /// </summary>
 /// <remarks>
-///     Owns an ordered list of <see cref="QwpColumn" /> instances, the table's row count, and the
-///     schema id slot used for the cached vs. full schema decision.
+///     Owns an ordered list of <see cref="QwpColumn" /> instances and the table's row count.
 ///     <para />
 ///     Per-row state machine:
 ///     <list type="number">
@@ -49,9 +48,8 @@ internal static class QwpStrictUtf8
 ///               null-padded; the designated-timestamp column receives the supplied timestamp.</item>
 ///     </list>
 ///     <para />
-///     A <see cref="SchemaId" /> of <c>-1</c> means "needs allocation on next flush". The id is reset
-///     to <c>-1</c> whenever a new column is added, forcing the next frame to send the schema in
-///     full mode.
+///     Schemas always travel inline on the wire (no schema-id reference mechanism), so the buffer
+///     no longer carries a schema-id slot.
 /// </remarks>
 internal sealed class QwpTableBuffer
 {
@@ -65,7 +63,6 @@ internal sealed class QwpTableBuffer
     private bool[] _touchedInCurrentRow = new bool[8];
 
     private int _committedColumnCount;
-    private int _committedSchemaId = -1;
     private QwpColumn.Savepoint[] _rowSavepoints = new QwpColumn.Savepoint[8];
     private QwpColumn.Savepoint? _designatedSavepoint;
     private bool _designatedCreatedInCurrentRow;
@@ -112,14 +109,6 @@ internal sealed class QwpTableBuffer
     ///     Number of fully-committed rows. Increments on each <c>At*</c> call.
     /// </summary>
     public int RowCount { get; private set; }
-
-    /// <summary>
-    ///     Per-connection schema id; <c>-1</c> means "not yet allocated". The production WS sender
-    ///     encodes every frame self-sufficient (full schema), so this is reset to <c>-1</c> after
-    ///     each successful flush. Only the standalone <c>QwpEncoder.Encode</c> entry-point exercises
-    ///     the reference-mode path keyed off this id.
-    /// </summary>
-    public int SchemaId { get; internal set; } = -1;
 
     /// <summary>
     ///     User-declared data columns in declaration order. The designated-timestamp column is
@@ -313,9 +302,8 @@ internal sealed class QwpTableBuffer
     }
 
     /// <summary>
-    ///     Drops row data while preserving the table's name, columns, and schema id. Used by the
-    ///     sender to recycle the buffer between batches without losing the cached schema id —
-    ///     subsequent encodes will emit <see cref="QwpConstants.SchemaModeReference" />.
+    ///     Drops row data while preserving the table's name and column declarations. Used by the
+    ///     sender to recycle the buffer between batches.
     /// </summary>
     public void Clear()
     {
@@ -334,7 +322,6 @@ internal sealed class QwpTableBuffer
         RowCount = 0;
         HasPendingRow = false;
         _committedColumnCount = _columns.Count;
-        _committedSchemaId = SchemaId;
         _designatedSavepoint = null;
 
         if (_touchedInCurrentRow.Length > 0)
@@ -406,9 +393,7 @@ internal sealed class QwpTableBuffer
     ///     Look up an existing column or create a new one.
     /// </summary>
     /// <remarks>
-    ///     A new column resets <see cref="SchemaId" /> to -1, which forces the next encoded frame to
-    ///     emit a fresh full-schema block. The new column is back-filled with nulls for the
-    ///     <see cref="RowCount" /> rows that came before it.
+    ///     The new column is back-filled with nulls for the <see cref="RowCount" /> rows that came before it.
     /// </remarks>
     private QwpColumn? GetOrCreateColumn(ReadOnlySpan<char> columnName)
     {
@@ -460,7 +445,6 @@ internal sealed class QwpTableBuffer
         idx = _columns.Count;
         _columns.Add(col);
         _columnIndex[name] = idx;
-        SchemaId = -1;
 
         EnsureTouchedCapacity(idx + 1);
         MarkTouched(idx);
@@ -498,8 +482,6 @@ internal sealed class QwpTableBuffer
             _columns.RemoveAt(last);
         }
 
-        SchemaId = _committedSchemaId;
-
         if (_designatedCreatedInCurrentRow)
         {
             DesignatedTimestampColumn = null;
@@ -529,7 +511,6 @@ internal sealed class QwpTableBuffer
         if (DesignatedTimestampColumn is null)
         {
             DesignatedTimestampColumn = new QwpColumn(string.Empty, RowCount);
-            SchemaId = -1;
             _designatedCreatedInCurrentRow = true;
         }
 
@@ -556,7 +537,6 @@ internal sealed class QwpTableBuffer
         RowCount++;
         HasPendingRow = false;
         _committedColumnCount = _columns.Count;
-        _committedSchemaId = SchemaId;
         _designatedSavepoint = null;
         _designatedCreatedInCurrentRow = false;
     }

@@ -26,44 +26,16 @@ using QuestDB.Enums;
 
 namespace QuestDB.Qwp.Query;
 
+/// <summary>
+///     Connection-scoped egress state. Holds the symbol dictionary that survives across queries
+///     within a single connection. The column schema rides only the first RESULT_BATCH of a query
+///     (<c>batch_seq == 0</c>) and is owned by <see cref="QwpResultBatchDecoder" />, not here.
+/// </summary>
 internal sealed class QwpEgressConnState
 {
-    private readonly Dictionary<ulong, EgressSchema> _schemas = new();
-
     public QwpEgressSymbolDict SymbolDict { get; } = new();
 
-    public bool TryGetSchema(ulong schemaId, out EgressSchema schema) =>
-        _schemas.TryGetValue(schemaId, out schema!);
-
-    public void RegisterSchema(ulong schemaId, EgressSchema schema)
-    {
-        if (_schemas.TryGetValue(schemaId, out var existing))
-        {
-            if (!SchemasEqual(existing, schema))
-            {
-                throw new QwpDecodeException(
-                    $"schema_id {schemaId} re-registered with a different layout " +
-                    $"(was {existing.Columns.Length} columns, now {schema.Columns.Length})");
-            }
-            return;
-        }
-        _schemas[schemaId] = schema;
-    }
-
     public void ResetSymbolDict() => SymbolDict.Reset();
-
-    public void ResetSchemas() => _schemas.Clear();
-
-    private static bool SchemasEqual(EgressSchema a, EgressSchema b)
-    {
-        if (a.Columns.Length != b.Columns.Length) return false;
-        for (var i = 0; i < a.Columns.Length; i++)
-        {
-            if (a.Columns[i].TypeCode != b.Columns[i].TypeCode) return false;
-            if (a.Columns[i].Name != b.Columns[i].Name) return false;
-        }
-        return true;
-    }
 }
 
 internal readonly struct EgressColumnDef

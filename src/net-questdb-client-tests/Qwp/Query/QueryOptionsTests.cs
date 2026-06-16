@@ -367,7 +367,7 @@ public class QueryOptionsTests
         Assert.DoesNotThrow(() => new QueryOptions(
             "ws::addr=h:9000;sf_dir=/tmp/x;auto_flush_rows=5000;gorilla=on;" +
             "reconnect_max_backoff_millis=3000;drain_orphans=on;request_durable_ack=on;" +
-            "on_server_error=halt;max_schemas_per_connection=100;error_inbox_capacity=64;"));
+            "on_server_error=halt;error_inbox_capacity=64;"));
     }
 
     [Test]

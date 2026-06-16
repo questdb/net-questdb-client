@@ -172,6 +172,9 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient
             {
                 _pendingCreditBytes = 0;
                 _expectedBatchSeq = 0;
+                // The schema rides only batch_seq == 0; invalidate any schema left over from the
+                // prior query so a continuation batch can't bind rows to a stale schema.
+                _decoder.ResetQuerySchema();
                 try
                 {
                     await SendQueryRequestAsync(requestId, sql, sqlByteCount, _options.initial_credit, bindBlob, bindCount, ct)
@@ -256,7 +259,8 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient
         {
             ServerInfo = info;
             _connState.ResetSymbolDict();
-            _connState.ResetSchemas();
+            // No schema reset needed here: the per-query schema lives on the decoder and is
+            // invalidated by the next Execute() call's ResetQuerySchema().
             return;
         }
 
@@ -301,7 +305,7 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient
             {
                 candidate = BuildTransport(addr);
 
-                QwpServerInfo? info;
+                QwpServerInfo? info = null;
                 using (var upgradeCts = CancellationTokenSource.CreateLinkedTokenSource(ct))
                 {
                     upgradeCts.CancelAfter(_options.auth_timeout_ms);
@@ -316,9 +320,9 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient
                     }
                 }
 
-                if (candidate.NegotiatedVersion >= 2)
+                // SERVER_INFO is unconditionally delivered post-upgrade — no v2 gate any more.
+                using (var serverInfoCts = CancellationTokenSource.CreateLinkedTokenSource(ct))
                 {
-                    using var serverInfoCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
                     serverInfoCts.CancelAfter(ServerInfoReadTimeout);
                     try
                     {
@@ -329,19 +333,16 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient
                         throw new IngressError(ErrorCode.SocketError,
                             $"SERVER_INFO read for {addr} exceeded {ServerInfoReadTimeout.TotalMilliseconds}ms");
                     }
-
-                    if (info is not null && (info.Capabilities & QwpConstants.CapZone) != 0)
-                    {
-                        _hostTracker.RecordZone(idx, info.ZoneId);
-                    }
                 }
-                else
+
+                // info is non-null here: ReadServerInfoFrameAsync returns non-null or throws.
+                if ((info!.Capabilities & QwpConstants.CapZone) != 0)
                 {
-                    info = null;
+                    _hostTracker.RecordZone(idx, info.ZoneId);
                 }
 
                 lastInfo = info;
-                if (EndpointMatchesTarget(info))
+                if (RoleMatchesTarget(info.Role, _options.target))
                 {
                     if (Volatile.Read(ref _disposed) != 0)
                     {
@@ -355,9 +356,9 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient
                 }
 
                 anyRoleMismatch = true;
-                _hostTracker.RecordRoleReject(idx, transient: info?.Role == QwpConstants.RolePrimaryCatchup);
+                _hostTracker.RecordRoleReject(idx, transient: info.Role == QwpConstants.RolePrimaryCatchup);
                 lastError = new IngressError(ErrorCode.ConfigError,
-                    $"endpoint {addr} role {info?.RoleName ?? "<none>"} does not match target={_options.target}");
+                    $"endpoint {addr} role {info.RoleName} does not match target={_options.target}");
                 candidate.Dispose();
                 candidate = null;
             }
@@ -515,7 +516,7 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient
         var transportOpts = new QwpWebSocketTransportOptions
         {
             Uri = BuildUri(_options, addr),
-            ClientMaxVersion = QwpConstants.SupportedEgressVersion,
+            ClientMaxVersion = QwpConstants.SupportedVersion,
             ClientId = _options.client_id,
             AuthorizationHeader = QwpTlsAuth.BuildAuthHeader(
                 _options.username, _options.password, _options.token, _options.auth),
@@ -582,13 +583,6 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient
         return byte.MaxValue;
     }
 
-    // v1 server (no SERVER_INFO) only matches target=any; primary/replica must skip it.
-    private bool EndpointMatchesTarget(QwpServerInfo? info)
-    {
-        if (info is not null) return RoleMatchesTarget(info.Role, _options.target);
-        return _options.target == TargetType.any;
-    }
-
     internal static bool RoleMatchesTarget(byte role, TargetType target)
     {
         // target=any only accepts spec-defined role bytes; unknown values must topology-reject
@@ -618,7 +612,7 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient
         if (kind != QwpEgressMsgKind.ServerInfo)
         {
             throw new IngressError(ErrorCode.ProtocolVersionError,
-                $"v2 server must send SERVER_INFO as the first frame, got 0x{(byte)kind:X2}");
+                $"server must send SERVER_INFO as the first frame, got 0x{(byte)kind:X2}");
         }
         return DecodeServerInfo(payload);
     }
@@ -782,7 +776,7 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient
         }
 
         var version = hdr[QwpConstants.OffsetVersion];
-        if (version > QwpConstants.SupportedEgressVersion)
+        if (version != QwpConstants.SupportedVersion)
         {
             throw new IngressError(ErrorCode.ProtocolVersionError, $"unsupported QWP version {version}");
         }
@@ -1169,8 +1163,8 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient
                 $"CACHE_RESET has wrong msg_kind 0x{s[0]:X2}");
         }
         var mask = s[1];
+        // Only bit 0 (SYMBOL dict) is defined; other bits are reserved and silently ignored.
         if ((mask & QwpConstants.ResetMaskDict) != 0) _connState.ResetSymbolDict();
-        if ((mask & QwpConstants.ResetMaskSchemas) != 0) _connState.ResetSchemas();
     }
 
     private void ThrowIfDisposed()

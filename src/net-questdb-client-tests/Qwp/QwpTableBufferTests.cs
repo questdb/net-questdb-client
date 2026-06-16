@@ -77,7 +77,6 @@ public class QwpTableBufferTests
         Assert.That(t.Columns.Count, Is.EqualTo(3), "3 user columns; designated TS is separate");
         Assert.That(t.TotalColumnCount, Is.EqualTo(4));
         Assert.That(t.DesignatedTimestampColumn, Is.Not.Null);
-        Assert.That(t.SchemaId, Is.EqualTo(-1), "fresh buffer leaves SchemaId at -1 until the encoder allocates one");
         Assert.That(t.HasPendingRow, Is.False);
 
         var ticker = t.Columns[0];
@@ -116,7 +115,7 @@ public class QwpTableBufferTests
     }
 
     [Test]
-    public void NewColumn_MidBatch_BackfillsLeadingNulls_AndInvalidatesSchemaId()
+    public void NewColumn_MidBatch_BackfillsLeadingNulls()
     {
         var t = new QwpTableBuffer("t");
 
@@ -125,15 +124,11 @@ public class QwpTableBufferTests
         t.AppendDouble("price", 2.0);
         t.At(1);
 
-        // Pretend the encoder has assigned a schema id and observed the table.
-        t.SchemaId = 0;
-
-        // Now add a new column on row 3 (zero-based row 2). This must reset SchemaId.
+        // Add a new column on row 3 (zero-based row 2); it must back-fill the first two rows as nulls.
         t.AppendDouble("price", 3.0);
         t.AppendLong("volume", 999);
         t.At(2);
 
-        Assert.That(t.SchemaId, Is.EqualTo(-1), "adding a column invalidates the schema id");
         Assert.That(t.Columns.Count, Is.EqualTo(2), "user columns: price + volume");
         Assert.That(t.TotalColumnCount, Is.EqualTo(3), "user columns + designated TS");
 

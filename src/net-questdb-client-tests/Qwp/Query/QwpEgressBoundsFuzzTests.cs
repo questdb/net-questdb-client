@@ -177,7 +177,7 @@ public class QwpEgressBoundsFuzzTests
             dict = new DeltaSymbolDict { DeltaStart = 0, Entries = entries };
         }
 
-        var schema = new ResultSchema { SchemaId = 1 };
+        var schema = new ResultSchema();
         for (var i = 0; i < colCount; i++)
         {
             schema.Columns.Add(new SchemaColumn($"c{i}", kinds[i]));

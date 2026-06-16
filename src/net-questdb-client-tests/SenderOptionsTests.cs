@@ -251,7 +251,6 @@ public class SenderOptionsTests
     {
         var keys = new[]
         {
-            "max_schemas_per_connection=1024",
             "gorilla=off", "request_durable_ack=on",
         };
         foreach (var kv in keys)
@@ -358,7 +357,6 @@ public class SenderOptionsTests
         Assert.That(opts.auto_flush_bytes, Is.EqualTo(8 * 1024 * 1024));
         Assert.That(opts.auto_flush_interval, Is.EqualTo(TimeSpan.FromMilliseconds(100)));
         Assert.That(opts.Port, Is.EqualTo(9000));
-        Assert.That(opts.max_schemas_per_connection, Is.EqualTo(65535));
         Assert.That(opts.request_durable_ack, Is.False);
         Assert.That(opts.gorilla, Is.True);
     }
@@ -807,12 +805,12 @@ public class SenderOptionsTests
     [Test]
     public void RecordWith_FlippingWsToHttp_StillRejectsWsOnlyKeys()
     {
-        var ws = new SenderOptions("ws::addr=localhost:9000;max_schemas_per_connection=1024;");
+        var ws = new SenderOptions("ws::addr=localhost:9000;gorilla=off;");
         var flipped = ws with { protocol = QuestDB.Enums.ProtocolType.http };
 
         Assert.That(
             () => QuestDB.Sender.New(flipped),
-            Throws.TypeOf<IngressError>().With.Message.Contains("max_schemas_per_connection"));
+            Throws.TypeOf<IngressError>().With.Message.Contains("gorilla"));
     }
 
     [Test]
@@ -822,12 +820,12 @@ public class SenderOptionsTests
         {
             protocol = QuestDB.Enums.ProtocolType.http,
             addr     = "localhost:9000",
-            max_schemas_per_connection = 1024,
+            gorilla  = false,
         };
 
         Assert.That(
             () => QuestDB.Sender.New(opts),
-            Throws.TypeOf<IngressError>().With.Message.Contains("max_schemas_per_connection"));
+            Throws.TypeOf<IngressError>().With.Message.Contains("gorilla"));
     }
 
     [TestCase("on", true)]
@@ -893,11 +891,11 @@ public class SenderOptionsTests
     public void RecordWith_MutatingWsKeyAfterFlip_StillRejected()
     {
         var ws = new SenderOptions("ws::addr=localhost:9000;");
-        var flipped = ws with { protocol = QuestDB.Enums.ProtocolType.http, max_schemas_per_connection = 1024 };
+        var flipped = ws with { protocol = QuestDB.Enums.ProtocolType.http, gorilla = false };
 
         Assert.That(
             () => QuestDB.Sender.New(flipped),
-            Throws.TypeOf<IngressError>().With.Message.Contains("max_schemas_per_connection"));
+            Throws.TypeOf<IngressError>().With.Message.Contains("gorilla"));
     }
 
     [Test]
@@ -943,12 +941,12 @@ public class SenderOptionsTests
         {
             protocol = QuestDB.Enums.ProtocolType.http,
             addr     = "localhost:9000",
-            max_schemas_per_connection = 65535,
+            gorilla  = true, // default value, still rejected on non-WS scheme
         };
 
         Assert.That(
             () => QuestDB.Sender.New(opts),
-            Throws.TypeOf<IngressError>().With.Message.Contains("max_schemas_per_connection"));
+            Throws.TypeOf<IngressError>().With.Message.Contains("gorilla"));
     }
 
     [Test]
@@ -976,9 +974,9 @@ public class SenderOptionsTests
     public void Ws_ToString_RoundTripsWithWsOnlyKeys()
     {
         var opts = new SenderOptions(
-            "ws::addr=h:9000;max_schemas_per_connection=1024;ping_timeout=2500;");
+            "ws::addr=h:9000;gorilla=off;ping_timeout=2500;");
         var rt = new SenderOptions(opts.ToString());
-        Assert.That(rt.max_schemas_per_connection, Is.EqualTo(1024));
+        Assert.That(rt.gorilla, Is.False);
         Assert.That(rt.ping_timeout, Is.EqualTo(TimeSpan.FromMilliseconds(2500)));
     }
 
@@ -1052,7 +1050,6 @@ public class SenderOptionsTests
             Throws.TypeOf<IngressError>().With.Message.Contains("tcp"));
     }
 
-    [TestCase("http", "max_schemas_per_connection=10")]
     [TestCase("http", "gorilla=on")]
     [TestCase("http", "request_durable_ack=on")]
     [TestCase("http", "sf_dir=/tmp/x")]

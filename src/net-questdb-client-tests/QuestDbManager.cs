@@ -107,6 +107,7 @@ public class QuestDbManager : IAsyncDisposable
         startInfo.ArgumentList.Add("-Dnoebug");
         startInfo.ArgumentList.Add("-XX:+UnlockExperimentalVMOptions");
         startInfo.ArgumentList.Add("-XX:+AlwaysPreTouch");
+        startInfo.ArgumentList.Add("--add-exports=java.base/jdk.internal.vm=io.questdb");
         startInfo.ArgumentList.Add("-p");
         startInfo.ArgumentList.Add(jar);
         startInfo.ArgumentList.Add("-m");

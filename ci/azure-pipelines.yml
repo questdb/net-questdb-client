@@ -86,7 +86,16 @@ steps:
     set -e
     git clone --depth 1 https://github.com/questdb/questdb.git questdb-src
     cd questdb-src
-    mvn -q -pl core -am -DskipTests -P build-binaries package
+    CLIENT_VERSION=$(sed -n 's/.*<questdb.client.version>\(.*\)<\/questdb.client.version>.*/\1/p' core/pom.xml | head -1)
+    echo "questdb.client.version=$CLIENT_VERSION"
+    PROFILES=build-binaries
+    case "$CLIENT_VERSION" in
+      *-SNAPSHOT)
+        git submodule update --init --depth 1 java-questdb-client
+        PROFILES=build-binaries,local-client
+        ;;
+    esac
+    mvn -q -pl core -am -DskipTests -P "$PROFILES" package
     echo "##vso[task.setvariable variable=QUESTDB_REPO]$(pwd)"
   displayName: 'Clone + build QuestDB master'
   condition: eq(variables['osName'], 'Linux')

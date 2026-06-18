@@ -48,7 +48,9 @@ public class QwpEncoderTests
         var bytes = QwpEncoder.Encode(new[] { t }, new QwpSymbolDictionary());
 
         var expected = ConcatBytes(
-            new byte[] { 0x51, 0x57, 0x50, 0x31, 0x01, 0x08, 0x01, 0x00, 0x4C, 0x00, 0x00, 0x00 },
+            // header: magic "QWP1", version 1, flags 0x0C (DELTA_SYMBOL_DICT | GORILLA),
+            // tableCount 1, payloadLen 0x4D = 77.
+            new byte[] { 0x51, 0x57, 0x50, 0x31, 0x01, 0x0C, 0x01, 0x00, 0x4D, 0x00, 0x00, 0x00 },
             new byte[] { 0x00, 0x00 },
             new byte[] { 0x07 },
             Encoding.UTF8.GetBytes("sensors"),
@@ -62,7 +64,8 @@ public class QwpEncoderTests
             new byte[] { 0x00 },
             LittleEndianDouble(1.3),
             LittleEndianDouble(2.2),
-            new byte[] { 0x00 },
+            new byte[] { 0x00 },                    // designated-TS null flag
+            new byte[] { 0x00 },                    // Gorilla encoding flag: 0x00 uncompressed (< 3 values)
             LittleEndianInt64(10_000_000_000L),
             LittleEndianInt64(400_000L));
 
@@ -143,7 +146,8 @@ public class QwpEncoderTests
 
         // Header at bytes 0..11:
         Assert.That(bytes[QwpConstants.OffsetVersion], Is.EqualTo(QwpConstants.SupportedVersion));
-        Assert.That(bytes[QwpConstants.OffsetFlags], Is.EqualTo(QwpConstants.FlagDeltaSymbolDict));
+        Assert.That(bytes[QwpConstants.OffsetFlags],
+            Is.EqualTo((byte)(QwpConstants.FlagDeltaSymbolDict | QwpConstants.FlagGorilla)));
         Assert.That(BinaryPrimitives.ReadUInt16LittleEndian(bytes.AsSpan(QwpConstants.OffsetTableCount, 2)), Is.EqualTo(1));
 
         // Delta dict prelude immediately after the 12-byte header:
@@ -685,12 +689,14 @@ public class QwpEncoderTests
         //   + columnDef("v"): nameLen(1) + "v"(1) + type(1) = 3
         //   + designatedTsColDef: nameLen(1)=0 + type(1) = 2
         //   + colData("v"): nullFlag(1) + 8 bytes value = 9
-        //   + colData(""): nullFlag(1) + 8 bytes value = 9
-        //   = 1+1+1+1+3+2+9+9 = 27 bytes per table block.
+        //   + colData(""): nullFlag(1) + Gorilla encoding flag(1) + 8 bytes value = 10
+        //   = 1+1+1+1+3+2+9+10 = 28 bytes per table block.
+        // The designated-TS column carries a 1-byte Gorilla encoding flag (0x00 uncompressed for a
+        // single value) ahead of its data, per the always-on FLAG_GORILLA contract.
         // First table starts at offset 14 (header 12 + delta 2). The name varint of the second
         // table is the byte immediately after the first table block.
         const int firstTableStart = 14;
-        const int tableBlockSize = 27;
+        const int tableBlockSize = 28;
         Assert.That(bytes[firstTableStart], Is.EqualTo((byte)"a".Length),
             "table A name length leads the first table block");
         Assert.That(bytes[firstTableStart + tableBlockSize], Is.EqualTo((byte)"b".Length),

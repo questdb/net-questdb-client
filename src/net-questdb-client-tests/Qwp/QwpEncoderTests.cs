@@ -505,7 +505,7 @@ public class QwpEncoderTests
     }
 
     [Test]
-    public void Encode_GorillaEnabled_SetsHeaderFlagAndPrependsEncodingByte()
+    public void Encode_SetsGorillaHeaderFlagAndPrependsEncodingByte()
     {
         var t = new QwpTableBuffer("t");
         t.AppendLong("v", 1L);
@@ -515,7 +515,7 @@ public class QwpEncoderTests
         t.AppendLong("v", 3L);
         t.At(1_000_002L);
 
-        var bytes = QwpEncoder.Encode(new[] { t }, new QwpSymbolDictionary(), gorillaEnabled: true);
+        var bytes = QwpEncoder.Encode(new[] { t }, new QwpSymbolDictionary());
 
         var expectedFlags = (byte)(QwpConstants.FlagDeltaSymbolDict | QwpConstants.FlagGorilla);
         Assert.That(bytes[QwpConstants.OffsetFlags], Is.EqualTo(expectedFlags));
@@ -527,31 +527,11 @@ public class QwpEncoderTests
         // 3 longs = 24 bytes
         pos += 24;
 
-        // Designated TS column: encoding-flag should be present because gorillaEnabled is true.
+        // Designated TS column: the encoding-flag byte is always present.
         Assert.That(bytes[pos++], Is.EqualTo(0x00), "ts col null flag");
         var encodingFlag = bytes[pos];
         Assert.That(encodingFlag is QwpGorilla.EncodingUncompressed or QwpGorilla.EncodingGorilla,
             "encoding flag must be 0x00 or 0x01");
-    }
-
-    [Test]
-    public void Encode_GorillaDisabled_OmitsEncodingByteForTimestamps()
-    {
-        var t = new QwpTableBuffer("t");
-        t.AppendLong("v", 1L);
-        t.At(1_000_000L);
-
-        var bytes = QwpEncoder.Encode(new[] { t }, new QwpSymbolDictionary(), gorillaEnabled: false);
-
-        Assert.That(bytes[QwpConstants.OffsetFlags], Is.EqualTo(QwpConstants.FlagDeltaSymbolDict));
-
-        // header(12) + delta(2) + tableHeader(1+1+1+1=4) + col defs(3+2=5) = 23.
-        // long col data: null flag (1) + 8 bytes = 9. Then ts col data starts at 23 + 9 = 32.
-        var pos = 23 + 9;
-        Assert.That(bytes[pos++], Is.EqualTo(0x00), "ts null flag");
-        // Next 8 bytes should be the timestamp directly (no encoding flag preamble).
-        var ts = BinaryPrimitives.ReadInt64LittleEndian(bytes.AsSpan(pos, 8));
-        Assert.That(ts, Is.EqualTo(1_000_000L));
     }
 
     [Test]
@@ -641,7 +621,7 @@ public class QwpEncoderTests
         // Self-sufficient with an explicit prefix length of 2: only ids [0, 2) are restated.
         var builder = new QwpEncoder.FrameBuilder(4096);
         var len = QwpEncoder.EncodeInto(builder, new[] { t }, symbols,
-            selfSufficient: true, gorillaEnabled: false, symbolDeltaCount: 2);
+            selfSufficient: true, symbolDeltaCount: 2);
         var bytes = builder.AsSpan(0, len).ToArray();
 
         // Delta dict prelude follows the 12-byte header.
@@ -668,7 +648,7 @@ public class QwpEncoderTests
 
         var builder = new QwpEncoder.FrameBuilder(4096);
         var len = QwpEncoder.EncodeInto(builder, new[] { t }, symbols,
-            selfSufficient: true, gorillaEnabled: false, symbolDeltaCount: 0);
+            selfSufficient: true, symbolDeltaCount: 0);
         var bytes = builder.AsSpan(0, len).ToArray();
 
         Assert.That(bytes[12], Is.EqualTo(0x00), "delta_start = 0");

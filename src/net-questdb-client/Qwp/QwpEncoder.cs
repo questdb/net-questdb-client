@@ -48,10 +48,10 @@ namespace QuestDB.Qwp;
 ///     id the frame references; in delta mode it carries only the delta since the last flush.
 ///     When a frame references no symbols, the prelude is empty (<c>0x00 0x00</c>) but still written.
 ///     <para />
-///     <b>FLAG_GORILLA</b> is set when <c>gorillaEnabled</c> is requested. Each TIMESTAMP /
-///     TIMESTAMP_NANOS column body is then prefixed with an <c>encoding_flag</c> byte
-///     (<c>0x00</c> uncompressed, <c>0x01</c> Gorilla DoD); the encoder transparently falls back to
-///     uncompressed when DoDs overflow int32, and always emits the flag (even for all-null columns).
+///     <b>FLAG_GORILLA</b> is always set. Each TIMESTAMP / TIMESTAMP_NANOS column body is
+///     prefixed with an <c>encoding_flag</c> byte (<c>0x00</c> uncompressed, <c>0x01</c> Gorilla
+///     DoD); the encoder transparently falls back to uncompressed when DoDs overflow int32, and
+///     always emits the flag (even for all-null columns).
 ///     <para />
 ///     The encoder reads the symbol dictionary but never mutates it; in self-sufficient mode it
 ///     re-emits the dictionary prefix from id 0 on every frame, so there is no per-flush watermark
@@ -71,22 +71,15 @@ internal static class QwpEncoder
     ///     connection state. Required by store-and-forward mode where each frame must be replayable
     ///     in isolation. Column schemas always travel inline regardless of this flag. Defaults to <c>false</c>.
     /// </param>
-    /// <param name="gorillaEnabled">
-    ///     If <c>true</c>, the frame's flags byte carries <c>FLAG_GORILLA</c> and every TIMESTAMP /
-    ///     TIMESTAMP_NANOS column is preceded by an <c>encoding_flag</c> byte. The encoder
-    ///     transparently falls back to uncompressed per column when DoDs overflow int32.
-    ///     Defaults to <c>false</c>.
-    /// </param>
     /// <returns>The complete QWP frame, including the 12-byte header.</returns>
     /// <remarks>Allocates per call. Production paths use <see cref="EncodeInto" /> directly.</remarks>
     internal static byte[] Encode(
         IReadOnlyList<QwpTableBuffer> tables,
         QwpSymbolDictionary symbolDictionary,
-        bool selfSufficient = false,
-        bool gorillaEnabled = false)
+        bool selfSufficient = false)
     {
         var builder = new FrameBuilder(InitialCapacity);
-        var len = EncodeInto(builder, tables, symbolDictionary, selfSufficient, gorillaEnabled);
+        var len = EncodeInto(builder, tables, symbolDictionary, selfSufficient);
         var result = new byte[len];
         builder.AsSpan(0, len).CopyTo(result);
         return result;
@@ -103,7 +96,6 @@ internal static class QwpEncoder
         IReadOnlyList<QwpTableBuffer> tables,
         QwpSymbolDictionary symbolDictionary,
         bool selfSufficient = false,
-        bool gorillaEnabled = false,
         int symbolDeltaCount = -1)
     {
         ArgumentNullException.ThrowIfNull(builder);
@@ -132,7 +124,7 @@ internal static class QwpEncoder
                 continue;
             }
 
-            WriteTableBlock(builder, t, gorillaEnabled);
+            WriteTableBlock(builder, t);
             emittedTableCount++;
         }
 
@@ -147,13 +139,7 @@ internal static class QwpEncoder
         var header = builder.AsSpan(0, QwpConstants.HeaderSize);
         BinaryPrimitives.WriteUInt32LittleEndian(header.Slice(QwpConstants.OffsetMagic, 4), QwpConstants.Magic);
         header[QwpConstants.OffsetVersion] = QwpConstants.SupportedVersion;
-        var flags = QwpConstants.FlagDeltaSymbolDict;
-        if (gorillaEnabled)
-        {
-            flags |= QwpConstants.FlagGorilla;
-        }
-
-        header[QwpConstants.OffsetFlags] = flags;
+        header[QwpConstants.OffsetFlags] = (byte)(QwpConstants.FlagDeltaSymbolDict | QwpConstants.FlagGorilla);
         BinaryPrimitives.WriteUInt16LittleEndian(header.Slice(QwpConstants.OffsetTableCount, 2), (ushort)emittedTableCount);
         BinaryPrimitives.WriteUInt32LittleEndian(header.Slice(QwpConstants.OffsetPayloadLength, 4), (uint)payloadLength);
 
@@ -192,7 +178,7 @@ internal static class QwpEncoder
         }
     }
 
-    private static void WriteTableBlock(FrameBuilder buf, QwpTableBuffer table, bool gorillaEnabled)
+    private static void WriteTableBlock(FrameBuilder buf, QwpTableBuffer table)
     {
         WriteString(buf, table.TableName);
         buf.WriteVarint((ulong)table.RowCount);
@@ -212,12 +198,12 @@ internal static class QwpEncoder
         // Column data sections (in the same order as definitions: user columns first, designated TS last).
         for (var i = 0; i < table.Columns.Count; i++)
         {
-            WriteColumnData(buf, table.Columns[i], table.RowCount, gorillaEnabled);
+            WriteColumnData(buf, table.Columns[i], table.RowCount);
         }
 
         if (table.DesignatedTimestampColumn is not null)
         {
-            WriteColumnData(buf, table.DesignatedTimestampColumn, table.RowCount, gorillaEnabled);
+            WriteColumnData(buf, table.DesignatedTimestampColumn, table.RowCount);
         }
     }
 
@@ -232,7 +218,7 @@ internal static class QwpEncoder
         buf.WriteByte((byte)col.TypeCode);
     }
 
-    private static void WriteColumnData(FrameBuilder buf, QwpColumn col, int rowCount, bool gorillaEnabled)
+    private static void WriteColumnData(FrameBuilder buf, QwpColumn col, int rowCount)
     {
         // An untyped column has no per-type metadata to emit; a short body would desync the wire.
         if (!col.IsTyped)
@@ -255,7 +241,7 @@ internal static class QwpEncoder
         var n = col.NonNullCount;
 
         // FLAG_GORILLA promises a per-column encoding-flag byte; emit it even when all values are null.
-        if (gorillaEnabled && col.TypeCode is QwpTypeCode.Timestamp or QwpTypeCode.TimestampNanos && n == 0)
+        if (col.TypeCode is QwpTypeCode.Timestamp or QwpTypeCode.TimestampNanos && n == 0)
         {
             buf.WriteByte(QwpGorilla.EncodingUncompressed);
             return;
@@ -298,15 +284,7 @@ internal static class QwpEncoder
 
             case QwpTypeCode.Timestamp:
             case QwpTypeCode.TimestampNanos:
-                if (gorillaEnabled)
-                {
-                    WriteTimestampColumnGorilla(buf, col, n);
-                }
-                else
-                {
-                    buf.WriteBytes(col.FixedData!.AsSpan(0, col.FixedLen));
-                }
-
+                WriteTimestampColumnGorilla(buf, col, n);
                 break;
 
             case QwpTypeCode.Byte:

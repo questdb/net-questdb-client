@@ -747,7 +747,6 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
         return QwpEncoder.EncodeInto(
             _encoderBuffer, _flushBatch, _symbolDictionary,
             selfSufficient: true,
-            gorillaEnabled: Options.gorilla,
             symbolDeltaCount: _currentBatchMaxSymbolId + 1);
     }
 

@@ -54,7 +54,7 @@ internal static class QwpConnectStringKeys
         "auto_flush", "auto_flush_rows", "auto_flush_bytes", "auto_flush_interval",
         "init_buf_size", "max_buf_size", "max_name_len",
         "request_min_throughput", "request_timeout", "retry_timeout", "pool_timeout", "own_socket",
-        "request_durable_ack", "gorilla",
+        "request_durable_ack",
         "sf_dir", "sender_id", "sf_max_bytes", "sf_max_total_bytes", "sf_durability",
         "sf_append_deadline_millis",
         "reconnect_max_duration_millis", "reconnect_initial_backoff_millis", "reconnect_max_backoff_millis",

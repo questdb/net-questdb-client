@@ -362,7 +362,7 @@ public class QueryOptionsTests
     public void Parse_IngressOnlyKeys_AcceptedAndIgnoredOnEgress()
     {
         Assert.DoesNotThrow(() => new QueryOptions(
-            "ws::addr=h:9000;sf_dir=/tmp/x;auto_flush_rows=5000;gorilla=on;" +
+            "ws::addr=h:9000;sf_dir=/tmp/x;auto_flush_rows=5000;" +
             "reconnect_max_backoff_millis=3000;drain_orphans=on;request_durable_ack=on;" +
             "on_server_error=halt;error_inbox_capacity=64;"));
     }

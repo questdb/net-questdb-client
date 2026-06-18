@@ -251,7 +251,7 @@ public class SenderOptionsTests
     {
         var keys = new[]
         {
-            "gorilla=off", "request_durable_ack=on",
+            "request_durable_ack=on",
         };
         foreach (var kv in keys)
         {
@@ -358,7 +358,6 @@ public class SenderOptionsTests
         Assert.That(opts.auto_flush_interval, Is.EqualTo(TimeSpan.FromMilliseconds(100)));
         Assert.That(opts.Port, Is.EqualTo(9000));
         Assert.That(opts.request_durable_ack, Is.False);
-        Assert.That(opts.gorilla, Is.True);
     }
 
     [Test]
@@ -805,12 +804,12 @@ public class SenderOptionsTests
     [Test]
     public void RecordWith_FlippingWsToHttp_StillRejectsWsOnlyKeys()
     {
-        var ws = new SenderOptions("ws::addr=localhost:9000;gorilla=off;");
+        var ws = new SenderOptions("ws::addr=localhost:9000;request_durable_ack=on;");
         var flipped = ws with { protocol = QuestDB.Enums.ProtocolType.http };
 
         Assert.That(
             () => QuestDB.Sender.New(flipped),
-            Throws.TypeOf<IngressError>().With.Message.Contains("gorilla"));
+            Throws.TypeOf<IngressError>().With.Message.Contains("request_durable_ack"));
     }
 
     [Test]
@@ -820,12 +819,12 @@ public class SenderOptionsTests
         {
             protocol = QuestDB.Enums.ProtocolType.http,
             addr     = "localhost:9000",
-            gorilla  = false,
+            request_durable_ack = true,
         };
 
         Assert.That(
             () => QuestDB.Sender.New(opts),
-            Throws.TypeOf<IngressError>().With.Message.Contains("gorilla"));
+            Throws.TypeOf<IngressError>().With.Message.Contains("request_durable_ack"));
     }
 
     [TestCase("on", true)]
@@ -843,19 +842,6 @@ public class SenderOptionsTests
     {
         var opts = new SenderOptions($"http::addr=localhost:9000;gzip={raw};");
         Assert.That(opts.gzip, Is.EqualTo(expected));
-    }
-
-    [TestCase("on", true)]
-    [TestCase("ON", true)]
-    [TestCase("off", false)]
-    [TestCase("OFF", false)]
-    [TestCase("true", true)]
-    [TestCase("TRUE", true)]
-    [TestCase("false", false)]
-    public void Gorilla_AcceptsBothBooleanForms(string raw, bool expected)
-    {
-        var opts = new SenderOptions($"ws::addr=localhost:9000;gorilla={raw};");
-        Assert.That(opts.gorilla, Is.EqualTo(expected));
     }
 
     [TestCase("on", true)]
@@ -891,11 +877,11 @@ public class SenderOptionsTests
     public void RecordWith_MutatingWsKeyAfterFlip_StillRejected()
     {
         var ws = new SenderOptions("ws::addr=localhost:9000;");
-        var flipped = ws with { protocol = QuestDB.Enums.ProtocolType.http, gorilla = false };
+        var flipped = ws with { protocol = QuestDB.Enums.ProtocolType.http, request_durable_ack = true };
 
         Assert.That(
             () => QuestDB.Sender.New(flipped),
-            Throws.TypeOf<IngressError>().With.Message.Contains("gorilla"));
+            Throws.TypeOf<IngressError>().With.Message.Contains("request_durable_ack"));
     }
 
     [Test]
@@ -941,12 +927,12 @@ public class SenderOptionsTests
         {
             protocol = QuestDB.Enums.ProtocolType.http,
             addr     = "localhost:9000",
-            gorilla  = true, // default value, still rejected on non-WS scheme
+            request_durable_ack = false, // default value, still rejected on non-WS scheme
         };
 
         Assert.That(
             () => QuestDB.Sender.New(opts),
-            Throws.TypeOf<IngressError>().With.Message.Contains("gorilla"));
+            Throws.TypeOf<IngressError>().With.Message.Contains("request_durable_ack"));
     }
 
     [Test]
@@ -974,9 +960,9 @@ public class SenderOptionsTests
     public void Ws_ToString_RoundTripsWithWsOnlyKeys()
     {
         var opts = new SenderOptions(
-            "ws::addr=h:9000;gorilla=off;ping_timeout=2500;");
+            "ws::addr=h:9000;request_durable_ack=on;ping_timeout=2500;");
         var rt = new SenderOptions(opts.ToString());
-        Assert.That(rt.gorilla, Is.False);
+        Assert.That(rt.request_durable_ack, Is.True);
         Assert.That(rt.ping_timeout, Is.EqualTo(TimeSpan.FromMilliseconds(2500)));
     }
 
@@ -1050,19 +1036,15 @@ public class SenderOptionsTests
             Throws.TypeOf<IngressError>().With.Message.Contains("tcp"));
     }
 
-    [TestCase("http", "gorilla=on")]
     [TestCase("http", "request_durable_ack=on")]
     [TestCase("http", "sf_dir=/tmp/x")]
     [TestCase("http", "sender_id=foo")]
     [TestCase("http", "ping_timeout=1000")]
     [TestCase("http", "proxy=http://p:8080")]
-    [TestCase("https", "gorilla=on")]
     [TestCase("https", "ping_timeout=1000")]
     [TestCase("https", "proxy=http://p:8080")]
-    [TestCase("tcp", "gorilla=on")]
     [TestCase("tcp", "ping_timeout=1000")]
     [TestCase("tcp", "proxy=http://p:8080")]
-    [TestCase("tcps", "gorilla=on")]
     [TestCase("tcps", "ping_timeout=1000")]
     [TestCase("tcps", "proxy=http://p:8080")]
     public void WsOnlyKey_OnNonWsScheme_Rejected(string scheme, string kv)

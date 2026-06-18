@@ -189,13 +189,7 @@ Run with `dotnet run --project src/example-qwp-ingest`.
 
 #### Gorilla timestamp compression
 
-Set `gorilla=on` to enable delta-of-delta compression for timestamp columns. Best fit for steady-tick streams (sensor readings, evenly spaced ticks). The encoder transparently falls back to uncompressed per column when DoDs overflow int32:
-
-```csharp
-using var sender = Sender.New("ws::addr=localhost:9000;gorilla=on;");
-```
-
-For irregular timestamps (event-driven workloads) Gorilla can be larger than uncompressed; benchmark with your actual data before enabling.
+Timestamp columns on the QWP (`ws::` / `wss::`) sender are automatically compressed with Gorilla delta-of-delta encoding. This is the best fit for steady-tick streams (sensor readings, evenly spaced ticks). The encoder transparently falls back to uncompressed per column when DoDs overflow int32. For irregular timestamps (event-driven workloads) the Gorilla form can be larger than the uncompressed values.
 
 #### Durable acknowledgements
 
@@ -227,7 +221,6 @@ if (sender is IQwpWebSocketSender ws)
 | `close_flush_timeout_millis`  | 5000 ms           | n/a                             |
 | `max_schemas_per_connection`  | 65535             | n/a                             |
 | `request_durable_ack`         | `off`             | n/a                             |
-| `gorilla`                     | `off`             | n/a                             |
 
 #### Store-and-forward (durable client buffer)
 
@@ -308,7 +301,6 @@ The config string format is:
 | --------------------------------- | ------------ | -------------------------------------------------------------------------------------------------------- |
 | `in_flight_window`                | `128`        | Max pipelined batches awaiting ACK. Minimum is `2` — `in_flight_window=1` is rejected.                   |
 | `max_schemas_per_connection`      | `65535`      | Per-connection cap on distinct schema IDs. Hitting it requires recreating the sender.                    |
-| `gorilla`                         | `off`        | `on` / `off` — enables Gorilla DoD compression on timestamp columns.                                     |
 | `request_durable_ack`             | `off`        | `on` / `off` — opts into per-table object-store ACK watermarks (cast to `IQwpWebSocketSender`).         |
 | `sf_dir`                          |              | Path to a local directory enabling store-and-forward. Sets the SF stack on this sender.                  |
 | `sender_id`                       | `default`    | Slot identifier under `<sf_dir>/<sender_id>/`. Must be unique per process sharing the same `sf_dir`.     |

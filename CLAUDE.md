@@ -325,7 +325,7 @@ behaviours:
 - `token_x` / `token_y`: silently accepted for cross-client config-string
   interop; ignored at runtime.
 - `in_flight_window`, `close_timeout`, `max_schemas_per_connection`,
-  `gorilla`, `request_durable_ack`, `sf_*`, `reconnect_*`,
+  `request_durable_ack`, `sf_*`, `reconnect_*`,
   `initial_connect_retry`, `close_flush_timeout_millis`, `drain_orphans`,
   `max_background_drainers`, `sender_id`: WS-only. Rejected on
   non-WS schemes via `ValidateWebSocketKeys` (string-ctor path) or

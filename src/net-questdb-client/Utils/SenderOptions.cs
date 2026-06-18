@@ -83,7 +83,6 @@ public record SenderOptions
 
     // WebSocket / QWP knobs.
     private bool _requestDurableAck;
-    private bool _gorilla = true;
 
     private string? _sfDir;
     private string _senderId = "default";
@@ -115,7 +114,6 @@ public record SenderOptions
     private SenderErrorPolicy? _onWriteError;
 
     private bool _requestDurableAckUserSet;
-    private bool _gorillaUserSet;
     private bool _sfDirUserSet;
     private bool _senderIdUserSet;
     private bool _sfMaxBytesUserSet;
@@ -218,7 +216,6 @@ public record SenderOptions
         // WebSocket / QWP knobs. Parsed unconditionally; ValidateWebSocketKeys throws if any
         // appear with a non-WebSocket scheme.
         ParseBoolOnOff(nameof(request_durable_ack), "off", out _requestDurableAck);
-        ParseBoolOnOff(nameof(gorilla), "on", out _gorilla);
 
         ParseStringWithDefault(nameof(sf_dir), null, out _sfDir);
         ParseStringWithDefault(nameof(sender_id), "default", out var senderIdRaw);
@@ -655,7 +652,6 @@ public record SenderOptions
             return;
         }
 
-        if (_gorillaUserSet) Throw(nameof(gorilla));
         if (_requestDurableAckUserSet) Throw(nameof(request_durable_ack));
         if (_sfDirUserSet) Throw(nameof(sf_dir));
         if (_senderIdUserSet) Throw(nameof(sender_id));
@@ -713,7 +709,7 @@ public record SenderOptions
     {
         var keys = new List<string>
         {
-            "gorilla", "request_durable_ack",
+            "request_durable_ack",
             "sf_dir", "sender_id", "sf_max_bytes", "sf_max_total_bytes", "sf_durability",
             "sf_append_deadline_millis", "reconnect_max_duration_millis", "reconnect_initial_backoff_millis",
             "reconnect_max_backoff_millis", "initial_connect_retry", "initial_connect_mode",
@@ -1081,17 +1077,6 @@ public record SenderOptions
     {
         get => _requestDurableAck;
         set { _requestDurableAck = value; _requestDurableAckUserSet = true; }
-    }
-
-    /// <summary>
-    ///     If <c>true</c>, the WebSocket sender enables Gorilla delta-of-delta compression for
-    ///     timestamp columns. Falls back to uncompressed per column when DoDs overflow int32.
-    ///     On by default.
-    /// </summary>
-    public bool gorilla
-    {
-        get => _gorilla;
-        set { _gorilla = value; _gorillaUserSet = true; }
     }
 
     /// <summary>

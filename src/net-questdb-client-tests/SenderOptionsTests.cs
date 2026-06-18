@@ -1055,4 +1055,40 @@ public class SenderOptionsTests
             Throws.TypeOf<IngressError>(),
             $"key `{kv.Split('=')[0]}` must be rejected on {scheme} scheme");
     }
+
+    [TestCase("ws", "protocol_version=2")]
+    [TestCase("ws", "request_timeout=5000")]
+    [TestCase("ws", "retry_timeout=10000")]
+    [TestCase("ws", "request_min_throughput=1024")]
+    [TestCase("wss", "protocol_version=2")]
+    [TestCase("wss", "request_timeout=5000")]
+    [TestCase("wss", "retry_timeout=10000")]
+    [TestCase("wss", "request_min_throughput=1024")]
+    public void IlpHttpOnlyKey_OnWsScheme_Rejected(string scheme, string kv)
+    {
+        var ex = Assert.Throws<IngressError>(
+            () => new SenderOptions($"{scheme}::addr=localhost:9000;{kv};"));
+        Assert.That(ex!.Message, Does.Contain("not supported for QWP/WebSocket transport"),
+            $"key `{kv.Split('=')[0]}` must be rejected on {scheme} scheme");
+    }
+
+    [TestCase("http", "protocol_version=2")]
+    [TestCase("http", "request_timeout=5000")]
+    [TestCase("http", "retry_timeout=10000")]
+    [TestCase("http", "request_min_throughput=1024")]
+    [TestCase("https", "protocol_version=2")]
+    [TestCase("https", "request_timeout=5000")]
+    [TestCase("https", "retry_timeout=10000")]
+    [TestCase("https", "request_min_throughput=1024")]
+    [TestCase("tcp", "protocol_version=2")]
+    [TestCase("tcp", "request_timeout=5000")]
+    [TestCase("tcp", "retry_timeout=10000")]
+    [TestCase("tcp", "request_min_throughput=1024")]
+    public void IlpHttpOnlyKey_OnIlpScheme_Accepted(string scheme, string kv)
+    {
+        var addr = scheme.StartsWith("tcp") ? "addr=localhost:9009" : "addr=localhost:9000";
+        Assert.DoesNotThrow(
+            () => new SenderOptions($"{scheme}::{addr};{kv};"),
+            $"key `{kv.Split('=')[0]}` must be accepted on {scheme} scheme");
+    }
 }

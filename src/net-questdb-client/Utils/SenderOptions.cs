@@ -205,6 +205,17 @@ public record SenderOptions
             }
             ParseMillisecondsWithDefault("auth_timeout_ms", "15000", out _authTimeout);
         }
+        if (IsWebSocket())
+        {
+            foreach (var key in IlpHttpOnlyKeys)
+            {
+                if (ReadOptionFromBuilder(key) is not null)
+                {
+                    throw new IngressError(ErrorCode.ConfigError,
+                        $"`{key}` is not supported for QWP/WebSocket transport");
+                }
+            }
+        }
         ParseMillisecondsWithDefault(nameof(request_timeout), "30000", out _requestTimeout);
         ParseMillisecondsWithDefault(nameof(retry_timeout), "10000", out _retryTimeout);
         ParseMillisecondsWithDefault(nameof(pool_timeout), "120000", out _poolTimeout);
@@ -702,6 +713,18 @@ public record SenderOptions
             _autoFlushInterval = TimeSpan.FromMilliseconds(-1);
         }
     }
+
+    /// <summary>
+    ///     ILP HTTP/TCP-level keys that have no meaning on the QWP/WebSocket transport. Rejected
+    ///     when any of them appears in a <c>ws::</c> / <c>wss::</c> connect string.
+    /// </summary>
+    private static readonly string[] IlpHttpOnlyKeys =
+    {
+        "protocol_version",
+        "request_min_throughput",
+        "request_timeout",
+        "retry_timeout",
+    };
 
     private static readonly string[] WebSocketOnlyKeys = BuildWebSocketOnlyKeys();
 
@@ -1780,6 +1803,11 @@ public record SenderOptions
         {
             // WS-only keys would fail re-parse on non-WS protocols; skip to keep ToString round-trip.
             if (!IsWebSocket() && Array.IndexOf(WebSocketOnlyKeys, prop.Name) >= 0)
+            {
+                continue;
+            }
+            // ILP HTTP/TCP-only keys would fail re-parse on WS protocols; skip to keep ToString round-trip.
+            if (IsWebSocket() && Array.IndexOf(IlpHttpOnlyKeys, prop.Name) >= 0)
             {
                 continue;
             }

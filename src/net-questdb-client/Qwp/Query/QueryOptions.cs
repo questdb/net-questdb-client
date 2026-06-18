@@ -46,6 +46,19 @@ public sealed class QueryOptions
 {
     private static readonly HashSet<string> KeySet = BuildKeySet();
 
+    /// <summary>
+    ///     ILP HTTP/TCP-level keys rejected on <c>ws::</c> / <c>wss::</c>. They are listed in
+    ///     <see cref="QwpConnectStringKeys.IngressOnly" /> so the key-set check admits them, but
+    ///     the parse loop rejects them explicitly.
+    /// </summary>
+    private static readonly string[] IlpHttpOnlyKeys =
+    {
+        "protocol_version",
+        "request_min_throughput",
+        "request_timeout",
+        "retry_timeout",
+    };
+
     private static HashSet<string> BuildKeySet()
     {
         var keys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -276,6 +289,11 @@ public sealed class QueryOptions
             if (!KeySet.Contains(key))
             {
                 throw new IngressError(ErrorCode.ConfigError, $"invalid property: `{key}`");
+            }
+            if (IlpHttpOnlyKeys.Contains(key, StringComparer.OrdinalIgnoreCase))
+            {
+                throw new IngressError(ErrorCode.ConfigError,
+                    $"`{key}` is not supported for QWP/WebSocket transport");
             }
         }
 

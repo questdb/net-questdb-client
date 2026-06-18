@@ -387,16 +387,28 @@ public class QueryOptionsTests
     [Test]
     public void ConnectString_WithFullUnionOfBothSidesKeys_ParsesOnBothClients()
     {
+        // protocol_version, request_timeout, retry_timeout, request_min_throughput are ILP
+        // HTTP/TCP keys with no meaning on QWP/WebSocket transport; they are excluded here.
         const string shared =
             "ws::addr=localhost:9000;user=admin;pass=secret;" +
-            "protocol_version=2;gzip=off;request_timeout=5000;retry_timeout=10000;" +
-            "pool_timeout=30000;request_min_throughput=1024;own_socket=on;" +
+            "gzip=off;pool_timeout=30000;own_socket=on;" +
             "auth_timeout=15000;init_buf_size=65536;max_buf_size=1048576;max_name_len=127;" +
             "sf_dir=/tmp/qdb;auto_flush_rows=5000;reconnect_max_backoff_millis=3000;" +
             "compression=zstd;failover=on;max_batch_rows=10000;target=replica;path=/read/v1;";
 
         Assert.DoesNotThrow(() => _ = new SenderOptions(shared));
         Assert.DoesNotThrow(() => _ = new QueryOptions(shared));
+    }
+
+    [TestCase("protocol_version=2")]
+    [TestCase("request_timeout=5000")]
+    [TestCase("retry_timeout=10000")]
+    [TestCase("request_min_throughput=1024")]
+    public void Parse_IlpHttpOnlyKey_RejectedOnWs(string keyValue)
+    {
+        var ex = Assert.Throws<IngressError>(() =>
+            new QueryOptions($"ws::addr=h:9000;{keyValue};"));
+        Assert.That(ex!.Message, Does.Contain("not supported for QWP/WebSocket transport"));
     }
 
     [TestCase("Addr")]

@@ -69,7 +69,7 @@ internal static class QwpConnectStringKeys
     /// <summary>Egress-query-client-only keys. The ingress sender accepts and ignores these.</summary>
     internal static readonly string[] EgressOnly =
     {
-        "path", "auth", "compression", "compression_level",
+        "path", "compression", "compression_level",
         "failover", "failover_max_attempts", "failover_backoff_initial_ms",
         "failover_backoff_max_ms", "failover_max_duration_ms",
         "max_batch_rows", "client_id", "buffer_pool_size",

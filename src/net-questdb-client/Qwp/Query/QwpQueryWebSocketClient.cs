@@ -519,7 +519,7 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient
             ClientMaxVersion = QwpConstants.SupportedVersion,
             ClientId = _options.client_id,
             AuthorizationHeader = QwpTlsAuth.BuildAuthHeader(
-                _options.username, _options.password, _options.token, _options.auth),
+                _options.username, _options.password, _options.token),
             RemoteCertificateValidationCallback = QwpTlsAuth.BuildCertificateValidator(
                 _options.tls_verify, _options.tls_roots, _options.tls_roots_password),
             ExtraRequestHeaders = extras.Count > 0 ? extras : null,

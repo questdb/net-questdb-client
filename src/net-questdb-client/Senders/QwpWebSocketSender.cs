@@ -1207,7 +1207,7 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
     }
 
     private static string? BuildAuthHeader(SenderOptions options) =>
-        QwpTlsAuth.BuildAuthHeader(options.username, options.password, options.token, rawAuth: null);
+        QwpTlsAuth.BuildAuthHeader(options.username, options.password, options.token);
 
     private static System.Net.Security.RemoteCertificateValidationCallback? BuildCertificateValidator(SenderOptions options) =>
         QwpTlsAuth.BuildCertificateValidator(options.tls_verify, options.tls_roots, options.tls_roots_password);

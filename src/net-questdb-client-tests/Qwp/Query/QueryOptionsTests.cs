@@ -245,8 +245,6 @@ public class QueryOptionsTests
         Assert.That(o.max_batch_rows, Is.EqualTo(0));
     }
 
-    [TestCase("auth=Bearer abc;username=u;password=p;")]
-    [TestCase("auth=X;token=t;")]
     [TestCase("username=u;password=p;token=t;")]
     public void Parse_AuthMutex_Rejected(string params_)
     {
@@ -266,10 +264,9 @@ public class QueryOptionsTests
     }
 
     [Test]
-    public void Parse_RawAuthAlone_Accepted()
+    public void Parse_AuthKey_Rejected()
     {
-        var o = new QueryOptions("ws::addr=h:9000;auth=Bearer xyz;");
-        Assert.That(o.auth, Is.EqualTo("Bearer xyz"));
+        Assert.Throws<IngressError>(() => new QueryOptions("ws::addr=h:9000;auth=Bearer xyz;"));
     }
 
     [Test]
@@ -495,10 +492,10 @@ public class QueryOptionsTests
     }
 
     [Test]
-    public void Parse_AuthWithControlChar_Rejected()
+    public void Parse_TokenWithControlChar_Rejected()
     {
         Assert.Throws<IngressError>(() => new QueryOptions(
-            "ws::addr=h:9000;auth=Bearer abc\rdef;"));
+            "ws::addr=h:9000;token=abc\rdef;"));
     }
 
     [Test]
@@ -518,7 +515,7 @@ public class QueryOptionsTests
     [Test]
     public void EnsureValid_Programmatic_AuthMutexCaught()
     {
-        var o = new QueryOptions { auth = "Bearer x", token = "t" };
+        var o = new QueryOptions { username = "u", password = "p", token = "t" };
         Assert.Throws<IngressError>(() => o.EnsureValid());
     }
 

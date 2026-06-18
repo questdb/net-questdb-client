@@ -136,8 +136,6 @@ public sealed class QueryOptions
     /// <summary>HTTP path used for the WebSocket upgrade; defaults to <see cref="QwpConstants.ReadPath" />.</summary>
     public string path { get; set; } = QwpConstants.ReadPath;
 
-    /// <summary>Pre-built <c>Authorization</c> header value; mutually exclusive with the username/password/token combinations.</summary>
-    public string? auth { get; set; }
     /// <summary>Basic-auth username; pair with <see cref="password" />.</summary>
     public string? username { get; set; }
     /// <summary>Basic-auth password; pair with <see cref="username" />.</summary>
@@ -213,7 +211,6 @@ public sealed class QueryOptions
         RejectControlChars(nameof(username), username);
         RejectControlChars(nameof(password), password);
         RejectControlChars(nameof(token), token);
-        RejectControlChars(nameof(auth), auth);
         RejectControlChars(nameof(client_id), client_id);
         RejectControlChars(nameof(path), path);
         RejectControlChars(nameof(zone), zone);
@@ -293,7 +290,6 @@ public sealed class QueryOptions
         }
 
         path = ReadStringOr(builder, "path", QwpConstants.ReadPath)!;
-        auth = ReadString(builder, "auth");
         username = ReadString(builder, "username");
         password = ReadString(builder, "password");
         token = ReadString(builder, "token");
@@ -352,16 +348,14 @@ public sealed class QueryOptions
 
     private void ValidateAuthCombination()
     {
-        var hasAuth = !string.IsNullOrEmpty(auth);
         var hasUsername = !string.IsNullOrEmpty(username);
         var hasPassword = !string.IsNullOrEmpty(password);
         var hasToken = !string.IsNullOrEmpty(token);
 
-        var modes = (hasAuth ? 1 : 0) + ((hasUsername || hasPassword) ? 1 : 0) + (hasToken ? 1 : 0);
-        if (modes > 1)
+        if ((hasUsername || hasPassword) && hasToken)
         {
             throw new IngressError(ErrorCode.ConfigError,
-                "`auth`, `username`/`password`, and `token` are mutually exclusive");
+                "`username`/`password` and `token` are mutually exclusive");
         }
 
         if (hasUsername != hasPassword)

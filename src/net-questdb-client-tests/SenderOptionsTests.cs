@@ -407,7 +407,7 @@ public class SenderOptionsTests
         Assert.That(() => new SenderOptions(
             "ws::addr=localhost:9000;compression=zstd;compression_level=6;failover=on;" +
             "failover_max_attempts=4;max_batch_rows=5000;client_id=app-1;buffer_pool_size=8;" +
-            "auth=xyz;path=/read/v1;"), Throws.Nothing);
+            "path=/read/v1;"), Throws.Nothing);
     }
 
     [Test]

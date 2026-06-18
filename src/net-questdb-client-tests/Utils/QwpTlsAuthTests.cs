@@ -35,26 +35,10 @@ namespace net_questdb_client_tests.Utils;
 public class QwpTlsAuthTests
 {
     [Test]
-    public void BuildAuthHeader_RawAuth_ReturnedVerbatim()
-    {
-        var header = QwpTlsAuth.BuildAuthHeader(
-            username: null, password: null, token: null, rawAuth: "Bearer abc123");
-        Assert.That(header, Is.EqualTo("Bearer abc123"));
-    }
-
-    [Test]
-    public void BuildAuthHeader_RawAuth_WinsOverBasicAndBearer()
-    {
-        var header = QwpTlsAuth.BuildAuthHeader(
-            username: "user", password: "pass", token: "tok", rawAuth: "Custom xyz");
-        Assert.That(header, Is.EqualTo("Custom xyz"));
-    }
-
-    [Test]
     public void BuildAuthHeader_BasicEncodesUtf8Pair()
     {
         var header = QwpTlsAuth.BuildAuthHeader(
-            username: "alice", password: "s3cret", token: null, rawAuth: null);
+            username: "alice", password: "s3cret", token: null);
         Assert.That(header, Is.EqualTo("Basic " + Convert.ToBase64String(
             System.Text.Encoding.UTF8.GetBytes("alice:s3cret"))));
     }
@@ -63,7 +47,7 @@ public class QwpTlsAuthTests
     public void BuildAuthHeader_BasicHandlesNonAsciiCredentials()
     {
         var header = QwpTlsAuth.BuildAuthHeader(
-            username: "用户", password: "пароль", token: null, rawAuth: null);
+            username: "用户", password: "пароль", token: null);
         var expected = "Basic " + Convert.ToBase64String(
             System.Text.Encoding.UTF8.GetBytes("用户:пароль"));
         Assert.That(header, Is.EqualTo(expected));
@@ -73,7 +57,7 @@ public class QwpTlsAuthTests
     public void BuildAuthHeader_BearerToken()
     {
         var header = QwpTlsAuth.BuildAuthHeader(
-            username: null, password: null, token: "tok", rawAuth: null);
+            username: null, password: null, token: "tok");
         Assert.That(header, Is.EqualTo("Bearer tok"));
     }
 
@@ -81,7 +65,7 @@ public class QwpTlsAuthTests
     public void BuildAuthHeader_BasicTakesPrecedenceOverBearer()
     {
         var header = QwpTlsAuth.BuildAuthHeader(
-            username: "u", password: "p", token: "tok", rawAuth: null);
+            username: "u", password: "p", token: "tok");
         Assert.That(header, Does.StartWith("Basic "));
     }
 
@@ -89,20 +73,20 @@ public class QwpTlsAuthTests
     public void BuildAuthHeader_UsernameWithoutPassword_FallsThroughToToken()
     {
         var header = QwpTlsAuth.BuildAuthHeader(
-            username: "u", password: null, token: "tok", rawAuth: null);
+            username: "u", password: null, token: "tok");
         Assert.That(header, Is.EqualTo("Bearer tok"));
     }
 
     [Test]
     public void BuildAuthHeader_AllNull_ReturnsNull()
     {
-        Assert.That(QwpTlsAuth.BuildAuthHeader(null, null, null, null), Is.Null);
+        Assert.That(QwpTlsAuth.BuildAuthHeader(null, null, null), Is.Null);
     }
 
     [Test]
     public void BuildAuthHeader_AllEmptyStrings_TreatedAsUnset()
     {
-        Assert.That(QwpTlsAuth.BuildAuthHeader("", "", "", ""), Is.Null);
+        Assert.That(QwpTlsAuth.BuildAuthHeader("", "", ""), Is.Null);
     }
 
     [Test]

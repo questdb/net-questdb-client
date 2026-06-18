@@ -35,18 +35,13 @@ internal static class QwpTlsAuth
 {
     /// <summary>
     ///     Builds the value of the <c>Authorization</c> upgrade header. At most one of
-    ///     <paramref name="rawAuth" />, <c>username + password</c>, or <paramref name="token" />
-    ///     may be supplied; mutual-exclusion is the caller's responsibility (validated by
+    ///     <c>username + password</c> or <paramref name="token" /> may be supplied;
+    ///     mutual-exclusion is the caller's responsibility (validated by
     ///     <see cref="SenderOptions" /> / <c>QueryOptions</c>).
     /// </summary>
     /// <returns>The header value, or <c>null</c> if no auth is configured.</returns>
-    public static string? BuildAuthHeader(string? username, string? password, string? token, string? rawAuth)
+    public static string? BuildAuthHeader(string? username, string? password, string? token)
     {
-        if (!string.IsNullOrEmpty(rawAuth))
-        {
-            return rawAuth;
-        }
-
         if (!string.IsNullOrEmpty(username) && !string.IsNullOrEmpty(password))
         {
             var pair = $"{username}:{password}";

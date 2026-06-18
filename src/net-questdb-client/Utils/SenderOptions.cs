@@ -276,6 +276,28 @@ public record SenderOptions
         EnsureValid();
     }
 
+    /// <summary>
+    ///     Legacy ILP HTTP/TCP keys that have no meaning on the QWP/WebSocket transport and are
+    ///     absent from the QWP connect-string vocabulary (connect-string.md Key index). They are
+    ///     accepted on <c>http</c> / <c>https</c> / <c>tcp</c> / <c>tcps</c> but rejected when any
+    ///     of them appears in a <c>ws::</c> / <c>wss::</c> connect string, so a string shared with
+    ///     the QWP query client cannot smuggle an ILP-only knob onto the QWP path. Declared before
+    ///     <see cref="KnownConnectStringKeys" /> because that initializer folds this array in.
+    /// </summary>
+    private static readonly string[] IlpHttpOnlyKeys =
+    {
+        "protocol_version",
+        "request_min_throughput",
+        "request_timeout",
+        "retry_timeout",
+        "gzip",
+        "pool_timeout",
+        "own_socket",
+        "token_x",
+        "token_y",
+        "auth_timeout",
+    };
+
     private static readonly HashSet<string> KnownConnectStringKeys = BuildKnownConnectStringKeys();
 
     private static HashSet<string> BuildKnownConnectStringKeys()
@@ -285,6 +307,9 @@ public record SenderOptions
         foreach (var k in QwpConnectStringKeys.IngressOnly) keys.Add(k);
         // The connect string is one shared input; accept (and ignore) the egress query client's keys.
         foreach (var k in QwpConnectStringKeys.EgressOnly) keys.Add(k);
+        // Legacy ILP HTTP/TCP keys are not QWP vocabulary, so they live outside QwpConnectStringKeys.
+        // The ILP transports still parse them; the WebSocket path rejects them via IlpHttpOnlyKeys.
+        foreach (var k in IlpHttpOnlyKeys) keys.Add(k);
         return keys;
     }
 
@@ -713,18 +738,6 @@ public record SenderOptions
             _autoFlushInterval = TimeSpan.FromMilliseconds(-1);
         }
     }
-
-    /// <summary>
-    ///     ILP HTTP/TCP-level keys that have no meaning on the QWP/WebSocket transport. Rejected
-    ///     when any of them appears in a <c>ws::</c> / <c>wss::</c> connect string.
-    /// </summary>
-    private static readonly string[] IlpHttpOnlyKeys =
-    {
-        "protocol_version",
-        "request_min_throughput",
-        "request_timeout",
-        "retry_timeout",
-    };
 
     private static readonly string[] WebSocketOnlyKeys = BuildWebSocketOnlyKeys();
 
@@ -1806,8 +1819,11 @@ public record SenderOptions
             {
                 continue;
             }
-            // ILP HTTP/TCP-only keys would fail re-parse on WS protocols; skip to keep ToString round-trip.
-            if (IsWebSocket() && Array.IndexOf(IlpHttpOnlyKeys, prop.Name) >= 0)
+            // ILP HTTP/TCP-only keys would fail re-parse on WS protocols; skip to keep ToString
+            // round-trip. auth_timeout is the exception: on WS it is re-emitted below under its
+            // QWP name auth_timeout_ms, which re-parses cleanly, so it must not be skipped.
+            if (IsWebSocket() && prop.Name != nameof(auth_timeout)
+                && Array.IndexOf(IlpHttpOnlyKeys, prop.Name) >= 0)
             {
                 continue;
             }

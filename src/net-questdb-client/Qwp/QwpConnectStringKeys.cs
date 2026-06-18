@@ -35,38 +35,40 @@ internal static class QwpConnectStringKeys
     /// <summary>
     ///     Keys both the ingress sender and the egress query client recognise (auth, TLS,
     ///     addressing and other transport-level knobs). Each side honours the ones it acts on
-    ///     and ignores the rest.
+    ///     and ignores the rest. <c>protocol</c> is the synthetic scheme key the ingress parser
+    ///     stores in its builder; it is not a user-facing QWP option but must be admitted so the
+    ///     ingress known-key check passes.
     /// </summary>
     internal static readonly string[] Shared =
     {
         "addr", "protocol", "tls_verify", "tls_roots", "tls_roots_password",
-        "username", "user", "password", "pass", "token", "token_x", "token_y",
-        "auth_timeout", "auth_timeout_ms",
-        "zone", "target", "initial_credit",
+        "username", "user", "password", "pass", "token",
+        "auth_timeout_ms",
+        "zone", "target", "initial_credit", "error_inbox_capacity",
     };
 
     /// <summary>
-    ///     Ingress-sender-only keys. The egress query client accepts and ignores these.
+    ///     Ingress-sender-only QWP keys. The egress query client accepts and silently ignores
+    ///     these. <c>ping_timeout</c> and <c>proxy</c> are .NET-specific QWP ingress knobs the
+    ///     WebSocket sender acts on; the rest mirror the cross-client connect-string vocabulary.
     /// </summary>
     internal static readonly string[] IngressOnly =
     {
-        "protocol_version", "gzip",
         "auto_flush", "auto_flush_rows", "auto_flush_bytes", "auto_flush_interval",
         "init_buf_size", "max_buf_size", "max_name_len",
-        "request_min_throughput", "request_timeout", "retry_timeout", "pool_timeout", "own_socket",
         "request_durable_ack",
         "sf_dir", "sender_id", "sf_max_bytes", "sf_max_total_bytes", "sf_durability",
         "sf_append_deadline_millis",
         "reconnect_max_duration_millis", "reconnect_initial_backoff_millis", "reconnect_max_backoff_millis",
         "initial_connect_retry", "close_flush_timeout_millis",
         "drain_orphans", "max_background_drainers", "ping_timeout",
-        "durable_ack_keepalive_interval_millis", "proxy",
-        "error_inbox_capacity", "connection_listener_inbox_capacity",
-        "on_server_error", "on_schema_mismatch_error", "on_schema_error", "on_parse_error",
+        "durable_ack_keepalive_interval_millis", "proxy", "transaction",
+        "connection_listener_inbox_capacity",
+        "on_server_error", "on_schema_error", "on_schema_mismatch_error", "on_parse_error",
         "on_internal_error", "on_security_error", "on_write_error",
     };
 
-    /// <summary>Egress-query-client-only keys. The ingress sender accepts and ignores these.</summary>
+    /// <summary>Egress-query-client-only keys. The ingress sender accepts and silently ignores these.</summary>
     internal static readonly string[] EgressOnly =
     {
         "path", "compression", "compression_level",

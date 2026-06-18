@@ -368,12 +368,33 @@ public class SenderOptionsTests
         Assert.That(ex!.Message, Does.Contain("some_unrecognised_key"));
     }
 
-    [Test]
-    public void TokenXY_AreAcceptedForCrossClientInterop()
+    [TestCase("ws", "max_datagram_size=2048")]
+    [TestCase("ws", "multicast_ttl=4")]
+    [TestCase("wss", "max_datagram_size=2048")]
+    [TestCase("wss", "multicast_ttl=4")]
+    public void UdpOnlyKey_RejectedOnWebSocket(string scheme, string keyValue)
     {
+        // max_datagram_size / multicast_ttl are UDP-only ingress knobs with no transport in this
+        // client. They are absent from the QWP connect-string vocabulary, so the WebSocket ingress
+        // parser rejects them as unknown keys.
+        var key = keyValue.Substring(0, keyValue.IndexOf('='));
+        var ex = Assert.Throws<IngressError>(
+            () => new SenderOptions($"{scheme}::addr=localhost:9000;{keyValue};"));
+        Assert.That(ex!.Message, Does.Contain(key));
+    }
+
+    [Test]
+    public void TokenXY_AcceptedOnIlpRejectedOnWs()
+    {
+        // token_x / token_y are ECDSA P-256 key components for legacy ILP/TCP auth. They are not
+        // part of the QWP connect-string vocabulary, so the WebSocket ingress path rejects them
+        // (QWP auth is Basic / Bearer); http/tcp still accept them for cross-client interop.
         Assert.That(
-            () => new SenderOptions("ws::addr=localhost:9000;token_x=abc;token_y=def;"),
+            () => new SenderOptions("tcp::addr=localhost:9009;token_x=abc;token_y=def;"),
             Throws.Nothing);
+        var ex = Assert.Throws<IngressError>(
+            () => new SenderOptions("ws::addr=localhost:9000;token_x=abc;token_y=def;"));
+        Assert.That(ex!.Message, Does.Contain("not supported for QWP/WebSocket transport"));
     }
 
     [Test]
@@ -418,19 +439,29 @@ public class SenderOptionsTests
     }
 
     [Test]
-    public void Ws_AuthTimeoutMs_AliasParses()
+    public void Ws_AuthTimeoutMs_Parses()
     {
         var withMs = new SenderOptions("ws::addr=localhost:9000;auth_timeout_ms=2500;");
         Assert.That(withMs.auth_timeout, Is.EqualTo(TimeSpan.FromMilliseconds(2500)));
+    }
 
-        var legacy = new SenderOptions("ws::addr=localhost:9000;auth_timeout=2500;");
-        Assert.That(legacy.auth_timeout, Is.EqualTo(TimeSpan.FromMilliseconds(2500)));
+    [Test]
+    public void Ws_LegacyAuthTimeout_Rejected()
+    {
+        // The QWP connect-string vocabulary uses auth_timeout_ms; the bare legacy ILP name
+        // auth_timeout is rejected on the WebSocket path. It stays valid on http/tcp.
+        var ex = Assert.Throws<IngressError>(
+            () => new SenderOptions("ws::addr=localhost:9000;auth_timeout=2500;"));
+        Assert.That(ex!.Message, Does.Contain("not supported for QWP/WebSocket transport"));
+
+        var http = new SenderOptions("http::addr=localhost:9000;auth_timeout=2500;");
+        Assert.That(http.auth_timeout, Is.EqualTo(TimeSpan.FromMilliseconds(2500)));
     }
 
     [Test]
     public void Ws_ToString_EmitsAuthTimeoutMs()
     {
-        var opts = new SenderOptions("ws::addr=localhost:9000;auth_timeout=4000;");
+        var opts = new SenderOptions("ws::addr=localhost:9000;auth_timeout_ms=4000;");
         var s = opts.ToString();
         Assert.That(s, Does.Contain("auth_timeout_ms=4000"));
         Assert.That(s, Does.Not.Contain("auth_timeout=4000"));
@@ -745,9 +776,13 @@ public class SenderOptionsTests
     }
 
     [Test]
-    public void Gzip_OffWithWebSocketScheme_Accepted()
+    public void Gzip_OffWithWebSocketScheme_Rejected()
     {
-        Assert.DoesNotThrow(() => new SenderOptions("ws::addr=localhost:9000;gzip=false;"));
+        // gzip is an ILP-only key absent from the QWP vocabulary, so the WebSocket path rejects
+        // it by name regardless of value -- gzip=false is rejected just like gzip=true.
+        var ex = Assert.Throws<IngressError>(
+            () => new SenderOptions("ws::addr=localhost:9000;gzip=false;"));
+        Assert.That(ex!.Message, Does.Contain("not supported for QWP/WebSocket transport"));
     }
 
     [Test]
@@ -868,9 +903,11 @@ public class SenderOptionsTests
     [Test]
     public void GzipOn_ViaWebSocketScheme_GivesGzipRejectionNotParseError()
     {
+        // gzip is a legacy ILP HTTP key (binary QWP has no gzip), so the WebSocket path rejects
+        // it as a non-QWP key rather than letting it through to a later parse/validate error.
         Assert.That(
             () => new SenderOptions("ws::addr=localhost:9000;gzip=on;"),
-            Throws.TypeOf<IngressError>().With.Message.Contains("ws"));
+            Throws.TypeOf<IngressError>().With.Message.Contains("not supported for QWP/WebSocket transport"));
     }
 
     [Test]
@@ -1057,13 +1094,24 @@ public class SenderOptionsTests
     }
 
     [TestCase("ws", "protocol_version=2")]
+    [TestCase("ws", "protocol_version=auto")]
     [TestCase("ws", "request_timeout=5000")]
     [TestCase("ws", "retry_timeout=10000")]
     [TestCase("ws", "request_min_throughput=1024")]
+    [TestCase("ws", "gzip=on")]
+    [TestCase("ws", "pool_timeout=30000")]
+    [TestCase("ws", "own_socket=on")]
+    [TestCase("ws", "token_x=abc")]
+    [TestCase("ws", "token_y=def")]
+    [TestCase("ws", "auth_timeout=15000")]
     [TestCase("wss", "protocol_version=2")]
+    [TestCase("wss", "protocol_version=auto")]
     [TestCase("wss", "request_timeout=5000")]
     [TestCase("wss", "retry_timeout=10000")]
     [TestCase("wss", "request_min_throughput=1024")]
+    [TestCase("wss", "gzip=on")]
+    [TestCase("wss", "token_x=abc")]
+    [TestCase("wss", "auth_timeout=15000")]
     public void IlpHttpOnlyKey_OnWsScheme_Rejected(string scheme, string kv)
     {
         var ex = Assert.Throws<IngressError>(
@@ -1073,17 +1121,26 @@ public class SenderOptionsTests
     }
 
     [TestCase("http", "protocol_version=2")]
+    [TestCase("http", "protocol_version=auto")]
     [TestCase("http", "request_timeout=5000")]
     [TestCase("http", "retry_timeout=10000")]
     [TestCase("http", "request_min_throughput=1024")]
+    [TestCase("http", "gzip=on")]
+    [TestCase("http", "pool_timeout=30000")]
+    [TestCase("http", "own_socket=on")]
+    [TestCase("http", "token_x=abc")]
+    [TestCase("http", "token_y=def")]
+    [TestCase("http", "auth_timeout=15000")]
     [TestCase("https", "protocol_version=2")]
     [TestCase("https", "request_timeout=5000")]
     [TestCase("https", "retry_timeout=10000")]
     [TestCase("https", "request_min_throughput=1024")]
+    [TestCase("https", "gzip=on")]
     [TestCase("tcp", "protocol_version=2")]
     [TestCase("tcp", "request_timeout=5000")]
     [TestCase("tcp", "retry_timeout=10000")]
     [TestCase("tcp", "request_min_throughput=1024")]
+    [TestCase("tcp", "auth_timeout=15000")]
     public void IlpHttpOnlyKey_OnIlpScheme_Accepted(string scheme, string kv)
     {
         var addr = scheme.StartsWith("tcp") ? "addr=localhost:9009" : "addr=localhost:9000";

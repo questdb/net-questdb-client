@@ -387,13 +387,15 @@ public class QueryOptionsTests
     [Test]
     public void ConnectString_WithFullUnionOfBothSidesKeys_ParsesOnBothClients()
     {
-        // protocol_version, request_timeout, retry_timeout, request_min_throughput are ILP
-        // HTTP/TCP keys with no meaning on QWP/WebSocket transport; they are excluded here.
+        // The legacy ILP HTTP/TCP keys (protocol_version, request_timeout, retry_timeout,
+        // request_min_throughput, gzip, pool_timeout, own_socket, auth_timeout, token_x/y) are
+        // not part of the QWP vocabulary and are rejected on ws::; this string carries only QWP
+        // keys from both directions, so both QWP clients accept it.
         const string shared =
             "ws::addr=localhost:9000;user=admin;pass=secret;" +
-            "gzip=off;pool_timeout=30000;own_socket=on;" +
-            "auth_timeout=15000;init_buf_size=65536;max_buf_size=1048576;max_name_len=127;" +
+            "auth_timeout_ms=15000;init_buf_size=65536;max_buf_size=1048576;max_name_len=127;" +
             "sf_dir=/tmp/qdb;auto_flush_rows=5000;reconnect_max_backoff_millis=3000;" +
+            "ping_timeout=2000;transaction=on;error_inbox_capacity=64;on_parse_error=halt;" +
             "compression=zstd;failover=on;max_batch_rows=10000;target=replica;path=/read/v1;";
 
         Assert.DoesNotThrow(() => _ = new SenderOptions(shared));
@@ -401,14 +403,36 @@ public class QueryOptionsTests
     }
 
     [TestCase("protocol_version=2")]
+    [TestCase("protocol_version=auto")]
     [TestCase("request_timeout=5000")]
     [TestCase("retry_timeout=10000")]
     [TestCase("request_min_throughput=1024")]
+    [TestCase("gzip=on")]
+    [TestCase("pool_timeout=30000")]
+    [TestCase("own_socket=on")]
+    [TestCase("token_x=abc")]
+    [TestCase("token_y=def")]
+    [TestCase("auth_timeout=15000")]
     public void Parse_IlpHttpOnlyKey_RejectedOnWs(string keyValue)
     {
         var ex = Assert.Throws<IngressError>(() =>
             new QueryOptions($"ws::addr=h:9000;{keyValue};"));
         Assert.That(ex!.Message, Does.Contain("not supported for QWP/WebSocket transport"));
+    }
+
+    [TestCase("ws", "max_datagram_size=2048")]
+    [TestCase("ws", "multicast_ttl=4")]
+    [TestCase("wss", "max_datagram_size=2048")]
+    [TestCase("wss", "multicast_ttl=4")]
+    public void Parse_UdpOnlyKey_RejectedOnWs(string scheme, string keyValue)
+    {
+        // max_datagram_size / multicast_ttl are UDP-only ingress knobs with no transport in this
+        // client. They are absent from the QWP connect-string vocabulary, so the egress parser
+        // rejects them rather than silently consuming them.
+        var key = keyValue.Substring(0, keyValue.IndexOf('='));
+        var ex = Assert.Throws<IngressError>(() =>
+            new QueryOptions($"{scheme}::addr=h:9000;{keyValue};"));
+        Assert.That(ex!.Message, Does.Contain(key));
     }
 
     [TestCase("Addr")]
@@ -532,10 +556,23 @@ public class QueryOptionsTests
     }
 
     [Test]
-    public void TokenXY_AreAcceptedForCrossClientInterop()
+    public void TokenXY_RejectedOnWs()
     {
+        // token_x / token_y are legacy ILP/TCP ECDSA key components, not QWP keys; the egress
+        // query client is QWP-only, so it rejects them rather than silently consuming them.
+        var ex = Assert.Throws<IngressError>(
+            () => new QueryOptions("ws::addr=localhost:9000;token_x=abc;token_y=def;"));
+        Assert.That(ex!.Message, Does.Contain("not supported for QWP/WebSocket transport"));
+    }
+
+    [Test]
+    public void OtherDirectionIngressKey_AcceptedAndIgnored()
+    {
+        // A ws:: string is shared between the Sender and the QwpQueryClient. An ingress-only
+        // QWP key (here a .NET-specific WebSocket ingress knob) is silently consumed by the
+        // egress parser so the same string drives both clients.
         Assert.That(
-            () => new QueryOptions("ws::addr=localhost:9000;token_x=abc;token_y=def;"),
+            () => new QueryOptions("ws::addr=localhost:9000;ping_timeout=2000;proxy=http://h:8080;"),
             Throws.Nothing);
     }
 }

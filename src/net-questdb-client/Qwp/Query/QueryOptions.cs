@@ -47,9 +47,10 @@ public sealed class QueryOptions
     private static readonly HashSet<string> KeySet = BuildKeySet();
 
     /// <summary>
-    ///     ILP HTTP/TCP-level keys rejected on <c>ws::</c> / <c>wss::</c>. They are listed in
-    ///     <see cref="QwpConnectStringKeys.IngressOnly" /> so the key-set check admits them, but
-    ///     the parse loop rejects them explicitly.
+    ///     Legacy ILP HTTP/TCP keys explicitly rejected on the QWP/WebSocket egress path. They are
+    ///     absent from the QWP connect-string vocabulary (connect-string.md Key index), so they are
+    ///     not in <see cref="KeySet" /> either; the parse loop checks this list first to return a
+    ///     transport-specific message instead of the generic "invalid property".
     /// </summary>
     private static readonly string[] IlpHttpOnlyKeys =
     {
@@ -57,6 +58,12 @@ public sealed class QueryOptions
         "request_min_throughput",
         "request_timeout",
         "retry_timeout",
+        "gzip",
+        "pool_timeout",
+        "own_socket",
+        "token_x",
+        "token_y",
+        "auth_timeout",
     };
 
     private static HashSet<string> BuildKeySet()
@@ -286,14 +293,14 @@ public sealed class QueryOptions
         var builder = new DbConnectionStringBuilder { ConnectionString = paramString };
         foreach (string key in builder.Keys)
         {
-            if (!KeySet.Contains(key))
-            {
-                throw new IngressError(ErrorCode.ConfigError, $"invalid property: `{key}`");
-            }
             if (IlpHttpOnlyKeys.Contains(key, StringComparer.OrdinalIgnoreCase))
             {
                 throw new IngressError(ErrorCode.ConfigError,
                     $"`{key}` is not supported for QWP/WebSocket transport");
+            }
+            if (!KeySet.Contains(key))
+            {
+                throw new IngressError(ErrorCode.ConfigError, $"invalid property: `{key}`");
             }
         }
 

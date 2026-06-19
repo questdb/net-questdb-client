@@ -218,7 +218,7 @@ if (sender is IQwpWebSocketSender ws)
 | `auto_flush_interval`         | 100 ms            | 1000 ms                         |
 | `auto_flush_bytes`            | `int.MaxValue`    | `int.MaxValue`                  |
 | `in_flight_window`            | 128               | n/a                             |
-| `close_flush_timeout_millis`  | 5000 ms           | n/a                             |
+| `close_flush_timeout_millis`  | 60000 ms          | n/a                             |
 | `max_schemas_per_connection`  | 65535             | n/a                             |
 | `request_durable_ack`         | `off`             | n/a                             |
 
@@ -312,7 +312,7 @@ The config string format is:
 | `reconnect_max_backoff_millis`    | `5000`       | Cap on per-attempt backoff.                                                                              |
 | `reconnect_max_duration_millis`   | `300000`     | Total per-outage budget; sender becomes terminal if exceeded.                                            |
 | `initial_connect_retry`           | `off`        | `on` makes the first connect honour the same backoff loop. Default is "fail fast on first connect".      |
-| `close_flush_timeout_millis`      | `5000`       | Max wait at `Dispose` for the SF engine to drain. `0` or `-1` for fast close.                            |
+| `close_flush_timeout_millis`      | `60000`      | Max wait at `Dispose` for the SF engine to drain (matches Java). `0` or `-1` for fast close.             |
 | `drain_orphans`                   | `off`        | `on` adopts unlocked sibling slots on startup and drains them in the background.                         |
 | `max_background_drainers`         | `4`          | Cap on concurrent orphan-drain workers.                                                                  |
 
@@ -329,10 +329,11 @@ Behavior details:
 
 ### net-questdb-client specific parameters
 
-| Name           | Default  | Description                                                                           |
-| -------------- | -------- | ------------------------------------------------------------------------------------- |
-| `own_socket`   | `true`   | Specifies whether the internal TCP data stream will own the underlying socket or not. |
-| `pool_timeout` | `120000` | Sets the idle timeout for HTTP connections in SocketsHttpHandler.                     |
+| Name                   | Default  | Description                                                                                                                                                                                                              |
+| ---------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `own_socket`           | `true`   | Specifies whether the internal TCP data stream will own the underlying socket or not.                                                                                                                                    |
+| `pool_timeout`         | `120000` | Sets the idle timeout for HTTP connections in SocketsHttpHandler.                                                                                                                                                        |
+| `convert_local_to_utc` | `off`    | When `on`, a `DateTime` whose `Kind` is `Local` is converted to UTC (via `ToUniversalTime()`) before its timestamp is encoded. `Utc` and `Unspecified` values, and all `DateTimeOffset` values, are written unchanged. Default `off` writes a local value's raw wall-clock ticks as-is (i.e. as though it were UTC). Applies to HTTP, TCP, and WS ingest. |
 
 ## Properties and methods
 

@@ -1538,6 +1538,47 @@ public class QwpQueryClientEndToEndTests
     }
 
     [Test]
+    public async Task CorruptVarintInResultBatch_IsTerminalProtocolViolation_NotRetried()
+    {
+        // Regression (M3): a malformed varint inside a RESULT_BATCH is structural frame corruption.
+        // The shared QwpVarint.Read classifies it as the retryable ProtocolVersionError, but inside
+        // the decode path it must become the terminal ProtocolViolation — under failover=on the
+        // client must NOT reconnect and re-issue the query against the deterministically-corrupt frame.
+        var payload = new byte[1 + 8 + 11];
+        payload[0] = QwpConstants.MsgKindResultBatch;
+        BinaryPrimitives.WriteInt64LittleEndian(payload.AsSpan(1, 8), 1L);   // request_id
+        for (var i = 9; i < payload.Length; i++) payload[i] = 0x80;          // overlong batch_seq varint
+
+        var frame = new byte[QwpConstants.HeaderSize + payload.Length];
+        BinaryPrimitives.WriteUInt32LittleEndian(frame.AsSpan(0, 4), QwpConstants.Magic);
+        frame[QwpConstants.OffsetVersion] = 1;
+        BinaryPrimitives.WriteUInt16LittleEndian(frame.AsSpan(QwpConstants.OffsetTableCount, 2), 1);
+        BinaryPrimitives.WriteUInt32LittleEndian(frame.AsSpan(QwpConstants.OffsetPayloadLength, 4), (uint)payload.Length);
+        payload.CopyTo(frame, QwpConstants.HeaderSize);
+
+        await using var server = new DummyQwpServer(new DummyQwpServerOptions
+        {
+            Path = QwpConstants.ReadPath,
+            NegotiatedVersion = "1",
+            FrameHandlerMulti = f =>
+                f.Length > 0 && f[0] == QwpConstants.MsgKindQueryRequest
+                    ? new[] { frame }
+                    : Array.Empty<byte[]>(),
+        });
+        await server.StartAsync();
+
+        var conn = BuildConnString(server,
+            "target=any;failover=on;failover_max_attempts=4;" +
+            "failover_backoff_initial_ms=10;failover_backoff_max_ms=20;");
+        using var client = QueryClient.New(conn);
+
+        var ex = Assert.Throws<IngressError>(() => client.Execute("SELECT 1", new RecordingHandler()));
+        Assert.That(ex!.code, Is.EqualTo(ErrorCode.ProtocolViolation));
+        Assert.That(server.UpgradeCount, Is.EqualTo(1),
+            "corrupt-frame ProtocolViolation is terminal — failover must not reconnect");
+    }
+
+    [Test]
     public async Task HandlerThrowOnExecDone_DoesNotMarkClientTerminal()
     {
         var done1 = QwpEgressFrameBuilder.BuildExecDone(1L, opType: 1, rowsAffected: 5L);

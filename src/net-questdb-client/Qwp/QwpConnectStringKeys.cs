@@ -55,7 +55,7 @@ internal static class QwpConnectStringKeys
     internal static readonly string[] IngressOnly =
     {
         "auto_flush", "auto_flush_rows", "auto_flush_bytes", "auto_flush_interval",
-        "init_buf_size", "max_buf_size", "max_name_len",
+        "init_buf_size", "max_buf_size", "max_name_len", "convert_local_to_utc",
         "request_durable_ack",
         "sf_dir", "sender_id", "sf_max_bytes", "sf_max_total_bytes", "sf_durability",
         "sf_append_deadline_millis",

@@ -77,7 +77,8 @@ internal sealed class TcpSender : AbstractSender
             Options.init_buf_size,
             Options.max_name_len,
             Options.max_buf_size,
-            Options.protocol_version == ProtocolVersion.Auto ? ProtocolVersion.V1 : Options.protocol_version
+            Options.protocol_version == ProtocolVersion.Auto ? ProtocolVersion.V1 : Options.protocol_version,
+            Options.convert_local_to_utc
         );
 
         var socket = new Socket(AddressFamily.InterNetwork, SocketType.Stream, System.Net.Sockets.ProtocolType.Tcp);

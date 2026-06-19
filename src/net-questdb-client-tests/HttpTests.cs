@@ -1407,7 +1407,7 @@ public class HttpTests
         await sender.Column("foo", 123).AtAsync(86400000000000);
         await sender.Column("foo", 123d).AtAsync(86400000000000);
         await sender.Column("foo", new DateTime(1970, 1, 1)).AtAsync(86400000000000);
-        await sender.Column("foo", new DateTimeOffset(new DateTime(1970, 1, 1)))
+        await sender.Column("foo", new DateTimeOffset(new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc)))
                     .AtAsync(86400000000000);
         await sender.Column("foo", false).AtAsync(86400000000000);
 

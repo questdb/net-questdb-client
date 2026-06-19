@@ -25,6 +25,7 @@
 using System.Buffers.Binary;
 using System.Text;
 using QuestDB.Enums;
+using QuestDB.Utils;
 
 namespace QuestDB.Qwp.Query;
 
@@ -388,7 +389,18 @@ internal sealed class QwpResultBatchDecoder
         }
 
         // BE-safe: writes LE bytes; the Span<long> overload would byte-swap on big-endian readers.
-        var consumed = QwpGorilla.DecodeToBytes(payload.Slice(p), col.ValueBytes.AsSpan(0, rawBytes), nonNull);
+        int consumed;
+        try
+        {
+            consumed = QwpGorilla.DecodeToBytes(payload.Slice(p), col.ValueBytes.AsSpan(0, rawBytes), nonNull);
+        }
+        catch (Exception ex) when (ex is IngressError or InvalidOperationException)
+        {
+            // QwpGorilla (shared with ingest) reports corruption as the retryable ProtocolVersionError,
+            // or throws InvalidOperationException from QwpBitReader on a truncated DoD bitstream. Both
+            // are terminal RESULT_BATCH corruption — remap so the query loop sees ProtocolViolation.
+            throw new QwpDecodeException("malformed Gorilla timestamp column in RESULT_BATCH", ex);
+        }
         p += consumed;
     }
 
@@ -539,7 +551,19 @@ internal sealed class QwpResultBatchDecoder
         {
             throw new QwpDecodeException("truncated varint");
         }
-        var v = QwpVarint.Read(payload.Slice(p), out var consumed);
+        int consumed;
+        ulong v;
+        try
+        {
+            v = QwpVarint.Read(payload.Slice(p), out consumed);
+        }
+        catch (IngressError ex)
+        {
+            // QwpVarint.Read (shared with the ingest parser) reports a malformed varint as the
+            // retryable ProtocolVersionError; inside a RESULT_BATCH it's terminal frame corruption.
+            // Remap so the query loop sees ProtocolViolation and won't retry a corrupt frame.
+            throw new QwpDecodeException("malformed varint in RESULT_BATCH", ex);
+        }
         p += consumed;
         return v;
     }

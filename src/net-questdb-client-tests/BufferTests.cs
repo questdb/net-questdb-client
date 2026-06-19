@@ -172,15 +172,56 @@ public class BufferTests
     }
 
     [Test]
-    public void At_LocalDateTimeKind_NormalisedToUtc()
+    public void At_LocalDateTimeKind_ConvertedToUtc_WhenEnabled()
     {
         var local = DateTime.SpecifyKind(new DateTime(1970, 1, 1, 0, 0, 1), DateTimeKind.Local);
-        var bufferLocal = new BufferV3(128, 128, 128);
+        var bufferLocal = new BufferV3(128, 128, 128, convertLocalToUtc: true);
         bufferLocal.Table("t").Column("x", 1).At(local);
 
-        var bufferUtc = new BufferV3(128, 128, 128);
+        // ToUniversalTime() yields a Utc-kind value, which is never re-converted.
+        var bufferUtc = new BufferV3(128, 128, 128, convertLocalToUtc: true);
         bufferUtc.Table("t").Column("x", 1).At(local.ToUniversalTime());
 
         Assert.That(bufferLocal.GetSendBuffer().ToArray(), Is.EqualTo(bufferUtc.GetSendBuffer().ToArray()));
+    }
+
+    [Test]
+    public void At_LocalDateTimeKind_NotConverted_ByDefault()
+    {
+        var local = DateTime.SpecifyKind(new DateTime(1970, 1, 1, 0, 0, 1), DateTimeKind.Local);
+        var bufferDefault = new BufferV3(128, 128, 128);
+        bufferDefault.Table("t").Column("x", 1).At(local);
+
+        // Default writes the raw wall-clock ticks: identical to the same instant tagged Utc.
+        var bufferRaw = new BufferV3(128, 128, 128);
+        bufferRaw.Table("t").Column("x", 1).At(DateTime.SpecifyKind(local, DateTimeKind.Utc));
+
+        Assert.That(bufferDefault.GetSendBuffer().ToArray(), Is.EqualTo(bufferRaw.GetSendBuffer().ToArray()));
+    }
+
+    [Test]
+    public void Column_LocalDateTime_ConvertedToUtc_WhenEnabled()
+    {
+        var local = DateTime.SpecifyKind(new DateTime(1970, 1, 1, 0, 0, 1), DateTimeKind.Local);
+        var bufferLocal = new BufferV3(128, 128, 128, convertLocalToUtc: true);
+        bufferLocal.Table("t").Column("ts", local).At(2L);
+
+        var bufferUtc = new BufferV3(128, 128, 128, convertLocalToUtc: true);
+        bufferUtc.Table("t").Column("ts", local.ToUniversalTime()).At(2L);
+
+        Assert.That(bufferLocal.GetSendBuffer().ToArray(), Is.EqualTo(bufferUtc.GetSendBuffer().ToArray()));
+    }
+
+    [Test]
+    public void Column_LocalDateTime_NotConverted_ByDefault()
+    {
+        var local = DateTime.SpecifyKind(new DateTime(1970, 1, 1, 0, 0, 1), DateTimeKind.Local);
+        var bufferDefault = new BufferV3(128, 128, 128);
+        bufferDefault.Table("t").Column("ts", local).At(2L);
+
+        var bufferRaw = new BufferV3(128, 128, 128);
+        bufferRaw.Table("t").Column("ts", DateTime.SpecifyKind(local, DateTimeKind.Utc)).At(2L);
+
+        Assert.That(bufferDefault.GetSendBuffer().ToArray(), Is.EqualTo(bufferRaw.GetSendBuffer().ToArray()));
     }
 }

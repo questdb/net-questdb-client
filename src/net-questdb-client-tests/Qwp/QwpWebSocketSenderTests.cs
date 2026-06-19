@@ -1358,6 +1358,19 @@ public class QwpWebSocketSenderTests
         return new QwpWebSocketSender(options);
     }
 
+    // Sends one explicit batch and returns the raw QWP frame the server received. Two frames built
+    // from identical rows are byte-equal iff their encoded timestamps match, so callers compare a
+    // Local-kind row against a reference row to pin convert_local_to_utc behaviour.
+    private static async Task<byte[]> CaptureFirstFrame(string extraOptions, Action<ISender> write)
+    {
+        await using var server = StartServerWithOkAcks();
+        using var sender = NewSender(server, "auto_flush=off;" + extraOptions);
+        write(sender);
+        sender.Send();
+        await WaitFor(() => server.ReceivedFrames.Count >= 1);
+        return server.ReceivedFrames.First();
+    }
+
     private static QwpWebSocketSender NewSenderWithListener(DummyQwpServer server, string extraOptions, ISenderConnectionListener listener)
     {
         var port = server.Uri.Port;
@@ -1457,6 +1470,60 @@ public class QwpWebSocketSenderTests
         sender.Table("t").Column("v", 1L);
         var unspecified = new DateTime(2026, 4, 28, 12, 0, 0, DateTimeKind.Unspecified);
         Assert.DoesNotThrow(() => sender.At(unspecified));
+    }
+
+    [Test]
+    public async Task At_LocalDateTime_ConvertedToUtc_WhenEnabled()
+    {
+        var local = DateTime.SpecifyKind(new DateTime(2026, 4, 28, 12, 0, 0), DateTimeKind.Local);
+
+        var frameLocal = await CaptureFirstFrame("convert_local_to_utc=on;",
+            s => s.Table("t").Column("v", 1L).At(local));
+        // A Utc-kind value is never re-converted, so this is the post-conversion reference.
+        var frameConverted = await CaptureFirstFrame("convert_local_to_utc=on;",
+            s => s.Table("t").Column("v", 1L).At(local.ToUniversalTime()));
+
+        Assert.That(frameLocal, Is.EqualTo(frameConverted));
+    }
+
+    [Test]
+    public async Task At_LocalDateTime_NotConverted_ByDefault()
+    {
+        var local = DateTime.SpecifyKind(new DateTime(2026, 4, 28, 12, 0, 0), DateTimeKind.Local);
+
+        var frameLocal = await CaptureFirstFrame("",
+            s => s.Table("t").Column("v", 1L).At(local));
+        // Default writes the raw wall-clock: identical to the same instant tagged Utc.
+        var frameRaw = await CaptureFirstFrame("",
+            s => s.Table("t").Column("v", 1L).At(DateTime.SpecifyKind(local, DateTimeKind.Utc)));
+
+        Assert.That(frameLocal, Is.EqualTo(frameRaw));
+    }
+
+    [Test]
+    public async Task Column_LocalDateTime_ConvertedToUtc_WhenEnabled()
+    {
+        var local = DateTime.SpecifyKind(new DateTime(2026, 4, 28, 12, 0, 0), DateTimeKind.Local);
+
+        var frameLocal = await CaptureFirstFrame("convert_local_to_utc=on;",
+            s => s.Table("t").Column("ts", local).At(DateTime.UnixEpoch));
+        var frameConverted = await CaptureFirstFrame("convert_local_to_utc=on;",
+            s => s.Table("t").Column("ts", local.ToUniversalTime()).At(DateTime.UnixEpoch));
+
+        Assert.That(frameLocal, Is.EqualTo(frameConverted));
+    }
+
+    [Test]
+    public async Task Column_LocalDateTime_NotConverted_ByDefault()
+    {
+        var local = DateTime.SpecifyKind(new DateTime(2026, 4, 28, 12, 0, 0), DateTimeKind.Local);
+
+        var frameLocal = await CaptureFirstFrame("",
+            s => s.Table("t").Column("ts", local).At(DateTime.UnixEpoch));
+        var frameRaw = await CaptureFirstFrame("",
+            s => s.Table("t").Column("ts", DateTime.SpecifyKind(local, DateTimeKind.Utc)).At(DateTime.UnixEpoch));
+
+        Assert.That(frameLocal, Is.EqualTo(frameRaw));
     }
 
     [Test]

@@ -35,6 +35,7 @@ public class BufferV1 : IBuffer
 {
     private static readonly long EpochTicks = new DateTime(1970, 1, 1).Ticks;
     private readonly List<(byte[] Buffer, int Length)> _buffers = new();
+    private readonly bool _convertLocalToUtc;
     private readonly int _maxBufSize;
     private readonly int _maxNameLen;
     private int _currentBufferIndex;
@@ -53,12 +54,14 @@ public class BufferV1 : IBuffer
     /// <param name="bufferSize">Initial size of each buffer chunk, in bytes.</param>
     /// <param name="maxNameLen">Maximum allowed UTF-8 byte length for table and column names.</param>
     /// <param name="maxBufSize">Maximum total buffer size across all chunks, in bytes.</param>
-    public BufferV1(int bufferSize, int maxNameLen, int maxBufSize)
+    /// <param name="convertLocalToUtc">When true, <see cref="DateTimeKind.Local" /> timestamps are converted to UTC before encoding.</param>
+    public BufferV1(int bufferSize, int maxNameLen, int maxBufSize, bool convertLocalToUtc = false)
     {
         Chunk = new byte[bufferSize];
         _buffers.Add((Chunk, 0));
         _maxNameLen = maxNameLen;
         _maxBufSize = maxBufSize;
+        _convertLocalToUtc = convertLocalToUtc;
     }
 
     /// <inheritdoc />
@@ -119,7 +122,7 @@ public class BufferV1 : IBuffer
         FinishLine();
     }
 
-    private static DateTime NormaliseToUtc(DateTime value) => value.Kind == DateTimeKind.Local
+    private DateTime NormaliseToUtc(DateTime value) => _convertLocalToUtc && value.Kind == DateTimeKind.Local
         ? value.ToUniversalTime()
         : value;
 

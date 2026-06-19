@@ -38,7 +38,9 @@ public class BufferV2 : BufferV1
     /// <param name="bufferSize">Initial size of the internal write buffer, in bytes.</param>
     /// <param name="maxNameLen">Maximum allowed length for column names, in characters.</param>
     /// <param name="maxBufSize">Maximum allowed internal buffer size, in bytes.</param>
-    public BufferV2(int bufferSize, int maxNameLen, int maxBufSize) : base(bufferSize, maxNameLen, maxBufSize)
+    /// <param name="convertLocalToUtc">When true, <see cref="DateTimeKind.Local" /> timestamps are converted to UTC before encoding.</param>
+    public BufferV2(int bufferSize, int maxNameLen, int maxBufSize, bool convertLocalToUtc = false)
+        : base(bufferSize, maxNameLen, maxBufSize, convertLocalToUtc)
     {
     }
 

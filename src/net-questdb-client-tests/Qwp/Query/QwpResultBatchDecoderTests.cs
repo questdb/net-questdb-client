@@ -840,6 +840,70 @@ public class QwpResultBatchDecoderTests
             decoder.Decode(PayloadOf(batch2).Span, HeaderFlagsOf(batch2), new QwpColumnBatch()));
     }
 
+    [Test]
+    public void Decode_OverlongVarint_ThrowsQwpDecodeExceptionNotIngressError()
+    {
+        // Regression (M3): a malformed varint reaches the shared QwpVarint.Read, which classifies it
+        // as the retryable ProtocolVersionError. Inside a RESULT_BATCH that is terminal frame
+        // corruption — the decoder must surface it as QwpDecodeException so the query loop maps it to
+        // ProtocolViolation rather than reconnecting against a deterministically-corrupt frame.
+        var p = new List<byte> { QwpConstants.MsgKindResultBatch };
+        p.AddRange(new byte[8]);                          // request_id
+        p.AddRange(Enumerable.Repeat((byte)0x80, 11));    // batch_seq varint: 11 continuation bytes (overlong)
+
+        var decoder = new QwpResultBatchDecoder(new QwpEgressConnState());
+        var ex = Assert.Throws<QwpDecodeException>(() => decoder.Decode(p.ToArray(), 0, new QwpColumnBatch()));
+        StringAssert.Contains("varint", ex!.Message);
+    }
+
+    [Test]
+    public void Decode_GorillaTimestampBadFlag_ThrowsQwpDecodeExceptionNotIngressError()
+    {
+        // Regression (M3): QwpGorilla.DecodeToBytes flags an unknown encoding byte as the retryable
+        // ProtocolVersionError. Inside a RESULT_BATCH it must surface as QwpDecodeException.
+        var p = new List<byte> { QwpConstants.MsgKindResultBatch };
+        p.AddRange(new byte[8]);                  // request_id
+        p.Add(0x00);                              // batch_seq = 0
+        p.Add(0x00);                              // empty table name
+        p.Add(0x01);                              // row_count = 1
+        p.Add(0x01);                              // col_count = 1
+        p.Add(0x02); p.Add((byte)'t'); p.Add((byte)'s');
+        p.Add((byte)QwpTypeCode.Timestamp);
+        p.Add(0x00);                              // null_flag = 0 → nonNull = 1
+        p.Add(0x05);                              // Gorilla encoding flag: neither 0x00 nor 0x01
+
+        var decoder = new QwpResultBatchDecoder(new QwpEgressConnState());
+        var ex = Assert.Throws<QwpDecodeException>(() =>
+            decoder.Decode(p.ToArray(), QwpConstants.FlagGorilla, new QwpColumnBatch()));
+        StringAssert.Contains("Gorilla", ex!.Message);
+    }
+
+    [Test]
+    public void Decode_GorillaTimestampTruncatedBitstream_ThrowsQwpDecodeExceptionNotInvalidOperation()
+    {
+        // Regression (M3): a truncated Gorilla DoD bitstream makes QwpBitReader throw
+        // InvalidOperationException ("bit reader exhausted"). That, too, is terminal RESULT_BATCH
+        // corruption and must surface as QwpDecodeException, not leak the raw runtime exception.
+        var p = new List<byte> { QwpConstants.MsgKindResultBatch };
+        p.AddRange(new byte[8]);                  // request_id
+        p.Add(0x00);                              // batch_seq = 0
+        p.Add(0x00);                              // empty table name
+        p.Add(0x03);                              // row_count = 3
+        p.Add(0x01);                              // col_count = 1
+        p.Add(0x02); p.Add((byte)'t'); p.Add((byte)'s');
+        p.Add((byte)QwpTypeCode.Timestamp);
+        p.Add(0x00);                              // null_flag = 0 → nonNull = 3
+        p.Add(QwpGorilla.EncodingGorilla);        // 0x01
+        p.AddRange(new byte[8]);                  // first timestamp
+        p.AddRange(new byte[8]);                  // second timestamp
+        // no DoD bytes for the 3rd value → QwpBitReader runs off the end
+
+        var decoder = new QwpResultBatchDecoder(new QwpEgressConnState());
+        var ex = Assert.Throws<QwpDecodeException>(() =>
+            decoder.Decode(p.ToArray(), QwpConstants.FlagGorilla, new QwpColumnBatch()));
+        StringAssert.Contains("Gorilla", ex!.Message);
+    }
+
     private static void WriteVarintTo(List<byte> dst, ulong v)
     {
         while (v >= 0x80)

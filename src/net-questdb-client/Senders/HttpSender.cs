@@ -194,7 +194,8 @@ internal class HttpSender : AbstractSender
             Options.init_buf_size,
             Options.max_name_len,
             Options.max_buf_size,
-            protocolVersion
+            protocolVersion,
+            Options.convert_local_to_utc
         );
     }
 

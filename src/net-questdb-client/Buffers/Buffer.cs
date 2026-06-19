@@ -38,16 +38,18 @@ public static class Buffer
     /// <param name="maxNameLen">Maximum allowed length for names stored in the buffer.</param>
     /// <param name="maxBufSize">Maximum total buffer capacity.</param>
     /// <param name="version">Protocol version that determines which concrete buffer implementation to create.</param>
+    /// <param name="convertLocalToUtc">When true, <see cref="DateTimeKind.Local" /> timestamps are converted to UTC before encoding.</param>
     /// <returns>An <see cref="IBuffer"/> instance corresponding to the specified protocol version.</returns>
     /// <exception cref="NotImplementedException">Thrown when an unsupported protocol version is provided.</exception>
-    public static IBuffer Create(int bufferSize, int maxNameLen, int maxBufSize, ProtocolVersion version)
+    public static IBuffer Create(int bufferSize, int maxNameLen, int maxBufSize, ProtocolVersion version,
+        bool convertLocalToUtc = false)
     {
         return version switch
         {
-            ProtocolVersion.V1 => new BufferV1(bufferSize, maxNameLen, maxBufSize),
-            ProtocolVersion.V2 => new BufferV2(bufferSize, maxNameLen, maxBufSize),
-            ProtocolVersion.V3 => new BufferV3(bufferSize, maxNameLen, maxBufSize),
-            ProtocolVersion.Auto => new BufferV3(bufferSize, maxNameLen, maxBufSize),
+            ProtocolVersion.V1 => new BufferV1(bufferSize, maxNameLen, maxBufSize, convertLocalToUtc),
+            ProtocolVersion.V2 => new BufferV2(bufferSize, maxNameLen, maxBufSize, convertLocalToUtc),
+            ProtocolVersion.V3 => new BufferV3(bufferSize, maxNameLen, maxBufSize, convertLocalToUtc),
+            ProtocolVersion.Auto => new BufferV3(bufferSize, maxNameLen, maxBufSize, convertLocalToUtc),
             _ => throw new NotImplementedException(),
         };
     }

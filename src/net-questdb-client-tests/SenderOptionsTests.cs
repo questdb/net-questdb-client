@@ -72,7 +72,7 @@ public class SenderOptionsTests
     {
         Assert.That(
             new SenderOptions("http::addr=localhost:9000;").ToString()
-          , Is.EqualTo("http::addr=localhost:9000;auth_timeout=15000;auto_flush=on;auto_flush_bytes=2147483647;auto_flush_interval=1000;auto_flush_rows=75000;gzip=False;init_buf_size=65536;max_buf_size=104857600;max_name_len=127;pool_timeout=120000;protocol_version=Auto;request_min_throughput=102400;request_timeout=30000;retry_timeout=10000;tls_verify=on;"));
+          , Is.EqualTo("http::addr=localhost:9000;auth_timeout=15000;auto_flush=on;auto_flush_bytes=2147483647;auto_flush_interval=1000;auto_flush_rows=75000;convert_local_to_utc=off;gzip=False;init_buf_size=65536;max_buf_size=104857600;max_name_len=127;pool_timeout=120000;protocol_version=Auto;request_min_throughput=102400;request_timeout=30000;retry_timeout=10000;tls_verify=on;"));
     }
 
     [Test]
@@ -94,7 +94,7 @@ public class SenderOptionsTests
 
         Assert.That(senderOptions.ToString(),
                     Is.EqualTo(
-                        "http::addr=localhost:9000;auth_timeout=15000;auto_flush=on;auto_flush_bytes=-1;auto_flush_interval=-1;auto_flush_rows=-1;gzip=False;init_buf_size=65536;max_buf_size=104857600;max_name_len=127;pool_timeout=120000;protocol_version=Auto;request_min_throughput=102400;request_timeout=30000;retry_timeout=10000;tls_verify=on;"));
+                        "http::addr=localhost:9000;auth_timeout=15000;auto_flush=on;auto_flush_bytes=-1;auto_flush_interval=-1;auto_flush_rows=-1;convert_local_to_utc=off;gzip=False;init_buf_size=65536;max_buf_size=104857600;max_name_len=127;pool_timeout=120000;protocol_version=Auto;request_min_throughput=102400;request_timeout=30000;retry_timeout=10000;tls_verify=on;"));
     }
 
     [Test]
@@ -123,6 +123,39 @@ public class SenderOptionsTests
     {
         var senderOptions = new SenderOptions("http::addr=localhost:9000;gzip=true;");
         Assert.That(senderOptions.ToString(), Does.Contain("gzip=True"));
+    }
+
+    [Test]
+    public void ConvertLocalToUtcDefaultFalse()
+    {
+        Assert.That(new SenderOptions("http::addr=localhost:9000;").convert_local_to_utc, Is.False);
+    }
+
+    [Test]
+    [TestCase("http::addr=localhost:9000;convert_local_to_utc=on;")]
+    [TestCase("tcp::addr=localhost:9009;convert_local_to_utc=on;")]
+    [TestCase("ws::addr=localhost:9000;convert_local_to_utc=on;")]
+    public void ConvertLocalToUtcAcceptedOnAllIngestSchemes(string confStr)
+    {
+        Assert.That(new SenderOptions(confStr).convert_local_to_utc, Is.True);
+    }
+
+    [Test]
+    public void ConvertLocalToUtcOffParses()
+    {
+        Assert.That(new SenderOptions("http::addr=localhost:9000;convert_local_to_utc=off;").convert_local_to_utc,
+            Is.False);
+    }
+
+    [Test]
+    public void ConvertLocalToUtcRoundTripsViaToString()
+    {
+        var original = new SenderOptions("http::addr=localhost:9000;convert_local_to_utc=on;");
+        // Emit the on/off config token, not the CLR bool literal (which would round-trip but
+        // re-introduce true/false vocabulary into the connect string).
+        Assert.That(original.ToString(), Does.Contain("convert_local_to_utc=on"));
+        var roundTripped = new SenderOptions(original.ToString());
+        Assert.That(roundTripped.convert_local_to_utc, Is.True);
     }
 
     [Test]
@@ -192,7 +225,7 @@ public class SenderOptionsTests
         Assert.That(opts.reconnect_initial_backoff_millis, Is.EqualTo(TimeSpan.FromMilliseconds(100)));
         Assert.That(opts.reconnect_max_backoff_millis, Is.EqualTo(TimeSpan.FromSeconds(5)));
         Assert.That(opts.initial_connect_retry, Is.False);
-        Assert.That(opts.close_flush_timeout_millis, Is.EqualTo(TimeSpan.FromSeconds(5)));
+        Assert.That(opts.close_flush_timeout_millis, Is.EqualTo(TimeSpan.FromSeconds(60)));
         Assert.That(opts.drain_orphans, Is.False);
         Assert.That(opts.max_background_drainers, Is.EqualTo(4));
     }

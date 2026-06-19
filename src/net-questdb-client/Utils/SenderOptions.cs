@@ -62,6 +62,7 @@ public record SenderOptions
     private int _autoFlushRows = 75000;
     private bool _autoFlushRowsUserSet;
     private DbConnectionStringBuilder? _connectionStringBuilder;
+    private bool _convertLocalToUtc;
     private bool _gzip;
     private int _initBufSize = 65536;
     private int _maxBufSize = 104857600;
@@ -94,7 +95,7 @@ public record SenderOptions
     private TimeSpan _reconnectInitialBackoff = TimeSpan.FromMilliseconds(100);
     private TimeSpan _reconnectMaxBackoff = TimeSpan.FromMilliseconds(5000);
     private InitialConnectMode _initialConnectMode = InitialConnectMode.off;
-    private TimeSpan _closeFlushTimeout = TimeSpan.FromMilliseconds(5000);
+    private TimeSpan _closeFlushTimeout = TimeSpan.FromMilliseconds(60000);
     private bool _drainOrphans;
     private int _maxBackgroundDrainers = 4;
     private TimeSpan _pingTimeout = TimeSpan.FromMilliseconds(5000);
@@ -223,6 +224,7 @@ public record SenderOptions
         ParseStringWithDefault(nameof(tls_roots), null, out _tlsRoots);
         ParseStringWithDefault(nameof(tls_roots_password), null, out _tlsRootsPassword);
         ParseBoolWithDefault(nameof(own_socket), "true", out _ownSocket);
+        ParseBoolOnOff(nameof(convert_local_to_utc), "off", out _convertLocalToUtc);
 
         // WebSocket / QWP knobs. Parsed unconditionally; ValidateWebSocketKeys throws if any
         // appear with a non-WebSocket scheme.
@@ -253,7 +255,7 @@ public record SenderOptions
         ParseMillisecondsWithDefault(nameof(reconnect_max_backoff_millis), "5000", out _reconnectMaxBackoff);
         _initialConnectMode = ParseInitialConnectMode(
             ReadOptionFromBuilder(nameof(initial_connect_retry)));
-        ParseMillisecondsWithDefault(nameof(close_flush_timeout_millis), "5000", out _closeFlushTimeout);
+        ParseMillisecondsWithDefault(nameof(close_flush_timeout_millis), "60000", out _closeFlushTimeout);
         ParseBoolOnOff(nameof(drain_orphans), "off", out _drainOrphans);
         ParseIntWithDefault(nameof(max_background_drainers), "4", out _maxBackgroundDrainers);
         ParseMillisecondsWithDefault(nameof(ping_timeout), "5000", out _pingTimeout);
@@ -296,6 +298,19 @@ public record SenderOptions
         "token_x",
         "token_y",
         "auth_timeout",
+    };
+
+    /// <summary>
+    ///     Boolean keys whose documented vocabulary is <c>on</c> / <c>off</c> (parsed via
+    ///     <see cref="ParseBoolOnOff" />). <see cref="ToString" /> emits these as <c>on</c>/<c>off</c>
+    ///     rather than the CLR <c>True</c>/<c>False</c> literal so the output speaks the same tokens
+    ///     the parser documents. Keep in sync with the <see cref="ParseBoolOnOff" /> call sites.
+    /// </summary>
+    private static readonly string[] OnOffBoolKeys =
+    {
+        nameof(convert_local_to_utc),
+        nameof(request_durable_ack),
+        nameof(drain_orphans),
     };
 
     private static readonly HashSet<string> KnownConnectStringKeys = BuildKnownConnectStringKeys();
@@ -908,6 +923,20 @@ public record SenderOptions
     }
 
     /// <summary>
+    ///     When <c>true</c>, a <see cref="DateTime" /> with <see cref="DateTimeKind.Local" /> kind is
+    ///     converted to UTC (via <see cref="DateTime.ToUniversalTime" />) before its wire timestamp is
+    ///     computed; <see cref="DateTimeKind.Utc" /> and <see cref="DateTimeKind.Unspecified" /> values
+    ///     are written unchanged. Defaults to <c>false</c>, which writes the raw wall-clock ticks of a
+    ///     local value as-is (i.e. as though it were UTC). Applies to every ingest transport
+    ///     (HTTP / TCP / WS); <see cref="DateTimeOffset" /> values are timezone-aware and unaffected.
+    /// </summary>
+    public bool convert_local_to_utc
+    {
+        get => _convertLocalToUtc;
+        set => _convertLocalToUtc = value;
+    }
+
+    /// <summary>
     ///     Initial buffer size for the ILP rows in bytes.
     ///     Defaults to <c>64 KiB</c>.
     /// </summary>
@@ -1347,7 +1376,8 @@ public record SenderOptions
 
     /// <summary>
     ///     Maximum time to wait for unacked SF frames to drain on <c>Sender.Dispose</c>.
-    ///     Defaults to 5 s.
+    ///     Defaults to 60 s, matching the Java client — a wide default so close() does not
+    ///     silently drop unacked rows on slow/backlogged consumers.
     /// </summary>
     public TimeSpan close_flush_timeout_millis
     {
@@ -1882,6 +1912,11 @@ public record SenderOptions
                 // Cast to long-millis for round-trip safety; the parser is integer-valued.
                 builder.Add(emitName,
                     ((long)span.TotalMilliseconds).ToString(System.Globalization.CultureInfo.InvariantCulture));
+            }
+            else if (value is bool onOff && Array.IndexOf(OnOffBoolKeys, prop.Name) >= 0)
+            {
+                // Emit the on/off vocabulary the parser documents, not the CLR True/False literal.
+                builder.Add(emitName, onOff ? "on" : "off");
             }
             else if (value is IFormattable formattable)
             {

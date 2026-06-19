@@ -66,6 +66,8 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
     private readonly Dictionary<string, long> _durableSeqTxn = new(StringComparer.Ordinal);
     private readonly object _seqTxnLock = new();
 
+    private readonly bool _convertLocalToUtc;
+
     private QwpTableBuffer? _currentTable;
     private int _disposed;
     private int _runningRowCount;
@@ -81,6 +83,8 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
             throw new IngressError(ErrorCode.ConfigError,
                 $"protocol must be ws or wss for {nameof(QwpWebSocketSender)}, got {options.protocol}");
         }
+
+        _convertLocalToUtc = options.convert_local_to_utc;
 
         _symbolDictionary = new QwpSymbolDictionary();
 #if NET9_0_OR_GREATER
@@ -1143,9 +1147,9 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
             $"batch too large for server batch cap [messageSize={messageSize}, serverMaxBatchSize={cap}, droppedRows={droppedRows}]");
     }
 
-    private static long DateTimeToMicros(DateTime value)
+    private long DateTimeToMicros(DateTime value)
     {
-        var utc = value.Kind == DateTimeKind.Local ? value.ToUniversalTime() : value;
+        var utc = _convertLocalToUtc && value.Kind == DateTimeKind.Local ? value.ToUniversalTime() : value;
         return (utc - DateTime.UnixEpoch).Ticks / TicksPerMicrosecond;
     }
 

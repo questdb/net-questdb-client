@@ -33,6 +33,7 @@ namespace net_questdb_client_tests;
 ///     Requires Docker to be installed and running.
 /// </summary>
 [TestFixture]
+public class QuestDbIntegrationTests
 {
     [OneTimeSetUp]
     public async Task SetUpFixture()

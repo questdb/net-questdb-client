@@ -247,8 +247,8 @@ public class QuestDbQueryIntegrationTests
         }
 
         public override void OnEnd(long totalRows) => Ended = true;
-        public override void OnExecDone(byte opType, long rowsAffected) => ExecDoneObserved = true;
-        public override void OnError(byte status, string message) => LastErrorStatus = status;
+        public override void OnExecDone(QwpOpType opType, long rowsAffected) => ExecDoneObserved = true;
+        public override void OnError(QwpStatusCode status, string message) => LastErrorStatus = (byte)status;
 
         public long[] AllLongs(int colIndex)
         {

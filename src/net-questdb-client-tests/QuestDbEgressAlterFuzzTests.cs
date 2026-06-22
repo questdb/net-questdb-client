@@ -325,7 +325,7 @@ public class QuestDbEgressAlterFuzzTests
             }
         }
 
-        public override void OnError(byte status, string message)
+        public override void OnError(QwpStatusCode status, string message)
             => Assert.Fail($"unexpected egress error: status={status}, msg={message}");
 
         private static object ExtractCell(QwpColumnBatch batch, int c, int r) => batch.GetColumnWireType(c) switch

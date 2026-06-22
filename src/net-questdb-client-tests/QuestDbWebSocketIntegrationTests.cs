@@ -512,7 +512,7 @@ public class QuestDbWebSocketIntegrationTests
 
         public override void OnBatch(QwpColumnBatch batch) => Batch = batch;
         public override void OnEnd(long totalRows) => Ended = true;
-        public override void OnError(byte status, string message) =>
+        public override void OnError(QwpStatusCode status, string message) =>
             Assert.Fail($"unexpected egress error: status={status}, msg={message}");
     }
 

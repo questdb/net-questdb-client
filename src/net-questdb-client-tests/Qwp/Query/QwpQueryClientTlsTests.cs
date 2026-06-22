@@ -143,11 +143,11 @@ public class QwpQueryClientTlsTests
             Ended = true;
         }
 
-        public override void OnError(byte status, string message)
+        public override void OnError(QwpStatusCode status, string message)
         {
         }
 
-        public override void OnExecDone(byte opType, long rowsAffected)
+        public override void OnExecDone(QwpOpType opType, long rowsAffected)
         {
         }
     }

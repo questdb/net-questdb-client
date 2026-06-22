@@ -22,13 +22,15 @@
  *
  ******************************************************************************/
 
+using QuestDB.Enums;
+
 namespace QuestDB.Qwp.Query;
 
 /// <summary>Decoded SERVER_INFO frame (v2 only).</summary>
 public sealed class QwpServerInfo
 {
-    /// <summary>Server role byte; see <c>QwpConstants.Role*</c> for the defined values.</summary>
-    public byte Role { get; init; }
+    /// <summary>Server role; unrecognised wire codes surface as an unnamed <see cref="QwpRole" /> value.</summary>
+    public QwpRole Role { get; init; }
     /// <summary>Server epoch advanced on every primary/replica failover; lets the client detect topology changes.</summary>
     public ulong Epoch { get; init; }
     /// <summary>Bitmask of optional features advertised by the server.</summary>
@@ -49,10 +51,10 @@ public sealed class QwpServerInfo
     /// <summary>Human-readable name of <see cref="Role" />; <c>UNKNOWN(n)</c> for unrecognised codes.</summary>
     public string RoleName => Role switch
     {
-        QwpConstants.RoleStandalone => "STANDALONE",
-        QwpConstants.RolePrimary => "PRIMARY",
-        QwpConstants.RoleReplica => "REPLICA",
-        QwpConstants.RolePrimaryCatchup => "PRIMARY_CATCHUP",
-        _ => $"UNKNOWN({Role})",
+        QwpRole.Standalone => "STANDALONE",
+        QwpRole.Primary => "PRIMARY",
+        QwpRole.Replica => "REPLICA",
+        QwpRole.PrimaryCatchup => "PRIMARY_CATCHUP",
+        _ => $"UNKNOWN({(byte)Role})",
     };
 }

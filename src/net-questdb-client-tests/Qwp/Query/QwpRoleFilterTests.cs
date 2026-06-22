@@ -26,7 +26,6 @@
 
 using NUnit.Framework;
 using QuestDB.Enums;
-using QuestDB.Qwp;
 using QuestDB.Qwp.Query;
 
 namespace net_questdb_client_tests.Qwp.Query;
@@ -34,54 +33,54 @@ namespace net_questdb_client_tests.Qwp.Query;
 [TestFixture]
 public class QwpRoleFilterTests
 {
-    [TestCase(QwpConstants.RoleStandalone)]
-    [TestCase(QwpConstants.RolePrimary)]
-    [TestCase(QwpConstants.RoleReplica)]
-    [TestCase(QwpConstants.RolePrimaryCatchup)]
-    public void Any_AcceptsSpecDefinedRoleBytes(byte role)
+    [TestCase(QwpRole.Standalone)]
+    [TestCase(QwpRole.Primary)]
+    [TestCase(QwpRole.Replica)]
+    [TestCase(QwpRole.PrimaryCatchup)]
+    public void Any_AcceptsSpecDefinedRoleBytes(QwpRole role)
     {
         Assert.That(QwpQueryWebSocketClient.RoleMatchesTarget(role, TargetType.any), Is.True);
     }
 
-    [TestCase((byte)0x04)]
-    [TestCase((byte)0x7F)]
-    [TestCase((byte)0xFF)]
-    public void Any_RejectsUnknownRoleByte_SoFutureServerBugsAreLoud(byte role)
+    [TestCase((QwpRole)0x04)]
+    [TestCase((QwpRole)0x7F)]
+    [TestCase((QwpRole)0xFF)]
+    public void Any_RejectsUnknownRoleByte_SoFutureServerBugsAreLoud(QwpRole role)
     {
         // target=any silently accepting any byte was masking buggy or future-protocol servers
-        // as "matches anything"; only the four defined role bytes (0x00..0x03) are allowed.
+        // as "matches anything"; only the four defined roles (0x00..0x03) are allowed.
         Assert.That(QwpQueryWebSocketClient.RoleMatchesTarget(role, TargetType.any), Is.False);
     }
 
-    [TestCase(QwpConstants.RoleStandalone, true)]
-    [TestCase(QwpConstants.RolePrimary, true)]
-    [TestCase(QwpConstants.RolePrimaryCatchup, true)]
-    [TestCase(QwpConstants.RoleReplica, false)]
-    public void Primary_AcceptsStandalonePrimaryAndCatchup(byte role, bool expected)
+    [TestCase(QwpRole.Standalone, true)]
+    [TestCase(QwpRole.Primary, true)]
+    [TestCase(QwpRole.PrimaryCatchup, true)]
+    [TestCase(QwpRole.Replica, false)]
+    public void Primary_AcceptsStandalonePrimaryAndCatchup(QwpRole role, bool expected)
     {
         Assert.That(QwpQueryWebSocketClient.RoleMatchesTarget(role, TargetType.primary), Is.EqualTo(expected));
     }
 
-    [TestCase(QwpConstants.RoleStandalone, false)]
-    [TestCase(QwpConstants.RolePrimary, false)]
-    [TestCase(QwpConstants.RolePrimaryCatchup, false)]
-    [TestCase(QwpConstants.RoleReplica, true)]
-    public void Replica_AcceptsReplicaOnly(byte role, bool expected)
+    [TestCase(QwpRole.Standalone, false)]
+    [TestCase(QwpRole.Primary, false)]
+    [TestCase(QwpRole.PrimaryCatchup, false)]
+    [TestCase(QwpRole.Replica, true)]
+    public void Replica_AcceptsReplicaOnly(QwpRole role, bool expected)
     {
         Assert.That(QwpQueryWebSocketClient.RoleMatchesTarget(role, TargetType.replica), Is.EqualTo(expected));
     }
 
-    [TestCase("PRIMARY", QwpConstants.RolePrimary)]
-    [TestCase("primary", QwpConstants.RolePrimary)]
-    [TestCase("Primary", QwpConstants.RolePrimary)]
-    [TestCase("REPLICA", QwpConstants.RoleReplica)]
-    [TestCase("replica", QwpConstants.RoleReplica)]
-    [TestCase("STANDALONE", QwpConstants.RoleStandalone)]
-    [TestCase("standalone", QwpConstants.RoleStandalone)]
-    [TestCase("PRIMARY_CATCHUP", QwpConstants.RolePrimaryCatchup)]
-    [TestCase("Primary_Catchup", QwpConstants.RolePrimaryCatchup)]
-    [TestCase("primary_catchup", QwpConstants.RolePrimaryCatchup)]
-    public void MapRoleName_IsCaseInsensitive(string role, byte expected)
+    [TestCase("PRIMARY", QwpRole.Primary)]
+    [TestCase("primary", QwpRole.Primary)]
+    [TestCase("Primary", QwpRole.Primary)]
+    [TestCase("REPLICA", QwpRole.Replica)]
+    [TestCase("replica", QwpRole.Replica)]
+    [TestCase("STANDALONE", QwpRole.Standalone)]
+    [TestCase("standalone", QwpRole.Standalone)]
+    [TestCase("PRIMARY_CATCHUP", QwpRole.PrimaryCatchup)]
+    [TestCase("Primary_Catchup", QwpRole.PrimaryCatchup)]
+    [TestCase("primary_catchup", QwpRole.PrimaryCatchup)]
+    public void MapRoleName_IsCaseInsensitive(string role, QwpRole expected)
     {
         // QwpIngressRoleRejectedException carries the X-QuestDB-Role header verbatim; matching
         // case-sensitively (the old code) silently dropped well-formed but mixed-case responses
@@ -94,7 +93,7 @@ public class QwpRoleFilterTests
     [TestCase("UNKNOWN")]
     public void MapRoleName_UnknownStringReturnsSentinel(string? role)
     {
-        Assert.That(QwpQueryWebSocketClient.MapRoleName(role), Is.EqualTo(byte.MaxValue));
+        Assert.That(QwpQueryWebSocketClient.MapRoleName(role), Is.EqualTo(QwpRole.Undefined));
     }
 }
 

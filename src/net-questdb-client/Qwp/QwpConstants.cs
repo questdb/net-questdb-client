@@ -147,12 +147,6 @@ internal static class QwpConstants
     /// <summary>CACHE_RESET reset_mask bits. Bit 0 = SYMBOL dict is the only bit defined.</summary>
     public const byte ResetMaskDict = 0x01;
 
-    /// <summary>SERVER_INFO role bytes.</summary>
-    public const byte RoleStandalone = 0x00;
-    public const byte RolePrimary = 0x01;
-    public const byte RoleReplica = 0x02;
-    public const byte RolePrimaryCatchup = 0x03;
-
     /// <summary>SERVER_INFO capabilities bits. <c>CapZone</c> = server appends zone_id_len+zone_id after node_id.</summary>
     public const uint CapZone = 0x00000001;
 

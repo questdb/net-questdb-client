@@ -92,7 +92,7 @@ public class QwpEgressFragmentationFuzzTests
     private static async Task<DummyQwpServer> StartMockAsync(int rows, int fragmentSize)
     {
         var serverInfo = QwpEgressFrameBuilder.BuildServerInfo(
-            role: QwpConstants.RoleStandalone,
+            role: QwpRole.Standalone,
             epoch: 0UL,
             capabilities: 0,
             serverWallNs: 0,

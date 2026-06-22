@@ -45,7 +45,7 @@ internal static class QwpEgressFrameBuilder
         WriteI64Le(payload, requestId);
         WriteVarint(payload, (ulong)batchSeq);
 
-        var flags = QwpConstants.FlagDeltaSymbolDict;
+        var flags                 = QwpConstants.FlagDeltaSymbolDict;
         if (gorillaEnabled) flags |= QwpConstants.FlagGorilla;
 
         if (symbolDict is not null)
@@ -83,7 +83,7 @@ internal static class QwpEgressFrameBuilder
     public static byte[] BuildQueryError(long requestId, byte status, string message)
     {
         var msgBytes = Encoding.UTF8.GetBytes(message);
-        var payload = new MemoryStream();
+        var payload  = new MemoryStream();
         payload.WriteByte(QwpConstants.MsgKindQueryError);
         WriteI64Le(payload, requestId);
         payload.WriteByte(status);
@@ -106,7 +106,10 @@ internal static class QwpEgressFrameBuilder
 
     public static byte[] BuildCacheReset(byte resetMask)
     {
-        var payload = new byte[] { QwpConstants.MsgKindCacheReset, resetMask };
+        var payload = new byte[]
+        {
+            QwpConstants.MsgKindCacheReset, resetMask
+        };
         return WrapFrame(flags: 0, tableCount: 0, payload);
     }
 
@@ -116,18 +119,18 @@ internal static class QwpEgressFrameBuilder
         var existingPayloadLen = (int)BinaryPrimitives.ReadUInt32LittleEndian(
             uncompressedFrame.AsSpan(QwpConstants.OffsetPayloadLength, 4));
         var existingFlags = uncompressedFrame[QwpConstants.OffsetFlags];
-        var payload = uncompressedFrame.AsSpan(QwpConstants.HeaderSize, existingPayloadLen);
+        var payload       = uncompressedFrame.AsSpan(QwpConstants.HeaderSize, existingPayloadLen);
 
         QwpVarint.Read(payload.Slice(9), out var seqVarintLen);
         var preludeLen = 1 + 8 + seqVarintLen;
 
-        using var compressor = new ZstdSharp.Compressor(level: 3);
-        var rawBody = payload.Slice(preludeLen).ToArray();
-        var compressedBody = new byte[ZstdSharp.Compressor.GetCompressBound(rawBody.Length)];
-        var written = compressor.Wrap(rawBody, compressedBody);
+        using var compressor     = new ZstdSharp.Compressor(level: 3);
+        var       rawBody        = payload.Slice(preludeLen).ToArray();
+        var       compressedBody = new byte[ZstdSharp.Compressor.GetCompressBound(rawBody.Length)];
+        var       written        = compressor.Wrap(rawBody, compressedBody);
 
         var newPayloadLen = preludeLen + written;
-        var newPayload = new byte[newPayloadLen];
+        var newPayload    = new byte[newPayloadLen];
         payload.Slice(0, preludeLen).CopyTo(newPayload);
         compressedBody.AsSpan(0, written).CopyTo(newPayload.AsSpan(preludeLen));
 
@@ -137,14 +140,14 @@ internal static class QwpEgressFrameBuilder
     }
 #endif
 
-    public static byte[] BuildServerInfo(byte role, ulong epoch, uint capabilities, long serverWallNs,
-        string clusterId, string nodeId, string? zoneId = null)
+    public static byte[] BuildServerInfo(QwpRole role, ulong epoch, uint capabilities, long serverWallNs,
+                                         string clusterId, string nodeId, string? zoneId = null)
     {
         var clusterBytes = Encoding.UTF8.GetBytes(clusterId);
-        var nodeBytes = Encoding.UTF8.GetBytes(nodeId);
-        var payload = new MemoryStream();
+        var nodeBytes    = Encoding.UTF8.GetBytes(nodeId);
+        var payload      = new MemoryStream();
         payload.WriteByte(QwpConstants.MsgKindServerInfo);
-        payload.WriteByte(role);
+        payload.WriteByte((byte)role);
         WriteU64Le(payload, epoch);
         WriteU32Le(payload, capabilities);
         WriteI64Le(payload, serverWallNs);
@@ -158,6 +161,7 @@ internal static class QwpEgressFrameBuilder
             WriteU16Le(payload, (ushort)zoneBytes.Length);
             payload.Write(zoneBytes, 0, zoneBytes.Length);
         }
+
         return WrapFrame(flags: 0, tableCount: 0, payload.ToArray());
     }
 
@@ -166,7 +170,7 @@ internal static class QwpEgressFrameBuilder
         var frame = new byte[QwpConstants.HeaderSize + payload.Length];
         BinaryPrimitives.WriteUInt32LittleEndian(frame.AsSpan(QwpConstants.OffsetMagic, 4), QwpConstants.Magic);
         frame[QwpConstants.OffsetVersion] = QwpConstants.SupportedVersion;
-        frame[QwpConstants.OffsetFlags] = flags;
+        frame[QwpConstants.OffsetFlags]   = flags;
         BinaryPrimitives.WriteUInt16LittleEndian(frame.AsSpan(QwpConstants.OffsetTableCount, 2), tableCount);
         BinaryPrimitives.WriteUInt32LittleEndian(frame.AsSpan(QwpConstants.OffsetPayloadLength, 4), (uint)payload.Length);
         Buffer.BlockCopy(payload, 0, frame, QwpConstants.HeaderSize, payload.Length);
@@ -201,7 +205,7 @@ internal static class QwpEgressFrameBuilder
     private static void WriteVarint(MemoryStream s, ulong value)
     {
         Span<byte> buf = stackalloc byte[10];
-        var n = QwpVarint.Write(buf, value);
+        var        n   = QwpVarint.Write(buf, value);
         s.Write(buf.Slice(0, n));
     }
 
@@ -271,6 +275,7 @@ internal abstract class TestColumnData
             {
                 throw new InvalidOperationException("null bitmap too short");
             }
+
             s.Write(NullBitmap, 0, expected);
         }
 
@@ -304,11 +309,12 @@ internal sealed class TimestampColumnData : TestColumnData
                 BinaryPrimitives.WriteInt64LittleEndian(buf, v);
                 s.Write(buf);
             }
+
             return;
         }
 
         var dest = new byte[QwpGorilla.MaxEncodedSize(DenseValues.Length)];
-        var n = QwpGorilla.Encode(dest, DenseValues);
+        var n    = QwpGorilla.Encode(dest, DenseValues);
         s.Write(dest, 0, n);
     }
 }
@@ -319,11 +325,11 @@ internal sealed class VarcharColumnData : TestColumnData
 
     protected override void WriteValueRegion(MemoryStream s, QwpTypeCode wireType, bool gorillaEnabled)
     {
-        var bytes = new byte[DenseValues.Length][];
+        var bytes    = new byte[DenseValues.Length][];
         var totalLen = 0;
         for (var i = 0; i < DenseValues.Length; i++)
         {
-            bytes[i] = Encoding.UTF8.GetBytes(DenseValues[i]);
+            bytes[i] =  Encoding.UTF8.GetBytes(DenseValues[i]);
             totalLen += bytes[i].Length;
         }
 
@@ -339,6 +345,7 @@ internal sealed class VarcharColumnData : TestColumnData
             BinaryPrimitives.WriteInt32LittleEndian(intBuf, offsets[i]);
             s.Write(intBuf);
         }
+
         for (var i = 0; i < DenseValues.Length; i++)
         {
             s.Write(bytes[i], 0, bytes[i].Length);
@@ -364,6 +371,7 @@ internal sealed class BinaryColumnData : TestColumnData
             BinaryPrimitives.WriteInt32LittleEndian(intBuf, offsets[i]);
             s.Write(intBuf);
         }
+
         for (var i = 0; i < DenseValues.Length; i++)
         {
             s.Write(DenseValues[i], 0, DenseValues[i].Length);
@@ -406,7 +414,7 @@ internal sealed class GeohashColumnData : TestColumnData
     protected override void WriteValueRegion(MemoryStream s, QwpTypeCode wireType, bool gorillaEnabled)
     {
         Span<byte> buf = stackalloc byte[10];
-        var n = QwpVarint.Write(buf, (ulong)PrecisionBits);
+        var        n   = QwpVarint.Write(buf, (ulong)PrecisionBits);
         s.Write(buf.Slice(0, n));
         s.Write(DenseBytes, 0, DenseBytes.Length);
     }
@@ -419,7 +427,7 @@ internal sealed class DoubleArrayColumnData : TestColumnData
     protected override void WriteValueRegion(MemoryStream s, QwpTypeCode wireType, bool gorillaEnabled)
     {
         Span<byte> dim = stackalloc byte[4];
-        Span<byte> v = stackalloc byte[8];
+        Span<byte> v   = stackalloc byte[8];
         foreach (var (shape, values) in DenseArrays)
         {
             s.WriteByte((byte)shape.Length);
@@ -428,6 +436,7 @@ internal sealed class DoubleArrayColumnData : TestColumnData
                 BinaryPrimitives.WriteInt32LittleEndian(dim, d);
                 s.Write(dim);
             }
+
             foreach (var x in values)
             {
                 BinaryPrimitives.WriteInt64LittleEndian(v, BitConverter.DoubleToInt64Bits(x));
@@ -444,7 +453,7 @@ internal sealed class LongArrayColumnData : TestColumnData
     protected override void WriteValueRegion(MemoryStream s, QwpTypeCode wireType, bool gorillaEnabled)
     {
         Span<byte> dim = stackalloc byte[4];
-        Span<byte> v = stackalloc byte[8];
+        Span<byte> v   = stackalloc byte[8];
         foreach (var (shape, values) in DenseArrays)
         {
             s.WriteByte((byte)shape.Length);
@@ -453,6 +462,7 @@ internal sealed class LongArrayColumnData : TestColumnData
                 BinaryPrimitives.WriteInt32LittleEndian(dim, d);
                 s.Write(dim);
             }
+
             foreach (var x in values)
             {
                 BinaryPrimitives.WriteInt64LittleEndian(v, x);

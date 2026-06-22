@@ -27,6 +27,7 @@
 using System.Text.Json;
 using NUnit.Framework;
 using QuestDB;
+using QuestDB.Enums;
 using QuestDB.Qwp;
 using QuestDB.Qwp.Query;
 using QuestDB.Senders;
@@ -259,7 +260,7 @@ public class QuestDbEgressFragmentationFuzzTests
             RowCount += batch.RowCount;
         }
 
-        public override void OnError(byte status, string message)
+        public override void OnError(QwpStatusCode status, string message)
             => Assert.Fail($"unexpected egress error: status={status}, msg={message}");
     }
 }

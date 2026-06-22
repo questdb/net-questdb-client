@@ -122,7 +122,7 @@ public class QwpQueryClientEndToEndTests
     public async Task V2ServerInfo_IsConsumedAtConnect_AndExposedViaServerInfo()
     {
         var serverInfo = QwpEgressFrameBuilder.BuildServerInfo(
-            role: QwpConstants.RolePrimary,
+            role: QwpRole.Primary,
             epoch: 7UL,
             capabilities: 0,
             serverWallNs: 1_700_000_000_000_000_000L,
@@ -146,7 +146,7 @@ public class QwpQueryClientEndToEndTests
         using var client = QueryClient.New(BuildConnString(server, "target=primary;"));
 
         Assert.That(client.ServerInfo, Is.Not.Null);
-        Assert.That(client.ServerInfo!.Role, Is.EqualTo(QwpConstants.RolePrimary));
+        Assert.That(client.ServerInfo!.Role, Is.EqualTo(QwpRole.Primary));
         Assert.That(client.ServerInfo.RoleName, Is.EqualTo("PRIMARY"));
         Assert.That(client.ServerInfo.Epoch, Is.EqualTo(7UL));
         Assert.That(client.ServerInfo.ClusterId, Is.EqualTo("qdb-prod"));
@@ -161,7 +161,7 @@ public class QwpQueryClientEndToEndTests
     public async Task V2ServerInfo_TrailingBytes_FromUnknownCapBit_AreIgnored()
     {
         var baseFrame = QwpEgressFrameBuilder.BuildServerInfo(
-            role: QwpConstants.RolePrimary,
+            role: QwpRole.Primary,
             epoch: 1UL,
             capabilities: 0,
             serverWallNs: 0L,
@@ -194,7 +194,7 @@ public class QwpQueryClientEndToEndTests
 
         using var client = QueryClient.New(BuildConnString(server, "target=primary;"));
         Assert.That(client.ServerInfo, Is.Not.Null);
-        Assert.That(client.ServerInfo!.Role, Is.EqualTo(QwpConstants.RolePrimary));
+        Assert.That(client.ServerInfo!.Role, Is.EqualTo(QwpRole.Primary));
         Assert.That(client.ServerInfo.NodeId, Is.EqualTo("n"));
     }
 
@@ -202,7 +202,7 @@ public class QwpQueryClientEndToEndTests
     public async Task V2ServerInfo_WithCapZone_ExposesZoneId()
     {
         var serverInfo = QwpEgressFrameBuilder.BuildServerInfo(
-            role: QwpConstants.RolePrimary,
+            role: QwpRole.Primary,
             epoch: 1UL,
             capabilities: QwpConstants.CapZone,
             serverWallNs: 0L,
@@ -239,9 +239,9 @@ public class QwpQueryClientEndToEndTests
         var end = QwpEgressFrameBuilder.BuildResultEnd(1L, 0L, 1L);
 
         var infoWest = QwpEgressFrameBuilder.BuildServerInfo(
-            QwpConstants.RolePrimary, 1UL, QwpConstants.CapZone, 0L, "c", "node-west", "us-west-2");
+            QwpRole.Primary, 1UL, QwpConstants.CapZone, 0L, "c", "node-west", "us-west-2");
         var infoEast = QwpEgressFrameBuilder.BuildServerInfo(
-            QwpConstants.RolePrimary, 2UL, QwpConstants.CapZone, 0L, "c", "node-east", "us-east-1");
+            QwpRole.Primary, 2UL, QwpConstants.CapZone, 0L, "c", "node-east", "us-east-1");
 
         await using var west = new DummyQwpServer(new DummyQwpServerOptions
         {
@@ -268,14 +268,14 @@ public class QwpQueryClientEndToEndTests
         await using var east = new DummyQwpServer(new DummyQwpServerOptions
         {
             Path = QwpConstants.ReadPath,
-            RejectUpgradeWith = System.Net.HttpStatusCode.MisdirectedRequest,
+            RejectUpgradeWith = HttpStatusCode.MisdirectedRequest,
             RejectUpgradeRoleHeader = QwpConstants.RoleReplicaName,
             RejectUpgradeZoneHeader = "us-east-1",
         });
         await using var west = new DummyQwpServer(new DummyQwpServerOptions
         {
             Path = QwpConstants.ReadPath,
-            RejectUpgradeWith = System.Net.HttpStatusCode.MisdirectedRequest,
+            RejectUpgradeWith = HttpStatusCode.MisdirectedRequest,
             RejectUpgradeRoleHeader = QwpConstants.RoleReplicaName,
             RejectUpgradeZoneHeader = "us-west-2",
         });
@@ -304,7 +304,7 @@ public class QwpQueryClientEndToEndTests
             QueryClient.New(BuildConnString(server, "target=replica;")));
         Assert.That(ex!.Target, Is.EqualTo(TargetType.replica));
         Assert.That(ex.LastObserved, Is.Not.Null);
-        Assert.That(ex.LastObserved!.Role, Is.EqualTo(QwpConstants.RoleStandalone));
+        Assert.That(ex.LastObserved!.Role, Is.EqualTo(QwpRole.Standalone));
     }
 
     [Test]
@@ -333,7 +333,7 @@ public class QwpQueryClientEndToEndTests
     public async Task V2ServerInfo_RoleMismatch_ThrowsAndCarriesLastObserved()
     {
         var serverInfo = QwpEgressFrameBuilder.BuildServerInfo(
-            role: QwpConstants.RoleReplica, epoch: 1UL, capabilities: 0, serverWallNs: 0L,
+            role: QwpRole.Replica, epoch: 1UL, capabilities: 0, serverWallNs: 0L,
             clusterId: "c", nodeId: "n");
 
         await using var server = new DummyQwpServer(new DummyQwpServerOptions
@@ -348,7 +348,7 @@ public class QwpQueryClientEndToEndTests
             QueryClient.New(BuildConnString(server, "target=primary;")));
         Assert.That(ex!.Target, Is.EqualTo(TargetType.primary));
         Assert.That(ex.LastObserved, Is.Not.Null);
-        Assert.That(ex.LastObserved!.Role, Is.EqualTo(QwpConstants.RoleReplica));
+        Assert.That(ex.LastObserved!.Role, Is.EqualTo(QwpRole.Replica));
     }
 
     [Test]
@@ -597,7 +597,7 @@ public class QwpQueryClientEndToEndTests
         await using var server = new DummyQwpServer(new DummyQwpServerOptions
         {
             Path = QwpConstants.ReadPath,
-            RejectUpgradeWith = System.Net.HttpStatusCode.Unauthorized,
+            RejectUpgradeWith = HttpStatusCode.Unauthorized,
         });
         await server.StartAsync();
 
@@ -890,9 +890,9 @@ public class QwpQueryClientEndToEndTests
         var data = new ResultBatchData { RowCount = 1, Columns = { new FixedColumnData { DenseBytes = LongLe(7L) } } };
 
         var serverAInfo = QwpEgressFrameBuilder.BuildServerInfo(
-            QwpConstants.RolePrimary, epoch: 1, capabilities: 0, serverWallNs: 0, "c", "node-a");
+            QwpRole.Primary, epoch: 1, capabilities: 0, serverWallNs: 0, "c", "node-a");
         var serverBInfo = QwpEgressFrameBuilder.BuildServerInfo(
-            QwpConstants.RolePrimary, epoch: 2, capabilities: 0, serverWallNs: 0, "c", "node-b");
+            QwpRole.Primary, epoch: 2, capabilities: 0, serverWallNs: 0, "c", "node-b");
 
         await using var serverA = new DummyQwpServer(new DummyQwpServerOptions
         {
@@ -1009,14 +1009,14 @@ public class QwpQueryClientEndToEndTests
         await using var serverA = new DummyQwpServer(new DummyQwpServerOptions
         {
             Path = QwpConstants.ReadPath,
-            RejectUpgradeWith = System.Net.HttpStatusCode.BadGateway,
+            RejectUpgradeWith = HttpStatusCode.BadGateway,
         });
         await serverA.StartAsync();
 
         await using var serverB = new DummyQwpServer(new DummyQwpServerOptions
         {
             Path = QwpConstants.ReadPath,
-            RejectUpgradeWith = System.Net.HttpStatusCode.ServiceUnavailable,
+            RejectUpgradeWith = HttpStatusCode.ServiceUnavailable,
         });
         await serverB.StartAsync();
 
@@ -1035,7 +1035,7 @@ public class QwpQueryClientEndToEndTests
         // Server A accepts connect+SERVER_INFO then drops mid-query; server B rejects with 401.
         // The reconnect catch block (`IngressError ConfigError or AuthError`) must NOT swallow.
         var serverInfo = QwpEgressFrameBuilder.BuildServerInfo(
-            QwpConstants.RolePrimary, epoch: 1, capabilities: 0, serverWallNs: 0, "c", "node-a");
+            QwpRole.Primary, epoch: 1, capabilities: 0, serverWallNs: 0, "c", "node-a");
 
         await using var serverA = new DummyQwpServer(new DummyQwpServerOptions
         {
@@ -1051,7 +1051,7 @@ public class QwpQueryClientEndToEndTests
         await using var serverB = new DummyQwpServer(new DummyQwpServerOptions
         {
             Path = QwpConstants.ReadPath,
-            RejectUpgradeWith = System.Net.HttpStatusCode.Unauthorized,
+            RejectUpgradeWith = HttpStatusCode.Unauthorized,
         });
         await serverB.StartAsync();
 
@@ -1070,19 +1070,19 @@ public class QwpQueryClientEndToEndTests
         var schema = new ResultSchema { Columns = { new SchemaColumn("c", QwpTypeCode.Long) } };
         var data = new ResultBatchData { RowCount = 1, Columns = { new FixedColumnData { DenseBytes = LongLe(99L) } } };
         var infoC = QwpEgressFrameBuilder.BuildServerInfo(
-            QwpConstants.RolePrimary, epoch: 3, capabilities: 0, serverWallNs: 0, "c", "node-c");
+            QwpRole.Primary, epoch: 3, capabilities: 0, serverWallNs: 0, "c", "node-c");
         var batchC = QwpEgressFrameBuilder.BuildResultBatch(1L, 0L, schema, data);
         var endC = QwpEgressFrameBuilder.BuildResultEnd(1L, 0L, 1L);
 
         await using var serverA = new DummyQwpServer(new DummyQwpServerOptions
         {
             Path = QwpConstants.ReadPath,
-            RejectUpgradeWith = System.Net.HttpStatusCode.BadGateway,
+            RejectUpgradeWith = HttpStatusCode.BadGateway,
         });
         await using var serverB = new DummyQwpServer(new DummyQwpServerOptions
         {
             Path = QwpConstants.ReadPath,
-            RejectUpgradeWith = System.Net.HttpStatusCode.ServiceUnavailable,
+            RejectUpgradeWith = HttpStatusCode.ServiceUnavailable,
         });
         await using var serverC = new DummyQwpServer(new DummyQwpServerOptions
         {
@@ -1112,7 +1112,7 @@ public class QwpQueryClientEndToEndTests
     {
         // Both endpoints drop mid-query forever; capped at max_attempts=2 so the test terminates.
         var serverInfo = QwpEgressFrameBuilder.BuildServerInfo(
-            QwpConstants.RolePrimary, epoch: 1, capabilities: 0, serverWallNs: 0, "c", "n");
+            QwpRole.Primary, epoch: 1, capabilities: 0, serverWallNs: 0, "c", "n");
 
         await using var serverA = new DummyQwpServer(new DummyQwpServerOptions
         {
@@ -1149,7 +1149,7 @@ public class QwpQueryClientEndToEndTests
     {
         // Two servers both report REPLICA role; target=primary can't satisfy any.
         var info = QwpEgressFrameBuilder.BuildServerInfo(
-            QwpConstants.RoleReplica, epoch: 1, capabilities: 0, serverWallNs: 0, "c", "replica");
+            QwpRole.Replica, epoch: 1, capabilities: 0, serverWallNs: 0, "c", "replica");
 
         await using var serverA = new DummyQwpServer(new DummyQwpServerOptions
         {
@@ -1173,7 +1173,7 @@ public class QwpQueryClientEndToEndTests
         var ex = Assert.Throws<QwpRoleMismatchException>(() => QueryClient.New(conn));
         Assert.That(ex!.Target, Is.EqualTo(TargetType.primary));
         Assert.That(ex.LastObserved, Is.Not.Null);
-        Assert.That(ex.LastObserved!.Role, Is.EqualTo(QwpConstants.RoleReplica));
+        Assert.That(ex.LastObserved!.Role, Is.EqualTo(QwpRole.Replica));
     }
 
     [Test]
@@ -1222,7 +1222,7 @@ public class QwpQueryClientEndToEndTests
     public async Task FailoverMaxDuration_ShortCircuitsBeforeMaxAttempts()
     {
         var serverInfo = QwpEgressFrameBuilder.BuildServerInfo(
-            QwpConstants.RolePrimary, epoch: 1, capabilities: 0, serverWallNs: 0, "c", "node-a");
+            QwpRole.Primary, epoch: 1, capabilities: 0, serverWallNs: 0, "c", "node-a");
 
         await using var server = new DummyQwpServer(new DummyQwpServerOptions
         {
@@ -1254,9 +1254,9 @@ public class QwpQueryClientEndToEndTests
     {
         var schema = new ResultSchema { Columns = { new SchemaColumn("c", QwpTypeCode.Long) } };
         var infoA = QwpEgressFrameBuilder.BuildServerInfo(
-            QwpConstants.RolePrimary, epoch: 1, capabilities: 0, serverWallNs: 0, "c", "node-a");
+            QwpRole.Primary, epoch: 1, capabilities: 0, serverWallNs: 0, "c", "node-a");
         var infoB = QwpEgressFrameBuilder.BuildServerInfo(
-            QwpConstants.RolePrimary, epoch: 2, capabilities: 0, serverWallNs: 0, "c", "node-b");
+            QwpRole.Primary, epoch: 2, capabilities: 0, serverWallNs: 0, "c", "node-b");
 
         await using var serverA = new DummyQwpServer(new DummyQwpServerOptions
         {
@@ -1710,15 +1710,15 @@ public class QwpQueryClientEndToEndTests
             OnEndHook?.Invoke();
         }
 
-        public override void OnError(byte status, string message)
+        public override void OnError(QwpStatusCode status, string message)
         {
-            LastErrorStatus = status;
+            LastErrorStatus = (byte)status;
             LastErrorMessage = message;
         }
 
-        public override void OnExecDone(byte opType, long rowsAffected)
+        public override void OnExecDone(QwpOpType opType, long rowsAffected)
         {
-            LastExecOpType = opType;
+            LastExecOpType = (byte)opType;
             LastExecRowsAffected = rowsAffected;
             OnExecDoneHook?.Invoke();
         }

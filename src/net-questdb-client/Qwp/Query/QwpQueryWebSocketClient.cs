@@ -356,7 +356,7 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient
                 }
 
                 anyRoleMismatch = true;
-                _hostTracker.RecordRoleReject(idx, transient: info.Role == QwpConstants.RolePrimaryCatchup);
+                _hostTracker.RecordRoleReject(idx, transient: info.Role == QwpRole.PrimaryCatchup);
                 lastError = new IngressError(ErrorCode.ConfigError,
                     $"endpoint {addr} role {info.RoleName} does not match target={_options.target}");
                 candidate.Dispose();
@@ -565,39 +565,40 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient
     {
         // Role-header strings are case-insensitive per the failover spec; align here with the
         // RoleRejected.IsTransient check rather than the case-sensitive switch.
-        Role = MapRoleName(ex.Role),
+        Role   = MapRoleName(ex.Role),
         ZoneId = ex.Zone,
     };
 
-    internal static byte MapRoleName(string? role)
+    internal static QwpRole MapRoleName(string? role)
     {
-        if (string.IsNullOrEmpty(role)) return byte.MaxValue;
+        if (string.IsNullOrEmpty(role)) return QwpRole.Undefined;
         if (string.Equals(role, QwpConstants.RoleStandaloneName, StringComparison.OrdinalIgnoreCase))
-            return QwpConstants.RoleStandalone;
+            return QwpRole.Standalone;
         if (string.Equals(role, QwpConstants.RolePrimaryName, StringComparison.OrdinalIgnoreCase))
-            return QwpConstants.RolePrimary;
+            return QwpRole.Primary;
         if (string.Equals(role, QwpConstants.RoleReplicaName, StringComparison.OrdinalIgnoreCase))
-            return QwpConstants.RoleReplica;
+            return QwpRole.Replica;
         if (string.Equals(role, QwpConstants.RolePrimaryCatchupName, StringComparison.OrdinalIgnoreCase))
-            return QwpConstants.RolePrimaryCatchup;
-        return byte.MaxValue;
+            return QwpRole.PrimaryCatchup;
+        return QwpRole.Undefined;
     }
 
-    internal static bool RoleMatchesTarget(byte role, TargetType target)
+    internal static bool RoleMatchesTarget(QwpRole role, TargetType target)
     {
-        // target=any only accepts spec-defined role bytes; unknown values must topology-reject
-        // so a future or buggy server is rejected loudly rather than masked as "matches anything".
-        if (role is not (QwpConstants.RoleStandalone or QwpConstants.RolePrimary
-            or QwpConstants.RoleReplica or QwpConstants.RolePrimaryCatchup))
+        // target=any only accepts the spec-defined roles; unknown values (including the Undefined
+        // sentinel) must topology-reject so a future or buggy server is rejected loudly rather than
+        // masked as "matches anything".
+        if (role is not (QwpRole.Standalone or QwpRole.Primary
+            or QwpRole.Replica or QwpRole.PrimaryCatchup))
         {
             return false;
         }
         return target switch
         {
             TargetType.any => true,
-            TargetType.primary => role is QwpConstants.RoleStandalone or QwpConstants.RolePrimary
-                or QwpConstants.RolePrimaryCatchup,
-            TargetType.replica => role == QwpConstants.RoleReplica,
+            TargetType.primary => role is QwpRole.Standalone or QwpRole.Primary
+                or QwpRole.PrimaryCatchup,
+            TargetType.replica => role == QwpRole.Replica,
             _ => false,
         };
     }
@@ -703,7 +704,7 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient
                         continue;
                     }
                     _executeFinishedCleanly = true;
-                    handler.OnExecDone(opType, rowsAffected);
+                    handler.OnExecDone((QwpOpType)opType, rowsAffected);
                     return;
 
                 case QwpEgressMsgKind.QueryError:
@@ -722,7 +723,7 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient
                     {
                         _executeFinishedCleanly = true;
                     }
-                    handler.OnError(status, message);
+                    handler.OnError((QwpStatusCode)status, message);
                     return;
 
                 case QwpEgressMsgKind.CacheReset:
@@ -1080,7 +1081,7 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient
 
         return new QwpServerInfo
         {
-            Role = role,
+            Role = (QwpRole)role,
             Epoch = epoch,
             Capabilities = capabilities,
             ServerWallNs = serverWallNs,

@@ -22,6 +22,7 @@
  *
  ******************************************************************************/
 
+using System.Runtime.CompilerServices;
 using NUnit.Framework;
 using QuestDB.Qwp.Sf;
 
@@ -292,5 +293,47 @@ public class QwpSegmentRingTests
 
         Assert.That(ring.SegmentCount, Is.EqualTo(1));
         Assert.That(ring.TryAppend(new byte[24]), Is.True, "trimming a segment frees cap budget");
+    }
+
+    [Test]
+    [NonParallelizable]
+    public void MemoryRingDroppedWithoutDispose_FinalizerFreesSegmentNativeMemory()
+    {
+        Collect();
+        var baseline = Interlocked.Read(ref QwpMemorySegment.LiveNativeBytes);
+
+        AllocateMemoryRingAndDrop();
+
+        // The ring is now unreachable and was never Disposed. Its ~QwpSegmentRing finalizer must free
+        // every RAM-backed segment it still holds; otherwise their native buffers survive GC and
+        // LiveNativeBytes stays elevated forever — the leak.
+        Collect();
+        var residual = Interlocked.Read(ref QwpMemorySegment.LiveNativeBytes) - baseline;
+
+        Assert.That(residual, Is.Zero,
+            $"{residual} byte(s) of native segment memory survived GC — a memory-backed QwpSegmentRing "
+            + "dropped without Dispose must free its segments from its finalizer");
+    }
+
+    // Kept out of the test body so no local on the test's frame can root the ring past the drop.
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static void AllocateMemoryRingAndDrop()
+    {
+        // Small segments + many appends force several rotations, so the ring ends up holding an
+        // active segment plus a handful of sealed ones — all of which the finalizer must free.
+        var ring = QwpSegmentRing.OpenMemoryBacked(segmentCapacity: 4096);
+        var frame = new byte[2000];
+        for (var i = 0; i < 16; i++)
+        {
+            ring.TryAppend(frame);
+        }
+        // Deliberately no Dispose: simulate the holder GC'd without teardown.
+    }
+
+    private static void Collect()
+    {
+        GC.Collect();
+        GC.WaitForPendingFinalizers();
+        GC.Collect();
     }
 }

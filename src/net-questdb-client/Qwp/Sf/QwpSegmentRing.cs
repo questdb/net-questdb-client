@@ -515,6 +515,8 @@ internal sealed class QwpSegmentRing : IDisposable
             _sealedSegments.Clear();
         }
 
+        GC.SuppressFinalize(this);
+
         for (var i = 0; i < sealedSnapshot.Count; i++)
         {
             SfCleanup.Dispose(sealedSnapshot[i]);
@@ -532,6 +534,27 @@ internal sealed class QwpSegmentRing : IDisposable
             {
                 // next sender startup cleans stray .tmp via CleanupStaleSpares
             }
+        }
+    }
+
+    // Backstop for a memory-backed ring dropped without Dispose (the default ws:: transport is
+    // RAM-backed). Its QwpMemorySegments hold raw NativeMemory and carry no finalizer of their own,
+    // so the ring — their holder — frees them here. File-backed rings are skipped: their mmap
+    // segments self-release via ~QwpMmapSegment, and flushing mmap views from a finalizer is unsafe.
+    // Only this ring's own segment list + segments are touched; both are reachable from here and,
+    // being finalizer-free, are guaranteed not yet finalized. An unreachable ring cannot be racing a
+    // producer or the manager (both need a reference to it), so no lock is taken.
+    ~QwpSegmentRing()
+    {
+        if (_closed || _directory is not null)
+        {
+            return;
+        }
+
+        SfCleanup.Dispose(_active);
+        for (var i = 0; i < _sealedSegments.Count; i++)
+        {
+            SfCleanup.Dispose(_sealedSegments[i]);
         }
     }
 

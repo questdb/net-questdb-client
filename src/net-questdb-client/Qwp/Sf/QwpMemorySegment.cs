@@ -41,6 +41,15 @@ internal sealed class QwpMemorySegment : IQwpSegment
     // surfaces as a clear config error instead of an opaque NativeMemory.Alloc OOM.
     public const long MaxCapacity = 4L * 1024 * 1024 * 1024;
 
+    // Outstanding bytes held by live native segment buffers. Incremented when Allocate hands back a
+    // segment, decremented when its buffer is freed. A non-zero residual after a full GC means a
+    // segment was dropped without being freed — i.e. a native-memory leak. Test/diagnostic seam.
+    internal static long LiveNativeBytes;
+
+    // Raw NativeMemory.Alloc'd buffer. The segment is a "dumb" resource: it frees its buffer in
+    // Dispose but carries no finalizer of its own. The holder (the ring it lives in) is responsible
+    // for disposing every segment on its own Dispose/finalizer, so a sender dropped without teardown
+    // does not leak.
     private readonly unsafe byte* _basePtr;
     private readonly long _capacity;
     private readonly int _maxFrameLength;
@@ -82,7 +91,9 @@ internal sealed class QwpMemorySegment : IQwpSegment
                 var n = (int)Math.Min(capacity - off, int.MaxValue);
                 new Span<byte>(ptr + off, n).Clear();
             }
-            return new QwpMemorySegment(ptr, capacity, baseFsn, maxFrameLength);
+            var segment = new QwpMemorySegment(ptr, capacity, baseFsn, maxFrameLength);
+            Interlocked.Add(ref LiveNativeBytes, capacity);
+            return segment;
         }
         catch
         {
@@ -213,6 +224,7 @@ internal sealed class QwpMemorySegment : IQwpSegment
         if (_disposed) return;
         _disposed = true;
         NativeMemory.Free(_basePtr);
+        Interlocked.Add(ref LiveNativeBytes, -_capacity);
     }
 
     private void AppendOffset(long offset)

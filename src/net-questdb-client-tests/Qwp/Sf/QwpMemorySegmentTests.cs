@@ -184,6 +184,29 @@ public class QwpMemorySegmentTests
     }
 
     [Test]
+    [NonParallelizable]
+    public void Dispose_FreesNativeMemory_BalancingTheLiveByteCounter()
+    {
+        // The segment is a "dumb" resource with no finalizer: it must free its native buffer on
+        // Dispose, and its holder (the ring) is responsible for calling that. A dropped-without-
+        // Dispose segment intentionally leaks here — that path is covered by the ring finalizer test
+        // in QwpSegmentRingTests.
+        var baseline = Interlocked.Read(ref QwpMemorySegment.LiveNativeBytes);
+
+        const long capacity = 1L << 20; // 1 MiB
+        var seg = QwpMemorySegment.Allocate(capacity, baseFsn: 0);
+        Assert.That(Interlocked.Read(ref QwpMemorySegment.LiveNativeBytes) - baseline,
+            Is.EqualTo(capacity), "Allocate must account the native buffer");
+
+        seg.Dispose();
+        Assert.That(Interlocked.Read(ref QwpMemorySegment.LiveNativeBytes) - baseline,
+            Is.Zero, "Dispose must free the native buffer and balance the counter");
+
+        seg.Dispose(); // idempotent: a second Dispose must not double-decrement
+        Assert.That(Interlocked.Read(ref QwpMemorySegment.LiveNativeBytes) - baseline, Is.Zero);
+    }
+
+    [Test]
     public unsafe void TryReadFrame_VerifiesCrc_OnInMemoryCorruption()
     {
         using var seg = QwpMemorySegment.Allocate(4096, baseFsn: 0);

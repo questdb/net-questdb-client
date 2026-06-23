@@ -91,8 +91,19 @@ public interface IQwpWebSocketSender : ISender
     /// <exception cref="QuestDB.Utils.IngressError">if the I/O loop has latched a terminal failure.</exception>
     Task<bool> AwaitAckedFsnAsync(long targetFsn, TimeSpan timeout, CancellationToken ct = default);
 
-    /// <summary>Append a DECIMAL64 value to the named column (8-byte mantissa). First call locks the scale.</summary>
-    IQwpWebSocketSender ColumnDecimal64(ReadOnlySpan<char> name, decimal value);
+    /// <summary>
+    ///     Append a DECIMAL64 value coerced to <paramref name="scale" />: the value is rounded
+    ///     half-away-from-zero to that scale and stored as an 8-byte mantissa. The column scale locks
+    ///     on the first non-null write; later writes must use the same scale. Throws only on magnitude
+    ///     overflow (the value's integer part does not fit the type width).
+    /// </summary>
+    IQwpWebSocketSender ColumnDecimal64(ReadOnlySpan<char> name, decimal value, byte scale);
+
+    /// <summary>Append a DECIMAL128 value coerced to <paramref name="scale" /> (16-byte mantissa); same conversion rules as the DECIMAL64 overload.</summary>
+    IQwpWebSocketSender ColumnDecimal128(ReadOnlySpan<char> name, decimal value, byte scale);
+
+    /// <summary>Append a DECIMAL256 value coerced to <paramref name="scale" /> (32-byte mantissa); same conversion rules as the DECIMAL64 overload.</summary>
+    IQwpWebSocketSender ColumnDecimal256(ReadOnlySpan<char> name, decimal value, byte scale);
 
     /// <summary>
     ///     Append a DECIMAL64 value as the unscaled int64 mantissa with explicit scale (0–18). Locks
@@ -100,9 +111,6 @@ public interface IQwpWebSocketSender : ISender
     ///     <see cref="System.Decimal" /> cannot always represent.
     /// </summary>
     IQwpWebSocketSender ColumnDecimal64(ReadOnlySpan<char> name, long unscaledValue, byte scale);
-
-    /// <summary>Append a DECIMAL256 value to the named column (32-byte mantissa). First call locks the scale.</summary>
-    IQwpWebSocketSender ColumnDecimal256(ReadOnlySpan<char> name, decimal value);
 
     /// <summary>
     ///     Append a DECIMAL128 value as the two two's-complement 64-bit limbs of the unscaled

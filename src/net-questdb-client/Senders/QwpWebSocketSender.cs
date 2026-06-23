@@ -391,9 +391,10 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
     /// <inheritdoc />
     public ISender Column(ReadOnlySpan<char> name, decimal value)
     {
-        ThrowIfTerminal();
-        EnsureCurrentTable().AppendDecimal128(name, value);
-        return this;
+        // QWP carries an explicit per-column decimal width + scale, so the scale-inferring overload is
+        // not supported here — the caller must choose the type and scale.
+        throw new IngressError(ErrorCode.InvalidApiCall,
+            "QWP requires an explicit decimal type and scale; use ColumnDecimal64/128/256(name, value, scale)");
     }
 
     /// <inheritdoc />
@@ -474,19 +475,27 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
         return this;
     }
 
-    /// <summary>Appends a DECIMAL64 value (8-byte signed two's-complement mantissa). First non-null call locks the column scale.</summary>
-    public IQwpWebSocketSender ColumnDecimal64(ReadOnlySpan<char> name, decimal value)
+    /// <inheritdoc />
+    public IQwpWebSocketSender ColumnDecimal64(ReadOnlySpan<char> name, decimal value, byte scale)
     {
         ThrowIfTerminal();
-        EnsureCurrentTable().AppendDecimal64(name, value);
+        EnsureCurrentTable().AppendDecimal64(name, value, scale);
         return this;
     }
 
-    /// <summary>Appends a DECIMAL256 value (32-byte signed two's-complement mantissa). First non-null call locks the column scale.</summary>
-    public IQwpWebSocketSender ColumnDecimal256(ReadOnlySpan<char> name, decimal value)
+    /// <inheritdoc />
+    public IQwpWebSocketSender ColumnDecimal128(ReadOnlySpan<char> name, decimal value, byte scale)
     {
         ThrowIfTerminal();
-        EnsureCurrentTable().AppendDecimal256(name, value);
+        EnsureCurrentTable().AppendDecimal128(name, value, scale);
+        return this;
+    }
+
+    /// <inheritdoc />
+    public IQwpWebSocketSender ColumnDecimal256(ReadOnlySpan<char> name, decimal value, byte scale)
+    {
+        ThrowIfTerminal();
+        EnsureCurrentTable().AppendDecimal256(name, value, scale);
         return this;
     }
 

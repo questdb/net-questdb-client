@@ -708,6 +708,13 @@ internal sealed class QwpColumn
             }
         }
 
+        WriteFixedDecimalMantissa(mantissa, targetScale, sizeBytes);
+    }
+
+    // Serialises a (possibly rescaled) mantissa into FixedData as fixed-width little-endian
+    // two's-complement, rejecting only when the magnitude exceeds the field width.
+    private void WriteFixedDecimalMantissa(BigInteger mantissa, byte targetScale, int sizeBytes)
+    {
         EnsureFixedCapacity(FixedLen + sizeBytes);
         var dest = FixedData.AsSpan(FixedLen, sizeBytes);
         var bytes = mantissa.ToByteArray(isUnsigned: false, isBigEndian: false);
@@ -721,6 +728,75 @@ internal sealed class QwpColumn
         bytes.AsSpan().CopyTo(dest);
         FixedLen += sizeBytes;
         AdvanceNonNull();
+    }
+
+    /// <summary>Appends a DECIMAL64 value coerced to an explicit scale (see <see cref="AppendDecimalScaled" />).</summary>
+    public void AppendDecimal64(decimal value, byte scale)
+        => AppendDecimalScaled(QwpTypeCode.Decimal64, value, scale, QwpConstants.Decimal64SizeBytes);
+
+    /// <summary>Appends a DECIMAL128 value coerced to an explicit scale (see <see cref="AppendDecimalScaled" />).</summary>
+    public void AppendDecimal128(decimal value, byte scale)
+        => AppendDecimalScaled(QwpTypeCode.Decimal128, value, scale, QwpConstants.Decimal128SizeBytes);
+
+    /// <summary>Appends a DECIMAL256 value coerced to an explicit scale (see <see cref="AppendDecimalScaled" />).</summary>
+    public void AppendDecimal256(decimal value, byte scale)
+        => AppendDecimalScaled(QwpTypeCode.Decimal256, value, scale, QwpConstants.Decimal256SizeBytes);
+
+    /// <summary>
+    ///     Appends a decimal at an explicit, caller-supplied scale. The value is rounded
+    ///     half-away-from-zero to that scale (matching mainstream SQL databases), then stored. The
+    ///     column scale locks to this value on the first non-null write and every later write must use
+    ///     the same scale. The only rejection is magnitude overflow — a value whose integer part does
+    ///     not fit the type's width.
+    /// </summary>
+    private void AppendDecimalScaled(QwpTypeCode code, decimal value, byte targetScale, int sizeBytes)
+    {
+        var (maxScale, typeName) = code switch
+        {
+            QwpTypeCode.Decimal64 => (QwpConstants.MaxDecimal64Scale, "Decimal64"),
+            QwpTypeCode.Decimal128 => (QwpConstants.MaxDecimal128Scale, "Decimal128"),
+            QwpTypeCode.Decimal256 => (QwpConstants.MaxDecimal256Scale, "Decimal256"),
+            _ => (int.MaxValue, code.ToString()),
+        };
+        ValidateDecimalScale(targetScale, maxScale, typeName);
+
+        AssertOrSetType(code);
+        if (!DecimalScaleSet)
+        {
+            DecimalScale = targetScale;
+            DecimalScaleSet = true;
+        }
+        else if (DecimalScale != targetScale)
+        {
+            throw new IngressError(ErrorCode.InvalidApiCall,
+                $"column '{Name}' decimal scale is locked at {DecimalScale}; cannot write at scale {targetScale}");
+        }
+
+        // Round to the column scale, half away from zero (the coercion mainstream SQL databases apply).
+        // Math.Round caps `decimals` at 28; a target scale beyond System.Decimal's 28-digit limit needs
+        // no rounding (a decimal can't carry that many fractional digits) and is reached purely by the
+        // lossless scale-up below.
+        var rounded = Math.Round(value, Math.Min((int)targetScale, 28), MidpointRounding.AwayFromZero);
+
+        Span<int> bits = stackalloc int[4];
+        decimal.GetBits(rounded, bits);
+        var negative = (bits[3] & unchecked((int)0x80000000)) != 0;
+        var rScale = (byte)((bits[3] >> 16) & 0x7F);
+
+        // After rounding to min(targetScale, 28), rScale <= targetScale — always a lossless scale-up.
+        // When the scales already match, reuse the zero-allocation fast path.
+        if (rScale == targetScale)
+        {
+            AppendDecimal96TwosComplement((uint)bits[0], (uint)bits[1], (uint)bits[2], negative, sizeBytes);
+            return;
+        }
+
+        var mantissa = (new BigInteger((uint)bits[2]) << 64)
+            | (new BigInteger((uint)bits[1]) << 32)
+            | new BigInteger((uint)bits[0]);
+        if (negative) mantissa = -mantissa;
+        mantissa *= BigInteger.Pow(10, targetScale - rScale);
+        WriteFixedDecimalMantissa(mantissa, targetScale, sizeBytes);
     }
 
     /// <summary>Appends a BINARY value as length-prefixed opaque bytes (same wire layout as VARCHAR).</summary>

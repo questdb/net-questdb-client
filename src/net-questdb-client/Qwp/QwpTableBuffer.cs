@@ -247,6 +247,24 @@ internal sealed class QwpTableBuffer
         try { GetOrCreateColumn(columnName)?.AppendDecimal256(value); } catch { CancelCurrentRow(); throw; }
     }
 
+    /// <summary>Append a DECIMAL64 value coerced to the explicit scale (round half away from zero).</summary>
+    public void AppendDecimal64(ReadOnlySpan<char> columnName, decimal value, byte scale)
+    {
+        try { GetOrCreateColumn(columnName)?.AppendDecimal64(value, scale); } catch { CancelCurrentRow(); throw; }
+    }
+
+    /// <summary>Append a DECIMAL128 value coerced to the explicit scale (round half away from zero).</summary>
+    public void AppendDecimal128(ReadOnlySpan<char> columnName, decimal value, byte scale)
+    {
+        try { GetOrCreateColumn(columnName)?.AppendDecimal128(value, scale); } catch { CancelCurrentRow(); throw; }
+    }
+
+    /// <summary>Append a DECIMAL256 value coerced to the explicit scale (round half away from zero).</summary>
+    public void AppendDecimal256(ReadOnlySpan<char> columnName, decimal value, byte scale)
+    {
+        try { GetOrCreateColumn(columnName)?.AppendDecimal256(value, scale); } catch { CancelCurrentRow(); throw; }
+    }
+
     /// <summary>Append a DECIMAL64 value as the unscaled int64 with explicit scale.</summary>
     public void AppendDecimal64(ReadOnlySpan<char> columnName, long unscaledValue, byte scale)
     {

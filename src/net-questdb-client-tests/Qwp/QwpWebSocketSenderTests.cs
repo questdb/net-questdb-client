@@ -1061,7 +1061,7 @@ public class QwpWebSocketSenderTests
         var ws = (IQwpWebSocketSender)sender;
 
         sender.Table("t");
-        ws.ColumnDecimal64("p", 12.34m);
+        ws.ColumnDecimal64("p", 12.34m, 2);
         sender.At(DateTime.UtcNow);
         await sender.SendAsync();
         await ws.PingAsync();
@@ -1078,7 +1078,7 @@ public class QwpWebSocketSenderTests
         var ws = (IQwpWebSocketSender)sender;
 
         sender.Table("t");
-        ws.ColumnDecimal256("p", -1m);
+        ws.ColumnDecimal256("p", -1m, 0);
         sender.At(DateTime.UtcNow);
         await sender.SendAsync();
         await ws.PingAsync();
@@ -1337,22 +1337,34 @@ public class QwpWebSocketSenderTests
     }
 
     [Test]
-    public async Task EndToEnd_Decimal_LossyRescaleAcrossRows_IsRejectedNotTruncated()
+    public async Task EndToEnd_Decimal_InferringColumnOverload_IsRejectedOnQwp()
     {
         await using var server = StartServerWithOkAcks();
         using var sender = NewSender(server, "auto_flush=off;");
 
-        // First non-null write locks the column's decimal scale — here, 0.
-        sender.Table("t").Column("d", 5m).At(DateTime.UtcNow);
+        // QWP needs an explicit decimal type + scale; the scale-inferring Column(name, decimal) is
+        // not supported and must redirect the caller to the explicit overloads.
+        sender.Table("t");
+        var ex = Assert.Throws<IngressError>(() => sender.Column("d", 1.5m));
+        Assert.That(ex!.Message, Does.Contain("ColumnDecimal64"));
+    }
 
-        // A later scale-12 value with real fractional digits cannot be represented at scale 0
-        // without dropping digits, so it must be rejected at append time, never silently truncated.
-        var ex = Assert.Throws<IngressError>(() =>
-            sender.Table("t").Column("d", 1.234567890123m).At(DateTime.UtcNow));
-        Assert.That(ex!.Message, Does.Contain("precision loss"));
+    [Test]
+    public async Task EndToEnd_Decimal_ExcessFractionalDigits_RoundedNotRejected()
+    {
+        await using var server = StartServerWithOkAcks();
+        using var sender = NewSender(server, "auto_flush=off;");
+        var ws = (IQwpWebSocketSender)sender;
 
-        // The rejected row was rolled back, so the sender stays usable for a subsequent valid row.
-        sender.Table("t").Column("d", 7m).At(DateTime.UtcNow);
+        // More fractional digits than the declared scale: rounded half-away-from-zero (1.235 -> 1.24),
+        // never rejected. A later value at the same scale is fine; the column scale was declared, not
+        // inferred, so there is no "first row locks the scale" surprise.
+        sender.Table("t");
+        ws.ColumnDecimal128("d", 1.235m, 2);
+        sender.At(DateTime.UtcNow);
+        sender.Table("t");
+        ws.ColumnDecimal128("d", 999.999m, 2); // rounds to 1000.00
+        sender.At(DateTime.UtcNow);
         sender.Send();
 
         await WaitFor(() => server.ReceivedFrames.Count >= 1);
@@ -1360,29 +1372,17 @@ public class QwpWebSocketSenderTests
     }
 
     [Test]
-    public async Task EndToEnd_Decimal_ExactHigherScaleRescale_EncodesLikeLiteralAtLockedScale()
+    public async Task EndToEnd_Decimal_MagnitudeOverflow_Throws()
     {
-        // Fixed timestamp so the only thing that could differ between the two captured frames is the
-        // decimal encoding (timestamps would otherwise diverge).
-        var ts = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        await using var server = StartServerWithOkAcks();
+        using var sender = NewSender(server, "auto_flush=off;");
+        var ws = (IQwpWebSocketSender)sender;
 
-        // Column scale locks to 0 on the first value; the second is scale 12 but equals the integer 3
-        // exactly, so it rescales down to scale 0 without loss.
-        var rescaled = await CaptureFirstFrame("", s =>
-        {
-            s.Table("t").Column("d", 5m).At(ts);
-            s.Table("t").Column("d", 3.000000000000m).At(ts);
-        });
-
-        // Reference: identical rows, but the second value written as the literal 3m at scale 0.
-        var literal = await CaptureFirstFrame("", s =>
-        {
-            s.Table("t").Column("d", 5m).At(ts);
-            s.Table("t").Column("d", 3m).At(ts);
-        });
-
-        Assert.That(rescaled, Is.EqualTo(literal),
-            "an exactly-representable higher-scale value must encode identically to the literal value at the locked scale");
+        // The only rejection that survives the tolerant model: an integer part too large for the
+        // type's width. 10^20 does not fit Decimal64's signed 64-bit mantissa.
+        sender.Table("t");
+        var ex = Assert.Throws<IngressError>(() => ws.ColumnDecimal64("d", 100000000000000000000m, 0));
+        Assert.That(ex!.Message, Does.Contain("overflow"));
     }
 
     private static DummyQwpServer StartServerWithOkAcks()

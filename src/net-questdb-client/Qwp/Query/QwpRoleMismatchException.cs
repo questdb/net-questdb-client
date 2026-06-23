@@ -46,6 +46,17 @@ public sealed class QwpRoleMismatchException : IngressError
         LastObserved = lastObserved;
     }
 
+    /// <summary>
+    ///     Constructs the exception chaining the underlying cause (for example, the transport error
+    ///     observed against the last candidate endpoint).
+    /// </summary>
+    public QwpRoleMismatchException(TargetType target, QwpServerInfo? lastObserved, string message, Exception inner)
+        : base(ErrorCode.ConfigError, message, inner)
+    {
+        Target = target;
+        LastObserved = lastObserved;
+    }
+
     /// <summary>The role filter the caller requested when establishing the connection.</summary>
     public TargetType Target { get; }
 

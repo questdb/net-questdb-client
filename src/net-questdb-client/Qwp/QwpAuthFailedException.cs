@@ -54,7 +54,10 @@ public sealed class QwpAuthFailedException : IngressError
         Endpoint = endpoint;
     }
 
-    /// <inheritdoc cref="QwpAuthFailedException(int, Uri)" />
+    /// <summary>
+    ///     Constructs a new <see cref="QwpAuthFailedException" /> from the rejecting endpoint and HTTP
+    ///     status, chaining the underlying exception.
+    /// </summary>
     public QwpAuthFailedException(int httpStatusCode, Uri? endpoint, Exception inner)
         : base(ErrorCode.AuthError, BuildMessage(httpStatusCode, endpoint), inner)
     {

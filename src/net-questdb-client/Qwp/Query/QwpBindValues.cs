@@ -56,6 +56,11 @@ public sealed class QwpBindValues
     public int Count => _count;
 
     /// <summary>Returns the encoded bind buffer as a slice of the internal storage.</summary>
+    /// <remarks>
+    ///     The returned memory is a window over the live internal buffer, not a copy. Any subsequent
+    ///     <c>Set*</c> or <see cref="Reset" /> call mutates or reallocates that buffer and invalidates
+    ///     the window, so consume (or copy) it before mutating or reusing this instance.
+    /// </remarks>
     public ReadOnlyMemory<byte> AsMemory() => _buffer.AsMemory(0, _length);
 
     /// <summary>Clears all bind state so the instance can be reused for the next query.</summary>

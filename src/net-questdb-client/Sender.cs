@@ -124,25 +124,23 @@ public static class Sender
     ///     <see cref="Senders.IQwpWebSocketSender.GetHighestDurableSeqTxn" /> without an
     ///     <c>(IQwpWebSocketSender)</c> cast. Mirrors <see cref="QueryClient.New(string)" />.
     /// </summary>
-    public static Senders.IQwpWebSocketSender NewQwp(string confStr)
+    public static IQwpWebSocketSender NewQwp(string confStr)
     {
-        var sender = New(confStr);
-        return AsQwp(sender);
+        return NewQwp(Configure(confStr));
     }
 
     /// <inheritdoc cref="NewQwp(string)" />
-    public static Senders.IQwpWebSocketSender NewQwp(SenderOptions options)
+    public static IQwpWebSocketSender NewQwp(SenderOptions options)
     {
-        var sender = New(options);
-        return AsQwp(sender);
-    }
-
-    private static Senders.IQwpWebSocketSender AsQwp(ISender sender)
-    {
-        if (sender is Senders.IQwpWebSocketSender qwp) return qwp;
-        sender.Dispose();
-        throw new IngressError(ErrorCode.ConfigError,
-            "NewQwp requires a ws:: or wss:: connect string");
+        ArgumentNullException.ThrowIfNull(options);
+        // Validate the scheme up front rather than constructing a live HTTP/TCP sender (which opens
+        // sockets / handlers) only to dispose it on the type mismatch.
+        if (options.protocol is not (ProtocolType.ws or ProtocolType.wss))
+        {
+            throw new IngressError(ErrorCode.ConfigError,
+                "NewQwp requires a ws:: or wss:: connect string");
+        }
+        return (IQwpWebSocketSender)New(options);
     }
 #endif
 }

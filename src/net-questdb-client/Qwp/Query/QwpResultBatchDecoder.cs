@@ -211,7 +211,15 @@ internal sealed class QwpResultBatchDecoder
                 {
                     throw new QwpDecodeException("truncated column name");
                 }
-                var name = StrictUtf8.GetString(payload.Slice(p, cnLen));
+                string name;
+                try
+                {
+                    name = StrictUtf8.GetString(payload.Slice(p, cnLen));
+                }
+                catch (DecoderFallbackException ex)
+                {
+                    throw new QwpDecodeException("column name is not valid UTF-8", ex);
+                }
                 p += cnLen;
                 if (p >= payload.Length)
                 {

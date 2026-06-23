@@ -135,10 +135,10 @@ own framing, codecs, and server handshake. Everything QWP lives in
 `src/net-questdb-client/Qwp/`:
 
 - `QwpConstants.cs` — magic (`"QWP1"`), header flags (Gorilla, delta
-  symbol dictionary), type codes, ACK status codes, schema-mode bytes
-  (`SchemaModeFull` / `SchemaModeReference`). Self-sufficient framing is
-  a client-side mode (full schema + full symbol dict per frame), not a
-  wire flag.
+  symbol dictionary), type codes, ACK status codes. Schemas are always
+  inline — there is no schema-mode byte or schema-id on the wire.
+  Self-sufficient framing is a client-side mode (full symbol dict per
+  frame), not a wire flag.
 - `QwpVarint.cs` / `QwpBitWriter.cs` — wire primitives. Unsigned LEB128
   varints capped at 10 bytes (`MaxBytes`) with strict overflow rejection.
   `QwpBitWriter` / `QwpBitReader` are LSB-first bit-packers with upfront
@@ -159,13 +159,14 @@ own framing, codecs, and server handshake. Everything QWP lives in
   touched column + drop columns added since `_committedColumnCount`),
   so the caller sees consistent buffer state on any error path.
 - `QwpEncoder.cs` — assembles the multi-table QWP frame from a set of
-  table buffers in one flush; chooses `SchemaModeFull` vs
-  `SchemaModeReference` per table based on the schema cache.
-- `QwpSchemaCache.cs` / `QwpSymbolDictionary.cs` — schema id allocation
-  and delta symbol dictionary. Caches advance after a successful enqueue
-  (async mode) or a successful ACK (sync mode). Self-sufficient mode
-  (used by SF) bypasses both caches and re-emits the full schema +
-  full symbol dict on every frame.
+  table buffers in one flush. Each table block carries its column schema
+  inline (no schema-id / schema-mode byte); the encoder is stateless
+  across flushes.
+- `QwpSymbolDictionary.cs` — global symbol-id allocation + delta
+  encoding. The ingest sender always encodes in self-sufficient mode
+  (`selfSufficient: true`), re-emitting the full symbol dict on every
+  frame so the cursor engine can replay un-acked frames after a
+  reconnect without server-side cache state.
 - `QwpGorilla.cs` — delta-of-delta timestamp compression. The encoder
   emits a 1-byte encoding flag (`0x00` uncompressed, `0x01` Gorilla)
   only when `FLAG_GORILLA` is set on the message header. Falls back to
@@ -174,8 +175,6 @@ own framing, codecs, and server handshake. Everything QWP lives in
 - `QwpResponse.cs` — ACK / error frame parser. Strict UTF-8 (throws on
   invalid bytes) for error messages and per-table names; rejects empty
   table names, lying lengths, and trailing bytes after the last entry.
-- `QwpInFlightWindow.cs` — bounded ACK-pending tracker for non-SF async
-  mode. `AwaitEmpty(timeout)` is the producer-side drain.
 - `QwpWebSocketTransport.cs` — thin wrapper over
   `System.Net.WebSockets.ClientWebSocket`. Performs the `/write/v4`
   (ingest) or `/read/v1` (egress) upgrade — path is parameterised via
@@ -324,11 +323,12 @@ behaviours:
   `IsTcp()` first and returns early.
 - `token_x` / `token_y`: silently accepted for cross-client config-string
   interop; ignored at runtime.
-- `in_flight_window`, `close_timeout`, `max_schemas_per_connection`,
-  `request_durable_ack`, `sf_*`, `reconnect_*`,
-  `initial_connect_retry`, `close_flush_timeout_millis`, `drain_orphans`,
-  `max_background_drainers`, `sender_id`: WS-only. Rejected on
-  non-WS schemes via `ValidateWebSocketKeys` (string-ctor path) or
+- `request_durable_ack`, `sf_*`, `reconnect_*`, `initial_connect_retry`,
+  `initial_connect_mode`, `close_flush_timeout_millis`, `drain_orphans`,
+  `max_background_drainers`, `sender_id`, `ping_timeout`, the `on_*_error`
+  policy keys, and the egress-only keys (`target`, `compression`,
+  `failover_*`, `initial_credit`): WS-only. Rejected on non-WS schemes
+  via `ValidateWebSocketKeys` (string-ctor path) or
   `ValidateWebSocketKeysAgainstDefaults` (programmatic-init path,
   default-comparison heuristic).
 - `auto_flush=off` zeros `auto_flush_rows` / `auto_flush_bytes` /
@@ -378,8 +378,7 @@ semantics in `HttpSender`. WS / SF manage their own concurrency model
     failover, no Docker.
   - `Qwp/QwpEncoderTests.cs`, `Qwp/QwpColumnTests.cs`,
     `Qwp/QwpTableBufferTests.cs`, `Qwp/QwpVarintTests.cs`,
-    `Qwp/QwpResponseTests.cs`, `Qwp/QwpSchemaCacheTests.cs`,
-    `Qwp/QwpSymbolDictionaryTests.cs`, `Qwp/QwpInFlightWindowTests.cs`,
+    `Qwp/QwpResponseTests.cs`, `Qwp/QwpSymbolDictionaryTests.cs`,
     `Qwp/QwpGorillaTests.cs`, `Qwp/QwpWebSocketTransportTests.cs`,
     `Qwp/QwpWebSocketSenderTests.cs` — QWP-side unit + component tests
     using `DummyQwpServer` (`src/dummy-http-server/DummyQwpServer.cs`)

@@ -584,12 +584,94 @@ internal sealed class QwpColumn
         };
         ValidateDecimalScale(scale, maxScale, typeName);
 
+        // Fast path: no rescale needed — either this is the first non-null write (which locks the
+        // column scale to this value's scale) or the value's scale already matches the locked scale.
+        // Serialise the 96-bit mantissa straight into FixedData as fixed-width two's-complement.
+        // BigInteger is a struct, but the slow path still allocates on the heap per value: its uint[]
+        // backing store (whenever the magnitude is past int range) plus the byte[] that ToByteArray
+        // returns. A scale mismatch falls back to that BigInteger rescale arithmetic below.
+        if (!DecimalScaleSet || scale == DecimalScale)
+        {
+            AssertOrSetType(code);
+            if (!DecimalScaleSet)
+            {
+                DecimalScale = scale;
+                DecimalScaleSet = true;
+            }
+            AppendDecimal96TwosComplement((uint)bits[0], (uint)bits[1], (uint)bits[2], negative, sizeBytes);
+            return;
+        }
+
         var mantissa = (new BigInteger((uint)bits[2]) << 64)
             | (new BigInteger((uint)bits[1]) << 32)
             | new BigInteger((uint)bits[0]);
         if (negative) mantissa = -mantissa;
 
         AppendDecimalFromMantissa(code, mantissa, scale, sizeBytes);
+    }
+
+    // Writes a 96-bit magnitude (three little-endian 32-bit words) with the given sign into FixedData
+    // as a fixed-width little-endian two's-complement value. Zero-allocation companion to the
+    // BigInteger tail of AppendDecimalFromMantissa; produces byte-identical output for the no-rescale
+    // case (verified by QwpColumnDecimalEncodingTests).
+    private void AppendDecimal96TwosComplement(uint w0, uint w1, uint w2, bool negative, int sizeBytes)
+    {
+        if (!Magnitude96FitsSigned(w0, w1, w2, negative, sizeBytes))
+        {
+            throw new IngressError(ErrorCode.InvalidApiCall,
+                $"column '{Name}' decimal at scale {DecimalScale} overflows {sizeBytes * 8}-bit decimal range");
+        }
+
+        EnsureFixedCapacity(FixedLen + sizeBytes);
+        var dest = FixedData.AsSpan(FixedLen, sizeBytes);
+        dest.Clear();
+        // sizeBytes is 8, 16, or 32 — always >= 8, so w0/w1 fit; w2 only when the field is >= 12 bytes
+        // wide (the 8-byte case guarantees w2 == 0 via the overflow check above).
+        BinaryPrimitives.WriteUInt32LittleEndian(dest.Slice(0, 4), w0);
+        BinaryPrimitives.WriteUInt32LittleEndian(dest.Slice(4, 4), w1);
+        if (sizeBytes >= 12)
+        {
+            BinaryPrimitives.WriteUInt32LittleEndian(dest.Slice(8, 4), w2);
+        }
+        if (negative)
+        {
+            NegateLittleEndian(dest);
+        }
+
+        FixedLen += sizeBytes;
+        AdvanceNonNull();
+    }
+
+    // True when the unsigned 96-bit magnitude fits the signed range of `sizeBytes` bytes under the
+    // given sign. A 96-bit magnitude always fits 128-/256-bit; only Decimal64 (8 bytes) can overflow.
+    private static bool Magnitude96FitsSigned(uint w0, uint w1, uint w2, bool negative, int sizeBytes)
+    {
+        if (sizeBytes >= 16)
+        {
+            return true;
+        }
+        if (w2 != 0)
+        {
+            return false; // magnitude >= 2^64, cannot fit signed 64-bit
+        }
+        if ((w1 & 0x80000000u) == 0)
+        {
+            return true; // |value| < 2^63 fits either sign
+        }
+        // Top bit of the 64-bit magnitude is set: only -2^63 (exactly) is representable.
+        return negative && w1 == 0x80000000u && w0 == 0u;
+    }
+
+    // In-place little-endian two's-complement negation (invert all bytes, add one).
+    private static void NegateLittleEndian(Span<byte> bytes)
+    {
+        var carry = 1;
+        for (var i = 0; i < bytes.Length; i++)
+        {
+            var v = (byte)~bytes[i] + carry;
+            bytes[i] = (byte)v;
+            carry = v >> 8;
+        }
     }
 
     private void AppendDecimalFromMantissa(QwpTypeCode code, BigInteger mantissa, byte sourceScale, int sizeBytes)

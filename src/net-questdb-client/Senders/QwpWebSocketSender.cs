@@ -428,7 +428,7 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
         ThrowIfTerminal();
         var arr = value as T[] ?? value.ToArray();
         var shapeArr = shape as int[] ?? shape.ToArray();
-        AppendArrayDispatch(name, arr.AsSpan(), shapeArr.AsSpan());
+        AppendArrayDispatch<T>(name, arr.AsSpan(), shapeArr.AsSpan());
         return this;
     }
 

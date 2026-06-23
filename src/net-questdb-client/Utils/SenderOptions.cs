@@ -482,7 +482,7 @@ public record SenderOptions
 
     private bool IsKeyExplicit(string name)
     {
-        return _connectionStringBuilder!.ContainsKey(name);
+        return _connectionStringBuilder?.ContainsKey(name) ?? false;
     }
 
     private void ValidateWebSocketKeys()
@@ -681,6 +681,14 @@ public record SenderOptions
         {
             throw new IngressError(ErrorCode.ConfigError,
                 $"`sf_max_bytes` must be > 0; got {_sfMaxBytes}");
+        }
+        // A segment is buffered as a single contiguous byte[] (QwpCursorSendEngine's send buffer),
+        // so it must fit a managed array; reject early as a clean ConfigError instead of letting an
+        // oversized value surface as an opaque OverflowException/OOM at engine construction.
+        if (_sfMaxBytes > Array.MaxLength)
+        {
+            throw new IngressError(ErrorCode.ConfigError,
+                $"`sf_max_bytes` ({_sfMaxBytes}) exceeds the maximum single-segment size of {Array.MaxLength} bytes");
         }
         if (_sfMaxTotalBytes <= 0)
         {
@@ -1780,7 +1788,8 @@ public record SenderOptions
 
     private string? ReadOptionFromBuilder(string name)
     {
-        _connectionStringBuilder!.TryGetValue(name, out var value);
+        if (_connectionStringBuilder is null) return null;
+        _connectionStringBuilder.TryGetValue(name, out var value);
         return (string?)value;
     }
 

@@ -51,6 +51,20 @@ public sealed class QwpException : IngressError
         Sequence = sequence;
     }
 
+    /// <summary>
+    ///     Constructs a new <see cref="QwpException" /> chaining the underlying cause.
+    /// </summary>
+    /// <param name="status">QWP status code from the server frame.</param>
+    /// <param name="sequence">Batch sequence the server was responding to. <c>-1</c> if not applicable.</param>
+    /// <param name="message">UTF-8 message decoded from the server frame, or a synthetic message.</param>
+    /// <param name="inner">The underlying exception that triggered this error.</param>
+    public QwpException(QwpStatusCode status, long sequence, string message, Exception inner)
+        : base(MapToErrorCode(status), Format(status, sequence, message), inner)
+    {
+        Status = status;
+        Sequence = sequence;
+    }
+
     /// <summary>QWP status code received from the server.</summary>
     public QwpStatusCode Status { get; }
 

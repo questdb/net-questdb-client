@@ -1027,6 +1027,20 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient
         }
     }
 
+    // StrictUtf8 throws DecoderFallbackException on invalid bytes; remap to ProtocolViolation so a
+    // malformed server frame surfaces through the egress error contract rather than as a raw BCL type.
+    private static string DecodeUtf8(ReadOnlySpan<byte> bytes, string field)
+    {
+        try
+        {
+            return StrictUtf8.GetString(bytes);
+        }
+        catch (DecoderFallbackException ex)
+        {
+            throw new IngressError(ErrorCode.ProtocolViolation, $"{field} is not valid UTF-8", ex);
+        }
+    }
+
     private static QwpServerInfo DecodeServerInfo(ReadOnlyMemory<byte> payload)
     {
         var s = payload.Span;
@@ -1052,7 +1066,7 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient
         {
             throw new IngressError(ErrorCode.ProtocolViolation, "SERVER_INFO truncated at cluster_id");
         }
-        var clusterId = StrictUtf8.GetString(s.Slice(24, clusterIdLen));
+        var clusterId = DecodeUtf8(s.Slice(24, clusterIdLen), "SERVER_INFO cluster_id");
         var nodeIdLenOffset = 24 + clusterIdLen;
         var nodeIdLen = BinaryPrimitives.ReadUInt16LittleEndian(s.Slice(nodeIdLenOffset, 2));
         var nodeIdStart = nodeIdLenOffset + 2;
@@ -1060,7 +1074,7 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient
         {
             throw new IngressError(ErrorCode.ProtocolViolation, "SERVER_INFO truncated at node_id");
         }
-        var nodeId = StrictUtf8.GetString(s.Slice(nodeIdStart, nodeIdLen));
+        var nodeId = DecodeUtf8(s.Slice(nodeIdStart, nodeIdLen), "SERVER_INFO node_id");
         var consumed = nodeIdStart + nodeIdLen;
 
         string? zoneId = null;
@@ -1077,7 +1091,7 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient
             {
                 throw new IngressError(ErrorCode.ProtocolViolation, "SERVER_INFO truncated at zone_id");
             }
-            zoneId = StrictUtf8.GetString(s.Slice(consumed, zoneIdLen));
+            zoneId = DecodeUtf8(s.Slice(consumed, zoneIdLen), "SERVER_INFO zone_id");
             consumed += zoneIdLen;
         }
 
@@ -1154,7 +1168,7 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient
             throw new IngressError(ErrorCode.ProtocolViolation,
                 $"QUERY_ERROR length mismatch: msgLen={msgLen} payload={s.Length}");
         }
-        var msg = StrictUtf8.GetString(s.Slice(12, msgLen));
+        var msg = DecodeUtf8(s.Slice(12, msgLen), "QUERY_ERROR message");
         return (requestId, status, msg);
     }
 

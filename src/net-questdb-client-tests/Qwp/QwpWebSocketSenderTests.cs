@@ -1336,6 +1336,55 @@ public class QwpWebSocketSenderTests
         await WaitFor(() => server.ReceivedFrames.Count >= 2);
     }
 
+    [Test]
+    public async Task EndToEnd_Decimal_LossyRescaleAcrossRows_IsRejectedNotTruncated()
+    {
+        await using var server = StartServerWithOkAcks();
+        using var sender = NewSender(server, "auto_flush=off;");
+
+        // First non-null write locks the column's decimal scale — here, 0.
+        sender.Table("t").Column("d", 5m).At(DateTime.UtcNow);
+
+        // A later scale-12 value with real fractional digits cannot be represented at scale 0
+        // without dropping digits, so it must be rejected at append time, never silently truncated.
+        var ex = Assert.Throws<IngressError>(() =>
+            sender.Table("t").Column("d", 1.234567890123m).At(DateTime.UtcNow));
+        Assert.That(ex!.Message, Does.Contain("precision loss"));
+
+        // The rejected row was rolled back, so the sender stays usable for a subsequent valid row.
+        sender.Table("t").Column("d", 7m).At(DateTime.UtcNow);
+        sender.Send();
+
+        await WaitFor(() => server.ReceivedFrames.Count >= 1);
+        Assert.That(server.ReceivedFrames.Count, Is.GreaterThanOrEqualTo(1));
+    }
+
+    [Test]
+    public async Task EndToEnd_Decimal_ExactHigherScaleRescale_EncodesLikeLiteralAtLockedScale()
+    {
+        // Fixed timestamp so the only thing that could differ between the two captured frames is the
+        // decimal encoding (timestamps would otherwise diverge).
+        var ts = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+
+        // Column scale locks to 0 on the first value; the second is scale 12 but equals the integer 3
+        // exactly, so it rescales down to scale 0 without loss.
+        var rescaled = await CaptureFirstFrame("", s =>
+        {
+            s.Table("t").Column("d", 5m).At(ts);
+            s.Table("t").Column("d", 3.000000000000m).At(ts);
+        });
+
+        // Reference: identical rows, but the second value written as the literal 3m at scale 0.
+        var literal = await CaptureFirstFrame("", s =>
+        {
+            s.Table("t").Column("d", 5m).At(ts);
+            s.Table("t").Column("d", 3m).At(ts);
+        });
+
+        Assert.That(rescaled, Is.EqualTo(literal),
+            "an exactly-representable higher-scale value must encode identically to the literal value at the locked scale");
+    }
+
     private static DummyQwpServer StartServerWithOkAcks()
     {
         long nextSeq = 0;

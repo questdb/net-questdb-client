@@ -24,8 +24,23 @@
 
 namespace QuestDB.Qwp.Query;
 
-internal sealed class QwpDecodeException : Exception
+/// <summary>
+///     Raised by the egress decoder (<see cref="QwpResultBatchDecoder" /> and
+///     <see cref="QwpColumnBatch" />) when a <c>RESULT_BATCH</c> frame is malformed or corrupt:
+///     truncated payloads, lengths or counts out of range, unsupported column type codes,
+///     overlong varints, or a bad Gorilla timestamp column. The query loop in
+///     <c>QwpQueryWebSocketClient</c> catches it and re-wraps it as an
+///     <c>IngressError</c> with <c>ErrorCode.ProtocolViolation</c>, so callers of the query
+///     API observe a protocol violation rather than this internal decode failure.
+/// </summary>
+public sealed class QwpDecodeException : Exception
 {
+    /// <summary>Constructs the exception with a description of the malformed frame.</summary>
     public QwpDecodeException(string message) : base(message) { }
+
+    /// <summary>
+    ///     Constructs the exception with a description and the underlying runtime failure
+    ///     (e.g. a varint or Gorilla decode error), so the raw exception isn't surfaced directly.
+    /// </summary>
     public QwpDecodeException(string message, Exception inner) : base(message, inner) { }
 }

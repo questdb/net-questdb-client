@@ -63,7 +63,7 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient
     private long _expectedBatchSeq;
     private int _disposed;
     private int _terminal;
-    private int _cancelRequested;
+    private long _cancelTargetRid = -1;
     // Either flag suppresses MarkTerminal in finally: cleanly = wire-side terminator or user-cancelled;
     // drainOk = user callback threw but the connection is still recoverable.
     private bool _executeFinishedCleanly;
@@ -151,7 +151,6 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient
 
         _executeFinishedCleanly = false;
         _drainOkAfterHandlerThrow = false;
-        Interlocked.Exchange(ref _cancelRequested, 0);
         _hostTracker.BeginRound(forgetClassifications: false);
         var requestId = Interlocked.Increment(ref _nextRequestId);
         Interlocked.Exchange(ref _currentRequestId, requestId);
@@ -197,7 +196,7 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient
                     && Environment.TickCount64 < failoverDeadline
                     && IsTransportError(ex)
                     && !ct.IsCancellationRequested
-                    && Volatile.Read(ref _cancelRequested) == 0
+                    && Interlocked.Read(ref _cancelTargetRid) != requestId
                     && Volatile.Read(ref _disposed) == 0)
                 {
                     if (_activeAddressIndex >= 0) _hostTracker.RecordMidStreamFailure(_activeAddressIndex);
@@ -207,13 +206,13 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient
                     if (sleep.TotalMilliseconds > remainingMs)
                         sleep = TimeSpan.FromMilliseconds(remainingMs);
                     await Task.Delay(sleep, ct).ConfigureAwait(false);
-                    if (Volatile.Read(ref _cancelRequested) != 0)
+                    if (Interlocked.Read(ref _cancelTargetRid) == requestId)
                     {
                         throw new OperationCanceledException("query cancelled during failover");
                     }
                     attempt++;
                     await ReconnectAsync(attempt, ct).ConfigureAwait(false);
-                    if (Volatile.Read(ref _cancelRequested) != 0)
+                    if (Interlocked.Read(ref _cancelTargetRid) == requestId)
                     {
                         throw new OperationCanceledException("query cancelled during failover");
                     }
@@ -227,6 +226,12 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient
         {
             if (!_executeFinishedCleanly && !_drainOkAfterHandlerThrow) MarkTerminal();
             Interlocked.Exchange(ref _currentRequestId, -1);
+            // The decompressor is reused across queries, so reclaim it only on the disposal path:
+            // when Dispose() races an in-flight Execute it can't take _executeLock and skips
+            // DisposeDecompressor, so this query — its last user — frees the native context as it
+            // exits. Done under _executeLock (like the Dispose paths) so disposal stays serialised
+            // with the decode loop's use of the decompressor. Idempotent via Interlocked.Exchange.
+            if (Volatile.Read(ref _disposed) != 0) DisposeDecompressor();
             _executeLock.Release();
         }
     }
@@ -394,7 +399,10 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient
     {
         var rid = Interlocked.Read(ref _currentRequestId);
         if (rid < 0) return;
-        Interlocked.Exchange(ref _cancelRequested, 1);
+        // Record the exact rid being cancelled. If this thread is pre-empted between the read above
+        // and here while query `rid` finishes and the next query starts, the stale rid no longer
+        // matches the running requestId, so the failover-path checks ignore it.
+        Interlocked.Exchange(ref _cancelTargetRid, rid);
         if (Volatile.Read(ref _disposed) != 0) return;
 
         try

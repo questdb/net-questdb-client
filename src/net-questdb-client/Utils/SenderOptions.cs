@@ -1842,11 +1842,17 @@ public record SenderOptions
     private const string SecretRedaction = "***";
 
     /// <summary>
-    ///     Renders the options as a connection string. Round-trips through
-    ///     <see cref="SenderOptions(string)" />. Secret fields (<c>password</c>, <c>token</c>,
-    ///     <c>tls_roots_password</c>) are omitted entirely; logging this output never leaks secrets,
-    ///     and re-parsing is loss-y for those fields by design.
+    ///     Renders the options as a connection string, safe to log: the secret fields
+    ///     (<c>password</c>, <c>token</c>, <c>tls_roots_password</c>) are omitted entirely, so this
+    ///     output never leaks credentials.
     /// </summary>
+    /// <remarks>
+    ///     Re-parsing via <see cref="SenderOptions(string)" /> round-trips only for configs without
+    ///     authentication. An authenticated config does <b>not</b> round-trip: the secret is stripped
+    ///     but its paired <c>username</c> is still emitted, so the re-parse throws (Basic auth's
+    ///     <c>username</c> with no <c>password</c>, or TCP's <c>username</c> with no <c>token</c>).
+    ///     Use this for diagnostics and logging, not to clone or persist a credentialed config.
+    /// </remarks>
     public override string ToString()
     {
         var builder = new DbConnectionStringBuilder();

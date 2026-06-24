@@ -196,10 +196,11 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
                     segmentCapacity: options.sf_max_bytes,
                     drainTimeout: options.reconnect_max_duration_millis,
                     durableAckMode: options.request_durable_ack);
+                // Orphan-drainer shutdown uses the pool's own small fixed grace; do NOT pass
+                // close_flush_timeout here, or a wedged drainer adds the full flush budget to Dispose().
                 pool = new QwpBackgroundDrainerPool(
                     options.max_background_drainers,
-                    drainer,
-                    shutdownWait: options.close_flush_timeout_millis);
+                    drainer);
                 var orphans = QwpOrphanScanner.ClaimOrphans(options.sf_dir!, options.sender_id);
                 var enqueued = 0;
                 try

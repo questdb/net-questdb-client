@@ -47,6 +47,13 @@ internal sealed class QwpBackgroundDrainerPool : IDisposable
 {
     private const string FailedSentinel = ".failed";
 
+    // Orphan-drainer shutdown grace, deliberately decoupled from close_flush_timeout (mirrors the
+    // Java client's BackgroundDrainerPool): a short graceful drain window, then a brief stop-grace
+    // for in-flight drainers to release their slot locks and exit before we abandon them. Scaling
+    // this to close_flush_timeout would let a wedged drainer add the full flush budget to Dispose().
+    private static readonly TimeSpan GracefulDrainWait = TimeSpan.FromMilliseconds(2500);
+    private static readonly TimeSpan StopGraceWait = TimeSpan.FromMilliseconds(500);
+
     private readonly IQwpSlotDrainer _drainer;
     private readonly SemaphoreSlim _slots;
     private readonly object _trackingLock = new();
@@ -70,7 +77,7 @@ internal sealed class QwpBackgroundDrainerPool : IDisposable
 
             _drainer = drainer ?? throw new ArgumentNullException(nameof(drainer));
             _slots = new SemaphoreSlim(maxConcurrent, maxConcurrent);
-            _shutdownWait = shutdownWait ?? TimeSpan.FromSeconds(5);
+            _shutdownWait = shutdownWait ?? GracefulDrainWait;
         }
         catch
         {
@@ -160,7 +167,7 @@ internal sealed class QwpBackgroundDrainerPool : IDisposable
 
             try
             {
-                allJoined = joinTask.Wait(TimeSpan.FromSeconds(2));
+                allJoined = joinTask.Wait(StopGraceWait);
             }
             catch (Exception)
             {

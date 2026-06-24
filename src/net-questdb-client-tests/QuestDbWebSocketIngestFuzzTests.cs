@@ -895,7 +895,7 @@ public class QuestDbWebSocketIngestFuzzTests
                 var whole = long.Parse(valueBase, CultureInfo.InvariantCulture) * 1000 + rng.NextInt(1000);
                 var frac = rng.NextInt(100);
                 var decStr = $"{whole}.{frac:D2}";
-                sender.Column(colName, decimal.Parse(decStr, CultureInfo.InvariantCulture));
+                sender.ColumnDecimal128(colName, decimal.Parse(decStr, CultureInfo.InvariantCulture), 2);
                 return decStr;
             }
             case ColType.Decimal256:

@@ -187,7 +187,7 @@ public class QuestDbWebSocketIntegrationTests
                 .Column("b", true)
                 .Column("c", 'Q')
                 .Column("g", guid)
-                .Column("dec", 12345.67m)
+                .ColumnDecimal64("dec", 12345.67m, 2)
                 .ColumnNanos("tsn", 1_700_000_000_123_456_789L)
                 .At(ts);
             await sender.SendAsync();

@@ -22,9 +22,11 @@
  *
  ******************************************************************************/
 
+using System.Numerics;
 using System.Runtime.CompilerServices;
 using QuestDB.Buffers;
 using QuestDB.Enums;
+using QuestDB.Qwp;
 using QuestDB.Utils;
 
 namespace QuestDB.Senders;
@@ -278,6 +280,105 @@ internal abstract class AbstractSender : ISender
         Buffer.Column(name, value);
         return this;
     }
+
+    // QWP carries an explicit per-column decimal width + scale; ILP has a single variable-length
+    // binary decimal. These overloads honour the same (value, scale) contract over ILP by rounding to
+    // `scale` (half away from zero, as the QWP path and mainstream SQL do) and emitting the V3 binary
+    // decimal. The width name (64/128/256) only bounds the accepted scale here — the ILP wire form is
+    // width-agnostic. The raw-limb overloads route through System.Decimal and therefore reject values
+    // whose magnitude exceeds its 96-bit mantissa or whose scale exceeds 28; use ws/wss for the full
+    // DECIMAL128 / DECIMAL256 range.
+
+    /// <inheritdoc />
+    public ISender ColumnDecimal64(ReadOnlySpan<char> name, decimal value, byte scale)
+        => AppendIlpDecimalScaled(name, value, scale, QwpConstants.MaxDecimal64Scale, "Decimal64");
+
+    /// <inheritdoc />
+    public ISender ColumnDecimal128(ReadOnlySpan<char> name, decimal value, byte scale)
+        => AppendIlpDecimalScaled(name, value, scale, QwpConstants.MaxDecimal128Scale, "Decimal128");
+
+    /// <inheritdoc />
+    public ISender ColumnDecimal256(ReadOnlySpan<char> name, decimal value, byte scale)
+        => AppendIlpDecimalScaled(name, value, scale, QwpConstants.MaxDecimal256Scale, "Decimal256");
+
+    /// <inheritdoc />
+    public ISender ColumnDecimal64(ReadOnlySpan<char> name, long unscaledValue, byte scale)
+    {
+        ValidateDecimalScale(scale, QwpConstants.MaxDecimal64Scale, "Decimal64");
+        return AppendIlpDecimalFromMantissa(name, new BigInteger(unscaledValue), scale);
+    }
+
+    /// <inheritdoc />
+    public ISender ColumnDecimal128(ReadOnlySpan<char> name, long lo, long hi, byte scale)
+    {
+        ValidateDecimalScale(scale, QwpConstants.MaxDecimal128Scale, "Decimal128");
+        var mantissa = (new BigInteger(hi) << 64) + new BigInteger((ulong)lo);
+        return AppendIlpDecimalFromMantissa(name, mantissa, scale);
+    }
+
+    /// <inheritdoc />
+    public ISender ColumnDecimal256(ReadOnlySpan<char> name, long l0, long l1, long l2, long l3, byte scale)
+    {
+        ValidateDecimalScale(scale, QwpConstants.MaxDecimal256Scale, "Decimal256");
+        var mantissa = (new BigInteger(l3) << 192)
+            + (new BigInteger((ulong)l2) << 128)
+            + (new BigInteger((ulong)l1) << 64)
+            + new BigInteger((ulong)l0);
+        return AppendIlpDecimalFromMantissa(name, mantissa, scale);
+    }
+
+    private ISender AppendIlpDecimalScaled(ReadOnlySpan<char> name, decimal value, byte scale, int maxScale,
+        string typeName)
+    {
+        ValidateDecimalScale(scale, maxScale, typeName);
+        // Round to the requested scale, half away from zero, matching the QWP path. Math.Round caps the
+        // digit count at 28; a System.Decimal can't carry more than 28 fractional digits, so a target
+        // scale above 28 needs no rounding and the value is written as-is — the server rescales to the
+        // column's declared scale.
+        var rounded = Math.Round(value, Math.Min((int)scale, MaxDecimalScale), MidpointRounding.AwayFromZero);
+        Buffer.Column(name, rounded);
+        return this;
+    }
+
+    // Routes a raw two's-complement unscaled mantissa + scale through the ILP binary decimal encoder by
+    // reconstructing a System.Decimal. Rejects values ILP cannot represent: a scale beyond
+    // System.Decimal's 28-digit limit, or a magnitude beyond its 96-bit mantissa. Both are representable
+    // over ws/wss, so the error points the caller there.
+    private ISender AppendIlpDecimalFromMantissa(ReadOnlySpan<char> name, BigInteger mantissa, byte scale)
+    {
+        if (scale > MaxDecimalScale)
+        {
+            throw new IngressError(ErrorCode.InvalidApiCall,
+                $"decimal scale {scale} exceeds the {MaxDecimalScale} digits representable over ILP; use a ws/wss sender");
+        }
+
+        var negative = mantissa.Sign < 0;
+        var magnitude = BigInteger.Abs(mantissa);
+        if (magnitude > Max96BitMagnitude)
+        {
+            throw new IngressError(ErrorCode.InvalidApiCall,
+                "decimal magnitude exceeds the 96-bit range representable over ILP; use a ws/wss sender");
+        }
+
+        var lo = (uint)(magnitude & uint.MaxValue);
+        var mid = (uint)((magnitude >> 32) & uint.MaxValue);
+        var hi = (uint)((magnitude >> 64) & uint.MaxValue);
+        Buffer.Column(name, new decimal((int)lo, (int)mid, (int)hi, negative, scale));
+        return this;
+    }
+
+    private static void ValidateDecimalScale(byte scale, int maxScale, string typeName)
+    {
+        if (scale > maxScale)
+        {
+            throw new IngressError(ErrorCode.InvalidApiCall,
+                $"{typeName} scale {scale} exceeds maximum {maxScale}");
+        }
+    }
+
+    // Largest scale System.Decimal can carry, and its largest unsigned 96-bit mantissa (2^96 - 1).
+    private const int MaxDecimalScale = 28;
+    private static readonly BigInteger Max96BitMagnitude = (BigInteger.One << 96) - BigInteger.One;
 
     /// <inheritdoc />
     public ISender Column(ReadOnlySpan<char> name, Guid value)

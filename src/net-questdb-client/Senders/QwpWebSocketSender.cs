@@ -476,7 +476,7 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
     }
 
     /// <inheritdoc />
-    public IQwpWebSocketSender ColumnDecimal64(ReadOnlySpan<char> name, decimal value, byte scale)
+    public ISender ColumnDecimal64(ReadOnlySpan<char> name, decimal value, byte scale)
     {
         ThrowIfTerminal();
         EnsureCurrentTable().AppendDecimal64(name, value, scale);
@@ -484,7 +484,7 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
     }
 
     /// <inheritdoc />
-    public IQwpWebSocketSender ColumnDecimal128(ReadOnlySpan<char> name, decimal value, byte scale)
+    public ISender ColumnDecimal128(ReadOnlySpan<char> name, decimal value, byte scale)
     {
         ThrowIfTerminal();
         EnsureCurrentTable().AppendDecimal128(name, value, scale);
@@ -492,7 +492,7 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
     }
 
     /// <inheritdoc />
-    public IQwpWebSocketSender ColumnDecimal256(ReadOnlySpan<char> name, decimal value, byte scale)
+    public ISender ColumnDecimal256(ReadOnlySpan<char> name, decimal value, byte scale)
     {
         ThrowIfTerminal();
         EnsureCurrentTable().AppendDecimal256(name, value, scale);
@@ -500,7 +500,7 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
     }
 
     /// <inheritdoc />
-    public IQwpWebSocketSender ColumnDecimal64(ReadOnlySpan<char> name, long unscaledValue, byte scale)
+    public ISender ColumnDecimal64(ReadOnlySpan<char> name, long unscaledValue, byte scale)
     {
         ThrowIfTerminal();
         EnsureCurrentTable().AppendDecimal64(name, unscaledValue, scale);
@@ -508,7 +508,7 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
     }
 
     /// <inheritdoc />
-    public IQwpWebSocketSender ColumnDecimal128(ReadOnlySpan<char> name, long lo, long hi, byte scale)
+    public ISender ColumnDecimal128(ReadOnlySpan<char> name, long lo, long hi, byte scale)
     {
         ThrowIfTerminal();
         EnsureCurrentTable().AppendDecimal128(name, lo, hi, scale);
@@ -516,7 +516,7 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
     }
 
     /// <inheritdoc />
-    public IQwpWebSocketSender ColumnDecimal256(ReadOnlySpan<char> name, long l0, long l1, long l2, long l3, byte scale)
+    public ISender ColumnDecimal256(ReadOnlySpan<char> name, long l0, long l1, long l2, long l3, byte scale)
     {
         ThrowIfTerminal();
         EnsureCurrentTable().AppendDecimal256(name, l0, l1, l2, l3, scale);

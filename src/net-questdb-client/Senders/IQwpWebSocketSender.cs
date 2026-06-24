@@ -91,45 +91,9 @@ public interface IQwpWebSocketSender : ISender
     /// <exception cref="QuestDB.Utils.IngressError">if the I/O loop has latched a terminal failure.</exception>
     Task<bool> AwaitAckedFsnAsync(long targetFsn, TimeSpan timeout, CancellationToken ct = default);
 
-    /// <summary>
-    ///     Append a DECIMAL64 value coerced to <paramref name="scale" />: the value is rounded
-    ///     half-away-from-zero to that scale and stored as an 8-byte mantissa. The column scale locks
-    ///     on the first non-null write; later writes must use the same scale. Throws only on magnitude
-    ///     overflow (the value's integer part does not fit the type width).
-    /// </summary>
-    IQwpWebSocketSender ColumnDecimal64(ReadOnlySpan<char> name, decimal value, byte scale);
-
-    /// <summary>Append a DECIMAL128 value coerced to <paramref name="scale" /> (16-byte mantissa); same conversion rules as the DECIMAL64 overload.</summary>
-    IQwpWebSocketSender ColumnDecimal128(ReadOnlySpan<char> name, decimal value, byte scale);
-
-    /// <summary>Append a DECIMAL256 value coerced to <paramref name="scale" /> (32-byte mantissa); same conversion rules as the DECIMAL64 overload.</summary>
-    IQwpWebSocketSender ColumnDecimal256(ReadOnlySpan<char> name, decimal value, byte scale);
-
-    /// <summary>
-    ///     Append a DECIMAL64 value as the unscaled int64 mantissa with explicit scale (0–18). Locks
-    ///     the column scale on first call. Use this overload to access the full 18-digit range that
-    ///     <see cref="System.Decimal" /> cannot always represent.
-    /// </summary>
-    IQwpWebSocketSender ColumnDecimal64(ReadOnlySpan<char> name, long unscaledValue, byte scale);
-
-    /// <summary>
-    ///     Append a DECIMAL128 value as the two two's-complement 64-bit limbs of the unscaled
-    ///     integer: <paramref name="lo" /> is the low 64 bits (unsigned magnitude), <paramref name="hi" />
-    ///     is the signed high 64 bits — i.e. the value is <c>(hi ≪ 64) | (ulong)lo</c>. Explicit
-    ///     scale (0–38); locks the column scale on first call. Use this overload for the full
-    ///     38-digit range beyond <see cref="System.Decimal" />'s ~28-digit limit.
-    /// </summary>
-    IQwpWebSocketSender ColumnDecimal128(ReadOnlySpan<char> name, long lo, long hi, byte scale);
-
-    /// <summary>
-    ///     Append a DECIMAL256 value as the four two's-complement 64-bit limbs of the unscaled
-    ///     integer: <c>l0</c>–<c>l2</c> are unsigned magnitude limbs and <c>l3</c> is the signed
-    ///     high limb — the value is <c>(ulong)l0 | (ulong)l1≪64 | (ulong)l2≪128 | l3≪192</c>.
-    ///     Explicit scale (0–76); locks the column scale on first call. The
-    ///     <see cref="System.Decimal" /> overload is capped at ~28 digits; this overload exposes
-    ///     the full 76-digit DECIMAL256 range.
-    /// </summary>
-    IQwpWebSocketSender ColumnDecimal256(ReadOnlySpan<char> name, long l0, long l1, long l2, long l3, byte scale);
+    // ColumnDecimal64 / ColumnDecimal128 / ColumnDecimal256 (both the (decimal, scale) and raw-limb
+    // overloads) are declared on ISender and inherited here; QWP encodes them as fixed-width 8/16/32-byte
+    // mantissas with the column scale locked on the first non-null write.
 
     /// <summary>Append a BINARY value to the named column (opaque bytes; no UTF-8 contract).</summary>
     IQwpWebSocketSender ColumnBinary(ReadOnlySpan<char> name, ReadOnlySpan<byte> value);

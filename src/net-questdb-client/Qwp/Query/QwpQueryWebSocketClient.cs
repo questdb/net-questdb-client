@@ -1113,15 +1113,31 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient
         };
     }
 
+    // QwpVarint.Read (shared with the ingest parser) reports a malformed varint as the retryable
+    // ProtocolVersionError; inside a fixed-size terminator frame that's structural corruption, so
+    // remap to ProtocolViolation — matching this file's other terminator guards and the RESULT_BATCH
+    // decoder, so the query loop fails terminal instead of retrying a deterministically-corrupt frame.
+    private static ulong ReadTerminatorVarint(ReadOnlySpan<byte> src, out int bytesRead, string context)
+    {
+        try
+        {
+            return QwpVarint.Read(src, out bytesRead);
+        }
+        catch (IngressError ex)
+        {
+            throw new IngressError(ErrorCode.ProtocolViolation, context, ex);
+        }
+    }
+
     private static (long RequestId, long TotalRows) DecodeResultEnd(ReadOnlyMemory<byte> payload)
     {
         var s = payload.Span;
         if (s.Length < 1 + 8) throw new IngressError(ErrorCode.ProtocolViolation, "RESULT_END too short");
         var requestId = BinaryPrimitives.ReadInt64LittleEndian(s.Slice(1, 8));
         var p = 9;
-        QwpVarint.Read(s.Slice(p), out var consumed1); // final_seq is informational; not surfaced.
+        ReadTerminatorVarint(s.Slice(p), out var consumed1, "RESULT_END malformed final_seq varint"); // final_seq is informational; not surfaced.
         p += consumed1;
-        var totalRows = (long)QwpVarint.Read(s.Slice(p), out var consumed2);
+        var totalRows = (long)ReadTerminatorVarint(s.Slice(p), out var consumed2, "RESULT_END malformed total_rows varint");
         p += consumed2;
         if (p != s.Length)
         {
@@ -1137,7 +1153,7 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient
         if (s.Length < 1 + 8 + 1 + 1) throw new IngressError(ErrorCode.ProtocolViolation, "EXEC_DONE too short");
         var requestId = BinaryPrimitives.ReadInt64LittleEndian(s.Slice(1, 8));
         byte opType = s[9];
-        var rowsAffectedRaw = QwpVarint.Read(s.Slice(10), out var consumed);
+        var rowsAffectedRaw = ReadTerminatorVarint(s.Slice(10), out var consumed, "EXEC_DONE malformed rows_affected varint");
         if (rowsAffectedRaw > long.MaxValue)
         {
             throw new IngressError(ErrorCode.ProtocolViolation,

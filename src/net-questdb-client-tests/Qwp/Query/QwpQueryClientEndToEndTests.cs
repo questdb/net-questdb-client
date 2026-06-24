@@ -1579,6 +1579,67 @@ public class QwpQueryClientEndToEndTests
     }
 
     [Test]
+    public async Task CorruptVarintInResultEnd_IsTerminalProtocolViolation_NotRetried()
+    {
+        // Regression (M2): a malformed varint in a RESULT_END terminator is structural frame corruption.
+        // QwpVarint.Read classifies it as the retryable ProtocolVersionError, but here it must surface as
+        // the terminal ProtocolViolation — under failover=on the client must NOT reconnect and re-issue
+        // the query against the deterministically-corrupt frame.
+        var frame = QwpEgressFrameBuilder.BuildResultEnd(1L, finalSeq: 0L, totalRows: 0L);
+        frame[^1] = 0x80; // total_rows varint: continuation bit set with no following byte -> truncated
+
+        await using var server = new DummyQwpServer(new DummyQwpServerOptions
+        {
+            Path = QwpConstants.ReadPath,
+            NegotiatedVersion = "1",
+            FrameHandlerMulti = f =>
+                f.Length > 0 && f[0] == QwpConstants.MsgKindQueryRequest
+                    ? new[] { frame }
+                    : Array.Empty<byte[]>(),
+        });
+        await server.StartAsync();
+
+        var conn = BuildConnString(server,
+            "target=any;failover=on;failover_max_attempts=4;" +
+            "failover_backoff_initial_ms=10;failover_backoff_max_ms=20;");
+        using var client = QueryClient.New(conn);
+
+        var ex = Assert.Throws<IngressError>(() => client.Execute("SELECT 1", new RecordingHandler()));
+        Assert.That(ex!.code, Is.EqualTo(ErrorCode.ProtocolViolation));
+        Assert.That(server.UpgradeCount, Is.EqualTo(1),
+            "corrupt-frame ProtocolViolation is terminal — failover must not reconnect");
+    }
+
+    [Test]
+    public async Task CorruptVarintInExecDone_IsTerminalProtocolViolation_NotRetried()
+    {
+        // Regression (M2): sibling of the RESULT_END case for the EXEC_DONE terminator's rows_affected varint.
+        var frame = QwpEgressFrameBuilder.BuildExecDone(1L, opType: 0, rowsAffected: 0L);
+        frame[^1] = 0x80; // rows_affected varint: continuation bit set with no following byte -> truncated
+
+        await using var server = new DummyQwpServer(new DummyQwpServerOptions
+        {
+            Path = QwpConstants.ReadPath,
+            NegotiatedVersion = "1",
+            FrameHandlerMulti = f =>
+                f.Length > 0 && f[0] == QwpConstants.MsgKindQueryRequest
+                    ? new[] { frame }
+                    : Array.Empty<byte[]>(),
+        });
+        await server.StartAsync();
+
+        var conn = BuildConnString(server,
+            "target=any;failover=on;failover_max_attempts=4;" +
+            "failover_backoff_initial_ms=10;failover_backoff_max_ms=20;");
+        using var client = QueryClient.New(conn);
+
+        var ex = Assert.Throws<IngressError>(() => client.Execute("INSERT INTO t VALUES(1)", new RecordingHandler()));
+        Assert.That(ex!.code, Is.EqualTo(ErrorCode.ProtocolViolation));
+        Assert.That(server.UpgradeCount, Is.EqualTo(1),
+            "corrupt-frame ProtocolViolation is terminal — failover must not reconnect");
+    }
+
+    [Test]
     public async Task HandlerThrowOnExecDone_DoesNotMarkClientTerminal()
     {
         var done1 = QwpEgressFrameBuilder.BuildExecDone(1L, opType: 1, rowsAffected: 5L);

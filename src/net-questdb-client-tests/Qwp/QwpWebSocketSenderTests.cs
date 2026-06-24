@@ -914,6 +914,38 @@ public class QwpWebSocketSenderTests
     }
 
     [Test]
+    public async Task Dispose_Sf_ZeroCloseFlushTimeout_StillPersistsBufferedRowsToDisk()
+    {
+        // close_flush_timeout_millis=0 means "don't wait for acks", not "discard the buffer". In SF
+        // mode the close-time encode-to-ring is a local disk append (durability), not a network wait,
+        // so buffered-but-unsent rows must still be persisted to the segment ring on dispose.
+        // FrameHandler => null: the server never acks, so the persisted frame is never trimmed off disk.
+        await using var server = new DummyQwpServer(new DummyQwpServerOptions { FrameHandler = _ => null });
+        await server.StartAsync();
+        var sfRoot = Path.Combine(Path.GetTempPath(), "qwp-sf-closeflush0-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            using (var sender = NewSender(server,
+                       $"auto_flush=off;sf_dir={sfRoot};sender_id=svc-a;sf_max_bytes=4096;close_flush_timeout_millis=0;"))
+            {
+                // Buffered only — auto_flush is off and Send() is never called, so the close-time encode
+                // is the row's only path to the on-disk ring.
+                sender.Table("trades")
+                    .Symbol("ticker", "ETH-USD")
+                    .Column("price", 2615.54)
+                    .At(new DateTime(2026, 4, 28, 12, 0, 0, DateTimeKind.Utc));
+            }
+
+            Assert.That(SegmentBytesOnDisk(sfRoot), Is.GreaterThan(0),
+                "SF segment ring must retain the buffered row after a zero close-flush-timeout dispose");
+        }
+        finally
+        {
+            TryDeleteDirectory(sfRoot);
+        }
+    }
+
+    [Test]
     public async Task ConnectionListener_FiresConnectedOnFirstConnect()
     {
         await using var server = StartServerWithOkAcks();
@@ -1617,6 +1649,23 @@ public class QwpWebSocketSenderTests
         {
             try { Directory.Delete(path, recursive: true); } catch { }
         }
+    }
+
+    // Non-zero byte count across all SF segment files. A pre-sized, empty segment is all zeros;
+    // a written envelope ([u32 crc32c][u32 frame_len][frame]) introduces non-zero bytes.
+    private static long SegmentBytesOnDisk(string sfRoot)
+    {
+        if (!Directory.Exists(sfRoot)) return 0;
+        long nonZero = 0;
+        foreach (var path in Directory.EnumerateFiles(sfRoot, "*", SearchOption.AllDirectories))
+        {
+            if (!path.EndsWith(".sfa", StringComparison.Ordinal)) continue;
+            foreach (var b in File.ReadAllBytes(path))
+            {
+                if (b != 0) nonZero++;
+            }
+        }
+        return nonZero;
     }
 }
 

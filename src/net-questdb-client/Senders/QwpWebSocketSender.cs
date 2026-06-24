@@ -963,11 +963,8 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
         try
         {
             toRethrow = DrainOnClose(
-                drain: () =>
-                {
-                    FlushSync(CancellationToken.None);
-                    _engine.FlushAsync(Options.close_flush_timeout_millis).GetAwaiter().GetResult();
-                });
+                encode: () => FlushSync(CancellationToken.None),
+                wait: () => _engine.FlushAsync(Options.close_flush_timeout_millis).GetAwaiter().GetResult());
         }
         finally
         {
@@ -986,11 +983,8 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
         try
         {
             toRethrow = await DrainOnCloseAsync(
-                drain: async () =>
-                {
-                    await FlushAsyncCore(CancellationToken.None).ConfigureAwait(false);
-                    await _engine.FlushAsync(Options.close_flush_timeout_millis).ConfigureAwait(false);
-                }).ConfigureAwait(false);
+                encode: () => FlushAsyncCore(CancellationToken.None),
+                wait: () => new ValueTask(_engine.FlushAsync(Options.close_flush_timeout_millis))).ConfigureAwait(false);
         }
         finally
         {
@@ -1003,12 +997,28 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
         toRethrow?.Throw();
     }
 
-    private ExceptionDispatchInfo? DrainOnClose(Action drain)
+    private ExceptionDispatchInfo? DrainOnClose(Action encode, Action wait)
     {
         var timeoutMs = Options.close_flush_timeout_millis.TotalMilliseconds;
-        if (timeoutMs <= 0) return null;
+        if (timeoutMs <= 0)
+        {
+            // Explicit "don't wait" close. Still encode buffered rows into the on-disk ring in SF mode
+            // (a local append bounded by sf_append_deadline, not a network wait) so they replay after
+            // restart; best-effort and never throws. In RAM mode the ring is torn down un-sent, so
+            // there is nothing useful to encode.
+            if (!string.IsNullOrEmpty(Options.sf_dir))
+            {
+                try { encode(); }
+                catch { }
+            }
+            return null;
+        }
 
-        try { drain(); }
+        try
+        {
+            encode();
+            wait();
+        }
         catch (TimeoutException ex)
         {
             LogCloseFlushTimeoutWarn(timeoutMs);
@@ -1019,12 +1029,26 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
         return CaptureTerminalForRethrow();
     }
 
-    private async ValueTask<ExceptionDispatchInfo?> DrainOnCloseAsync(Func<ValueTask> drain)
+    private async ValueTask<ExceptionDispatchInfo?> DrainOnCloseAsync(Func<ValueTask> encode, Func<ValueTask> wait)
     {
         var timeoutMs = Options.close_flush_timeout_millis.TotalMilliseconds;
-        if (timeoutMs <= 0) return null;
+        if (timeoutMs <= 0)
+        {
+            // See DrainOnClose: encode best-effort into the on-disk ring in SF mode even when the
+            // ack-wait is skipped, so buffered rows survive to replay; never throws.
+            if (!string.IsNullOrEmpty(Options.sf_dir))
+            {
+                try { await encode().ConfigureAwait(false); }
+                catch { }
+            }
+            return null;
+        }
 
-        try { await drain().ConfigureAwait(false); }
+        try
+        {
+            await encode().ConfigureAwait(false);
+            await wait().ConfigureAwait(false);
+        }
         catch (TimeoutException ex)
         {
             LogCloseFlushTimeoutWarn(timeoutMs);

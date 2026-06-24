@@ -23,7 +23,9 @@
  ******************************************************************************/
 
 using NUnit.Framework;
+using QuestDB.Enums;
 using QuestDB.Qwp.Sf;
+using QuestDB.Utils;
 
 namespace net_questdb_client_tests.Qwp.Sf;
 
@@ -121,6 +123,27 @@ public class QwpMmapSegmentTests
     {
         using var seg = QwpMmapSegment.Open(SegmentPath(), 4096, 0);
         Assert.Throws<ArgumentException>(() => seg.TryAppend(ReadOnlySpan<byte>.Empty));
+    }
+
+    [Test]
+    public void Reopen_WithLoweredCapacityBelowFileSize_ThrowsInsteadOfTruncatingReplay()
+    {
+        var path = SegmentPath();
+
+        // Write a segment, then fill it with several frames so it is meaningfully larger than the
+        // lowered capacity we reopen with.
+        using (var seg = QwpMmapSegment.Open(path, 8192, 100))
+        {
+            for (var i = 0; i < 50; i++)
+            {
+                seg.TryAppend(new byte[] { (byte)i, 1, 2, 3 });
+            }
+        }
+
+        // Reopening at a capacity smaller than the on-disk file would map only a prefix and silently
+        // drop the trailing un-acked envelopes from replay. Must fail loudly instead.
+        var ex = Assert.Throws<IngressError>(() => QwpMmapSegment.Open(path, 4096, 100));
+        Assert.That(ex!.code, Is.EqualTo(ErrorCode.ConfigError));
     }
 
     [Test]

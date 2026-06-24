@@ -514,6 +514,10 @@ public record SenderOptions
             throw new IngressError(ErrorCode.ConfigError, $"`pool_timeout` must be > 0; got {_poolTimeout.TotalMilliseconds}ms");
         if (IsWebSocket())
         {
+            // 0 is the deliberate "fast close, don't wait" opt-out; a negative would fold into the
+            // same `<= 0` guard at dispose and silently drop buffered rows in RAM mode.
+            if (_closeFlushTimeout < TimeSpan.Zero)
+                throw new IngressError(ErrorCode.ConfigError, $"`close_flush_timeout_millis` must be ≥ 0; got {_closeFlushTimeout.TotalMilliseconds}ms");
             if (_sfAppendDeadline <= TimeSpan.Zero)
                 throw new IngressError(ErrorCode.ConfigError, $"`sf_append_deadline_millis` must be > 0; got {_sfAppendDeadline.TotalMilliseconds}ms");
             if (_reconnectMaxDuration <= TimeSpan.Zero)

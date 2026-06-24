@@ -26,6 +26,8 @@ using System.Buffers.Binary;
 using System.Diagnostics;
 using System.IO.MemoryMappedFiles;
 using Microsoft.Win32.SafeHandles;
+using QuestDB.Enums;
+using QuestDB.Utils;
 
 namespace QuestDB.Qwp.Sf;
 
@@ -165,6 +167,20 @@ internal sealed class QwpMmapSegment : IQwpSegment
         if (capacity <= HeaderSize + EnvelopeHeaderSize)
         {
             throw new ArgumentOutOfRangeException(nameof(capacity), "capacity must be larger than the file + envelope header");
+        }
+
+        // Mapping only a prefix of an oversized on-disk segment would silently drop every envelope
+        // past `capacity` from replay (ScanForLastGoodEnvelope can't see them, and the ring's
+        // inter-segment FSN-gap guard never fires for a single segment). Fail loudly instead — this
+        // only happens when sf_max_total_bytes is lowered below the size of an existing segment.
+        var existing = new FileInfo(path);
+        if (existing.Exists && existing.Length > capacity)
+        {
+            throw new IngressError(ErrorCode.ConfigError,
+                $"SF segment `{System.IO.Path.GetFileName(path)}` is {existing.Length} bytes on disk, larger than the " +
+                $"configured segment capacity {capacity} bytes. Lowering sf_max_total_bytes below the size of an " +
+                "existing segment would truncate un-acked frames from replay. Restore the previous capacity or " +
+                "drain and remove the SF directory before lowering it.");
         }
 
         var (mmap, fs) = QwpFiles.OpenMemoryMappedSegment(path, capacity);

@@ -565,6 +565,32 @@ public class QwpResultBatchDecoderTests
     }
 
     [Test]
+    public void ArrayAndSymbolAccessors_OnWrongTypedColumn_Throw()
+    {
+        // On a type-mismatched column (server schema drift, or app hard-coding the wrong type) these
+        // must surface InvalidOperationException like the other typed accessors (GetBinarySpan /
+        // GetStringSpan / GetLong256), not a raw NullReferenceException from dereferencing the wrong
+        // backing array (SymbolIds / StringOffsets).
+        var schema = new ResultSchema
+        {
+            Columns = { new SchemaColumn("v", QwpTypeCode.Long) },
+        };
+        var data = new ResultBatchData
+        {
+            RowCount = 1,
+            Columns = { new FixedColumnData { DenseBytes = LongsLe(42L) } },
+        };
+
+        var (_, batch, _, _) = DecodeOneBatch(schema, data);
+
+        Assert.Throws<InvalidOperationException>(() => batch.GetSymbolId(0, 0));
+        Assert.Throws<InvalidOperationException>(() => batch.GetDoubleArraySpan(0, 0).ToArray());
+        Assert.Throws<InvalidOperationException>(() => batch.GetLongArraySpan(0, 0).ToArray());
+        Assert.Throws<InvalidOperationException>(() => batch.GetArrayShape(0, 0));
+        Assert.Throws<InvalidOperationException>(() => batch.GetArrayNDims(0, 0));
+    }
+
+    [Test]
     public void Decode_RejectsHugeColumnNameLength()
     {
         // Hand-craft a payload whose column name length varint encodes int.MaxValue.

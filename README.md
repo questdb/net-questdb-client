@@ -147,7 +147,7 @@ using var sender = Sender.New("wss::addr=q.example.com:443;username=admin;passwo
 
 #### Pipelined async mode
 
-By default the WebSocket sender pipelines up to 128 batches in flight. Use the `*Async` API to keep the calling thread free while frames are on the wire:
+By default the WebSocket sender pipelines batches in flight. Use the `*Async` API to keep the calling thread free while frames are on the wire:
 
 ```csharp
 await using var sender = Sender.New("ws::addr=localhost:9000;");
@@ -162,8 +162,6 @@ for (var i = 0; i < 1_000_000; i++)
 
 await sender.SendAsync();
 ```
-
-`in_flight_window` controls the pipeline depth; valid range is `2..N`. The WebSocket transport is async-only — `in_flight_window=1` is rejected.
 
 #### Multi-address failover
 
@@ -217,9 +215,7 @@ if (sender is IQwpWebSocketSender ws)
 | `auto_flush_rows`             | 1000              | 75000 (HTTP), 600 (TCP)         |
 | `auto_flush_interval`         | 100 ms            | 1000 ms                         |
 | `auto_flush_bytes`            | `int.MaxValue`    | `int.MaxValue`                  |
-| `in_flight_window`            | 128               | n/a                             |
 | `close_flush_timeout_millis`  | 60000 ms          | n/a                             |
-| `max_schemas_per_connection`  | 65535             | n/a                             |
 | `request_durable_ack`         | `off`             | n/a                             |
 
 #### Store-and-forward (durable client buffer)
@@ -299,8 +295,6 @@ The config string format is:
 
 | Name                              | Default      | Description                                                                                              |
 | --------------------------------- | ------------ | -------------------------------------------------------------------------------------------------------- |
-| `in_flight_window`                | `128`        | Max pipelined batches awaiting ACK. Minimum is `2` — `in_flight_window=1` is rejected.                   |
-| `max_schemas_per_connection`      | `65535`      | Per-connection cap on distinct schema IDs. Hitting it requires recreating the sender.                    |
 | `request_durable_ack`             | `off`        | `on` / `off` — opts into per-table object-store ACK watermarks (cast to `IQwpWebSocketSender`).         |
 | `sf_dir`                          |              | Path to a local directory enabling store-and-forward. Sets the SF stack on this sender.                  |
 | `sender_id`                       | `default`    | Slot identifier under `<sf_dir>/<sender_id>/`. Must be unique per process sharing the same `sf_dir`.     |

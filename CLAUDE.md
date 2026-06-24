@@ -220,10 +220,9 @@ own framing, codecs, and server handshake. Everything QWP lives in
     unconditionally on connect; failover walks `addr=` candidates
     filtering against role.
 - `Senders/QwpWebSocketSender.cs` — owns the lifecycle. Single
-  execution path through `QwpCursorSendEngine` regardless of mode.
-  `in_flight_window=` is accepted (cross-client config-string interop)
-  and ignored — the engine uses pipelined double-buffering bounded by
-  the FSN ring capacity rather than a numeric window:
+  execution path through `QwpCursorSendEngine` regardless of mode — the
+  engine uses pipelined double-buffering bounded by the FSN ring
+  capacity rather than a numeric in-flight window:
   - **RAM mode** (default, `sf_dir` unset): the engine sits over a
     memory-backed `QwpSegmentRing` (`OpenMemoryBacked`) of
     `QwpMemorySegment`s, capped at `sf_max_total_bytes` (default

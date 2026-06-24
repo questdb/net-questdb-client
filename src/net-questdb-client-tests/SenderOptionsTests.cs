@@ -264,6 +264,32 @@ public class SenderOptionsTests
     }
 
     [Test]
+    public void CloseFlushTimeout_Negative_Rejected()
+    {
+        // 0 is the deliberate "fast close" opt-out (b631099); a negative is only ever a misconfig
+        // (e.g. a -1 "disabled" sentinel from another system) and would otherwise fold into the
+        // dispose-time `<= 0` guard and silently drop buffered rows in RAM mode.
+        var ex = Assert.Throws<IngressError>(
+            () => new SenderOptions("ws::addr=localhost:9000;close_flush_timeout_millis=-5;"));
+        Assert.That(ex!.Message, Does.Contain("close_flush_timeout_millis"));
+
+        // Same gap via the programmatic TimeSpan setter.
+        var opts = new SenderOptions
+        {
+            protocol = ProtocolType.ws, addr = "h:9000",
+            close_flush_timeout_millis = TimeSpan.FromMilliseconds(-5),
+        };
+        Assert.That(
+            () => opts.EnsureValid(),
+            Throws.TypeOf<IngressError>().With.Message.Contains("close_flush_timeout_millis"));
+
+        // 0 stays valid.
+        Assert.That(
+            () => new SenderOptions("ws::addr=localhost:9000;close_flush_timeout_millis=0;"),
+            Throws.Nothing);
+    }
+
+    [Test]
     public void Sf_DurabilityNonMemory_Throws()
     {
         Assert.That(

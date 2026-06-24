@@ -407,6 +407,11 @@ public sealed class QwpColumnBatch
     public int GetSymbolId(int col, int row)
     {
         var c = Col(col);
+        if (c.TypeCode != QwpTypeCode.Symbol)
+        {
+            throw new InvalidOperationException(
+                $"GetSymbolId requires a SYMBOL column, got {c.TypeCode}");
+        }
         var i = DenseIndex(c, row);
         if (i < 0) return -1;
         return c.SymbolIds![i];
@@ -415,11 +420,8 @@ public sealed class QwpColumnBatch
     /// <summary>Returns the dimensionality of a *_ARRAY value; <c>0</c> for NULL.</summary>
     public int GetArrayNDims(int col, int row)
     {
-        var c = Col(col);
-        var i = DenseIndex(c, row);
-        if (i < 0) return 0;
-        var start = c.StringOffsets![i];
-        return c.ValueBytes[start];
+        var (_, _, _, nDims) = ArraySpan(col, row);
+        return nDims < 0 ? 0 : nDims;
     }
 
     /// <summary>
@@ -495,6 +497,11 @@ public sealed class QwpColumnBatch
     private (byte[] Heap, int Start, int End, int NDims) ArraySpan(int col, int row)
     {
         var c = Col(col);
+        if (c.TypeCode is not (QwpTypeCode.DoubleArray or QwpTypeCode.LongArray))
+        {
+            throw new InvalidOperationException(
+                $"array accessors require a DOUBLE_ARRAY or LONG_ARRAY column, got {c.TypeCode}");
+        }
         var i = DenseIndex(c, row);
         if (i < 0) return (Array.Empty<byte>(), 0, 0, -1);
         var start = c.StringOffsets![i];

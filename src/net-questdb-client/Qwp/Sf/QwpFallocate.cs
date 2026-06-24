@@ -45,7 +45,7 @@ namespace QuestDB.Qwp.Sf;
 ///         allocated clusters.</item>
 ///     </list>
 ///     When the native call cannot run on the current target (unsupported filesystem, missing
-///     libc symbol, variadic-ABI mismatch on Apple Silicon), the routine falls back to
+///     libc symbol, an unrecognised architecture's variadic ABI), the routine falls back to
 ///     <see cref="FileStream.SetLength" /> alone. Page-walking the file would be the obvious
 ///     belt-and-braces fallback but it (a) does not actually reserve blocks on copy-on-write
 ///     filesystems and (b) clobbers any bytes the caller had already written, so it is omitted.
@@ -124,8 +124,11 @@ internal static class QwpFallocate
         }
     }
 
-    // fcntl is variadic — .NET's fixed-arg P/Invoke can mis-pass the pointer on Apple Silicon and
-    // return a false rc==0, so success is confirmed by reading fst_bytesalloc back, not by rc.
+    // fcntl is variadic — int fcntl(int fildes, int cmd, ...) — and .NET cannot emit a C varargs call
+    // (__arglist throws "Vararg calling convention not supported" on arm64), so ApplePreallocate uses a
+    // per-architecture fixed-signature P/Invoke to land the fstore_t* where libc's va_arg reads it.
+    // Success is still confirmed by reading fst_bytesalloc back, not by rc, so any unforeseen ABI
+    // mismatch degrades to the SetLength fallback instead of reporting a false success.
     private static bool TryPreallocateOnce(SafeFileHandle handle, IntPtr ptr, uint flags, long bytesToReserve)
     {
         var fstore = new fstore_t
@@ -140,7 +143,7 @@ internal static class QwpFallocate
         int rc;
         try
         {
-            rc = fcntl(handle, F_PREALLOCATE, ptr);
+            rc = ApplePreallocate(handle, ptr);
         }
         catch (EntryPointNotFoundException)
         {
@@ -155,11 +158,30 @@ internal static class QwpFallocate
         return Marshal.PtrToStructure<fstore_t>(ptr).fst_bytesalloc >= bytesToReserve;
     }
 
+    // Apple arm64 passes the named args (fildes, cmd) in x0/x1 and every variadic arg on the stack, so
+    // six dummy register args fill x2..x7 and force `arg` (the 9th) to spill to [sp,#0] — the slot the
+    // variadic callee reads its first ... argument from. x86-64 SysV instead passes it in rdx, matching
+    // a plain 3-arg call. macOS runs only on these two architectures.
+    private static int ApplePreallocate(SafeFileHandle handle, IntPtr arg)
+    {
+        if (RuntimeInformation.ProcessArchitecture == Architecture.Arm64)
+        {
+            return fcntl_arm64(handle, F_PREALLOCATE, 0, 0, 0, 0, 0, 0, arg);
+        }
+
+        return fcntl(handle, F_PREALLOCATE, arg);
+    }
+
     [DllImport("libc", SetLastError = false)]
     private static extern int posix_fallocate(SafeFileHandle fd, long offset, long len);
 
     [DllImport("libc", EntryPoint = "fcntl", SetLastError = true)]
     private static extern int fcntl(SafeFileHandle fd, int cmd, IntPtr arg);
+
+    [DllImport("libc", EntryPoint = "fcntl", SetLastError = true)]
+    private static extern int fcntl_arm64(
+        SafeFileHandle fd, int cmd,
+        long pad2, long pad3, long pad4, long pad5, long pad6, long pad7, IntPtr arg);
 
     private const int F_PREALLOCATE = 42;
     private const uint F_ALLOCATECONTIG = 0x00000002;

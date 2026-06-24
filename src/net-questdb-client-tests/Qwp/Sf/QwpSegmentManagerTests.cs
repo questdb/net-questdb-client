@@ -22,6 +22,7 @@
  *
  ******************************************************************************/
 
+using System.Runtime.InteropServices;
 using NUnit.Framework;
 using QuestDB.Qwp.Sf;
 
@@ -58,6 +59,37 @@ public class QwpSegmentManagerTests
         await WaitFor(() => mgr.SparesInstalled >= 1, TimeSpan.FromSeconds(2));
         Assert.That(ring.NeedsHotSpare(), Is.False);
         Assert.That(mgr.CommittedBytes, Is.EqualTo((long)QwpMmapSegment.HeaderSize + 64));
+    }
+
+    [Test]
+    public async Task ProvisionedHotSpare_IsBlockReserved_NotSparse()
+    {
+        // Guards the ProvisionHotSpare ordering: Reserve must own the SetLength so the macOS
+        // F_PREALLOCATE path (which reserves blocks from the physical EOF) actually runs. A SetLength
+        // before Reserve leaves a sparse spare whose mmap-write SIGBUSes when the disk is full. The
+        // sparseness is only observable on Unix via on-disk block accounting (du); NTFS SetLength
+        // always allocates, so there is nothing to verify on Windows.
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+        {
+            Assert.Ignore("Sparse spares are not observable on Windows; SetLength allocates on NTFS.");
+        }
+
+        // Capacity well above a filesystem block so sparse (~0 reserved) vs full (~capacity reserved)
+        // is unambiguous.
+        const long capacity = QwpMmapSegment.HeaderSize + 4L * 1024 * 1024;
+        using var ring = QwpSegmentRing.Open(_root, segmentCapacity: capacity);
+        using var mgr = new QwpSegmentManager(ring, long.MaxValue);
+        mgr.Start();
+
+        await WaitFor(() => mgr.SparesInstalled >= 1, TimeSpan.FromSeconds(5));
+
+        var spares = Directory.GetFiles(
+            _root, QwpSegmentRing.SparePrefix + "*" + QwpSegmentRing.SpareSuffix);
+        Assert.That(spares, Has.Length.EqualTo(1), "manager installs exactly one hot spare");
+
+        var allocated = GetAllocatedBytes(spares[0]);
+        Assert.That(allocated, Is.GreaterThanOrEqualTo(capacity / 2),
+            $"hot spare must be block-reserved, not sparse (allocated={allocated}, capacity={capacity})");
     }
 
     [Test]
@@ -197,6 +229,29 @@ public class QwpSegmentManagerTests
         // Final invariant: published = appended - 1 (assuming 0-based FSN), acked ≤ published.
         Assert.That(ring.PublishedFsn, Is.EqualTo(Interlocked.Read(ref appended) - 1));
         Assert.That(ring.AckedFsn, Is.LessThanOrEqualTo(ring.PublishedFsn));
+    }
+
+    // On-disk bytes actually reserved for the file (st_blocks), as reported by `du -k`. A sparse file
+    // reports ~0 regardless of its logical length; a block-reserved file reports ~its length.
+    private static long GetAllocatedBytes(string path)
+    {
+        var psi = new System.Diagnostics.ProcessStartInfo("du")
+        {
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+        };
+        psi.ArgumentList.Add("-k");
+        psi.ArgumentList.Add(path);
+
+        using var proc = System.Diagnostics.Process.Start(psi)!;
+        var stdout = proc.StandardOutput.ReadToEnd();
+        proc.WaitForExit();
+
+        // `du -k` emits "<kib>\t<path>"; the first whitespace-delimited token is 1024-byte blocks.
+        var token = stdout.Split(
+            new[] { '\t', ' ', '\n', '\r' }, StringSplitOptions.RemoveEmptyEntries)[0];
+        return long.Parse(token, System.Globalization.CultureInfo.InvariantCulture) * 1024;
     }
 
     private static async Task WaitFor(Func<bool> condition, TimeSpan timeout)

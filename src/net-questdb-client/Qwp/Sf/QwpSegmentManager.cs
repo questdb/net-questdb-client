@@ -264,10 +264,11 @@ internal sealed class QwpSegmentManager : IDisposable
         try
         {
             using var fs = QwpFiles.OpenExclusive(sparePath);
-            fs.SetLength(capacity);
             // Force block allocation so a producer mmap-write can't trigger SIGBUS / EFAULT later
-            // when the disk turns out to be full.
-            ReserveDiskBlocks(fs, capacity);
+            // when the disk turns out to be full. Reserve does the SetLength itself, and must see the
+            // still-zero-length file first: macOS F_PREALLOCATE reserves from the physical EOF, so a
+            // SetLength here would make toReserve==0 and leave a sparse spare that SIGBUSes on write.
+            QwpFallocate.Reserve(fs, capacity);
             fs.Flush(flushToDisk: true);
         }
         catch (Exception ex)
@@ -287,9 +288,6 @@ internal sealed class QwpSegmentManager : IDisposable
             SfCleanup.DeleteFile(sparePath);
         }
     }
-
-    private static void ReserveDiskBlocks(FileStream fs, long length) =>
-        QwpFallocate.Reserve(fs, length);
 
     private void DrainAndDisposeTrimmable()
     {

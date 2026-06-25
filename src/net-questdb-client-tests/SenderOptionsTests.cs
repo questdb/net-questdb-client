@@ -465,19 +465,25 @@ public class SenderOptionsTests
     }
 
     [Test]
-    public void Target_IsSilentlyAcceptedOnIngress()
+    public void Target_IsSilentlyAcceptedOnWebSocketButRejectedOnIngress()
     {
+        // `target` is an egress-only key: accepted-and-ignored on ws/wss, rejected on http/tcp
+        // like every other egress key (mirrors EgressKeys_RejectedOnNonWebSocketScheme).
         Assert.That(() => new SenderOptions("ws::addr=localhost:9000;target=replica;"), Throws.Nothing);
-        Assert.That(() => new SenderOptions("http::addr=localhost:9000;target=primary;"), Throws.Nothing);
-        Assert.That(() => new SenderOptions("tcp::addr=localhost:9009;target=any;"), Throws.Nothing);
+        Assert.That(() => new SenderOptions("http::addr=localhost:9000;target=primary;"),
+            Throws.TypeOf<IngressError>().With.Message.Contains("target"));
+        Assert.That(() => new SenderOptions("tcp::addr=localhost:9009;target=any;"),
+            Throws.TypeOf<IngressError>().With.Message.Contains("target"));
     }
 
     [Test]
-    public void InitialCredit_IsSilentlyAcceptedOnIngress()
+    public void InitialCredit_IsSilentlyAcceptedOnWebSocketButRejectedOnIngress()
     {
         Assert.That(() => new SenderOptions("ws::addr=localhost:9000;initial_credit=1024;"), Throws.Nothing);
-        Assert.That(() => new SenderOptions("http::addr=localhost:9000;initial_credit=1024;"), Throws.Nothing);
-        Assert.That(() => new SenderOptions("tcp::addr=localhost:9009;initial_credit=1024;"), Throws.Nothing);
+        Assert.That(() => new SenderOptions("http::addr=localhost:9000;initial_credit=1024;"),
+            Throws.TypeOf<IngressError>().With.Message.Contains("initial_credit"));
+        Assert.That(() => new SenderOptions("tcp::addr=localhost:9009;initial_credit=1024;"),
+            Throws.TypeOf<IngressError>().With.Message.Contains("initial_credit"));
     }
 
     [Test]
@@ -1137,10 +1143,16 @@ public class SenderOptionsTests
     [TestCase("http", "sender_id=foo")]
     [TestCase("http", "ping_timeout=1000")]
     [TestCase("http", "proxy=http://p:8080")]
+    [TestCase("http", "target=primary")]
+    [TestCase("http", "initial_credit=5")]
     [TestCase("https", "ping_timeout=1000")]
     [TestCase("https", "proxy=http://p:8080")]
+    [TestCase("https", "target=replica")]
+    [TestCase("https", "initial_credit=5")]
     [TestCase("tcp", "ping_timeout=1000")]
     [TestCase("tcp", "proxy=http://p:8080")]
+    [TestCase("tcp", "target=primary")]
+    [TestCase("tcp", "initial_credit=5")]
     [TestCase("tcps", "ping_timeout=1000")]
     [TestCase("tcps", "proxy=http://p:8080")]
     public void WsOnlyKey_OnNonWsScheme_Rejected(string scheme, string kv)

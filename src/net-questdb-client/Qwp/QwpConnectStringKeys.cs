@@ -44,7 +44,7 @@ internal static class QwpConnectStringKeys
         "addr", "protocol", "tls_verify", "tls_roots", "tls_roots_password",
         "username", "user", "password", "pass", "token",
         "auth_timeout_ms",
-        "zone", "target", "initial_credit", "error_inbox_capacity",
+        "zone", "error_inbox_capacity",
     };
 
     /// <summary>
@@ -75,5 +75,6 @@ internal static class QwpConnectStringKeys
         "failover", "failover_max_attempts", "failover_backoff_initial_ms",
         "failover_backoff_max_ms", "failover_max_duration_ms",
         "max_batch_rows", "client_id", "buffer_pool_size",
+        "target", "initial_credit",
     };
 }

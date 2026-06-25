@@ -308,4 +308,87 @@ public class QwpColumnTests
         var span = col.FixedData!.AsSpan(50 * 8, 8);
         Assert.That(System.Buffers.Binary.BinaryPrimitives.ReadInt64LittleEndian(span), Is.EqualTo(50));
     }
+
+    // Regression: Clear() zeroes the lengths but keeps the backing arrays non-null;
+    // a subsequent TrimToCurrent() then Array.Resizes them to length 0 (still non-null).
+    // The next append hits GrowTo(0, required), which doubled 0*2==0 forever — a hard
+    // CPU hang on the producer thread. Each grow path is exercised separately because
+    // they resize different backing arrays. The triggering append runs on a background
+    // thread guarded by a timeout so the buggy path fails fast instead of hanging the
+    // whole suite.
+    [Test]
+    public void Append_AfterClearThenTrim_DoesNotHang_Fixed()
+    {
+        var col = new QwpColumn("c", 0);
+        col.AppendLong(42);
+        col.Clear();
+        col.TrimToCurrent();
+
+        AssertCompletesQuickly(() => col.AppendLong(7));
+        Assert.That(col.RowCount, Is.EqualTo(1));
+    }
+
+    [Test]
+    public void Append_AfterClearThenTrim_DoesNotHang_Varchar()
+    {
+        var col = new QwpColumn("c", 0);
+        col.AppendVarchar("hello".AsSpan());
+        col.Clear();
+        col.TrimToCurrent();
+
+        AssertCompletesQuickly(() => col.AppendVarchar("world".AsSpan()));
+        Assert.That(col.RowCount, Is.EqualTo(1));
+    }
+
+    [Test]
+    public void Append_AfterClearThenTrim_DoesNotHang_Symbol()
+    {
+        var col = new QwpColumn("c", 0);
+        col.AppendSymbol(3);
+        col.Clear();
+        col.TrimToCurrent();
+
+        AssertCompletesQuickly(() => col.AppendSymbol(5));
+        Assert.That(col.RowCount, Is.EqualTo(1));
+    }
+
+    [Test]
+    public void Append_AfterClearThenTrim_DoesNotHang_Bool()
+    {
+        var col = new QwpColumn("c", 0);
+        col.AppendBool(true);
+        col.Clear();
+        col.TrimToCurrent();
+
+        AssertCompletesQuickly(() => col.AppendBool(false));
+        Assert.That(col.RowCount, Is.EqualTo(1));
+    }
+
+    private static void AssertCompletesQuickly(System.Action action)
+    {
+        System.Exception? captured = null;
+        var thread = new Thread(() =>
+        {
+            try
+            {
+                action();
+            }
+            catch (System.Exception ex)
+            {
+                captured = ex;
+            }
+        })
+        {
+            IsBackground = true, // a hang must not keep a live foreground thread spinning after the run.
+        };
+
+        thread.Start();
+        var completed = thread.Join(System.TimeSpan.FromSeconds(5));
+
+        Assert.That(completed, Is.True, "append did not complete — infinite loop in GrowTo(0, required)");
+        if (captured is not null)
+        {
+            throw captured;
+        }
+    }
 }

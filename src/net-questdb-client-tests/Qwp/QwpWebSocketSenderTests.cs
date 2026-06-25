@@ -182,6 +182,38 @@ public class QwpWebSocketSenderTests
     }
 
     [Test]
+    public async Task EndToEnd_FlushTruncateThenAppend_DoesNotHang()
+    {
+        await using var server = StartServerWithOkAcks();
+        using var sender = NewSender(server, "auto_flush=off;");
+
+        sender.Table("t").Column("v", 1L).At(DateTime.UtcNow);
+        sender.Send();
+        await WaitFor(() => server.ReceivedFrames.Count >= 1);
+
+        sender.Truncate();
+
+        var completed = await Task.Run(() =>
+        {
+            var thread = new System.Threading.Thread(() =>
+            {
+                sender.Table("t").Column("v", 2L).At(DateTime.UtcNow);
+                sender.Send();
+            })
+            {
+                IsBackground = true, // a hang must not keep a live foreground thread spinning after the run.
+            };
+            thread.Start();
+            return thread.Join(System.TimeSpan.FromSeconds(5));
+        });
+
+        Assert.That(completed, Is.True,
+            "append after Flush()+Truncate() hung — infinite loop in GrowTo(0, required)");
+        await WaitFor(() => server.ReceivedFrames.Count >= 2);
+        Assert.That(server.ReceivedFrames.Count, Is.EqualTo(2));
+    }
+
+    [Test]
     public async Task EndToEnd_NewColumnMidStream_GrowsInlineSchema()
     {
         await using var server = StartServerWithOkAcks();

@@ -1146,7 +1146,7 @@ internal sealed class QwpColumn
                 $"QWP {what} capacity requirement overflowed int.MaxValue");
         }
 
-        var newSize = (long)currentLength;
+        var newSize = Math.Max(1L, (long)currentLength);
         while (newSize < required)
         {
             newSize *= 2;

@@ -307,6 +307,56 @@ public class QwpResultBatchDecoderTests
     }
 
     [Test]
+    public void ArrayElementAccessors_OnMismatchedArrayType_Throw()
+    {
+        // A DOUBLE_ARRAY column must reject GetLong* and a LONG_ARRAY column must reject GetDouble*.
+        // Both element widths are 8 bytes, so without an exact-type guard the bytes would be silently
+        // reinterpreted (longs as doubles / vice versa) and return wrong data with no error.
+        var doubleSchema = new ResultSchema
+        {
+            Columns = { new SchemaColumn("a", QwpTypeCode.DoubleArray) },
+        };
+        var doubleData = new ResultBatchData
+        {
+            RowCount = 1,
+            Columns =
+            {
+                new DoubleArrayColumnData
+                {
+                    DenseArrays = new[] { (new[] { 3 }, new[] { 1.0, 2.0, 3.0 }) },
+                },
+            },
+        };
+        var (_, doubleBatch, _, _) = DecodeOneBatch(doubleSchema, doubleData);
+        Assert.Throws<InvalidOperationException>(() => doubleBatch.GetLongArraySpan(0, 0).ToArray());
+        Assert.Throws<InvalidOperationException>(() => doubleBatch.GetLongArrayElements(0, 0));
+        // Type-agnostic accessors still work on either array type.
+        Assert.That(doubleBatch.GetArrayShape(0, 0), Is.EqualTo(new[] { 3 }));
+        Assert.That(doubleBatch.GetDoubleArrayElements(0, 0), Is.EqualTo(new[] { 1.0, 2.0, 3.0 }));
+
+        var longSchema = new ResultSchema
+        {
+            Columns = { new SchemaColumn("la", QwpTypeCode.LongArray) },
+        };
+        var longData = new ResultBatchData
+        {
+            RowCount = 1,
+            Columns =
+            {
+                new LongArrayColumnData
+                {
+                    DenseArrays = new[] { (new[] { 4 }, new[] { 1L, 2L, 3L, 4L }) },
+                },
+            },
+        };
+        var (_, longBatch, _, _) = DecodeOneBatch(longSchema, longData);
+        Assert.Throws<InvalidOperationException>(() => longBatch.GetDoubleArraySpan(0, 0).ToArray());
+        Assert.Throws<InvalidOperationException>(() => longBatch.GetDoubleArrayElements(0, 0));
+        Assert.That(longBatch.GetArrayShape(0, 0), Is.EqualTo(new[] { 4 }));
+        Assert.That(longBatch.GetLongArrayElements(0, 0), Is.EqualTo(new[] { 1L, 2L, 3L, 4L }));
+    }
+
+    [Test]
     public void Decode_GeohashColumn_RoundTripsPrecisionAndValue()
     {
         var schema = new ResultSchema

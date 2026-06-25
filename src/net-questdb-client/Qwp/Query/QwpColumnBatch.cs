@@ -442,7 +442,7 @@ public sealed class QwpColumnBatch
     /// </summary>
     public ReadOnlySpan<double> GetDoubleArraySpan(int col, int row)
     {
-        var (heap, start, end, nDims) = ArraySpan(col, row);
+        var (heap, start, end, nDims) = ArraySpan(col, row, QwpTypeCode.DoubleArray);
         if (nDims < 0) return ReadOnlySpan<double>.Empty;
         var valueByteCount = ArrayValueByteCount(start, end, nDims, elementBytes: 8);
         return System.Runtime.InteropServices.MemoryMarshal
@@ -457,7 +457,7 @@ public sealed class QwpColumnBatch
     /// </summary>
     public ReadOnlySpan<long> GetLongArraySpan(int col, int row)
     {
-        var (heap, start, end, nDims) = ArraySpan(col, row);
+        var (heap, start, end, nDims) = ArraySpan(col, row, QwpTypeCode.LongArray);
         if (nDims < 0) return ReadOnlySpan<long>.Empty;
         var valueByteCount = ArrayValueByteCount(start, end, nDims, elementBytes: 8);
         return System.Runtime.InteropServices.MemoryMarshal
@@ -503,10 +503,20 @@ public sealed class QwpColumnBatch
         return shape;
     }
 
-    private (byte[] Heap, int Start, int End, int NDims) ArraySpan(int col, int row)
+    // expected != null pins the exact element type (DOUBLE_ARRAY vs LONG_ARRAY) for the
+    // value-returning accessors; shape/ndims accessors pass null since they don't read elements.
+    private (byte[] Heap, int Start, int End, int NDims) ArraySpan(int col, int row, QwpTypeCode? expected = null)
     {
         var c = Col(col);
-        if (c.TypeCode is not (QwpTypeCode.DoubleArray or QwpTypeCode.LongArray))
+        if (expected is { } want)
+        {
+            if (c.TypeCode != want)
+            {
+                throw new InvalidOperationException(
+                    $"column type mismatch: expected {want}, got {c.TypeCode}");
+            }
+        }
+        else if (c.TypeCode is not (QwpTypeCode.DoubleArray or QwpTypeCode.LongArray))
         {
             throw new InvalidOperationException(
                 $"array accessors require a DOUBLE_ARRAY or LONG_ARRAY column, got {c.TypeCode}");

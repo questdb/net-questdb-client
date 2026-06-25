@@ -246,7 +246,7 @@ public class QwpResultBatchDecoderTests
         var (_, batch, _, _) = DecodeOneBatch(schema, data);
 
         Assert.That(batch.GetDecimalScale(0), Is.EqualTo((byte)2));
-        Assert.That(batch.GetLongValue(0, 0), Is.EqualTo(12345L));
+        Assert.That(batch.GetDecimal64UnscaledValue(0, 0), Is.EqualTo(12345L));
     }
 
     [Test]
@@ -588,6 +588,101 @@ public class QwpResultBatchDecoderTests
         Assert.Throws<InvalidOperationException>(() => batch.GetLongArraySpan(0, 0).ToArray());
         Assert.Throws<InvalidOperationException>(() => batch.GetArrayShape(0, 0));
         Assert.Throws<InvalidOperationException>(() => batch.GetArrayNDims(0, 0));
+    }
+
+    [Test]
+    public void NumericAccessors_OnWrongTypedColumn_Throw()
+    {
+        // A VARCHAR column decodes into StringHeap/StringOffsets and never touches the ValueBytes
+        // scratch — which is pooled across batches (ColumnView.Reset clears sentinels, not scratch).
+        // Without a type guard a numeric accessor reads stale ValueBytes residue from a prior batch
+        // and returns a plausible-looking wrong value (or an ArgumentOutOfRangeException on an empty
+        // scratch) instead of throwing, the silent-wrong-data failure 32d8f00 set out to eliminate.
+        var schema = new ResultSchema
+        {
+            Columns = { new SchemaColumn("s", QwpTypeCode.Varchar) },
+        };
+        var data = new ResultBatchData
+        {
+            RowCount = 1,
+            Columns = { new VarcharColumnData { DenseValues = new[] { "x" } } },
+        };
+
+        var (_, batch, _, _) = DecodeOneBatch(schema, data);
+
+        Assert.Throws<InvalidOperationException>(() => batch.GetBoolValue(0, 0));
+        Assert.Throws<InvalidOperationException>(() => batch.GetByteValue(0, 0));
+        Assert.Throws<InvalidOperationException>(() => batch.GetSByteValue(0, 0));
+        Assert.Throws<InvalidOperationException>(() => batch.GetShortValue(0, 0));
+        Assert.Throws<InvalidOperationException>(() => batch.GetCharValue(0, 0));
+        Assert.Throws<InvalidOperationException>(() => batch.GetIntValue(0, 0));
+        Assert.Throws<InvalidOperationException>(() => batch.GetLongValue(0, 0));
+        Assert.Throws<InvalidOperationException>(() => batch.GetFloatValue(0, 0));
+        Assert.Throws<InvalidOperationException>(() => batch.GetDoubleValue(0, 0));
+        // Width-family wrappers and the IPv4/timestamp/date convenience readers share the same guard.
+        Assert.Throws<InvalidOperationException>(() => batch.GetIPv4Value(0, 0));
+        Assert.Throws<InvalidOperationException>(() => batch.GetTimestampValue(0, 0));
+        Assert.Throws<InvalidOperationException>(() => batch.GetDateValue(0, 0));
+    }
+
+    [Test]
+    public void NumericAccessors_AcceptCompatibleWireTypeFamily()
+    {
+        // GetLongValue is the int64 reader for the whole long family (a designated TIMESTAMP / DATE
+        // is read through it), and GetIntValue covers Int + IPv4. GetString and the convenience
+        // wrappers depend on that, so the guard must admit the family, not just the canonical code.
+        var schema = new ResultSchema
+        {
+            Columns =
+            {
+                new SchemaColumn("ts", QwpTypeCode.Timestamp),
+                new SchemaColumn("d", QwpTypeCode.Date),
+                new SchemaColumn("ip", QwpTypeCode.IPv4),
+            },
+        };
+        var data = new ResultBatchData
+        {
+            RowCount = 1,
+            Columns =
+            {
+                new TimestampColumnData { DenseValues = new[] { 1_700_000_000_000_000L } },
+                new TimestampColumnData { DenseValues = new[] { 123_456L } },
+                new FixedColumnData { DenseBytes = IntsLe(0x7F000001) },
+            },
+        };
+
+        var (_, batch, _, _) = DecodeOneBatch(schema, data);
+
+        Assert.That(batch.GetLongValue(0, 0), Is.EqualTo(1_700_000_000_000_000L));
+        Assert.That(batch.GetLongValue(1, 0), Is.EqualTo(123_456L));
+        Assert.That(batch.GetIntValue(2, 0), Is.EqualTo(0x7F000001));
+    }
+
+    [Test]
+    public void GetString_OnInvalidUtf8Varchar_RendersReplacementCharWithoutThrowing()
+    {
+        // The decoder copies VARCHAR/SYMBOL heap bytes verbatim, so GetString is the first UTF-8
+        // decode point. A server value with invalid UTF-8 (a lone 0xFF) must render lossily via the
+        // replacement fallback, not throw a raw DecoderFallbackException out of OnBatch.
+        // VARCHAR and BINARY share the offsets+heap wire layout, so a Varchar schema column paired
+        // with BinaryColumnData injects arbitrary heap bytes a string[] builder cannot represent.
+        var schema = new ResultSchema
+        {
+            Columns = { new SchemaColumn("s", QwpTypeCode.Varchar) },
+        };
+        var data = new ResultBatchData
+        {
+            RowCount = 1,
+            Columns = { new BinaryColumnData { DenseValues = new[] { new byte[] { 0xFF } } } },
+        };
+
+        var (_, batch, _, _) = DecodeOneBatch(schema, data);
+
+        string? rendered = null;
+        Assert.DoesNotThrow(() => rendered = batch.GetString(0, 0));
+        Assert.That(rendered, Is.EqualTo("�")); // U+FFFD replacement char
+        // The raw bytes remain available, unchanged, through the span accessor.
+        Assert.That(batch.GetStringSpan(0, 0).ToArray(), Is.EqualTo(new byte[] { 0xFF }));
     }
 
     [Test]

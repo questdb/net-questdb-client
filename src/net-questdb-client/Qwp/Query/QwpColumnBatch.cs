@@ -75,6 +75,7 @@ public sealed class QwpColumnBatch
     public bool GetBoolValue(int col, int row)
     {
         var c = Col(col);
+        RequireType(c, QwpTypeCode.Boolean);
         var i = DenseIndex(c, row);
         if (i < 0) return false;
         var byteIdx = i >> 3;
@@ -91,6 +92,7 @@ public sealed class QwpColumnBatch
     public short GetShortValue(int col, int row)
     {
         var c = Col(col);
+        RequireType(c, QwpTypeCode.Short);
         var i = DenseIndex(c, row);
         if (i < 0) return 0;
         return BinaryPrimitives.ReadInt16LittleEndian(c.ValueBytes.AsSpan(i * 2, 2));
@@ -100,6 +102,7 @@ public sealed class QwpColumnBatch
     public char GetCharValue(int col, int row)
     {
         var c = Col(col);
+        RequireType(c, QwpTypeCode.Char);
         var i = DenseIndex(c, row);
         if (i < 0) return '\0';
         return (char)BinaryPrimitives.ReadUInt16LittleEndian(c.ValueBytes.AsSpan(i * 2, 2));
@@ -109,6 +112,7 @@ public sealed class QwpColumnBatch
     public int GetIntValue(int col, int row)
     {
         var c = Col(col);
+        RequireType(c, IntFamily);
         var i = DenseIndex(c, row);
         if (i < 0) return 0;
         return BinaryPrimitives.ReadInt32LittleEndian(c.ValueBytes.AsSpan(i * 4, 4));
@@ -118,15 +122,15 @@ public sealed class QwpColumnBatch
     public long GetLongValue(int col, int row)
     {
         var c = Col(col);
-        var i = DenseIndex(c, row);
-        if (i < 0) return 0;
-        return BinaryPrimitives.ReadInt64LittleEndian(c.ValueBytes.AsSpan(i * 8, 8));
+        RequireType(c, LongFamily);
+        return ReadInt64(c, row);
     }
 
     /// <summary>Returns the FLOAT (32-bit); <c>0</c> for NULL.</summary>
     public float GetFloatValue(int col, int row)
     {
         var c = Col(col);
+        RequireType(c, QwpTypeCode.Float);
         var i = DenseIndex(c, row);
         if (i < 0) return 0f;
         return BitConverter.Int32BitsToSingle(
@@ -137,6 +141,7 @@ public sealed class QwpColumnBatch
     public double GetDoubleValue(int col, int row)
     {
         var c = Col(col);
+        RequireType(c, QwpTypeCode.Double);
         var i = DenseIndex(c, row);
         if (i < 0) return 0d;
         return BitConverter.Int64BitsToDouble(
@@ -178,7 +183,7 @@ public sealed class QwpColumnBatch
             throw new InvalidOperationException(
                 $"GetDecimal64UnscaledValue requires a DECIMAL64 column, got {c.TypeCode}");
         }
-        return GetLongValue(col, row);
+        return ReadInt64(c, row);
     }
 
     /// <summary>Returns the lower 64 bits of a DECIMAL128 unscaled value; <c>0</c> for NULL.</summary>
@@ -378,7 +383,11 @@ public sealed class QwpColumnBatch
         var c = Col(col);
         return c.TypeCode switch
         {
-            QwpTypeCode.Varchar or QwpTypeCode.Symbol => QwpConstants.StrictUtf8.GetString(GetStringSpan(col, row)),
+            // Best-effort renderer: decode VARCHAR/SYMBOL value bytes with the replacement fallback
+            // (U+FFFD) rather than QwpConstants.StrictUtf8, so an invalid-UTF-8 server value renders
+            // a lossy string instead of throwing a raw DecoderFallbackException out of OnBatch.
+            // StrictUtf8 stays scoped to wire identifiers; callers needing the raw bytes use GetStringSpan.
+            QwpTypeCode.Varchar or QwpTypeCode.Symbol => Encoding.UTF8.GetString(GetStringSpan(col, row)),
             QwpTypeCode.Boolean => GetBoolValue(col, row).ToString(),
             QwpTypeCode.Byte => GetByteValue(col, row).ToString(),
             QwpTypeCode.Short => GetShortValue(col, row).ToString(),
@@ -578,9 +587,48 @@ public sealed class QwpColumnBatch
     private byte GetFixedByte(int col, int row)
     {
         var c = Col(col);
+        RequireType(c, QwpTypeCode.Byte);
         var i = DenseIndex(c, row);
         if (i < 0) return 0;
         return c.ValueBytes[i];
+    }
+
+    private long ReadInt64(ColumnView c, int row)
+    {
+        var i = DenseIndex(c, row);
+        if (i < 0) return 0;
+        return BinaryPrimitives.ReadInt64LittleEndian(c.ValueBytes.AsSpan(i * 8, 8));
+    }
+
+    // GetLongValue / GetIntValue are the int64 / int32 readers for a family of wire types that
+    // share a physical width (a designated TIMESTAMP is read via GetLongValue, an IPv4 via
+    // GetIntValue), so the guard admits the whole family rather than a single code.
+    private static readonly QwpTypeCode[] LongFamily =
+        { QwpTypeCode.Long, QwpTypeCode.Date, QwpTypeCode.Timestamp, QwpTypeCode.TimestampNanos };
+
+    private static readonly QwpTypeCode[] IntFamily =
+        { QwpTypeCode.Int, QwpTypeCode.IPv4 };
+
+    // Guards a fixed-width numeric accessor against a wrong-typed column. The scratch buffers are
+    // pooled across batches (see ColumnView.Reset), so without this a reader would return residue
+    // from a prior batch as a plausible-looking wrong value instead of throwing.
+    private static void RequireType(ColumnView c, QwpTypeCode expected)
+    {
+        if (c.TypeCode != expected)
+        {
+            throw new InvalidOperationException(
+                $"column type mismatch: expected {expected}, got {c.TypeCode}");
+        }
+    }
+
+    private static void RequireType(ColumnView c, ReadOnlySpan<QwpTypeCode> expected)
+    {
+        foreach (var e in expected)
+        {
+            if (c.TypeCode == e) return;
+        }
+        throw new InvalidOperationException(
+            $"column type mismatch: expected one of [{string.Join(", ", expected.ToArray())}], got {c.TypeCode}");
     }
 }
 

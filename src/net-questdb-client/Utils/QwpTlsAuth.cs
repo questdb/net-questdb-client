@@ -57,17 +57,45 @@ internal static class QwpTlsAuth
     }
 
     /// <summary>
-    ///     Builds the <see cref="RemoteCertificateValidationCallback" /> for the TLS handshake.
-    ///     Returns <c>null</c> when the system default chain validation is sufficient.
+    ///     Owns the <see cref="RemoteCertificateValidationCallback" /> for the TLS handshake and,
+    ///     for custom-root pinning, the loaded CA certificate. The owning sender / query client
+    ///     must <see cref="Dispose" /> this so the native cert handle is freed deterministically
+    ///     instead of waiting on GC finalization.
     /// </summary>
-    public static RemoteCertificateValidationCallback? BuildCertificateValidator(
+    internal sealed class CertificateValidator : IDisposable
+    {
+        private readonly Lazy<X509Certificate2>? _trustRoot;
+
+        internal CertificateValidator(RemoteCertificateValidationCallback callback, Lazy<X509Certificate2>? trustRoot)
+        {
+            Callback = callback;
+            _trustRoot = trustRoot;
+        }
+
+        public RemoteCertificateValidationCallback Callback { get; }
+
+        public void Dispose()
+        {
+            if (_trustRoot is { IsValueCreated: true })
+            {
+                _trustRoot.Value.Dispose();
+            }
+        }
+    }
+
+    /// <summary>
+    ///     Builds the certificate validator for the TLS handshake. Returns <c>null</c> when the
+    ///     system default chain validation is sufficient. The returned holder owns any loaded
+    ///     custom-root certificate and must be disposed by the caller.
+    /// </summary>
+    public static CertificateValidator? BuildCertificateValidator(
         TlsVerifyType tlsVerify,
         string? tlsRoots,
         string? tlsRootsPassword)
     {
         if (tlsVerify == TlsVerifyType.unsafe_off)
         {
-            return (_, _, _, _) => true;
+            return new CertificateValidator((_, _, _, _) => true, trustRoot: null);
         }
 
         if (string.IsNullOrEmpty(tlsRoots))
@@ -78,7 +106,7 @@ internal static class QwpTlsAuth
         // Lazy-load on first handshake so a non-existent path doesn't fail at builder time;
         // once loaded the cert is cached and every subsequent handshake reuses it.
         var trustRoot = new Lazy<X509Certificate2>(() => LoadTrustRoot(tlsRoots, tlsRootsPassword));
-        return (_, certificate, chain, errors) =>
+        RemoteCertificateValidationCallback callback = (_, certificate, chain, errors) =>
         {
             if ((errors & ~SslPolicyErrors.RemoteCertificateChainErrors) != 0)
             {
@@ -94,6 +122,7 @@ internal static class QwpTlsAuth
             }
             return chain.Build(serverCert);
         };
+        return new CertificateValidator(callback, trustRoot);
     }
 
     internal static X509Certificate2 LoadTrustRoot(string path, string? password)

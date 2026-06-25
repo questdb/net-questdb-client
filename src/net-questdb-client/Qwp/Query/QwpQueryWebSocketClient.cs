@@ -50,6 +50,7 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient
 
     private QwpWebSocketTransport? _transport;
     private readonly QwpHostHealthTracker _hostTracker;
+    private readonly QwpTlsAuth.CertificateValidator? _certValidator;
     private int _activeAddressIndex = -1;
     private byte[] _receiveBuffer = new byte[InitialReceiveBufferBytes];
     private byte[] _decompressBuffer = Array.Empty<byte>();
@@ -78,6 +79,10 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient
             options.addresses,
             clientZone: options.zone,
             targetIsPrimary: options.target == TargetType.primary);
+        // Built once and reused across every (re)connect; owns the loaded custom-root cert so it
+        // is freed deterministically on Dispose rather than leaking one per BuildTransport call.
+        _certValidator = QwpTlsAuth.BuildCertificateValidator(
+            options.tls_verify, options.tls_roots, options.tls_roots_password);
     }
 
     internal static async Task<QwpQueryWebSocketClient> CreateAsync(QueryOptions options, CancellationToken ct)
@@ -433,6 +438,8 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient
             try { _executeLock.Dispose(); } catch { }
             try { _sendLock.Dispose(); } catch { }
         }
+
+        try { _certValidator?.Dispose(); } catch { }
     }
 
     public async ValueTask DisposeAsync()
@@ -458,6 +465,8 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient
             try { _executeLock.Dispose(); } catch { }
             try { _sendLock.Dispose(); } catch { }
         }
+
+        try { _certValidator?.Dispose(); } catch { }
     }
 
     private static void CloseAndDisposeTransport(QwpWebSocketTransport? transport)
@@ -528,8 +537,7 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient
             ClientId = _options.client_id,
             AuthorizationHeader = QwpTlsAuth.BuildAuthHeader(
                 _options.username, _options.password, _options.token),
-            RemoteCertificateValidationCallback = QwpTlsAuth.BuildCertificateValidator(
-                _options.tls_verify, _options.tls_roots, _options.tls_roots_password),
+            RemoteCertificateValidationCallback = _certValidator?.Callback,
             ExtraRequestHeaders = extras.Count > 0 ? extras : null,
         };
         return new QwpWebSocketTransport(transportOpts);

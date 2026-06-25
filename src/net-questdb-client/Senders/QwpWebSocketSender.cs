@@ -61,6 +61,7 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
     private readonly QwpBackgroundDrainerPool? _drainerPool;
     private readonly QwpSenderErrorDispatcher? _errorDispatcher;
     private readonly QwpConnectionEventDispatcher? _connectionEventDispatcher;
+    private readonly QwpTlsAuth.CertificateValidator? _certValidator;
 
     private readonly Dictionary<string, long> _committedSeqTxn = new(StringComparer.Ordinal);
     private readonly Dictionary<string, long> _durableSeqTxn = new(StringComparer.Ordinal);
@@ -92,11 +93,11 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
 #endif
         _encoderBuffer = new QwpEncoder.FrameBuilder(EncoderInitialCapacity);
 
-        (_slotLock, _engine, _drainerPool, _errorDispatcher, _connectionEventDispatcher) = BuildEngineStack(options);
+        (_slotLock, _engine, _drainerPool, _errorDispatcher, _connectionEventDispatcher, _certValidator) = BuildEngineStack(options);
         _engine.SetTableEntryHandler(UpdateSeqTxnFromAck);
     }
 
-    private static (QwpSlotLock? slotLock, QwpCursorSendEngine engine, QwpBackgroundDrainerPool? pool, QwpSenderErrorDispatcher? dispatcher, QwpConnectionEventDispatcher? eventDispatcher)
+    private static (QwpSlotLock? slotLock, QwpCursorSendEngine engine, QwpBackgroundDrainerPool? pool, QwpSenderErrorDispatcher? dispatcher, QwpConnectionEventDispatcher? eventDispatcher, QwpTlsAuth.CertificateValidator? certValidator)
         BuildEngineStack(SenderOptions options)
     {
         var sfMode = !string.IsNullOrEmpty(options.sf_dir);
@@ -107,6 +108,7 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
         QwpBackgroundDrainerPool? pool = null;
         QwpSenderErrorDispatcher? dispatcher = null;
         QwpConnectionEventDispatcher? eventDispatcher = null;
+        QwpTlsAuth.CertificateValidator? certValidator = null;
 
         try
         {
@@ -129,9 +131,10 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
             }
 
             var authHeader = BuildAuthHeader(options);
-            var certValidator = BuildCertificateValidator(options);
+            certValidator = BuildCertificateValidator(options);
+            var certCallback = certValidator?.Callback;
             var tracker = new QwpHostHealthTracker(options.addresses, clientZone: options.zone, targetIsPrimary: false);
-            var transportFactory = BuildHostRotatingFactory(options, tracker, authHeader, certValidator);
+            var transportFactory = BuildHostRotatingFactory(options, tracker, authHeader, certCallback);
 
             var policy = new QwpReconnectPolicy(
                 options.reconnect_initial_backoff_millis,
@@ -187,7 +190,7 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
                     {
                         var drainerTracker = new QwpHostHealthTracker(options.addresses, clientZone: options.zone, targetIsPrimary: false);
                         var drainerFactory = BuildHostRotatingFactory(
-                            options, drainerTracker, authHeader, certValidator);
+                            options, drainerTracker, authHeader, certCallback);
                         return new Qwp.Sf.DrainContext(
                             drainerFactory,
                             () => !drainerTracker.IsRoundExhausted);
@@ -220,7 +223,7 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
                 }
             }
 
-            return (slotLock, engine, pool, dispatcher, eventDispatcher);
+            return (slotLock, engine, pool, dispatcher, eventDispatcher, certValidator);
         }
         catch (Exception)
         {
@@ -231,6 +234,7 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
             SfCleanup.Dispose(ring);
             SfCleanup.Dispose(ackWatermark);
             SfCleanup.Dispose(slotLock);
+            SfCleanup.Dispose(certValidator);
             throw;
         }
     }
@@ -973,6 +977,7 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
             SfCleanup.Dispose(_engine);
             SfCleanup.Dispose(_errorDispatcher);
             SfCleanup.Dispose(_connectionEventDispatcher);
+            SfCleanup.Dispose(_certValidator);
         }
 
         toRethrow?.Throw();
@@ -993,6 +998,7 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
             SfCleanup.Dispose(_engine);
             SfCleanup.Dispose(_errorDispatcher);
             SfCleanup.Dispose(_connectionEventDispatcher);
+            SfCleanup.Dispose(_certValidator);
         }
 
         toRethrow?.Throw();
@@ -1246,7 +1252,7 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
     private static string? BuildAuthHeader(SenderOptions options) =>
         QwpTlsAuth.BuildAuthHeader(options.username, options.password, options.token);
 
-    private static System.Net.Security.RemoteCertificateValidationCallback? BuildCertificateValidator(SenderOptions options) =>
+    private static QwpTlsAuth.CertificateValidator? BuildCertificateValidator(SenderOptions options) =>
         QwpTlsAuth.BuildCertificateValidator(options.tls_verify, options.tls_roots, options.tls_roots_password);
 }
 

@@ -92,9 +92,10 @@ public class QwpTlsAuthTests
     [Test]
     public void BuildCertificateValidator_UnsafeOff_AlwaysTrueCallback()
     {
-        var cb = QwpTlsAuth.BuildCertificateValidator(TlsVerifyType.unsafe_off, null, null);
-        Assert.That(cb, Is.Not.Null);
-        Assert.That(cb!(null!, null, null!, System.Net.Security.SslPolicyErrors.RemoteCertificateChainErrors), Is.True);
+        using var validator = QwpTlsAuth.BuildCertificateValidator(TlsVerifyType.unsafe_off, null, null);
+        Assert.That(validator, Is.Not.Null);
+        var cb = validator!.Callback;
+        Assert.That(cb(null!, null, null!, System.Net.Security.SslPolicyErrors.RemoteCertificateChainErrors), Is.True);
         Assert.That(cb(null!, null, null!, System.Net.Security.SslPolicyErrors.RemoteCertificateNameMismatch), Is.True);
         Assert.That(cb(null!, null, null!, System.Net.Security.SslPolicyErrors.None), Is.True);
     }
@@ -126,13 +127,14 @@ public class QwpTlsAuthTests
 #pragma warning restore SYSLIB0057
         try
         {
-            var cb = QwpTlsAuth.BuildCertificateValidator(TlsVerifyType.on, pfxPath, null);
-            Assert.That(cb, Is.Not.Null);
+            using var validator = QwpTlsAuth.BuildCertificateValidator(TlsVerifyType.on, pfxPath, null);
+            Assert.That(validator, Is.Not.Null);
+            var cb = validator!.Callback;
 
             using (var chainForLeaf = new X509Chain())
             {
                 Assert.That(
-                    cb!(this, leaf, chainForLeaf, SslPolicyErrors.RemoteCertificateChainErrors),
+                    cb(this, leaf, chainForLeaf, SslPolicyErrors.RemoteCertificateChainErrors),
                     Is.True,
                     "a cert chained to the pinned custom CA must validate");
             }
@@ -140,7 +142,7 @@ public class QwpTlsAuthTests
             using (var chainForStranger = new X509Chain())
             {
                 Assert.That(
-                    cb!(this, unrelated, chainForStranger, SslPolicyErrors.RemoteCertificateChainErrors),
+                    cb(this, unrelated, chainForStranger, SslPolicyErrors.RemoteCertificateChainErrors),
                     Is.False,
                     "a cert not chained to the pinned CA must be rejected");
             }
@@ -148,7 +150,7 @@ public class QwpTlsAuthTests
             using (var chainForLeaf2 = new X509Chain())
             {
                 Assert.That(
-                    cb!(this, leaf, chainForLeaf2, SslPolicyErrors.RemoteCertificateNameMismatch),
+                    cb(this, leaf, chainForLeaf2, SslPolicyErrors.RemoteCertificateNameMismatch),
                     Is.False,
                     "a name mismatch must be rejected even for a CA-chained cert");
             }

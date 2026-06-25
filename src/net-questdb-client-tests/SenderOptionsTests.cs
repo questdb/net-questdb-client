@@ -290,6 +290,50 @@ public class SenderOptionsTests
     }
 
     [Test]
+    public void ReconnectTimeouts_AboveTaskDelayCeiling_Rejected()
+    {
+        // The reconnect loop sleeps via Task.Delay, which throws once the delay exceeds ~int.MaxValue
+        // ms (~24.8 days). The config-string path is int-parsed so it can't express a larger value;
+        // the programmatic TimeSpan setters can, so EnsureValid must reject them rather than let the
+        // engine fault mid-outage with a raw ArgumentOutOfRangeException.
+        var overCeiling = TimeSpan.FromMilliseconds((double)int.MaxValue + 1);
+
+        var dur = new SenderOptions
+        {
+            protocol = ProtocolType.ws, addr = "h:9000", reconnect_max_duration_millis = overCeiling,
+        };
+        Assert.That(() => dur.EnsureValid(),
+            Throws.TypeOf<IngressError>().With.Message.Contains("reconnect_max_duration_millis"));
+
+        var init = new SenderOptions
+        {
+            protocol = ProtocolType.ws, addr = "h:9000", reconnect_initial_backoff_millis = overCeiling,
+        };
+        Assert.That(() => init.EnsureValid(),
+            Throws.TypeOf<IngressError>().With.Message.Contains("reconnect_initial_backoff_millis"));
+
+        var back = new SenderOptions
+        {
+            protocol = ProtocolType.ws, addr = "h:9000", reconnect_max_backoff_millis = overCeiling,
+        };
+        Assert.That(() => back.EnsureValid(),
+            Throws.TypeOf<IngressError>().With.Message.Contains("reconnect_max_backoff_millis"));
+
+        // Exactly at the ceiling stays valid.
+        var atCeiling = new SenderOptions
+        {
+            protocol = ProtocolType.ws, addr = "h:9000",
+            reconnect_max_duration_millis = TimeSpan.FromMilliseconds(int.MaxValue),
+        };
+        Assert.That(() => atCeiling.EnsureValid(), Throws.Nothing);
+
+        // The config-string path can't even express an over-ceiling value (int-parsed).
+        Assert.That(
+            () => new SenderOptions("ws::addr=h:9000;reconnect_max_backoff_millis=2147483648;"),
+            Throws.TypeOf<IngressError>().With.Message.Contains("reconnect_max_backoff_millis"));
+    }
+
+    [Test]
     public void Sf_DurabilityNonMemory_Throws()
     {
         Assert.That(

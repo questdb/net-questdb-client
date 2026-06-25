@@ -427,6 +427,12 @@ public sealed class QueryOptions
 
     private void ValidateNumericRanges()
     {
+        // The failover loop sleeps via Task.Delay (shared QwpReconnectPolicy), which throws once the
+        // delay exceeds ~int.MaxValue ms (~24.8 days). The config-string path is int-parsed so it can't
+        // express a larger value; the programmatic TimeSpan setters can, so reject them here rather than
+        // let the failover loop fault with a raw ArgumentOutOfRangeException.
+        const long maxBackoffMillis = int.MaxValue;
+
         if (failover_max_attempts < 1)
         {
             throw new IngressError(ErrorCode.ConfigError,
@@ -455,6 +461,24 @@ public sealed class QueryOptions
         {
             throw new IngressError(ErrorCode.ConfigError,
                 "`failover_max_duration_ms` must be non-negative (0 = unbounded)");
+        }
+
+        if (failover_backoff_initial_ms.TotalMilliseconds > maxBackoffMillis)
+        {
+            throw new IngressError(ErrorCode.ConfigError,
+                $"`failover_backoff_initial_ms` must be <= {maxBackoffMillis}ms (~24.8 days)");
+        }
+
+        if (failover_backoff_max_ms.TotalMilliseconds > maxBackoffMillis)
+        {
+            throw new IngressError(ErrorCode.ConfigError,
+                $"`failover_backoff_max_ms` must be <= {maxBackoffMillis}ms (~24.8 days)");
+        }
+
+        if (failover_max_duration_ms.TotalMilliseconds > maxBackoffMillis)
+        {
+            throw new IngressError(ErrorCode.ConfigError,
+                $"`failover_max_duration_ms` must be <= {maxBackoffMillis}ms (~24.8 days)");
         }
 
         if (auth_timeout_ms <= TimeSpan.Zero)

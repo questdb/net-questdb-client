@@ -91,6 +91,12 @@ public record SenderOptions
     private long _sfMaxTotalBytes = 128L * 1024 * 1024;
     private string _sfDurability = "memory";
     private TimeSpan _sfAppendDeadline = TimeSpan.FromMilliseconds(30000);
+
+    // The reconnect loop sleeps via Task.Delay, which throws once the delay exceeds its supported
+    // range (int.MaxValue ms on the oldest target runtime, ~24.8 days). Every reconnect sleep is
+    // clipped to the remaining outage budget, so bounding these three knobs at that ceiling keeps any
+    // computed backoff in range and turns a multi-week misconfig into a clear config error.
+    private const long MaxReconnectMillis = int.MaxValue;
     private TimeSpan _reconnectMaxDuration = TimeSpan.FromMilliseconds(300000);
     private TimeSpan _reconnectInitialBackoff = TimeSpan.FromMilliseconds(100);
     private TimeSpan _reconnectMaxBackoff = TimeSpan.FromMilliseconds(5000);
@@ -522,10 +528,16 @@ public record SenderOptions
                 throw new IngressError(ErrorCode.ConfigError, $"`sf_append_deadline_millis` must be > 0; got {_sfAppendDeadline.TotalMilliseconds}ms");
             if (_reconnectMaxDuration <= TimeSpan.Zero)
                 throw new IngressError(ErrorCode.ConfigError, $"`reconnect_max_duration_millis` must be > 0; got {_reconnectMaxDuration.TotalMilliseconds}ms");
+            if (_reconnectMaxDuration.TotalMilliseconds > MaxReconnectMillis)
+                throw new IngressError(ErrorCode.ConfigError, $"`reconnect_max_duration_millis` must be ≤ {MaxReconnectMillis}ms (~24.8 days); got {_reconnectMaxDuration.TotalMilliseconds}ms");
             if (_reconnectInitialBackoff <= TimeSpan.Zero)
                 throw new IngressError(ErrorCode.ConfigError, $"`reconnect_initial_backoff_millis` must be > 0; got {_reconnectInitialBackoff.TotalMilliseconds}ms");
+            if (_reconnectInitialBackoff.TotalMilliseconds > MaxReconnectMillis)
+                throw new IngressError(ErrorCode.ConfigError, $"`reconnect_initial_backoff_millis` must be ≤ {MaxReconnectMillis}ms (~24.8 days); got {_reconnectInitialBackoff.TotalMilliseconds}ms");
             if (_reconnectMaxBackoff <= TimeSpan.Zero)
                 throw new IngressError(ErrorCode.ConfigError, $"`reconnect_max_backoff_millis` must be > 0; got {_reconnectMaxBackoff.TotalMilliseconds}ms");
+            if (_reconnectMaxBackoff.TotalMilliseconds > MaxReconnectMillis)
+                throw new IngressError(ErrorCode.ConfigError, $"`reconnect_max_backoff_millis` must be ≤ {MaxReconnectMillis}ms (~24.8 days); got {_reconnectMaxBackoff.TotalMilliseconds}ms");
             if (_reconnectInitialBackoff > _reconnectMaxBackoff)
                 throw new IngressError(ErrorCode.ConfigError,
                     $"`reconnect_initial_backoff_millis` ({_reconnectInitialBackoff.TotalMilliseconds}ms) must be ≤ `reconnect_max_backoff_millis` ({_reconnectMaxBackoff.TotalMilliseconds}ms)");

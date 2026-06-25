@@ -556,6 +556,32 @@ public class QueryOptionsTests
     }
 
     [Test]
+    public void EnsureValid_FailoverTimeouts_AboveTaskDelayCeiling_Rejected()
+    {
+        // The failover loop sleeps via Task.Delay (shared QwpReconnectPolicy), which throws once the
+        // delay exceeds ~int.MaxValue ms. The config string is int-parsed so it can't reach this, but
+        // the programmatic TimeSpan setters can — EnsureValid must reject them at config-load.
+        var overCeiling = TimeSpan.FromMilliseconds((double)int.MaxValue + 1);
+
+        var max = new QueryOptions { failover_backoff_max_ms = overCeiling };
+        Assert.That(() => max.EnsureValid(),
+            Throws.TypeOf<IngressError>().With.Message.Contains("failover_backoff_max_ms"));
+
+        var dur = new QueryOptions { failover_max_duration_ms = overCeiling };
+        Assert.That(() => dur.EnsureValid(),
+            Throws.TypeOf<IngressError>().With.Message.Contains("failover_max_duration_ms"));
+
+        // initial must stay <= max, so raise both; the initial ceiling check fires first.
+        var init = new QueryOptions { failover_backoff_initial_ms = overCeiling, failover_backoff_max_ms = overCeiling };
+        Assert.That(() => init.EnsureValid(),
+            Throws.TypeOf<IngressError>().With.Message.Contains("failover_backoff_initial_ms"));
+
+        // Exactly at the ceiling stays valid.
+        var atCeiling = new QueryOptions { failover_backoff_max_ms = TimeSpan.FromMilliseconds(int.MaxValue) };
+        Assert.That(() => atCeiling.EnsureValid(), Throws.Nothing);
+    }
+
+    [Test]
     public void TokenXY_RejectedOnWs()
     {
         // token_x / token_y are legacy ILP/TCP ECDSA key components, not QWP keys; the egress

@@ -52,6 +52,13 @@ internal interface IQwpCursorTransport : IDisposable
     /// </summary>
     int NegotiatedMaxBatchSize => 0;
 
+    /// <summary>
+    ///     Server-advertised availability zone for this host from the upgrade response
+    ///     (<c>X-QuestDB-Zone</c>); <c>null</c> when the server did not advertise it. Valid only
+    ///     after <see cref="ConnectAsync" />. Feeds same-zone-vs-other-zone failover tiering.
+    /// </summary>
+    string? NegotiatedZone => null;
+
     /// <summary>Connects to the server and completes the QWP upgrade.</summary>
     Task ConnectAsync(CancellationToken cancellationToken);
 

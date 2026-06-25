@@ -62,6 +62,8 @@ internal sealed class QwpTrackedCursorTransport : IQwpCursorTransport
 
     public int NegotiatedMaxBatchSize => _inner.NegotiatedMaxBatchSize;
 
+    public string? NegotiatedZone => _inner.NegotiatedZone;
+
     public async Task ConnectAsync(CancellationToken cancellationToken)
     {
         CancellationTokenSource? timeoutCts = null;
@@ -109,6 +111,9 @@ internal sealed class QwpTrackedCursorTransport : IQwpCursorTransport
             timeoutCts?.Dispose();
         }
 
+        // Record the zone on the success path too (not only on role-reject) so same-zone tiering
+        // engages among healthy hosts; RecordZone is a no-op when the server advertised no zone.
+        _tracker.RecordZone(_hostIndex, _inner.NegotiatedZone);
         _tracker.RecordSuccess(_hostIndex);
     }
 

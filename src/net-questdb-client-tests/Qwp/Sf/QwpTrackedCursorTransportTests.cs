@@ -87,6 +87,54 @@ public class QwpTrackedCursorTransportTests
         Assert.That(tracker.GetZoneTier(0), Is.EqualTo(QwpZoneTier.Other));
     }
 
+    [Test]
+    public void Success_WithZoneHeader_RecordsZoneOnConnect()
+    {
+        // The same-zone vs other-zone tiering must engage among *healthy* hosts, not just hosts
+        // that role-reject. The success path therefore has to record the negotiated zone too.
+        var hosts = new[] { "h1:9000", "h2:9000" };
+        // targetIsPrimary=false so RecordZone actually distinguishes Same vs Other (ingress folds
+        // every zone into Same when targetIsPrimary).
+        var tracker = new QwpHostHealthTracker(hosts, clientZone: "us-east-1", targetIsPrimary: false);
+        var stub = new ConnectingStub("us-east-1");
+        var tracked = new QwpTrackedCursorTransport(stub, tracker, hostIndex: 0);
+
+        Assert.DoesNotThrowAsync(async () => await tracked.ConnectAsync(CancellationToken.None));
+
+        Assert.That(tracker.GetZoneTier(0), Is.EqualTo(QwpZoneTier.Same),
+            "a healthy host whose X-QuestDB-Zone matches clientZone must tier as Same");
+        Assert.That(tracker.GetState(0), Is.EqualTo(QwpHostState.Healthy));
+    }
+
+    [Test]
+    public void Success_CrossZoneHost_TiersAsOther()
+    {
+        var hosts = new[] { "h1:9000" };
+        var tracker = new QwpHostHealthTracker(hosts, clientZone: "us-east-1", targetIsPrimary: false);
+        var stub = new ConnectingStub("eu-west-2");
+        var tracked = new QwpTrackedCursorTransport(stub, tracker, hostIndex: 0);
+
+        Assert.DoesNotThrowAsync(async () => await tracked.ConnectAsync(CancellationToken.None));
+
+        Assert.That(tracker.GetZoneTier(0), Is.EqualTo(QwpZoneTier.Other));
+        Assert.That(tracker.GetState(0), Is.EqualTo(QwpHostState.Healthy));
+    }
+
+    [Test]
+    public void Success_WithoutZoneHeader_DoesNotTouchZoneTier()
+    {
+        var hosts = new[] { "h1:9000" };
+        var tracker = new QwpHostHealthTracker(hosts, clientZone: "us-east-1", targetIsPrimary: false);
+        var stub = new ConnectingStub(zone: null);
+        var tracked = new QwpTrackedCursorTransport(stub, tracker, hostIndex: 0);
+
+        Assert.DoesNotThrowAsync(async () => await tracked.ConnectAsync(CancellationToken.None));
+
+        Assert.That(tracker.GetZoneTier(0), Is.EqualTo(QwpZoneTier.Unknown),
+            "a server that advertises no zone must leave the tier untouched");
+        Assert.That(tracker.GetState(0), Is.EqualTo(QwpHostState.Healthy));
+    }
+
     private sealed class RejectingStub : IQwpCursorTransport
     {
         private readonly string _role;
@@ -102,6 +150,30 @@ public class QwpTrackedCursorTransportTests
 
         public Task ConnectAsync(CancellationToken cancellationToken) =>
             throw new QwpIngressRoleRejectedException(_role, new Uri("ws://h:9000/write/v4"), _zone);
+
+        public Task SendBinaryAsync(ReadOnlyMemory<byte> data, CancellationToken cancellationToken) =>
+            Task.CompletedTask;
+
+        public Task<int> ReceiveFrameAsync(Memory<byte> destination, CancellationToken cancellationToken) =>
+            Task.FromResult(0);
+
+        public Task CloseAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+
+        public void Dispose() { }
+    }
+
+    private sealed class ConnectingStub : IQwpCursorTransport
+    {
+        public ConnectingStub(string? zone)
+        {
+            NegotiatedZone = zone;
+        }
+
+        public (string Host, int Port)? Endpoint => ("h", 9000);
+
+        public string? NegotiatedZone { get; }
+
+        public Task ConnectAsync(CancellationToken cancellationToken) => Task.CompletedTask;
 
         public Task SendBinaryAsync(ReadOnlyMemory<byte> data, CancellationToken cancellationToken) =>
             Task.CompletedTask;

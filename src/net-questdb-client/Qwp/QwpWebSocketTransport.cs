@@ -133,6 +133,9 @@ internal sealed class QwpWebSocketTransport : IQwpCursorTransport
     public int NegotiatedMaxBatchSize => _negotiatedMaxBatchSize;
 
     /// <inheritdoc />
+    public string? NegotiatedZone { get; private set; }
+
+    /// <inheritdoc />
     public (string Host, int Port)? Endpoint { get; }
 
     /// <summary>
@@ -204,6 +207,8 @@ internal sealed class QwpWebSocketTransport : IQwpCursorTransport
             && parsed > 0
                 ? parsed
                 : 0;
+
+        NegotiatedZone = ReadOptionalHeader(QwpConstants.HeaderQuestDbZone);
     }
 
     private string? ReadOptionalHeader(string name)

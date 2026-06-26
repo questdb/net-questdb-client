@@ -260,6 +260,22 @@ public class QwpEncoderTests
     }
 
     [Test]
+    public void Encode_DeferCommit_SetsFlagBit()
+    {
+        var t = new QwpTableBuffer("trades");
+        t.AppendLong("v", 1L);
+        t.At(0);
+
+        var deferred = QwpEncoder.Encode(new[] { t }, new QwpSymbolDictionary(), deferCommit: true);
+        Assert.That(deferred[QwpConstants.OffsetFlags],
+            Is.EqualTo((byte)(QwpConstants.FlagDeltaSymbolDict | QwpConstants.FlagGorilla | QwpConstants.FlagDeferCommit)));
+
+        var committing = QwpEncoder.Encode(new[] { t }, new QwpSymbolDictionary());
+        Assert.That(committing[QwpConstants.OffsetFlags] & QwpConstants.FlagDeferCommit, Is.Zero,
+            "default encode must not set the defer-commit flag");
+    }
+
+    [Test]
     public void Encode_MagicBytesAreCorrect()
     {
         var bytes = QwpEncoder.Encode(Array.Empty<QwpTableBuffer>(), new QwpSymbolDictionary());

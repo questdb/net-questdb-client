@@ -645,13 +645,111 @@ public class QwpWebSocketSenderTests
 #pragma warning restore SYSLIB0057
     }
 
+    private static readonly DateTime TxnTs = new(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+
+    private static bool IsDeferred(byte[] frame)
+        => (frame[QwpConstants.OffsetFlags] & QwpConstants.FlagDeferCommit) != 0;
+
     [Test]
-    public async Task EndToEnd_TransactionsAreRejected()
+    public async Task Transaction_ExplicitPerTableApi_StillThrows()
+    {
+        await using var server = StartServerWithOkAcks();
+        using var sender = NewSender(server, "transaction=on;auto_flush=off;");
+
+        // WS transactions are a connection mode, not a per-table begin; these stay unsupported.
+        Assert.Throws<IngressError>(() => sender.Transaction("t"));
+        Assert.Throws<IngressError>(() => sender.Rollback());
+    }
+
+    [Test]
+    public async Task Transaction_AutoFlushDefers_ExplicitSendCommits()
+    {
+        await using var server = StartServerWithOkAcks();
+        using var sender = NewSender(server,
+            "transaction=on;auto_flush_rows=2;auto_flush_interval=off;auto_flush_bytes=off;");
+
+        sender.Table("t").Column("v", 1L).At(TxnTs);
+        sender.Table("t").Column("v", 2L).At(TxnTs); // hits auto_flush_rows=2 → deferred frame
+        await WaitFor(() => server.ReceivedFrames.Count >= 1);
+        Assert.That(IsDeferred(server.ReceivedFrames.First()), Is.True, "auto-flush frame must defer commit");
+
+        sender.Table("t").Column("v", 3L).At(TxnTs);
+        sender.Send(); // residual row 3 → committing frame
+        await WaitFor(() => server.ReceivedFrames.Count >= 2);
+        Assert.That(IsDeferred(server.ReceivedFrames.Last()), Is.False, "explicit Send must commit (no defer flag)");
+    }
+
+    [Test]
+    public async Task Transaction_CommitWithNoResidual_SendsEmptyCommitFrame()
+    {
+        await using var server = StartServerWithOkAcks();
+        using var sender = NewSender(server,
+            "transaction=on;auto_flush_rows=2;auto_flush_interval=off;auto_flush_bytes=off;");
+
+        sender.Table("t").Column("v", 1L).At(TxnTs);
+        sender.Table("t").Column("v", 2L).At(TxnTs); // auto-flush → deferred frame
+        await WaitFor(() => server.ReceivedFrames.Count >= 1);
+
+        sender.Commit(); // nothing buffered, but a commit is owed → empty commit frame
+        await WaitFor(() => server.ReceivedFrames.Count >= 2);
+
+        var commit = server.ReceivedFrames.Last();
+        Assert.That(IsDeferred(commit), Is.False);
+        Assert.That(BinaryPrimitives.ReadUInt16LittleEndian(commit.AsSpan(QwpConstants.OffsetTableCount, 2)),
+            Is.EqualTo(0), "commit frame carries zero tables");
+    }
+
+    [Test]
+    public async Task Transaction_Commit_RequiresTransactionalMode()
+    {
+        await using var server = StartServerWithOkAcks();
+        using var sender = NewSender(server, "auto_flush=off;"); // transaction not enabled
+
+        var ex = Assert.Throws<IngressError>(() => sender.Commit());
+        Assert.That(ex!.Message, Does.Contain("transaction"));
+    }
+
+    [Test]
+    public async Task Transaction_CommitAsync_FlushesBufferedRowsNonDeferred()
+    {
+        await using var server = StartServerWithOkAcks();
+        using var sender = NewSender(server, "transaction=on;auto_flush=off;");
+
+        sender.Table("t").Column("v", 1L).At(TxnTs);
+        sender.Table("t").Column("v", 2L).At(TxnTs);
+        await sender.CommitAsync();
+        await WaitFor(() => server.ReceivedFrames.Count >= 1);
+
+        Assert.That(IsDeferred(server.ReceivedFrames.Single()), Is.False);
+    }
+
+    [Test]
+    public async Task Transaction_Dispose_CommitsDeferredRows()
+    {
+        await using var server = StartServerWithOkAcks();
+        await using (var sender = NewSender(server,
+            "transaction=on;auto_flush_rows=1;auto_flush_interval=off;auto_flush_bytes=off;close_flush_timeout_millis=2000;"))
+        {
+            sender.Table("t").Column("v", 1L).At(TxnTs); // auto-flush row=1 → deferred frame
+            await WaitFor(() => server.ReceivedFrames.Count >= 1);
+        }
+
+        // dispose must emit a committing frame for the deferred rows
+        await WaitFor(() => server.ReceivedFrames.Count >= 2);
+        Assert.That(IsDeferred(server.ReceivedFrames.Last()), Is.False);
+    }
+
+    [Test]
+    public async Task NonTransactional_FramesNeverDefer()
     {
         await using var server = StartServerWithOkAcks();
         using var sender = NewSender(server, "auto_flush=off;");
 
-        Assert.Throws<IngressError>(() => sender.Transaction("t"));
+        sender.Table("t").Column("v", 1L).At(TxnTs);
+        sender.Send();
+        await WaitFor(() => server.ReceivedFrames.Count >= 1);
+
+        Assert.That(IsDeferred(server.ReceivedFrames.Single()), Is.False);
     }
 
     [Test]

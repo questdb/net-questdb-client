@@ -76,10 +76,11 @@ internal static class QwpEncoder
     internal static byte[] Encode(
         IReadOnlyList<QwpTableBuffer> tables,
         QwpSymbolDictionary symbolDictionary,
-        bool selfSufficient = false)
+        bool selfSufficient = false,
+        bool deferCommit = false)
     {
         var builder = new FrameBuilder(InitialCapacity);
-        var len = EncodeInto(builder, tables, symbolDictionary, selfSufficient);
+        var len = EncodeInto(builder, tables, symbolDictionary, selfSufficient, deferCommit: deferCommit);
         var result = new byte[len];
         builder.AsSpan(0, len).CopyTo(result);
         return result;
@@ -96,7 +97,8 @@ internal static class QwpEncoder
         IReadOnlyList<QwpTableBuffer> tables,
         QwpSymbolDictionary symbolDictionary,
         bool selfSufficient = false,
-        int symbolDeltaCount = -1)
+        int symbolDeltaCount = -1,
+        bool deferCommit = false)
     {
         ArgumentNullException.ThrowIfNull(builder);
         ArgumentNullException.ThrowIfNull(tables);
@@ -139,7 +141,8 @@ internal static class QwpEncoder
         var header = builder.AsSpan(0, QwpConstants.HeaderSize);
         BinaryPrimitives.WriteUInt32LittleEndian(header.Slice(QwpConstants.OffsetMagic, 4), QwpConstants.Magic);
         header[QwpConstants.OffsetVersion] = QwpConstants.SupportedVersion;
-        header[QwpConstants.OffsetFlags] = (byte)(QwpConstants.FlagDeltaSymbolDict | QwpConstants.FlagGorilla);
+        header[QwpConstants.OffsetFlags] = (byte)(QwpConstants.FlagDeltaSymbolDict | QwpConstants.FlagGorilla
+            | (deferCommit ? QwpConstants.FlagDeferCommit : 0));
         BinaryPrimitives.WriteUInt16LittleEndian(header.Slice(QwpConstants.OffsetTableCount, 2), (ushort)emittedTableCount);
         BinaryPrimitives.WriteUInt32LittleEndian(header.Slice(QwpConstants.OffsetPayloadLength, 4), (uint)payloadLength);
 

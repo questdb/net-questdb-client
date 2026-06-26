@@ -531,6 +531,50 @@ public class SenderOptionsTests
     }
 
     [Test]
+    public void Transaction_IsWebSocketOnly_RejectedOnIngress()
+    {
+        // `transaction` is WebSocket-only, matching the Java client which throws
+        // "transaction is only supported for WebSocket transport" on http/tcp. It was previously
+        // silently accepted-and-ignored on every scheme.
+        Assert.That(() => new SenderOptions("http::addr=localhost:9000;transaction=on;"),
+            Throws.TypeOf<IngressError>().With.Message.Contains("transaction"));
+        Assert.That(() => new SenderOptions("tcp::addr=localhost:9009;transaction=on;"),
+            Throws.TypeOf<IngressError>().With.Message.Contains("transaction"));
+        Assert.That(() => new SenderOptions("http::addr=localhost:9000;transaction=off;"),
+            Throws.TypeOf<IngressError>().With.Message.Contains("transaction"));
+    }
+
+    [Test]
+    public void Transaction_OnWebSocket_ParsesOnOff()
+    {
+        // WS transactional mode (defer-commit). on/off map to the `transaction` bool; an invalid
+        // value is rejected.
+        Assert.That(new SenderOptions("ws::addr=localhost:9000;transaction=on;").transaction, Is.True);
+        Assert.That(new SenderOptions("wss::addr=localhost:9000;transaction=on;").transaction, Is.True);
+        Assert.That(new SenderOptions("ws::addr=localhost:9000;transaction=off;").transaction, Is.False);
+        Assert.That(new SenderOptions("ws::addr=localhost:9000;").transaction, Is.False);
+
+        Assert.That(() => new SenderOptions("ws::addr=localhost:9000;transaction=maybe;"),
+            Throws.TypeOf<IngressError>().With.Message.Contains("transaction"));
+    }
+
+    [Test]
+    public void Transaction_ProgrammaticOnNonWebSocket_Rejected()
+    {
+        var opts = new SenderOptions("http::addr=localhost:9000;") { transaction = true };
+        Assert.That(() => opts.EnsureValid(),
+            Throws.TypeOf<IngressError>().With.Message.Contains("transaction"));
+    }
+
+    [Test]
+    public void Transaction_ToString_RoundTrips()
+    {
+        var opts = new SenderOptions("ws::addr=localhost:9000;transaction=on;");
+        var round = new SenderOptions(opts.ToString());
+        Assert.That(round.transaction, Is.True);
+    }
+
+    [Test]
     public void EgressKeys_SilentlyAcceptedOnWebSocket()
     {
         Assert.That(() => new SenderOptions(

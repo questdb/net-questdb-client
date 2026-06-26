@@ -76,6 +76,11 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
     private long _currentTableSnapshotBytes;
     private int _currentBatchMaxSymbolId = -1;
 
+    // Transactional (defer-commit) mode: auto-flush frames carry FLAG_DEFER_COMMIT; an explicit
+    // commit ships a non-deferred frame. _hasDeferredMessages tracks whether a commit is owed.
+    private readonly bool _transactional;
+    private bool _hasDeferredMessages;
+
     public QwpWebSocketSender(SenderOptions options)
     {
         Options = options ?? throw new ArgumentNullException(nameof(options));
@@ -86,6 +91,7 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
         }
 
         _convertLocalToUtc = options.convert_local_to_utc;
+        _transactional = options.transaction;
 
         _symbolDictionary = new QwpSymbolDictionary();
 #if NET9_0_OR_GREATER
@@ -249,7 +255,7 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
     public int RowCount => _runningRowCount;
 
     /// <inheritdoc />
-    public bool WithinTransaction => false;
+    public bool WithinTransaction => _transactional;
 
     /// <inheritdoc />
     public DateTime LastFlush { get; private set; } = DateTime.MinValue;
@@ -258,25 +264,46 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
     /// <inheritdoc />
     public ISender Transaction(ReadOnlySpan<char> tableName)
     {
-        throw new IngressError(ErrorCode.InvalidApiCall, "transactions are not supported on the WebSocket transport");
+        // WS transactions are a connection-level mode, not a per-table begin: enable `transaction=on`
+        // and commit with Commit()/Send().
+        throw new IngressError(ErrorCode.InvalidApiCall,
+            "explicit per-table Transaction() is not supported on the WebSocket transport; set `transaction=on` and use Commit()/Send()");
     }
 
     /// <inheritdoc />
     public void Rollback()
     {
-        throw new IngressError(ErrorCode.InvalidApiCall, "transactions are not supported on the WebSocket transport");
+        // Deferred rows are already streamed to the server (appended to the WAL, awaiting commit), so
+        // there is nothing to roll back client-side.
+        throw new IngressError(ErrorCode.InvalidApiCall,
+            "Rollback() is not supported on the WebSocket transport; deferred rows already shipped to the server cannot be rolled back");
     }
 
     /// <inheritdoc />
     public Task CommitAsync(CancellationToken ct = default)
     {
-        throw new IngressError(ErrorCode.InvalidApiCall, "transactions are not supported on the WebSocket transport");
+        ThrowIfTerminal();
+        RequireTransactionalMode();
+        EnsureNoRowInProgress();
+        return FlushAsyncCore(deferCommit: false, ct).AsTask();
     }
 
     /// <inheritdoc />
     public void Commit(CancellationToken ct = default)
     {
-        throw new IngressError(ErrorCode.InvalidApiCall, "transactions are not supported on the WebSocket transport");
+        ThrowIfTerminal();
+        RequireTransactionalMode();
+        EnsureNoRowInProgress();
+        FlushSync(deferCommit: false, ct);
+    }
+
+    private void RequireTransactionalMode()
+    {
+        if (!_transactional)
+        {
+            throw new IngressError(ErrorCode.InvalidApiCall,
+                "no transaction to commit; set `transaction=on` to enable WebSocket transactional mode");
+        }
     }
 
     /// <inheritdoc />
@@ -729,7 +756,7 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
     {
         ThrowIfTerminal();
         EnsureNoRowInProgress();
-        return FlushAsyncCore(ct).AsTask();
+        return FlushAsyncCore(deferCommit: false, ct).AsTask();
     }
 
     /// <inheritdoc />
@@ -737,7 +764,7 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
     {
         ThrowIfTerminal();
         EnsureNoRowInProgress();
-        FlushSync(ct);
+        FlushSync(deferCommit: false, ct);
     }
 
     private void EnsureNoRowInProgress()
@@ -752,7 +779,7 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
         }
     }
 
-    private int EncodeBatch()
+    private int EncodeBatch(bool deferCommit)
     {
         _flushBatch.Clear();
         foreach (var t in _tables.Values)
@@ -771,25 +798,63 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
         return QwpEncoder.EncodeInto(
             _encoderBuffer, _flushBatch, _symbolDictionary,
             selfSufficient: true,
-            symbolDeltaCount: _currentBatchMaxSymbolId + 1);
+            symbolDeltaCount: _currentBatchMaxSymbolId + 1,
+            deferCommit: deferCommit);
     }
 
-    private void FlushSync(CancellationToken ct)
+    // An empty (zero-table) non-deferred frame that triggers the server-side commit of rows shipped by
+    // earlier deferred auto-flushes when an explicit commit has no residual rows to send. Mirrors the
+    // Java client's sendCommitMessage (beginMessage with tableCount=0).
+    private int EncodeCommitFrame()
     {
-        var len = EncodeBatch();
-        if (len == 0) return;
-        GuardBatchSize(len);
-        _engine.AppendBlocking(_encoderBuffer.AsSpan(0, len), ct);
-        OnFlushSucceeded();
+        return QwpEncoder.EncodeInto(
+            _encoderBuffer, Array.Empty<QwpTableBuffer>(), _symbolDictionary,
+            selfSufficient: true,
+            symbolDeltaCount: _currentBatchMaxSymbolId + 1,
+            deferCommit: false);
     }
 
-    private async ValueTask FlushAsyncCore(CancellationToken ct)
+    private void FlushSync(bool deferCommit, CancellationToken ct)
     {
-        var len = EncodeBatch();
-        if (len == 0) return;
-        GuardBatchSize(len);
-        await _engine.AppendAsync(_encoderBuffer.WrittenMemory, ct).ConfigureAwait(false);
-        OnFlushSucceeded();
+        var len = EncodeBatch(deferCommit);
+        if (len > 0)
+        {
+            GuardBatchSize(len);
+            _engine.AppendBlocking(_encoderBuffer.AsSpan(0, len), ct);
+            OnFlushSucceeded();
+            _hasDeferredMessages = deferCommit;
+            return;
+        }
+
+        // No buffered rows. If this is a commit and earlier auto-flushes deferred, send the commit frame.
+        if (!deferCommit && _hasDeferredMessages)
+        {
+            var commitLen = EncodeCommitFrame();
+            _engine.AppendBlocking(_encoderBuffer.AsSpan(0, commitLen), ct);
+            OnFlushSucceeded();
+            _hasDeferredMessages = false;
+        }
+    }
+
+    private async ValueTask FlushAsyncCore(bool deferCommit, CancellationToken ct)
+    {
+        var len = EncodeBatch(deferCommit);
+        if (len > 0)
+        {
+            GuardBatchSize(len);
+            await _engine.AppendAsync(_encoderBuffer.WrittenMemory, ct).ConfigureAwait(false);
+            OnFlushSucceeded();
+            _hasDeferredMessages = deferCommit;
+            return;
+        }
+
+        if (!deferCommit && _hasDeferredMessages)
+        {
+            EncodeCommitFrame();
+            await _engine.AppendAsync(_encoderBuffer.WrittenMemory, ct).ConfigureAwait(false);
+            OnFlushSucceeded();
+            _hasDeferredMessages = false;
+        }
     }
 
     /// <inheritdoc />
@@ -799,12 +864,23 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
     public async Task<long> FlushAndGetSequenceAsync(CancellationToken ct = default)
     {
         ThrowIfTerminal();
-        var len = EncodeBatch();
-        if (len == 0) return _engine.NextFsn - 1;
+        // An explicit, sequence-returning flush is a commit point (non-deferred).
+        var len = EncodeBatch(deferCommit: false);
+        if (len == 0)
+        {
+            if (!_hasDeferredMessages) return _engine.NextFsn - 1;
+            EncodeCommitFrame();
+            await _engine.AppendAsync(_encoderBuffer.WrittenMemory, ct).ConfigureAwait(false);
+            var committedFsn = _engine.NextFsn - 1;
+            OnFlushSucceeded();
+            _hasDeferredMessages = false;
+            return committedFsn;
+        }
         GuardBatchSize(len);
         await _engine.AppendAsync(_encoderBuffer.WrittenMemory, ct).ConfigureAwait(false);
         var publishedFsn = _engine.NextFsn - 1;
         OnFlushSucceeded();
+        _hasDeferredMessages = false;
         return publishedFsn;
     }
 
@@ -974,7 +1050,7 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
         try
         {
             toRethrow = DrainOnClose(
-                encode: () => FlushSync(CancellationToken.None),
+                encode: () => FlushSync(deferCommit: false, CancellationToken.None),
                 wait: () => _engine.FlushAsync(Options.close_flush_timeout_millis).GetAwaiter().GetResult());
         }
         finally
@@ -995,7 +1071,7 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
         try
         {
             toRethrow = await DrainOnCloseAsync(
-                encode: () => FlushAsyncCore(CancellationToken.None),
+                encode: () => FlushAsyncCore(deferCommit: false, CancellationToken.None),
                 wait: () => new ValueTask(_engine.FlushAsync(Options.close_flush_timeout_millis))).ConfigureAwait(false);
         }
         finally
@@ -1128,13 +1204,15 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
     private void FlushIfNecessary(CancellationToken ct)
     {
         if (!ShouldAutoFlush()) return;
-        FlushSync(ct);
+        // In transactional mode auto-flush stages rows with FLAG_DEFER_COMMIT; the explicit
+        // Send()/Commit() commits. Outside transactional mode every frame commits immediately.
+        FlushSync(deferCommit: _transactional, ct);
     }
 
     private ValueTask FlushIfNecessaryAsyncCore(CancellationToken ct)
     {
         if (!ShouldAutoFlush()) return ValueTask.CompletedTask;
-        return FlushAsyncCore(ct);
+        return FlushAsyncCore(deferCommit: _transactional, ct);
     }
 
     private bool ShouldAutoFlush()

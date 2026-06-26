@@ -84,6 +84,7 @@ public record SenderOptions
 
     // WebSocket / QWP knobs.
     private bool _requestDurableAck;
+    private bool _transaction;
 
     private string? _sfDir;
     private string _senderId = "default";
@@ -121,6 +122,7 @@ public record SenderOptions
     private SenderErrorPolicy? _onWriteError;
 
     private bool _requestDurableAckUserSet;
+    private bool _transactionUserSet;
     private bool _sfDirUserSet;
     private bool _senderIdUserSet;
     private bool _sfMaxBytesUserSet;
@@ -235,6 +237,7 @@ public record SenderOptions
         // WebSocket / QWP knobs. Parsed unconditionally; ValidateWebSocketKeys throws if any
         // appear with a non-WebSocket scheme.
         ParseBoolOnOff(nameof(request_durable_ack), "off", out _requestDurableAck);
+        ParseBoolOnOff(nameof(transaction), "off", out _transaction);
 
         ParseStringWithDefault(nameof(sf_dir), null, out _sfDir);
         ParseStringWithDefault(nameof(sender_id), "default", out var senderIdRaw);
@@ -316,6 +319,7 @@ public record SenderOptions
     {
         nameof(convert_local_to_utc),
         nameof(request_durable_ack),
+        nameof(transaction),
         nameof(drain_orphans),
     };
 
@@ -728,6 +732,7 @@ public record SenderOptions
         }
 
         if (_requestDurableAckUserSet) Throw(nameof(request_durable_ack));
+        if (_transactionUserSet) Throw(nameof(transaction));
         if (_sfDirUserSet) Throw(nameof(sf_dir));
         if (_senderIdUserSet) Throw(nameof(sender_id));
         if (_sfMaxBytesUserSet) Throw(nameof(sf_max_bytes));
@@ -784,7 +789,7 @@ public record SenderOptions
     {
         var keys = new List<string>
         {
-            "request_durable_ack",
+            "request_durable_ack", "transaction",
             "sf_dir", "sender_id", "sf_max_bytes", "sf_max_total_bytes", "sf_durability",
             "sf_append_deadline_millis", "reconnect_max_duration_millis", "reconnect_initial_backoff_millis",
             "reconnect_max_backoff_millis", "initial_connect_retry", "initial_connect_mode",
@@ -1166,6 +1171,19 @@ public record SenderOptions
     {
         get => _requestDurableAck;
         set { _requestDurableAck = value; _requestDurableAckUserSet = true; }
+    }
+
+    /// <summary>
+    ///     Enables WebSocket transactional mode (connect-string key <c>transaction=on</c>). Auto-flush
+    ///     ships frames with <c>FLAG_DEFER_COMMIT</c> so the server appends without committing; an
+    ///     explicit <c>Send()</c>/<c>Commit()</c> (or dispose) ships a non-deferred frame that triggers
+    ///     the server-side WAL commit. Lets a producer stage a dataset larger than the server recv
+    ///     buffer and commit it atomically per table. WebSocket-only; off by default.
+    /// </summary>
+    public bool transaction
+    {
+        get => _transaction;
+        set { _transaction = value; _transactionUserSet = true; }
     }
 
     /// <summary>

@@ -58,6 +58,15 @@ internal static class QwpConstants
     /// <summary>The single QWP protocol version this client speaks. Ingress and egress share it.</summary>
     public const byte SupportedVersion = 0x01;
 
+    /// <summary>
+    ///     Defer the WAL commit: the server appends the frame's rows to the WAL writers but skips the
+    ///     commit until a subsequent frame arrives without this flag. Set on auto-flush frames in
+    ///     transactional mode so a dataset larger than the server recv buffer can be staged and then
+    ///     committed atomically per table by an explicit (non-deferred) flush. Matches the Java
+    ///     client's <c>FLAG_DEFER_COMMIT</c>.
+    /// </summary>
+    public const byte FlagDeferCommit = 0x01;
+
     /// <summary>Timestamp columns may use Gorilla delta-of-delta encoding.</summary>
     public const byte FlagGorilla = 0x04;
 

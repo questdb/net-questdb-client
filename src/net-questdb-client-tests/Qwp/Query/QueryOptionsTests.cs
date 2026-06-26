@@ -395,7 +395,7 @@ public class QueryOptionsTests
             "ws::addr=localhost:9000;user=admin;pass=secret;" +
             "auth_timeout_ms=15000;init_buf_size=65536;max_buf_size=1048576;max_name_len=127;" +
             "sf_dir=/tmp/qdb;auto_flush_rows=5000;reconnect_max_backoff_millis=3000;" +
-            "ping_timeout=2000;transaction=on;error_inbox_capacity=64;on_parse_error=halt;" +
+            "ping_timeout=2000;transaction=off;error_inbox_capacity=64;on_parse_error=halt;" +
             "compression=zstd;failover=on;max_batch_rows=10000;target=replica;path=/read/v1;";
 
         Assert.DoesNotThrow(() => _ = new SenderOptions(shared));

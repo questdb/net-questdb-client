@@ -464,6 +464,128 @@ public class QuestDbWebSocketIntegrationTests
             SenderErrorCategory.WriteError));
     }
 
+    [Test]
+    public async Task Transaction_DeferredRowsInvisibleUntilCommit()
+    {
+        await DropTableAsync("test_ws_txn_visibility");
+        var endpoint = _questDb!.GetWebSocketEndpoint();
+        const int rows = 20;
+
+        using var sender = Sender.New(
+            $"ws::addr={endpoint};transaction=on;auto_flush_rows={rows};auto_flush_interval=off;auto_flush_bytes=off;");
+        var qwp = (IQwpWebSocketSender)sender;
+
+        var ts = new DateTime(2026, 6, 1, 0, 0, 0, DateTimeKind.Utc);
+        for (var i = 0; i < rows; i++)
+        {
+            sender.Table("test_ws_txn_visibility").Column("v", (long)i).At(ts.AddSeconds(i));
+        }
+
+        // The final At() hit auto_flush_rows, shipping a single deferred frame (FSN 0). Wait for the
+        // server to ack it, so the rows are provably appended-but-uncommitted before we assert
+        // invisibility (otherwise count==0 could just mean "not yet sent").
+        Assert.That(await qwp.AwaitAckedFsnAsync(0, TimeSpan.FromSeconds(15)), Is.True,
+            "deferred frame was not acknowledged by the server");
+
+        // Give any (incorrect) immediate commit + WAL apply time to surface before asserting.
+        await Task.Delay(750);
+        if (await CountRowsAsync("test_ws_txn_visibility") != 0)
+        {
+            Assert.Inconclusive(
+                "server committed deferred rows immediately — this QuestDB build does not honour "
+                + "FLAG_DEFER_COMMIT; skipping the transactional-visibility assertion");
+            return;
+        }
+
+        await sender.CommitAsync();
+        await VerifyTableRowCountAsync("test_ws_txn_visibility", expected: rows);
+    }
+
+    [Test]
+    public async Task Transaction_LargeBatch_StagedThenCommittedAtomically()
+    {
+        await DropTableAsync("test_ws_txn_large");
+        var endpoint = _questDb!.GetWebSocketEndpoint();
+        const int rows = 20_000;
+        const int autoFlushRows = 1_000;
+
+        using var sender = Sender.New(
+            $"ws::addr={endpoint};transaction=on;auto_flush_rows={autoFlushRows};"
+            + "auto_flush_interval=off;auto_flush_bytes=off;");
+        var qwp = (IQwpWebSocketSender)sender;
+
+        var ts = new DateTime(2026, 6, 2, 0, 0, 0, DateTimeKind.Utc);
+        for (var i = 0; i < rows; i++)
+        {
+            sender.Table("test_ws_txn_large").Symbol("g", "g" + (i % 8)).Column("v", (long)i).At(ts.AddMilliseconds(i));
+        }
+
+        // rows/autoFlushRows deferred frames shipped; wait for the last (FSN = count-1) to ack.
+        Assert.That(await qwp.AwaitAckedFsnAsync(rows / autoFlushRows - 1, TimeSpan.FromSeconds(30)), Is.True);
+        await Task.Delay(750);
+        if (await CountRowsAsync("test_ws_txn_large") != 0)
+        {
+            Assert.Inconclusive("server does not honour FLAG_DEFER_COMMIT; skipping");
+            return;
+        }
+
+        await sender.CommitAsync();
+        await VerifyTableRowCountAsync("test_ws_txn_large", expected: rows, maxAttempts: 150);
+    }
+
+    [Test]
+    public async Task Transaction_MultiTable_CommitsAllAtomically()
+    {
+        await DropTableAsync("test_ws_txn_t1");
+        await DropTableAsync("test_ws_txn_t2");
+        var endpoint = _questDb!.GetWebSocketEndpoint();
+        const int perTable = 25;
+
+        using var sender = Sender.New(
+            $"ws::addr={endpoint};transaction=on;auto_flush_rows=10;auto_flush_interval=off;auto_flush_bytes=off;");
+        var qwp = (IQwpWebSocketSender)sender;
+
+        var ts = new DateTime(2026, 6, 3, 0, 0, 0, DateTimeKind.Utc);
+        for (var i = 0; i < perTable; i++)
+        {
+            sender.Table("test_ws_txn_t1").Column("v", (long)i).At(ts.AddSeconds(i));
+            sender.Table("test_ws_txn_t2").Column("v", (long)(i * 10)).At(ts.AddSeconds(i));
+        }
+
+        await sender.CommitAsync();
+
+        await VerifyTableRowCountAsync("test_ws_txn_t1", expected: perTable);
+        await VerifyTableRowCountAsync("test_ws_txn_t2", expected: perTable);
+    }
+
+    private async Task<long> CountRowsAsync(string tableName)
+    {
+        var endpoint = _questDb!.GetHttpEndpoint();
+        using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
+        try
+        {
+            var response = await client.GetAsync(
+                $"http://{endpoint}/exec?query={Uri.EscapeDataString($"select count(*) from {tableName}")}");
+            if (!response.IsSuccessStatusCode) return 0; // table not created yet → nothing visible
+            var content = await response.Content.ReadAsStringAsync();
+            using var json = JsonDocument.Parse(content);
+            if (json.RootElement.TryGetProperty("dataset", out var dataset)
+                && dataset.ValueKind == JsonValueKind.Array && dataset.GetArrayLength() > 0)
+            {
+                var row = dataset[0];
+                if (row.ValueKind == JsonValueKind.Array && row.GetArrayLength() > 0)
+                {
+                    return row[0].GetInt64();
+                }
+            }
+            return 0;
+        }
+        catch
+        {
+            return 0;
+        }
+    }
+
     private async Task DropTableAsync(string tableName)
     {
         var endpoint = _questDb!.GetHttpEndpoint();

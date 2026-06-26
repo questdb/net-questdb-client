@@ -1397,7 +1397,9 @@ internal sealed class QwpCursorSendEngine : IDisposable
             : new IngressError(code, "QWP cursor engine has terminally failed; see inner exception", inner);
     }
 
-    private static bool IsTerminalServerError(Exception ex)
+    // Also consulted by QwpBackgroundDrainerPool to decide whether an orphan-drain fault is
+    // deterministic (quarantine the slot) or transient (leave it for re-adoption).
+    internal static bool IsTerminalServerError(Exception ex)
     {
         return ex is QwpException
             || ex is QwpProtocolViolationException

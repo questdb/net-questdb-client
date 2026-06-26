@@ -22,6 +22,8 @@
  *
  ******************************************************************************/
 
+using QuestDB.Utils;
+
 namespace QuestDB.Qwp.Sf;
 
 /// <summary>
@@ -36,9 +38,14 @@ namespace QuestDB.Qwp.Sf;
 ///         <item>drain runs through the configured <see cref="IQwpSlotDrainer" />;</item>
 ///         <item>on success, the slot lock is disposed — the slot is empty so it may be reclaimed
 ///             by any sender;</item>
-///         <item>on terminal failure, a <c>.failed</c> sentinel is written before the lock is
-///             released, so subsequent <see cref="QwpOrphanScanner" /> sweeps will skip the slot
-///             and the user can manually inspect it;</item>
+///         <item>on a <b>deterministic</b> terminal failure (auth reject, protocol violation,
+///             wire halt, corrupt segment files), a <c>.failed</c> sentinel is written before the
+///             lock is released, so subsequent <see cref="QwpOrphanScanner" /> sweeps will skip the
+///             slot and the user can manually inspect it;</item>
+///         <item>on a <b>transient</b> failure (drain timeout, or reconnect-budget exhaustion from
+///             a temporary outage) the slot lock is disposed without a sentinel, so the slot is
+///             re-adopted on a later sweep — a brief outage must not permanently abandon recoverable
+///             un-acked frames;</item>
 ///         <item>on cancellation, the slot lock is disposed without dropping a sentinel — drain
 ///             will be retried on the next sender startup.</item>
 ///     </list>
@@ -243,6 +250,15 @@ internal sealed class QwpBackgroundDrainerPool : IDisposable
             {
                 // Late teardown of a CTS / drainer dependency is shutdown noise, not a slot failure.
             }
+            catch (Exception ex) when (IsRetryableDrainFault(ex))
+            {
+                // Transient: a slow/unreachable server or a backlog larger than the drain window.
+                // Leave NO sentinel so QwpOrphanScanner re-adopts the slot on a later sweep; a brief
+                // outage must not permanently abandon the crashed sibling's recoverable frames.
+                System.Diagnostics.Trace.TraceWarning(
+                    $"QWP orphan drain of `{slotLock.SlotDirectory}` did not complete (transient: " +
+                    $"{ex.GetType().Name}); slot left for re-adoption.");
+            }
             catch (Exception ex)
             {
                 TryDropFailedSentinel(slotLock, ex);
@@ -269,6 +285,21 @@ internal sealed class QwpBackgroundDrainerPool : IDisposable
             }
             slotLock.Dispose();
         }
+    }
+
+    private static bool IsRetryableDrainFault(Exception ex)
+    {
+        if (ex is OperationCanceledException or TimeoutException)
+        {
+            return true;
+        }
+
+        if (ex is IngressError { InnerException: { } cause })
+        {
+            return !QwpCursorSendEngine.IsTerminalServerError(cause);
+        }
+
+        return false;
     }
 
     private const int FailedSentinelMaxBytes = 4096;

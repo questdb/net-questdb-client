@@ -139,6 +139,68 @@ public class QwpBackgroundDrainerPoolTests
     }
 
     [Test]
+    public async Task Enqueue_DrainTimeout_LeavesNoSentinelAndReleasesLockForReadoption()
+    {
+        // A drain that exceeds its budget throws TimeoutException (QwpCursorSendEngine.FlushAsync).
+        // This is transient — a slow/unreachable server or a backlog larger than the window — so the
+        // orphan's recoverable frames must NOT be permanently quarantined with a .failed sentinel.
+        var slotDir = Path.Combine(_root, "slot");
+        var slotLock = QwpSlotLock.Acquire(slotDir);
+        var drainer = new ThrowingDrainer(new TimeoutException(
+            "close_flush_timeout (5000 ms) expired with un-acked frames pending"));
+
+        using var pool = new QwpBackgroundDrainerPool(2, drainer);
+        pool.Enqueue(slotLock);
+        await pool.WaitForAllAsync();
+
+        Assert.That(File.Exists(Path.Combine(slotDir, ".failed")), Is.False,
+            "a transient drain timeout must not write a permanent .failed sentinel");
+        // Lock released → QwpOrphanScanner can re-adopt the slot on a later sweep.
+        using var reacquired = QwpSlotLock.Acquire(slotDir);
+        Assert.That(reacquired.SlotDirectory, Is.EqualTo(slotDir));
+    }
+
+    [Test]
+    public async Task Enqueue_ReconnectBudgetExhaustedFromTransientOutage_LeavesNoSentinel()
+    {
+        // Reconnect-budget exhaustion re-wraps the connectivity cause as IngressError(..., inner)
+        // (QwpCursorSendEngine.WrapTerminalForProducer). A non-terminal inner means the outage was
+        // transient → retryable, so no sentinel.
+        var slotDir = Path.Combine(_root, "slot");
+        var slotLock = QwpSlotLock.Acquire(slotDir);
+        var transientCause = new IOException("connection reset by peer");
+        var drainer = new ThrowingDrainer(new IngressError(ErrorCode.ServerFlushError,
+            "QWP cursor engine has terminally failed; see inner exception", transientCause));
+
+        using var pool = new QwpBackgroundDrainerPool(2, drainer);
+        pool.Enqueue(slotLock);
+        await pool.WaitForAllAsync();
+
+        Assert.That(File.Exists(Path.Combine(slotDir, ".failed")), Is.False,
+            "a transient outage that exhausted the reconnect budget must not quarantine the slot");
+        using var reacquired = QwpSlotLock.Acquire(slotDir);
+        Assert.That(reacquired.SlotDirectory, Is.EqualTo(slotDir));
+    }
+
+    [Test]
+    public async Task Enqueue_WrappedDeterministicTerminal_DropsFailedSentinel()
+    {
+        // A deterministic terminal (here auth) is wrapped the same way, but its inner IS terminal —
+        // a retry will fail identically, so the slot is quarantined.
+        var slotDir = Path.Combine(_root, "slot");
+        var slotLock = QwpSlotLock.Acquire(slotDir);
+        var terminalCause = new IngressError(ErrorCode.AuthError, "401 unauthorized");
+        var drainer = new ThrowingDrainer(new IngressError(ErrorCode.AuthError,
+            "QWP cursor engine has terminally failed; see inner exception", terminalCause));
+
+        using var pool = new QwpBackgroundDrainerPool(2, drainer);
+        pool.Enqueue(slotLock);
+        await pool.WaitForAllAsync();
+
+        Assert.That(File.Exists(Path.Combine(slotDir, ".failed")), Is.True);
+    }
+
+    [Test]
     public async Task Enqueue_RespectsConcurrencyCap()
     {
         const int cap = 2;

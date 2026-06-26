@@ -53,4 +53,14 @@ public enum ProtocolType
     ///     HTTP transport with TLS.
     /// </summary>
     https,
+
+    /// <summary>
+    ///     WebSocket transport carrying the QWP columnar binary ingest protocol.
+    /// </summary>
+    ws,
+
+    /// <summary>
+    ///     WebSocket transport with TLS.
+    /// </summary>
+    wss,
 }

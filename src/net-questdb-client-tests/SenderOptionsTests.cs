@@ -26,6 +26,7 @@
 using System.Diagnostics;
 using Microsoft.Extensions.Configuration;
 using NUnit.Framework;
+using QuestDB.Enums;
 using QuestDB.Utils;
 
 namespace net_questdb_client_tests;
@@ -59,20 +60,11 @@ public class SenderOptionsTests
     [Test]
     public void DuplicateKey()
     {
-        // duplicate keys are 'last writer wins'
-        Assert.That(
-            new SenderOptions("http::addr=localhost:9000;addr=localhost:9009;").addr,
-            Is.EqualTo("localhost:9009"));
-    }
-
-    [Test]
-    public void KeyCannotStartWithNumber()
-    {
-        // invalid property
-        Assert.That(
-            () => new SenderOptions("https::123=456;"),
-            Throws.TypeOf<IngressError>().With.Message.Contains("Invalid property")
-        );
+        // Multiple `addr=` keys accumulate as a multi-host failover list. `addr` returns the
+        // first (= primary attempt order) for back-compat; `addresses` exposes the full list.
+        var opts = new SenderOptions("http::addr=localhost:9000;addr=localhost:9009;");
+        Assert.That(opts.addr, Is.EqualTo("localhost:9000"));
+        Assert.That(opts.addresses, Is.EqualTo(new[] { "localhost:9000", "localhost:9009" }));
     }
 
     [Test]
@@ -80,17 +72,7 @@ public class SenderOptionsTests
     {
         Assert.That(
             new SenderOptions("http::addr=localhost:9000;").ToString()
-          , Is.EqualTo("http::addr=localhost:9000;auth_timeout=15000;auto_flush=on;auto_flush_bytes=2147483647;auto_flush_interval=1000;auto_flush_rows=75000;gzip=False;init_buf_size=65536;max_buf_size=104857600;max_name_len=127;pool_timeout=120000;protocol_version=Auto;request_min_throughput=102400;request_timeout=10000;retry_timeout=10000;tls_verify=on;"));
-    }
-
-    [Test]
-    public void InvalidProperty()
-    {
-        Assert.That(
-            () => new SenderOptions("http::asdada=localhost:9000;"),
-            Throws.TypeOf<IngressError>()
-                  .With.Message.Contains("Invalid property")
-        );
+          , Is.EqualTo("http::addr=localhost:9000;auth_timeout=15000;auto_flush=on;auto_flush_bytes=2147483647;auto_flush_interval=1000;auto_flush_rows=75000;convert_local_to_utc=off;gzip=False;init_buf_size=65536;max_buf_size=104857600;max_name_len=127;pool_timeout=120000;protocol_version=Auto;request_min_throughput=102400;request_timeout=30000;retry_timeout=10000;tls_verify=on;"));
     }
 
     [Test]
@@ -112,7 +94,7 @@ public class SenderOptionsTests
 
         Assert.That(senderOptions.ToString(),
                     Is.EqualTo(
-                        "http::addr=localhost:9000;auth_timeout=15000;auto_flush=on;auto_flush_bytes=-1;auto_flush_interval=-1;auto_flush_rows=-1;gzip=False;init_buf_size=65536;max_buf_size=104857600;max_name_len=127;pool_timeout=120000;protocol_version=Auto;request_min_throughput=102400;request_timeout=10000;retry_timeout=10000;tls_verify=on;"));
+                        "http::addr=localhost:9000;auth_timeout=15000;auto_flush=on;auto_flush_bytes=-1;auto_flush_interval=-1;auto_flush_rows=-1;convert_local_to_utc=off;gzip=False;init_buf_size=65536;max_buf_size=104857600;max_name_len=127;pool_timeout=120000;protocol_version=Auto;request_min_throughput=102400;request_timeout=30000;retry_timeout=10000;tls_verify=on;"));
     }
 
     [Test]
@@ -141,5 +123,1188 @@ public class SenderOptionsTests
     {
         var senderOptions = new SenderOptions("http::addr=localhost:9000;gzip=true;");
         Assert.That(senderOptions.ToString(), Does.Contain("gzip=True"));
+    }
+
+    [Test]
+    public void ConvertLocalToUtcDefaultFalse()
+    {
+        Assert.That(new SenderOptions("http::addr=localhost:9000;").convert_local_to_utc, Is.False);
+    }
+
+    [Test]
+    [TestCase("http::addr=localhost:9000;convert_local_to_utc=on;")]
+    [TestCase("tcp::addr=localhost:9009;convert_local_to_utc=on;")]
+    [TestCase("ws::addr=localhost:9000;convert_local_to_utc=on;")]
+    public void ConvertLocalToUtcAcceptedOnAllIngestSchemes(string confStr)
+    {
+        Assert.That(new SenderOptions(confStr).convert_local_to_utc, Is.True);
+    }
+
+    [Test]
+    public void ConvertLocalToUtcOffParses()
+    {
+        Assert.That(new SenderOptions("http::addr=localhost:9000;convert_local_to_utc=off;").convert_local_to_utc,
+            Is.False);
+    }
+
+    [Test]
+    public void ConvertLocalToUtcRoundTripsViaToString()
+    {
+        var original = new SenderOptions("http::addr=localhost:9000;convert_local_to_utc=on;");
+        // Emit the on/off config token, not the CLR bool literal (which would round-trip but
+        // re-introduce true/false vocabulary into the connect string).
+        Assert.That(original.ToString(), Does.Contain("convert_local_to_utc=on"));
+        var roundTripped = new SenderOptions(original.ToString());
+        Assert.That(roundTripped.convert_local_to_utc, Is.True);
+    }
+
+    [Test]
+    public void ToString_OmitsSecretProperties()
+    {
+        var opts = new SenderOptions(
+            "https::addr=localhost:9000;username=alice;password=hunter2;tls_roots=/etc/ssl;tls_roots_password=ts3cret;");
+        var serialised = opts.ToString();
+
+        Assert.That(serialised, Does.Not.Contain("hunter2"));
+        Assert.That(serialised, Does.Not.Contain("ts3cret"));
+        Assert.That(serialised, Does.Not.Contain("password"));
+        Assert.That(serialised, Does.Not.Contain("tls_roots_password"));
+        Assert.That(serialised, Does.Contain("username=alice"));
+    }
+
+    [Test]
+    public void ToString_DoesNotEmitSecretKeyWhenAbsent()
+    {
+        var opts = new SenderOptions("http::addr=localhost:9000;");
+        var serialised = opts.ToString();
+        Assert.That(serialised, Does.Not.Contain("password"));
+        Assert.That(serialised, Does.Not.Contain("token"));
+    }
+
+    [Test]
+    public void ToString_RoundTrips_WithProgrammaticConnectionListener()
+    {
+        var opts = new SenderOptions("ws::addr=localhost:9000;")
+        {
+            ConnectionListener = new NoopConnectionListener(),
+        };
+
+        var serialised = opts.ToString();
+        Assert.That(serialised, Does.Not.Contain("ConnectionListener"));
+        Assert.DoesNotThrow(() => _ = new SenderOptions(serialised));
+    }
+
+    private sealed class NoopConnectionListener : QuestDB.Senders.ISenderConnectionListener
+    {
+        public void OnEvent(QuestDB.Senders.SenderConnectionEvent evt)
+        {
+        }
+    }
+
+    [Test]
+    public void Format_OmitsSecrets()
+    {
+        var opts = new SenderOptions(
+            "https::addr=localhost:9000;username=alice;password=hunter2;");
+        var formatted = $"{opts}";
+        Assert.That(formatted, Does.Not.Contain("hunter2"));
+        Assert.That(formatted, Does.Not.Contain("password"));
+    }
+
+    [Test]
+    public void Sf_DefaultsAreSane()
+    {
+        var opts = new SenderOptions("ws::addr=localhost:9000;");
+        Assert.That(opts.sf_dir, Is.Null);
+        Assert.That(opts.sender_id, Is.EqualTo("default"));
+        Assert.That(opts.sf_max_bytes, Is.EqualTo(4L * 1024 * 1024));
+        Assert.That(opts.sf_max_total_bytes, Is.EqualTo(128L * 1024 * 1024));
+        Assert.That(opts.sf_durability, Is.EqualTo("memory"));
+        Assert.That(opts.sf_append_deadline_millis, Is.EqualTo(TimeSpan.FromSeconds(30)));
+        Assert.That(opts.reconnect_max_duration_millis, Is.EqualTo(TimeSpan.FromMinutes(5)));
+        Assert.That(opts.reconnect_initial_backoff_millis, Is.EqualTo(TimeSpan.FromMilliseconds(100)));
+        Assert.That(opts.reconnect_max_backoff_millis, Is.EqualTo(TimeSpan.FromSeconds(5)));
+        Assert.That(opts.initial_connect_retry, Is.False);
+        Assert.That(opts.close_flush_timeout_millis, Is.EqualTo(TimeSpan.FromSeconds(60)));
+        Assert.That(opts.drain_orphans, Is.False);
+        Assert.That(opts.max_background_drainers, Is.EqualTo(4));
+    }
+
+    [Test]
+    public void Sf_DefaultMaxTotal_GrowsWhenSfDirSet()
+    {
+        var opts = new SenderOptions("ws::addr=localhost:9000;sf_dir=/tmp/qdb;");
+        Assert.That(opts.sf_max_total_bytes, Is.EqualTo(10L * 1024 * 1024 * 1024));
+    }
+
+    [Test]
+    public void Sf_AllKeysParse()
+    {
+        var opts = new SenderOptions(
+            "wss::addr=questdb.io:9000;sf_dir=/var/qdb-sf;sender_id=svc-7;" +
+            "sf_max_bytes=1048576;sf_max_total_bytes=10485760;sf_durability=memory;" +
+            "sf_append_deadline_millis=10000;reconnect_max_duration_millis=60000;" +
+            "reconnect_initial_backoff_millis=200;reconnect_max_backoff_millis=5000;" +
+            "initial_connect_retry=on;close_flush_timeout_millis=2000;" +
+            "drain_orphans=on;max_background_drainers=8;");
+
+        Assert.That(opts.sf_dir, Is.EqualTo("/var/qdb-sf"));
+        Assert.That(opts.sender_id, Is.EqualTo("svc-7"));
+        Assert.That(opts.sf_max_bytes, Is.EqualTo(1048576L));
+        Assert.That(opts.sf_max_total_bytes, Is.EqualTo(10485760L));
+        Assert.That(opts.sf_durability, Is.EqualTo("memory"));
+        Assert.That(opts.sf_append_deadline_millis, Is.EqualTo(TimeSpan.FromMilliseconds(10000)));
+        Assert.That(opts.reconnect_max_duration_millis, Is.EqualTo(TimeSpan.FromMilliseconds(60000)));
+        Assert.That(opts.reconnect_initial_backoff_millis, Is.EqualTo(TimeSpan.FromMilliseconds(200)));
+        Assert.That(opts.reconnect_max_backoff_millis, Is.EqualTo(TimeSpan.FromMilliseconds(5000)));
+        Assert.That(opts.initial_connect_retry, Is.True);
+        Assert.That(opts.close_flush_timeout_millis, Is.EqualTo(TimeSpan.FromMilliseconds(2000)));
+        Assert.That(opts.drain_orphans, Is.True);
+        Assert.That(opts.max_background_drainers, Is.EqualTo(8));
+    }
+
+    [Test]
+    public void CloseFlushTimeout_Negative_Rejected()
+    {
+        // 0 is the deliberate "fast close" opt-out (b631099); a negative is only ever a misconfig
+        // (e.g. a -1 "disabled" sentinel from another system) and would otherwise fold into the
+        // dispose-time `<= 0` guard and silently drop buffered rows in RAM mode.
+        var ex = Assert.Throws<IngressError>(
+            () => new SenderOptions("ws::addr=localhost:9000;close_flush_timeout_millis=-5;"));
+        Assert.That(ex!.Message, Does.Contain("close_flush_timeout_millis"));
+
+        // Same gap via the programmatic TimeSpan setter.
+        var opts = new SenderOptions
+        {
+            protocol = ProtocolType.ws, addr = "h:9000",
+            close_flush_timeout_millis = TimeSpan.FromMilliseconds(-5),
+        };
+        Assert.That(
+            () => opts.EnsureValid(),
+            Throws.TypeOf<IngressError>().With.Message.Contains("close_flush_timeout_millis"));
+
+        // 0 stays valid.
+        Assert.That(
+            () => new SenderOptions("ws::addr=localhost:9000;close_flush_timeout_millis=0;"),
+            Throws.Nothing);
+    }
+
+    [Test]
+    public void ReconnectTimeouts_AboveTaskDelayCeiling_Rejected()
+    {
+        // The reconnect loop sleeps via Task.Delay, which throws once the delay exceeds ~int.MaxValue
+        // ms (~24.8 days). The config-string path is int-parsed so it can't express a larger value;
+        // the programmatic TimeSpan setters can, so EnsureValid must reject them rather than let the
+        // engine fault mid-outage with a raw ArgumentOutOfRangeException.
+        var overCeiling = TimeSpan.FromMilliseconds((double)int.MaxValue + 1);
+
+        var dur = new SenderOptions
+        {
+            protocol = ProtocolType.ws, addr = "h:9000", reconnect_max_duration_millis = overCeiling,
+        };
+        Assert.That(() => dur.EnsureValid(),
+            Throws.TypeOf<IngressError>().With.Message.Contains("reconnect_max_duration_millis"));
+
+        var init = new SenderOptions
+        {
+            protocol = ProtocolType.ws, addr = "h:9000", reconnect_initial_backoff_millis = overCeiling,
+        };
+        Assert.That(() => init.EnsureValid(),
+            Throws.TypeOf<IngressError>().With.Message.Contains("reconnect_initial_backoff_millis"));
+
+        var back = new SenderOptions
+        {
+            protocol = ProtocolType.ws, addr = "h:9000", reconnect_max_backoff_millis = overCeiling,
+        };
+        Assert.That(() => back.EnsureValid(),
+            Throws.TypeOf<IngressError>().With.Message.Contains("reconnect_max_backoff_millis"));
+
+        // Exactly at the ceiling stays valid.
+        var atCeiling = new SenderOptions
+        {
+            protocol = ProtocolType.ws, addr = "h:9000",
+            reconnect_max_duration_millis = TimeSpan.FromMilliseconds(int.MaxValue),
+        };
+        Assert.That(() => atCeiling.EnsureValid(), Throws.Nothing);
+
+        // The config-string path can't even express an over-ceiling value (int-parsed).
+        Assert.That(
+            () => new SenderOptions("ws::addr=h:9000;reconnect_max_backoff_millis=2147483648;"),
+            Throws.TypeOf<IngressError>().With.Message.Contains("reconnect_max_backoff_millis"));
+    }
+
+    [Test]
+    public void Sf_DurabilityNonMemory_Throws()
+    {
+        Assert.That(
+            () => new SenderOptions("ws::addr=localhost:9000;sf_dir=/tmp;sf_durability=disk;"),
+            Throws.TypeOf<IngressError>().With.Message.Contains("sf_durability"));
+    }
+
+    [Test]
+    public void Sf_KeysOnHttpScheme_Throws()
+    {
+        Assert.That(
+            () => new SenderOptions("http::addr=localhost:9000;sf_dir=/tmp;"),
+            Throws.TypeOf<IngressError>().With.Message.Contains("ws::"));
+    }
+
+    [Test]
+    public void NonSfWsKeys_OnHttpScheme_RejectedIndividually()
+    {
+        var keys = new[]
+        {
+            "request_durable_ack=on",
+        };
+        foreach (var kv in keys)
+        {
+            Assert.That(
+                () => new SenderOptions($"http::addr=localhost:9000;{kv};"),
+                Throws.TypeOf<IngressError>(),
+                $"key `{kv.Split('=')[0]}` must be rejected on http scheme");
+        }
+    }
+
+    [Test]
+    public void TokenXY_SilentlyAccepted_ForCrossClientInterop()
+    {
+        Assert.DoesNotThrow(() => new SenderOptions(
+            "tcp::addr=localhost:9009"));
+    }
+
+    [Test]
+    public void AutoFlushOff_ZerosAllTriggers()
+    {
+        var opts = new SenderOptions("http::addr=localhost:9000;auto_flush=off;");
+        Assert.That(opts.auto_flush_rows, Is.EqualTo(-1));
+        Assert.That(opts.auto_flush_bytes, Is.EqualTo(-1));
+        Assert.That(opts.auto_flush_interval, Is.EqualTo(TimeSpan.FromMilliseconds(-1)));
+    }
+
+    [Test]
+    public void AutoFlushRowsZero_Rejected()
+    {
+        Assert.Throws<IngressError>(() =>
+            new SenderOptions("http::addr=localhost:9000;auto_flush_rows=0;"));
+    }
+
+    [Test]
+    public void AutoFlushIntervalZero_Rejected()
+    {
+        Assert.Throws<IngressError>(() =>
+            new SenderOptions("http::addr=localhost:9000;auto_flush_interval=0;"));
+    }
+
+    [Test]
+    public void AutoFlushBytesZero_Accepted()
+    {
+        var opts = new SenderOptions("http::addr=localhost:9000;auto_flush_bytes=0;");
+        Assert.That(opts.auto_flush_bytes, Is.EqualTo(-1));
+    }
+
+    [Test]
+    public void Ws_DefaultPort_NotProvided()
+    {
+        var opts = new SenderOptions("ws::addr=localhost;");
+        Assert.That(opts.Port, Is.EqualTo(9000));
+    }
+
+    [Test]
+    public void Wss_DefaultPort_NotProvided()
+    {
+        var opts = new SenderOptions("wss::addr=localhost;");
+        Assert.That(opts.Port, Is.EqualTo(9000));
+    }
+
+    [Test]
+    public void UserPassAliases_AcceptedAsUsernamePassword()
+    {
+        var opts = new SenderOptions("http::addr=localhost:9000;user=alice;pass=secret;");
+        Assert.That(opts.username, Is.EqualTo("alice"));
+        Assert.That(opts.password, Is.EqualTo("secret"));
+    }
+
+    [Test]
+    public void UsernameWinsOverUserAlias()
+    {
+        var opts = new SenderOptions("http::addr=localhost:9000;username=primary;user=alias;password=p;");
+        Assert.That(opts.username, Is.EqualTo("primary"));
+    }
+
+    [Test]
+    public void SenderId_PathTraversal_Rejected()
+    {
+        Assert.That(
+            () => new SenderOptions("ws::addr=localhost:9000;sf_dir=/tmp/qdb;sender_id=../etc;"),
+            Throws.TypeOf<IngressError>().With.Message.Contains("sender_id"));
+        Assert.That(
+            () => new SenderOptions("ws::addr=localhost:9000;sf_dir=/tmp/qdb;sender_id=a/b;"),
+            Throws.TypeOf<IngressError>().With.Message.Contains("sender_id"));
+        Assert.That(
+            () => new SenderOptions("ws::addr=localhost:9000;sf_dir=/tmp/qdb;sender_id=/abs;"),
+            Throws.TypeOf<IngressError>().With.Message.Contains("sender_id"));
+    }
+
+    [Test]
+    public void SenderId_NormalSegment_Accepted()
+    {
+        Assert.DoesNotThrow(
+            () => new SenderOptions("ws::addr=localhost:9000;sf_dir=/tmp/qdb;sender_id=service-7;"));
+    }
+
+    [Test]
+    public void Ws_Defaults()
+    {
+        var opts = new SenderOptions("ws::addr=localhost:9000;");
+        Assert.That(opts.auto_flush_rows, Is.EqualTo(1000));
+        Assert.That(opts.auto_flush_bytes, Is.EqualTo(8 * 1024 * 1024));
+        Assert.That(opts.auto_flush_interval, Is.EqualTo(TimeSpan.FromMilliseconds(100)));
+        Assert.That(opts.Port, Is.EqualTo(9000));
+        Assert.That(opts.request_durable_ack, Is.False);
+    }
+
+    [Test]
+    public void UnknownKey_IsRejected()
+    {
+        var ex = Assert.Throws<IngressError>(
+            () => new SenderOptions("ws::addr=localhost:9000;some_unrecognised_key=42;"));
+        Assert.That(ex!.Message, Does.Contain("some_unrecognised_key"));
+    }
+
+    [TestCase("ws", "max_datagram_size=2048")]
+    [TestCase("ws", "multicast_ttl=4")]
+    [TestCase("wss", "max_datagram_size=2048")]
+    [TestCase("wss", "multicast_ttl=4")]
+    public void UdpOnlyKey_RejectedOnWebSocket(string scheme, string keyValue)
+    {
+        // max_datagram_size / multicast_ttl are UDP-only ingress knobs with no transport in this
+        // client. They are absent from the QWP connect-string vocabulary, so the WebSocket ingress
+        // parser rejects them as unknown keys.
+        var key = keyValue.Substring(0, keyValue.IndexOf('='));
+        var ex = Assert.Throws<IngressError>(
+            () => new SenderOptions($"{scheme}::addr=localhost:9000;{keyValue};"));
+        Assert.That(ex!.Message, Does.Contain(key));
+    }
+
+    [Test]
+    public void TokenXY_AcceptedOnIlpRejectedOnWs()
+    {
+        // token_x / token_y are ECDSA P-256 key components for legacy ILP/TCP auth. They are not
+        // part of the QWP connect-string vocabulary, so the WebSocket ingress path rejects them
+        // (QWP auth is Basic / Bearer); http/tcp still accept them for cross-client interop.
+        Assert.That(
+            () => new SenderOptions("tcp::addr=localhost:9009;token_x=abc;token_y=def;"),
+            Throws.Nothing);
+        var ex = Assert.Throws<IngressError>(
+            () => new SenderOptions("ws::addr=localhost:9000;token_x=abc;token_y=def;"));
+        Assert.That(ex!.Message, Does.Contain("not supported for QWP/WebSocket transport"));
+    }
+
+    [Test]
+    public void Zone_IsAcceptedOnAllSchemesForCrossClientInterop()
+    {
+        Assert.That(() => new SenderOptions("ws::addr=localhost:9000;zone=eu-west-1a;"), Throws.Nothing);
+        Assert.That(() => new SenderOptions("http::addr=localhost:9000;zone=eu-west-1a;"), Throws.Nothing);
+        Assert.That(() => new SenderOptions("tcp::addr=localhost:9009;zone=eu-west-1a;"), Throws.Nothing);
+    }
+
+    [Test]
+    public void Target_IsSilentlyAcceptedOnWebSocketButRejectedOnIngress()
+    {
+        // `target` is an egress-only key: accepted-and-ignored on ws/wss, rejected on http/tcp
+        // like every other egress key (mirrors EgressKeys_RejectedOnNonWebSocketScheme).
+        Assert.That(() => new SenderOptions("ws::addr=localhost:9000;target=replica;"), Throws.Nothing);
+        Assert.That(() => new SenderOptions("http::addr=localhost:9000;target=primary;"),
+            Throws.TypeOf<IngressError>().With.Message.Contains("target"));
+        Assert.That(() => new SenderOptions("tcp::addr=localhost:9009;target=any;"),
+            Throws.TypeOf<IngressError>().With.Message.Contains("target"));
+    }
+
+    [Test]
+    public void InitialCredit_IsSilentlyAcceptedOnWebSocketButRejectedOnIngress()
+    {
+        Assert.That(() => new SenderOptions("ws::addr=localhost:9000;initial_credit=1024;"), Throws.Nothing);
+        Assert.That(() => new SenderOptions("http::addr=localhost:9000;initial_credit=1024;"),
+            Throws.TypeOf<IngressError>().With.Message.Contains("initial_credit"));
+        Assert.That(() => new SenderOptions("tcp::addr=localhost:9009;initial_credit=1024;"),
+            Throws.TypeOf<IngressError>().With.Message.Contains("initial_credit"));
+    }
+
+    [Test]
+    public void Transaction_IsWebSocketOnly_RejectedOnIngress()
+    {
+        // `transaction` is WebSocket-only, matching the Java client which throws
+        // "transaction is only supported for WebSocket transport" on http/tcp. It was previously
+        // silently accepted-and-ignored on every scheme.
+        Assert.That(() => new SenderOptions("http::addr=localhost:9000;transaction=on;"),
+            Throws.TypeOf<IngressError>().With.Message.Contains("transaction"));
+        Assert.That(() => new SenderOptions("tcp::addr=localhost:9009;transaction=on;"),
+            Throws.TypeOf<IngressError>().With.Message.Contains("transaction"));
+        Assert.That(() => new SenderOptions("http::addr=localhost:9000;transaction=off;"),
+            Throws.TypeOf<IngressError>().With.Message.Contains("transaction"));
+    }
+
+    [Test]
+    public void Transaction_OnWebSocket_ParsesOnOff()
+    {
+        // WS transactional mode (defer-commit). on/off map to the `transaction` bool; an invalid
+        // value is rejected.
+        Assert.That(new SenderOptions("ws::addr=localhost:9000;transaction=on;").transaction, Is.True);
+        Assert.That(new SenderOptions("wss::addr=localhost:9000;transaction=on;").transaction, Is.True);
+        Assert.That(new SenderOptions("ws::addr=localhost:9000;transaction=off;").transaction, Is.False);
+        Assert.That(new SenderOptions("ws::addr=localhost:9000;").transaction, Is.False);
+
+        Assert.That(() => new SenderOptions("ws::addr=localhost:9000;transaction=maybe;"),
+            Throws.TypeOf<IngressError>().With.Message.Contains("transaction"));
+    }
+
+    [Test]
+    public void Transaction_ProgrammaticOnNonWebSocket_Rejected()
+    {
+        var opts = new SenderOptions("http::addr=localhost:9000;") { transaction = true };
+        Assert.That(() => opts.EnsureValid(),
+            Throws.TypeOf<IngressError>().With.Message.Contains("transaction"));
+    }
+
+    [Test]
+    public void Transaction_ToString_RoundTrips()
+    {
+        var opts = new SenderOptions("ws::addr=localhost:9000;transaction=on;");
+        var round = new SenderOptions(opts.ToString());
+        Assert.That(round.transaction, Is.True);
+    }
+
+    [Test]
+    public void EgressKeys_SilentlyAcceptedOnWebSocket()
+    {
+        Assert.That(() => new SenderOptions(
+            "ws::addr=localhost:9000;compression=zstd;compression_level=6;failover=on;" +
+            "failover_max_attempts=4;max_batch_rows=5000;client_id=app-1;buffer_pool_size=8;" +
+            "path=/read/v1;"), Throws.Nothing);
+    }
+
+    [Test]
+    public void EgressKeys_RejectedOnNonWebSocketScheme()
+    {
+        var ex = Assert.Throws<IngressError>(
+            () => new SenderOptions("http::addr=localhost:9000;compression=zstd;"));
+        Assert.That(ex!.Message, Does.Contain("compression"));
+    }
+
+    [Test]
+    public void Ws_AuthTimeoutMs_Parses()
+    {
+        var withMs = new SenderOptions("ws::addr=localhost:9000;auth_timeout_ms=2500;");
+        Assert.That(withMs.auth_timeout, Is.EqualTo(TimeSpan.FromMilliseconds(2500)));
+    }
+
+    [Test]
+    public void Ws_LegacyAuthTimeout_Rejected()
+    {
+        // The QWP connect-string vocabulary uses auth_timeout_ms; the bare legacy ILP name
+        // auth_timeout is rejected on the WebSocket path. It stays valid on http/tcp.
+        var ex = Assert.Throws<IngressError>(
+            () => new SenderOptions("ws::addr=localhost:9000;auth_timeout=2500;"));
+        Assert.That(ex!.Message, Does.Contain("not supported for QWP/WebSocket transport"));
+
+        var http = new SenderOptions("http::addr=localhost:9000;auth_timeout=2500;");
+        Assert.That(http.auth_timeout, Is.EqualTo(TimeSpan.FromMilliseconds(2500)));
+    }
+
+    [Test]
+    public void Ws_ToString_EmitsAuthTimeoutMs()
+    {
+        var opts = new SenderOptions("ws::addr=localhost:9000;auth_timeout_ms=4000;");
+        var s = opts.ToString();
+        Assert.That(s, Does.Contain("auth_timeout_ms=4000"));
+        Assert.That(s, Does.Not.Contain("auth_timeout=4000"));
+    }
+
+    [Test]
+    public void Http_ToString_KeepsAuthTimeoutLegacyName()
+    {
+        var opts = new SenderOptions("http::addr=localhost:9000;auth_timeout=4000;");
+        Assert.That(opts.ToString(), Does.Contain("auth_timeout=4000"));
+    }
+
+    [TestCase("off", InitialConnectMode.off)]
+    [TestCase("false", InitialConnectMode.off)]
+    [TestCase("OFF", InitialConnectMode.off)]
+    [TestCase("on", InitialConnectMode.on)]
+    [TestCase("true", InitialConnectMode.on)]
+    [TestCase("sync", InitialConnectMode.on)]
+    [TestCase("SYNC", InitialConnectMode.on)]
+    [TestCase("async", InitialConnectMode.async)]
+    [TestCase("ASYNC", InitialConnectMode.async)]
+    public void InitialConnectRetry_AcceptsAllAliases(string raw, InitialConnectMode expected)
+    {
+        var opts = new SenderOptions($"ws::addr=localhost:9000;sf_dir=/tmp/qdb;initial_connect_retry={raw};");
+        Assert.That(opts.initial_connect_mode, Is.EqualTo(expected));
+    }
+
+    [Test]
+    public void InitialConnectRetry_OmittedDefaultsToOff()
+    {
+        var opts = new SenderOptions("ws::addr=localhost:9000;");
+        Assert.That(opts.initial_connect_mode, Is.EqualTo(InitialConnectMode.off));
+        Assert.That(opts.initial_connect_retry, Is.False);
+    }
+
+    [Test]
+    public void InitialConnectRetry_BoolGetterMapsModes()
+    {
+        var off = new SenderOptions("ws::addr=h:9000;sf_dir=/tmp/qdb;initial_connect_retry=off;");
+        Assert.That(off.initial_connect_retry, Is.False);
+
+        var on = new SenderOptions("ws::addr=h:9000;sf_dir=/tmp/qdb;initial_connect_retry=on;");
+        Assert.That(on.initial_connect_retry, Is.True);
+
+        var async = new SenderOptions("ws::addr=h:9000;sf_dir=/tmp/qdb;initial_connect_retry=async;");
+        Assert.That(async.initial_connect_retry, Is.True);
+        Assert.That(async.initial_connect_mode, Is.EqualTo(InitialConnectMode.async));
+    }
+
+    [Test]
+    public void InitialConnectRetry_InvalidValue_Rejected()
+    {
+        Assert.That(
+            () => new SenderOptions("ws::addr=h:9000;sf_dir=/tmp/qdb;initial_connect_retry=eventually;"),
+            Throws.TypeOf<IngressError>());
+    }
+
+    [TestCase("on")]
+    [TestCase("async")]
+    public void InitialConnectRetry_WithoutSfDir_AcceptedAfterCursorEngineUnification(string mode)
+    {
+        var opts = new SenderOptions($"ws::addr=h:9000;initial_connect_retry={mode};");
+        Assert.That(opts.initial_connect_retry, Is.True);
+    }
+
+    [TestCase("reconnect_max_duration_millis=60000")]
+    [TestCase("reconnect_initial_backoff_millis=200")]
+    [TestCase("reconnect_max_backoff_millis=5000")]
+    public void InitialConnectRetry_PromotedToOn_WhenReconnectKeyTuned(string reconnectKey)
+    {
+        var opts = new SenderOptions($"ws::addr=h:9000;{reconnectKey};");
+        Assert.That(opts.initial_connect_mode, Is.EqualTo(InitialConnectMode.on));
+    }
+
+    [Test]
+    public void InitialConnectRetry_ExplicitOff_SurvivesReconnectKeyTuning()
+    {
+        var opts = new SenderOptions(
+            "ws::addr=h:9000;reconnect_max_duration_millis=60000;initial_connect_retry=off;");
+        Assert.That(opts.initial_connect_mode, Is.EqualTo(InitialConnectMode.off));
+    }
+
+    [Test]
+    public void InitialConnectRetry_PromotedToOn_WhenReconnectKeyTunedProgrammatically()
+    {
+        var opts = new SenderOptions { protocol = ProtocolType.ws, addr = "h:9000" };
+        opts.reconnect_max_backoff_millis = TimeSpan.FromSeconds(10);
+        opts.EnsureValid();
+        Assert.That(opts.initial_connect_mode, Is.EqualTo(InitialConnectMode.on));
+    }
+
+    [Test]
+    public void ErrorHandler_WithoutSfDir_AcceptedAfterCursorEngineUnification()
+    {
+        var opts = new SenderOptions { protocol = ProtocolType.ws, addr = "h:9000" };
+        opts.error_handler = _ => { };
+        Assert.DoesNotThrow(() => opts.EnsureValid());
+        Assert.That(opts.error_handler, Is.Not.Null);
+    }
+
+    [Test]
+    public void ErrorHandler_WithSfDir_PassesValidation()
+    {
+        var opts = new SenderOptions { protocol = ProtocolType.ws, addr = "h:9000", sf_dir = "/tmp/qdb" };
+        opts.error_handler = _ => { };
+        Assert.DoesNotThrow(() => opts.EnsureValid());
+        Assert.That(opts.error_handler, Is.Not.Null);
+    }
+
+    [Test]
+    public void ErrorHandler_OnHttpScheme_Rejected()
+    {
+        var opts = new SenderOptions { protocol = ProtocolType.http, addr = "h:9000" };
+        opts.error_handler = _ => { };
+        Assert.That(
+            () => opts.EnsureValid(),
+            Throws.TypeOf<IngressError>().With.Message.Contains("ws"));
+    }
+
+    [Test]
+    public void ErrorPolicyResolver_WithoutSfDir_AcceptedAfterCursorEngineUnification()
+    {
+        var opts = new SenderOptions { protocol = ProtocolType.ws, addr = "h:9000" };
+        opts.error_policy_resolver = _ => SenderErrorPolicy.Halt;
+        Assert.DoesNotThrow(() => opts.EnsureValid());
+    }
+
+    [Test]
+    public void ErrorPolicyResolver_WithSfDir_PassesValidation()
+    {
+        var opts = new SenderOptions { protocol = ProtocolType.ws, addr = "h:9000", sf_dir = "/tmp/qdb" };
+        opts.error_policy_resolver = _ => SenderErrorPolicy.Halt;
+        Assert.DoesNotThrow(() => opts.EnsureValid());
+    }
+
+    [Test]
+    public void ErrorInboxCapacity_WithoutSfDir_AcceptedAfterCursorEngineUnification()
+    {
+        var opts = new SenderOptions { protocol = ProtocolType.ws, addr = "h:9000", error_inbox_capacity = 16 };
+        Assert.DoesNotThrow(() => opts.EnsureValid());
+    }
+
+    [Test]
+    public void ErrorInboxCapacity_BelowMinimum_Rejected()
+    {
+        var opts = new SenderOptions
+        {
+            protocol = ProtocolType.ws, addr = "h:9000", sf_dir = "/tmp/qdb", error_inbox_capacity = 15,
+        };
+        Assert.That(
+            () => opts.EnsureValid(),
+            Throws.TypeOf<IngressError>().With.Message.Contains(">= 16"));
+    }
+
+    [Test]
+    public void ErrorInboxCapacity_DefaultIs256()
+    {
+        var opts = new SenderOptions { protocol = ProtocolType.ws, addr = "h:9000", sf_dir = "/tmp/qdb" };
+        Assert.That(opts.error_inbox_capacity, Is.EqualTo(256));
+        Assert.DoesNotThrow(() => opts.EnsureValid());
+    }
+
+    [TestCase("halt", SenderErrorPolicy.Halt)]
+    [TestCase("HALT", SenderErrorPolicy.Halt)]
+    [TestCase("drop", SenderErrorPolicy.DropAndContinue)]
+    [TestCase("DROP", SenderErrorPolicy.DropAndContinue)]
+    [TestCase("drop_and_continue", SenderErrorPolicy.DropAndContinue)]
+    public void OnServerError_AcceptsHaltAndDropAliases(string raw, SenderErrorPolicy expected)
+    {
+        var opts = new SenderOptions(
+            $"ws::addr=h:9000;sf_dir=/tmp/qdb;on_server_error={raw};");
+        Assert.That(opts.on_server_error, Is.EqualTo(expected));
+    }
+
+    [Test]
+    public void OnServerError_InvalidValue_Rejected()
+    {
+        Assert.That(
+            () => new SenderOptions("ws::addr=h:9000;sf_dir=/tmp/qdb;on_server_error=maybe;"),
+            Throws.TypeOf<IngressError>().With.Message.Contains("on_server_error"));
+    }
+
+    [Test]
+    public void OnServerError_WithoutSfDir_AcceptedAfterCursorEngineUnification()
+    {
+        var opts = new SenderOptions("ws::addr=h:9000;on_server_error=halt;");
+        Assert.That(opts.on_server_error, Is.EqualTo(SenderErrorPolicy.Halt));
+    }
+
+    [Test]
+    public void OnServerError_OnHttpScheme_Rejected()
+    {
+        Assert.That(
+            () => new SenderOptions("http::addr=h:9000;on_server_error=halt;"),
+            Throws.TypeOf<IngressError>());
+    }
+
+    [Test]
+    public void OnPerCategoryError_Parses()
+    {
+        var opts = new SenderOptions(
+            "ws::addr=h:9000;sf_dir=/tmp/qdb;" +
+            "on_schema_mismatch_error=halt;on_parse_error=drop;" +
+            "on_internal_error=drop_and_continue;on_security_error=halt;on_write_error=halt;");
+        Assert.That(opts.on_schema_mismatch_error, Is.EqualTo(SenderErrorPolicy.Halt));
+        Assert.That(opts.on_parse_error, Is.EqualTo(SenderErrorPolicy.DropAndContinue));
+        Assert.That(opts.on_internal_error, Is.EqualTo(SenderErrorPolicy.DropAndContinue));
+        Assert.That(opts.on_security_error, Is.EqualTo(SenderErrorPolicy.Halt));
+        Assert.That(opts.on_write_error, Is.EqualTo(SenderErrorPolicy.Halt));
+    }
+
+    [Test]
+    public void EffectiveResolver_Null_WhenNothingSet()
+    {
+        var opts = new SenderOptions { protocol = ProtocolType.ws, addr = "h:9000", sf_dir = "/tmp/qdb" };
+        opts.EnsureValid();
+        Assert.That(opts.BuildEffectivePolicyResolver(), Is.Null);
+    }
+
+    [Test]
+    public void EffectiveResolver_PerCategoryWinsOverGlobal()
+    {
+        var opts = new SenderOptions(
+            "ws::addr=h:9000;sf_dir=/tmp/qdb;" +
+            "on_server_error=halt;on_schema_mismatch_error=drop;");
+        var resolver = opts.BuildEffectivePolicyResolver();
+        Assert.That(resolver, Is.Not.Null);
+        Assert.That(resolver!(SenderErrorCategory.SchemaMismatch), Is.EqualTo(SenderErrorPolicy.DropAndContinue));
+        Assert.That(resolver(SenderErrorCategory.ParseError), Is.EqualTo(SenderErrorPolicy.Halt));
+        Assert.That(resolver(SenderErrorCategory.InternalError), Is.EqualTo(SenderErrorPolicy.Halt));
+        Assert.That(resolver(SenderErrorCategory.WriteError), Is.EqualTo(SenderErrorPolicy.Halt));
+    }
+
+    [Test]
+    public void EffectiveResolver_GlobalAppliesToOverridableOnly()
+    {
+        var opts = new SenderOptions(
+            "ws::addr=h:9000;sf_dir=/tmp/qdb;on_server_error=drop;");
+        var resolver = opts.BuildEffectivePolicyResolver();
+        Assert.That(resolver, Is.Not.Null);
+        Assert.That(resolver!(SenderErrorCategory.SchemaMismatch), Is.EqualTo(SenderErrorPolicy.DropAndContinue));
+        Assert.That(resolver(SenderErrorCategory.ParseError), Is.EqualTo(SenderErrorPolicy.DropAndContinue));
+        Assert.That(resolver(SenderErrorCategory.InternalError), Is.EqualTo(SenderErrorPolicy.DropAndContinue));
+        Assert.That(resolver(SenderErrorCategory.SecurityError), Is.EqualTo(SenderErrorPolicy.DropAndContinue));
+        Assert.That(resolver(SenderErrorCategory.WriteError), Is.EqualTo(SenderErrorPolicy.DropAndContinue));
+    }
+
+    [Test]
+    public void EffectiveResolver_ProgrammaticBeatsConnectString()
+    {
+        var opts = new SenderOptions(
+            "ws::addr=h:9000;sf_dir=/tmp/qdb;on_server_error=halt;on_schema_mismatch_error=halt;");
+        opts.error_policy_resolver = _ => SenderErrorPolicy.DropAndContinue;
+        var resolver = opts.BuildEffectivePolicyResolver();
+        Assert.That(resolver!(SenderErrorCategory.SchemaMismatch), Is.EqualTo(SenderErrorPolicy.DropAndContinue));
+        Assert.That(resolver(SenderErrorCategory.ParseError), Is.EqualTo(SenderErrorPolicy.DropAndContinue));
+    }
+
+    [Test]
+    public void OnServerError_InWebSocketOnlyKeysList()
+    {
+        Assert.That(
+            () => new SenderOptions("http::addr=h:9000;on_schema_mismatch_error=halt;"),
+            Throws.TypeOf<IngressError>());
+    }
+
+    [Test]
+    public void OnServerError_RoundTripsViaToString()
+    {
+        var original = new SenderOptions(
+            "ws::addr=h:9000;sf_dir=/tmp/qdb;" +
+            "on_server_error=halt;on_schema_mismatch_error=drop;on_write_error=drop_and_continue;");
+        var roundTripped = new SenderOptions(original.ToString());
+        Assert.That(roundTripped.on_server_error, Is.EqualTo(SenderErrorPolicy.Halt));
+        Assert.That(roundTripped.on_schema_mismatch_error, Is.EqualTo(SenderErrorPolicy.DropAndContinue));
+        Assert.That(roundTripped.on_write_error, Is.EqualTo(SenderErrorPolicy.DropAndContinue));
+    }
+
+    [Test]
+    public void AuthPrecedence_UsernameAndToken_BothPresent_Rejected()
+    {
+        Assert.That(
+            () => new SenderOptions("http::addr=localhost:9000;username=alice;token=t123;"),
+            Throws.TypeOf<IngressError>());
+    }
+
+    [Test]
+    public void AuthPrecedence_UsernameWithoutPassword_Rejected()
+    {
+        Assert.That(
+            () => new SenderOptions("http::addr=localhost:9000;username=alice;"),
+            Throws.TypeOf<IngressError>());
+    }
+
+    [Test]
+    public void AuthPrecedence_PasswordWithoutUsername_Rejected()
+    {
+        Assert.That(
+            () => new SenderOptions("http::addr=localhost:9000;password=secret;"),
+            Throws.TypeOf<IngressError>());
+    }
+
+    [Test]
+    public void Gzip_OnWithWebSocketScheme_Rejected()
+    {
+        Assert.That(
+            () => new SenderOptions("ws::addr=localhost:9000;gzip=true;"),
+            Throws.TypeOf<IngressError>());
+        Assert.That(
+            () => new SenderOptions("wss::addr=localhost:9000;gzip=true;"),
+            Throws.TypeOf<IngressError>());
+    }
+
+    [Test]
+    public void Gzip_OffWithWebSocketScheme_Rejected()
+    {
+        // gzip is an ILP-only key absent from the QWP vocabulary, so the WebSocket path rejects
+        // it by name regardless of value -- gzip=false is rejected just like gzip=true.
+        var ex = Assert.Throws<IngressError>(
+            () => new SenderOptions("ws::addr=localhost:9000;gzip=false;"));
+        Assert.That(ex!.Message, Does.Contain("not supported for QWP/WebSocket transport"));
+    }
+
+    [Test]
+    public void Tls_VerifyKeysAccepted()
+    {
+        Assert.DoesNotThrow(() => new SenderOptions("https::addr=localhost:9000;tls_verify=on;"));
+        Assert.DoesNotThrow(() => new SenderOptions("https::addr=localhost:9000;tls_verify=unsafe_off;"));
+    }
+
+    [Test]
+    public void Tls_RootsAndPasswordAccepted()
+    {
+        Assert.DoesNotThrow(() => new SenderOptions(
+            "https::addr=localhost:9000;tls_roots=/tmp/ca.pem;tls_roots_password=secret;"));
+    }
+
+    [Test]
+    public void Tls_RootsPasswordWithoutRoots_Rejected()
+    {
+        Assert.That(
+            () => new SenderOptions("https::addr=localhost:9000;tls_roots_password=secret;"),
+            Throws.TypeOf<IngressError>());
+    }
+
+    [Test]
+    public void MultiAddress_AcceptedForWebSocket()
+    {
+        var ws = new SenderOptions("ws::addr=h1:9000;addr=h2:9000;");
+        Assert.That(ws.addresses, Is.EqualTo(new[] { "h1:9000", "h2:9000" }));
+        var wss = new SenderOptions("wss::addr=h1:9000;addr=h2:9000;");
+        Assert.That(wss.addresses, Is.EqualTo(new[] { "h1:9000", "h2:9000" }));
+    }
+
+    [Test]
+    public void Sf_AllKeysOnHttpScheme_RejectedIndividually()
+    {
+        var keys = new[]
+        {
+            "sender_id=foo", "sf_max_bytes=1024", "sf_max_total_bytes=1024", "sf_durability=memory",
+            "sf_append_deadline_millis=1000", "reconnect_max_duration_millis=1000",
+            "reconnect_initial_backoff_millis=1", "reconnect_max_backoff_millis=1",
+            "initial_connect_retry=on", "close_flush_timeout_millis=100",
+            "drain_orphans=on", "max_background_drainers=2",
+        };
+        foreach (var kv in keys)
+        {
+            Assert.That(
+                () => new SenderOptions($"http::addr=localhost:9000;{kv};"),
+                Throws.TypeOf<IngressError>(),
+                $"key `{kv.Split('=')[0]}` must be rejected on http scheme");
+        }
+    }
+
+    [Test]
+    public void RecordWith_FlippingWsToHttp_StillRejectsWsOnlyKeys()
+    {
+        var ws = new SenderOptions("ws::addr=localhost:9000;request_durable_ack=on;");
+        var flipped = ws with { protocol = QuestDB.Enums.ProtocolType.http };
+
+        Assert.That(
+            () => QuestDB.Sender.New(flipped),
+            Throws.TypeOf<IngressError>().With.Message.Contains("request_durable_ack"));
+    }
+
+    [Test]
+    public void Programmatic_HttpSenderWithWsOnlyKey_Rejected()
+    {
+        var opts = new SenderOptions
+        {
+            protocol = QuestDB.Enums.ProtocolType.http,
+            addr     = "localhost:9000",
+            request_durable_ack = true,
+        };
+
+        Assert.That(
+            () => QuestDB.Sender.New(opts),
+            Throws.TypeOf<IngressError>().With.Message.Contains("request_durable_ack"));
+    }
+
+    [TestCase("on", true)]
+    [TestCase("ON", true)]
+    [TestCase("On", true)]
+    [TestCase("off", false)]
+    [TestCase("OFF", false)]
+    [TestCase("Off", false)]
+    [TestCase("true", true)]
+    [TestCase("TRUE", true)]
+    [TestCase("True", true)]
+    [TestCase("false", false)]
+    [TestCase("FALSE", false)]
+    public void Gzip_AcceptsBothBooleanForms(string raw, bool expected)
+    {
+        var opts = new SenderOptions($"http::addr=localhost:9000;gzip={raw};");
+        Assert.That(opts.gzip, Is.EqualTo(expected));
+    }
+
+    [TestCase("on", true)]
+    [TestCase("OFF", false)]
+    [TestCase("True", true)]
+    public void RequestDurableAck_AcceptsBothBooleanForms(string raw, bool expected)
+    {
+        var opts = new SenderOptions($"ws::addr=localhost:9000;request_durable_ack={raw};");
+        Assert.That(opts.request_durable_ack, Is.EqualTo(expected));
+    }
+
+    [TestCase("yes")]
+    [TestCase("1")]
+    [TestCase("0")]
+    [TestCase("")]
+    [TestCase("nope")]
+    public void BoolKey_RejectsNonBooleanLiterals(string raw)
+    {
+        Assert.That(
+            () => new SenderOptions($"http::addr=localhost:9000;gzip={raw};"),
+            Throws.TypeOf<IngressError>());
+    }
+
+    [Test]
+    public void GzipOn_ViaWebSocketScheme_GivesGzipRejectionNotParseError()
+    {
+        // gzip is a legacy ILP HTTP key (binary QWP has no gzip), so the WebSocket path rejects
+        // it as a non-QWP key rather than letting it through to a later parse/validate error.
+        Assert.That(
+            () => new SenderOptions("ws::addr=localhost:9000;gzip=on;"),
+            Throws.TypeOf<IngressError>().With.Message.Contains("not supported for QWP/WebSocket transport"));
+    }
+
+    [Test]
+    public void RecordWith_MutatingWsKeyAfterFlip_StillRejected()
+    {
+        var ws = new SenderOptions("ws::addr=localhost:9000;");
+        var flipped = ws with { protocol = QuestDB.Enums.ProtocolType.http, request_durable_ack = true };
+
+        Assert.That(
+            () => QuestDB.Sender.New(flipped),
+            Throws.TypeOf<IngressError>().With.Message.Contains("request_durable_ack"));
+    }
+
+    [Test]
+    public void TcpUsernameAndToken_ParseTogether()
+    {
+        var opts = new SenderOptions("tcp::addr=localhost:9009;username=admin;token=secret;");
+        Assert.That(opts.username, Is.EqualTo("admin"));
+        Assert.That(opts.token, Is.EqualTo("secret"));
+    }
+
+    [Test]
+    public void Programmatic_HttpUsernameWithoutPassword_RejectedByEnsureValid()
+    {
+        var opts = new SenderOptions
+        {
+            protocol = QuestDB.Enums.ProtocolType.http,
+            addr     = "localhost:9000",
+            username = "alice",
+        };
+
+        Assert.That(
+            () => QuestDB.Sender.New(opts),
+            Throws.TypeOf<IngressError>());
+    }
+
+    [Test]
+    public void Programmatic_TcpUsernameAndTokenAccepted()
+    {
+        var opts = new SenderOptions
+        {
+            protocol = QuestDB.Enums.ProtocolType.tcp,
+            addr     = "localhost:9009",
+            username = "admin",
+            token    = "secret",
+        };
+        Assert.DoesNotThrow(() => opts.EnsureValid());
+    }
+
+    [Test]
+    public void Programmatic_WsKeySetToDefaultValue_OnHttp_StillRejected()
+    {
+        var opts = new SenderOptions
+        {
+            protocol = QuestDB.Enums.ProtocolType.http,
+            addr     = "localhost:9000",
+            request_durable_ack = false, // default value, still rejected on non-WS scheme
+        };
+
+        Assert.That(
+            () => QuestDB.Sender.New(opts),
+            Throws.TypeOf<IngressError>().With.Message.Contains("request_durable_ack"));
+    }
+
+    [Test]
+    public void Programmatic_NoWsKeysTouched_OnHttp_Allowed()
+    {
+        var opts = new SenderOptions
+        {
+            protocol = QuestDB.Enums.ProtocolType.http,
+            addr     = "localhost:9000",
+        };
+
+        Assert.DoesNotThrow(() => opts.EnsureValid());
+    }
+
+    [Test]
+    public void AutoFlushOff_OnWebSocketScheme_AlsoZerosTriggers()
+    {
+        var opts = new SenderOptions("ws::addr=localhost:9000;auto_flush=off;");
+        Assert.That(opts.auto_flush_rows, Is.EqualTo(-1));
+        Assert.That(opts.auto_flush_bytes, Is.EqualTo(-1));
+        Assert.That(opts.auto_flush_interval, Is.EqualTo(TimeSpan.FromMilliseconds(-1)));
+    }
+
+    [Test]
+    public void Ws_ToString_RoundTripsWithWsOnlyKeys()
+    {
+        var opts = new SenderOptions(
+            "ws::addr=h:9000;request_durable_ack=on;ping_timeout=2500;");
+        var rt = new SenderOptions(opts.ToString());
+        Assert.That(rt.request_durable_ack, Is.True);
+        Assert.That(rt.ping_timeout, Is.EqualTo(TimeSpan.FromMilliseconds(2500)));
+    }
+
+    [Test]
+    public void PingTimeout_OnHttpScheme_Rejected()
+    {
+        Assert.That(
+            () => new SenderOptions("http::addr=localhost:9000;ping_timeout=1000;"),
+            Throws.TypeOf<IngressError>().With.Message.Contains("ping_timeout"));
+    }
+
+    [Test]
+    public void AddrSetter_RefreshesAddresses()
+    {
+        var opts = new SenderOptions { protocol = QuestDB.Enums.ProtocolType.ws, addr = "h1:9000,h2:9000,h3:9000" };
+        Assert.That(opts.AddressCount, Is.EqualTo(3));
+        Assert.That(opts.addresses[0], Is.EqualTo("h1:9000"));
+        Assert.That(opts.addresses[2], Is.EqualTo("h3:9000"));
+    }
+
+    [Test]
+    public void AddrSetter_OverwritesPreviousList()
+    {
+        var opts = new SenderOptions { protocol = QuestDB.Enums.ProtocolType.ws, addr = "h1:9000,h2:9000" };
+        opts.addr = "single:9000";
+        Assert.That(opts.AddressCount, Is.EqualTo(1));
+        Assert.That(opts.addresses[0], Is.EqualTo("single:9000"));
+    }
+
+    [Test]
+    public void Proxy_OnHttpScheme_Programmatic_Rejected()
+    {
+        var opts = new SenderOptions
+        {
+            protocol = QuestDB.Enums.ProtocolType.http,
+            addr = "localhost:9000",
+            proxy = "http://p:8080",
+        };
+        Assert.That(() => QuestDB.Sender.New(opts), Throws.TypeOf<IngressError>().With.Message.Contains("proxy"));
+    }
+
+    [Test]
+    public void Proxy_OnHttpScheme_String_Rejected()
+    {
+        Assert.That(
+            () => new SenderOptions("http::addr=localhost:9000;proxy=http://p:8080;"),
+            Throws.TypeOf<IngressError>().With.Message.Contains("proxy"));
+    }
+
+    [Test]
+    public void SfMaxTotalBytes_LessThanTwiceSfMaxBytes_Rejected()
+    {
+        Assert.That(
+            () => new SenderOptions("ws::addr=h:9000;sf_dir=/tmp/test;sf_max_bytes=8000000;sf_max_total_bytes=10000000;"),
+            Throws.TypeOf<IngressError>().With.Message.Contains("sf_max_total_bytes"));
+    }
+
+    [Test]
+    public void SfMaxBytes_NonPositive_Rejected()
+    {
+        Assert.That(
+            () => new SenderOptions("ws::addr=h:9000;sf_dir=/tmp/test;sf_max_bytes=0;"),
+            Throws.TypeOf<IngressError>().With.Message.Contains("sf_max_bytes"));
+    }
+
+    [Test]
+    public void Tcp_MultiAddr_Rejected()
+    {
+        Assert.That(
+            () => new SenderOptions("tcp::addr=h1:9009,h2:9009;"),
+            Throws.TypeOf<IngressError>().With.Message.Contains("tcp"));
+    }
+
+    [TestCase("http", "request_durable_ack=on")]
+    [TestCase("http", "sf_dir=/tmp/x")]
+    [TestCase("http", "sender_id=foo")]
+    [TestCase("http", "ping_timeout=1000")]
+    [TestCase("http", "proxy=http://p:8080")]
+    [TestCase("http", "target=primary")]
+    [TestCase("http", "initial_credit=5")]
+    [TestCase("https", "ping_timeout=1000")]
+    [TestCase("https", "proxy=http://p:8080")]
+    [TestCase("https", "target=replica")]
+    [TestCase("https", "initial_credit=5")]
+    [TestCase("tcp", "ping_timeout=1000")]
+    [TestCase("tcp", "proxy=http://p:8080")]
+    [TestCase("tcp", "target=primary")]
+    [TestCase("tcp", "initial_credit=5")]
+    [TestCase("tcps", "ping_timeout=1000")]
+    [TestCase("tcps", "proxy=http://p:8080")]
+    public void WsOnlyKey_OnNonWsScheme_Rejected(string scheme, string kv)
+    {
+        var addr = scheme.StartsWith("tcp") ? "addr=localhost:9009" : "addr=localhost:9000";
+        Assert.That(
+            () => new SenderOptions($"{scheme}::{addr};{kv};"),
+            Throws.TypeOf<IngressError>(),
+            $"key `{kv.Split('=')[0]}` must be rejected on {scheme} scheme");
+    }
+
+    [TestCase("ws", "protocol_version=2")]
+    [TestCase("ws", "protocol_version=auto")]
+    [TestCase("ws", "request_timeout=5000")]
+    [TestCase("ws", "retry_timeout=10000")]
+    [TestCase("ws", "request_min_throughput=1024")]
+    [TestCase("ws", "gzip=on")]
+    [TestCase("ws", "pool_timeout=30000")]
+    [TestCase("ws", "own_socket=on")]
+    [TestCase("ws", "token_x=abc")]
+    [TestCase("ws", "token_y=def")]
+    [TestCase("ws", "auth_timeout=15000")]
+    [TestCase("wss", "protocol_version=2")]
+    [TestCase("wss", "protocol_version=auto")]
+    [TestCase("wss", "request_timeout=5000")]
+    [TestCase("wss", "retry_timeout=10000")]
+    [TestCase("wss", "request_min_throughput=1024")]
+    [TestCase("wss", "gzip=on")]
+    [TestCase("wss", "token_x=abc")]
+    [TestCase("wss", "auth_timeout=15000")]
+    public void IlpHttpOnlyKey_OnWsScheme_Rejected(string scheme, string kv)
+    {
+        var ex = Assert.Throws<IngressError>(
+            () => new SenderOptions($"{scheme}::addr=localhost:9000;{kv};"));
+        Assert.That(ex!.Message, Does.Contain("not supported for QWP/WebSocket transport"),
+            $"key `{kv.Split('=')[0]}` must be rejected on {scheme} scheme");
+    }
+
+    [TestCase("http", "protocol_version=2")]
+    [TestCase("http", "protocol_version=auto")]
+    [TestCase("http", "request_timeout=5000")]
+    [TestCase("http", "retry_timeout=10000")]
+    [TestCase("http", "request_min_throughput=1024")]
+    [TestCase("http", "gzip=on")]
+    [TestCase("http", "pool_timeout=30000")]
+    [TestCase("http", "own_socket=on")]
+    [TestCase("http", "token_x=abc")]
+    [TestCase("http", "token_y=def")]
+    [TestCase("http", "auth_timeout=15000")]
+    [TestCase("https", "protocol_version=2")]
+    [TestCase("https", "request_timeout=5000")]
+    [TestCase("https", "retry_timeout=10000")]
+    [TestCase("https", "request_min_throughput=1024")]
+    [TestCase("https", "gzip=on")]
+    [TestCase("tcp", "protocol_version=2")]
+    [TestCase("tcp", "request_timeout=5000")]
+    [TestCase("tcp", "retry_timeout=10000")]
+    [TestCase("tcp", "request_min_throughput=1024")]
+    [TestCase("tcp", "auth_timeout=15000")]
+    public void IlpHttpOnlyKey_OnIlpScheme_Accepted(string scheme, string kv)
+    {
+        var addr = scheme.StartsWith("tcp") ? "addr=localhost:9009" : "addr=localhost:9000";
+        Assert.DoesNotThrow(
+            () => new SenderOptions($"{scheme}::{addr};{kv};"),
+            $"key `{kv.Split('=')[0]}` must be accepted on {scheme} scheme");
     }
 }

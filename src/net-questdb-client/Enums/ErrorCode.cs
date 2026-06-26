@@ -97,4 +97,20 @@ public enum ErrorCode
     ///     Bad configuration.
     /// </summary>
     InvalidArrayShapeError,
+
+    /// <summary>
+    ///     A structurally corrupt or malformed wire frame was received, or the
+    ///     server closed the WebSocket with a protocol-violation code
+    ///     (RFC 6455 1002 / 1003 / 1007 / 1008 / 1009 / 1010). Terminal; this is
+    ///     not a connectivity fault, so the cursor engine / failover must not
+    ///     reconnect or re-issue the query.
+    /// </summary>
+    ProtocolViolation,
+
+    /// <summary>
+    ///     <c>request_durable_ack=on</c> was set but the server did not echo
+    ///     <c>X-QWP-Durable-Ack: enabled</c>. Terminal — without it the SF log would
+    ///     grow unbounded waiting for ack frames that will never arrive.
+    /// </summary>
+    DurableAckNotSupported,
 }

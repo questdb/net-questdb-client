@@ -22,3 +22,24 @@
   header: |-
     [.NET client library](https://github.com/questdb/net-questdb-client)
   conf: http::addr=localhost:9000;
+
+- name: qwp-ingest
+  lang: csharp
+  path: src/example-qwp-ingest/Program.cs
+  header: |-
+    [.NET client library](https://github.com/questdb/net-questdb-client)
+  conf: ws::addr=localhost:9000;
+
+- name: qwp-ingest-auth-tls
+  lang: csharp
+  path: src/example-qwp-ingest-auth-tls/Program.cs
+  header: |-
+    [.NET client library](https://github.com/questdb/net-questdb-client)
+  conf: wss::addr=localhost:9000;username=admin;password=quest;tls_verify=unsafe_off;
+
+- name: qwp-query
+  lang: csharp
+  path: src/example-qwp-query/Program.cs
+  header: |-
+    [.NET client library](https://github.com/questdb/net-questdb-client)
+  conf: ws::addr=localhost:9000;target=any;

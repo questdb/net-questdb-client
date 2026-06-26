@@ -68,20 +68,23 @@ public static class Sender
     {
         if (options is null)
         {
-            return new HttpSender("http::addr=localhost:9000;");
+            return new HttpSender(new SenderOptions("http::addr=localhost:9000;"));
         }
+        options.EnsureValid();
 
-        switch (options.protocol)
+        return options.protocol switch
         {
-            case ProtocolType.http:
-            case ProtocolType.https:
-                return new HttpSender(options);
-            case ProtocolType.tcp:
-            case ProtocolType.tcps:
-                return new TcpSender(options);
-        }
-
-        throw new NotImplementedException();
+            ProtocolType.http or ProtocolType.https => new HttpSender(options),
+            ProtocolType.tcp or ProtocolType.tcps => new TcpSender(options),
+#if NET7_0_OR_GREATER
+            ProtocolType.ws or ProtocolType.wss => new QwpWebSocketSender(options),
+#else
+            ProtocolType.ws or ProtocolType.wss => throw new IngressError(ErrorCode.ConfigError,
+                "ws::/wss:: senders require .NET 7 or later; HTTP and TCP transports remain available on net6.0"),
+#endif
+            _ => throw new ArgumentOutOfRangeException(nameof(options.protocol),
+                options.protocol, "unknown ProtocolType"),
+        };
     }
 
     /// <summary>
@@ -93,4 +96,51 @@ public static class Sender
     {
         return new SenderOptions(confStr);
     }
+
+    /// <summary>
+    ///     Creates an <see cref="ISender" /> from the connect-string stored in the
+    ///     <c>QDB_CLIENT_CONF</c> environment variable. Convenience for cloud and 12-factor
+    ///     deployments where configuration lives in env, not in code.
+    /// </summary>
+    /// <exception cref="IngressError">Thrown when <c>QDB_CLIENT_CONF</c> is unset or blank.</exception>
+    public static ISender FromEnv()
+    {
+        var confStr = Environment.GetEnvironmentVariable(EnvConfStr);
+        if (string.IsNullOrWhiteSpace(confStr))
+        {
+            throw new IngressError(ErrorCode.ConfigError,
+                $"{EnvConfStr} environment variable is not set");
+        }
+        return New(confStr);
+    }
+
+    internal const string EnvConfStr = "QDB_CLIENT_CONF";
+
+#if NET7_0_OR_GREATER
+    /// <summary>
+    ///     Builds a ws::/wss:: sender and returns the QWP-specific interface so callers can use
+    ///     <see cref="Senders.IQwpWebSocketSender.Ping" />,
+    ///     <see cref="Senders.IQwpWebSocketSender.GetHighestAckedSeqTxn" />, and
+    ///     <see cref="Senders.IQwpWebSocketSender.GetHighestDurableSeqTxn" /> without an
+    ///     <c>(IQwpWebSocketSender)</c> cast. Mirrors <see cref="QueryClient.New(string)" />.
+    /// </summary>
+    public static IQwpWebSocketSender NewQwp(string confStr)
+    {
+        return NewQwp(Configure(confStr));
+    }
+
+    /// <inheritdoc cref="NewQwp(string)" />
+    public static IQwpWebSocketSender NewQwp(SenderOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        // Validate the scheme up front rather than constructing a live HTTP/TCP sender (which opens
+        // sockets / handlers) only to dispose it on the type mismatch.
+        if (options.protocol is not (ProtocolType.ws or ProtocolType.wss))
+        {
+            throw new IngressError(ErrorCode.ConfigError,
+                "NewQwp requires a ws:: or wss:: connect string");
+        }
+        return (IQwpWebSocketSender)New(options);
+    }
+#endif
 }

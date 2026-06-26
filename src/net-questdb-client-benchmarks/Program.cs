@@ -23,6 +23,7 @@
  ******************************************************************************/
 
 
+using BenchmarkDotNet.Columns;
 using BenchmarkDotNet.Configs;
 using BenchmarkDotNet.Jobs;
 using BenchmarkDotNet.Running;
@@ -34,10 +35,28 @@ public class Program
 {
     public static void Main(string[] args)
     {
-        var config =
-            DefaultConfig.Instance.AddJob(Job.MediumRun.WithLaunchCount(1)
-                    .WithToolchain(InProcessNoEmitToolchain.Instance))
-                .WithOptions(ConfigOptions.DisableOptimizationsValidator);
+        var fastJob = Job.Default
+            .WithLaunchCount(1)
+            .WithWarmupCount(2)
+            .WithIterationCount(3)
+            .WithInvocationCount(1)
+            .WithUnrollFactor(1)
+            // Stateful benches (open sender + send N rows) run as one shot per invocation; tell BDN
+            // not to flag iterations < 100ms as "too small" — the workload is already meaningful.
+            .WithMinIterationTime(Perfolizer.Horology.TimeInterval.FromMilliseconds(10))
+            .WithToolchain(InProcessNoEmitToolchain.Instance);
+
+        var config = DefaultConfig.Instance
+            .AddJob(fastJob)
+            .AddColumn(StatisticColumn.Min, StatisticColumn.Max, StatisticColumn.P95)
+            .WithOptions(ConfigOptions.DisableOptimizationsValidator);
+
+        if (args is { Length: > 0 })
+        {
+            BenchmarkSwitcher.FromAssembly(typeof(Program).Assembly).Run(args, config);
+            return;
+        }
+
         RunConnectionChurnVsServerBench2(config);
     }
 
@@ -57,7 +76,39 @@ public class Program
     }
     
     public static void RunConnectionChurnVsServerBench2(ManualConfig config)
-    { 
+    {
         BenchmarkRunner.Run<BenchConnectionChurnVsServer2>(config);
     }
+
+#if NET7_0_OR_GREATER
+    public static void RunSfAppendBench(ManualConfig config)
+    {
+        BenchmarkRunner.Run<BenchSfAppend>(config);
+    }
+
+    public static void RunInsertsWsBench(ManualConfig config)
+    {
+        BenchmarkRunner.Run<BenchInsertsWs>(config);
+    }
+
+    public static void RunLatencyWsBench(ManualConfig config)
+    {
+        BenchmarkRunner.Run<BenchLatencyWs>(config);
+    }
+
+    public static void RunSfThroughputBench(ManualConfig config)
+    {
+        BenchmarkRunner.Run<BenchSfThroughput>(config);
+    }
+
+    public static void RunQueryWsBench(ManualConfig config)
+    {
+        BenchmarkRunner.Run<BenchQueryWs>(config);
+    }
+
+    public static void RunQueryLatencyWsBench(ManualConfig config)
+    {
+        BenchmarkRunner.Run<BenchQueryLatencyWs>(config);
+    }
+#endif
 }

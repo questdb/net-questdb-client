@@ -1,6 +1,8 @@
 <Project Sdk="Microsoft.NET.Sdk">
     <PropertyGroup>
         <IsAotCompatible>true</IsAotCompatible>
+        <!-- Required by Qwp/Sf/QwpMmapSegment for direct mmap access via SafeMemoryMappedViewHandle. -->
+        <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     </PropertyGroup>
     <PropertyGroup>
         <RootNamespace>QuestDB</RootNamespace>
@@ -9,15 +11,22 @@
         <LangVersion>latest</LangVersion>
         <GeneratePackageOnBuild>true</GeneratePackageOnBuild>
         <Title>QuestDB client</Title>
-        <Description>Simple QuestDB ILP protocol client</Description>
+        <Description>QuestDB .NET client. Supports ILP over HTTP/TCP and the QWP columnar binary protocol over WebSocket (ingest sender + egress query client + store-and-forward).</Description>
         <Copyright>QuestDB</Copyright>
         <PackageProjectUrl>https://questdb.io</PackageProjectUrl>
-        <PackageLicenseUrl>Apache 2.0</PackageLicenseUrl>
+        <PackageLicenseExpression>Apache-2.0</PackageLicenseExpression>
         <RepositoryUrl>https://github.com/questdb/net-questdb-client</RepositoryUrl>
-        <PackageTags>QuestDB, ILP</PackageTags>
+        <PackageTags>QuestDB, ILP, QWP, WebSocket, columnar, ingest, query, store-and-forward</PackageTags>
         <Company>QuestDB Limited</Company>
-        <PackageVersion>3.2.0</PackageVersion>
+        <PackageVersion>4.0.0</PackageVersion>
         <GenerateDocumentationFile>true</GenerateDocumentationFile>
         <TargetFrameworks>net6.0;net7.0;net8.0;net9.0;net10.0</TargetFrameworks>
     </PropertyGroup>
+    <ItemGroup>
+        <InternalsVisibleTo Include="net-questdb-client-tests" />
+    </ItemGroup>
+    <ItemGroup Condition="'$(TargetFramework)' != 'net6.0'">
+        <!-- Egress consumer only; the egress decode path is #if NET7_0_OR_GREATER. -->
+        <PackageReference Include="ZstdSharp.Port" Version="0.8.4" />
+    </ItemGroup>
 </Project>

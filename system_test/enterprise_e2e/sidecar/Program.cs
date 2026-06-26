@@ -1,0 +1,193 @@
+/*******************************************************************************
+ *     ___                  _   ____  ____
+ *    / _ \ _   _  ___  ___| |_|  _ \| __ )
+ *   | | | | | | |/ _ \/ __| __| | | |  _ \
+ *   | |_| | |_| |  __/\__ \ |_| |_| | |_) |
+ *    \__\_\\__,_|\___||___/\__|____/|____/
+ *
+ *  Copyright (c) 2014-2019 Appsicle
+ *  Copyright (c) 2019-2026 QuestDB
+ *
+ *  Licensed under the Apache License, Version 2.0 (the "License");
+ *  you may not use this file except in compliance with the License.
+ *  You may obtain a copy of the License at
+ *
+ *  http://www.apache.org/licenses/LICENSE-2.0
+ *
+ *  Unless required by applicable law or agreed to in writing, software
+ *  distributed under the License is distributed on an "AS IS" BASIS,
+ *  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ *  See the License for the specific language governing permissions and
+ *  limitations under the License.
+ *
+ ******************************************************************************/
+
+using System.Globalization;
+using QuestDB;
+using QuestDB.Senders;
+
+// Line-protocol sidecar for the Enterprise e2e pytest harness.
+// Mirrors the Java QwpSidecarMain: reads commands from stdin,
+// writes "OK ..." or "ERR ..." replies to stdout.
+
+Console.OutputEncoding = System.Text.Encoding.UTF8;
+Console.InputEncoding = System.Text.Encoding.UTF8;
+
+ISender? sender = null;
+
+Console.Out.WriteLine("READY");
+Console.Out.Flush();
+
+string? line;
+while ((line = Console.In.ReadLine()) != null)
+{
+    line = line.Trim();
+    if (line.Length == 0) continue;
+
+    var parts = line.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+    var verb = parts[0].ToUpperInvariant();
+
+    try
+    {
+        switch (verb)
+        {
+            case "CONNECT":
+            {
+                var connectString = line[parts[0].Length..].Trim();
+                await DisposeSenderAsync(sender);
+                sender = Sender.New(connectString);
+                Reply("OK");
+                break;
+            }
+
+            case "SEND":
+            {
+                EnsureSender(sender);
+                var table = parts[1];
+                var count = int.Parse(parts[2], CultureInfo.InvariantCulture);
+                var startIndex = parts.Length > 3
+                    ? int.Parse(parts[3], CultureInfo.InvariantCulture)
+                    : 0;
+
+                for (var i = 0; i < count; i++)
+                {
+                    var idx = startIndex + i;
+                    sender!.Table(table)
+                        .Symbol("tag", $"test_{idx}")
+                        .Column("v", (long)idx)
+                        .At(DateTime.UtcNow);
+                }
+
+                Reply("OK");
+                break;
+            }
+
+            case "FLUSH":
+            {
+                EnsureSender(sender);
+                if (sender is IQwpWebSocketSender wsSender)
+                {
+                    var fsn = await wsSender.FlushAndGetSequenceAsync();
+                    Reply($"OK {fsn}");
+                }
+                else
+                {
+                    await sender!.SendAsync();
+                    Reply("OK -1");
+                }
+
+                break;
+            }
+
+            case "AWAIT_ACKED":
+            {
+                EnsureSender(sender);
+                var fsn = long.Parse(parts[1], CultureInfo.InvariantCulture);
+                var timeoutMs = int.Parse(parts[2], CultureInfo.InvariantCulture);
+                if (sender is IQwpWebSocketSender wsSender)
+                {
+                    var reached = await wsSender.AwaitAckedFsnAsync(
+                        fsn, TimeSpan.FromMilliseconds(timeoutMs));
+                    Reply($"OK {(reached ? "true" : "false")}");
+                }
+                else
+                {
+                    Reply("OK true");
+                }
+
+                break;
+            }
+
+            case "STATS":
+            {
+                EnsureSender(sender);
+                if (sender is IQwpWebSocketSender wsSender)
+                {
+                    Reply(
+                        $"OK acked={wsSender.AckedFsn} " +
+                        $"sent={wsSender.TotalFramesSent} " +
+                        $"acks={wsSender.TotalAcks} " +
+                        $"reconnAttempts={wsSender.TotalReconnectAttempts} " +
+                        $"reconnSucc={wsSender.TotalReconnectsSucceeded} " +
+                        $"serverErrors={wsSender.TotalServerErrors}");
+                }
+                else
+                {
+                    Reply("OK acked=-1 sent=0 acks=0 reconnAttempts=0 reconnSucc=0 serverErrors=0");
+                }
+
+                break;
+            }
+
+            case "CLOSE":
+            {
+                await DisposeSenderAsync(sender);
+                sender = null;
+                Reply("OK");
+                break;
+            }
+
+            case "EXIT":
+            {
+                await DisposeSenderAsync(sender);
+                sender = null;
+                Reply("OK");
+                return;
+            }
+
+            default:
+                Reply($"ERR unknown verb: {verb}");
+                break;
+        }
+    }
+    catch (Exception ex)
+    {
+        Reply($"ERR {ex.GetType().Name}: {ex.Message}");
+    }
+}
+
+await DisposeSenderAsync(sender);
+return;
+
+static async Task DisposeSenderAsync(ISender? s)
+{
+    if (s == null) return;
+    using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+    try
+    {
+        await s.DisposeAsync();
+    }
+    catch (OperationCanceledException) { }
+    catch (Exception) { }
+}
+
+static void Reply(string msg)
+{
+    Console.Out.WriteLine(msg);
+    Console.Out.Flush();
+}
+
+static void EnsureSender(ISender? s)
+{
+    if (s == null) throw new InvalidOperationException("no active sender; call CONNECT first");
+}

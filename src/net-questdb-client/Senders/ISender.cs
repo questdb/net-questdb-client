@@ -28,12 +28,22 @@ using QuestDB.Utils;
 namespace QuestDB.Senders;
 
 /// <summary>
-///     Interface representing <see cref="Sender" /> implementations.
+///     Interface representing <see cref="Sender" /> implementations. For <c>ws::</c> / <c>wss::</c>
+///     senders prefer <c>await using var</c> so the close-time ACK drain doesn't block the caller.
 /// </summary>
-public interface ISender : IDisposable
+public interface ISender : IDisposable, IAsyncDisposable
 {
+    ValueTask IAsyncDisposable.DisposeAsync()
+    {
+        Dispose();
+        return ValueTask.CompletedTask;
+    }
+
     /// <summary>
-    ///     Represents the current length of the buffer in UTF-8 bytes.
+    ///     Approximate buffer size in bytes. For HTTP/TCP (ILP text) this is the exact UTF-8
+    ///     byte count of the pending payload. For WS/WSS (QWP columnar) this is an estimated
+    ///     footprint of the per-column buffers — close to but not identical to the wire size,
+    ///     because schema/symbol-dictionary deltas are added at flush time.
     /// </summary>
     public int Length { get; }
 
@@ -88,10 +98,6 @@ public interface ISender : IDisposable
     /// </summary>
     /// <remarks>
     ///     Only usable outside of a transaction. If there are no pending rows, then this is a no-op.
-    ///     <br />
-    ///     If the <see cref="SenderOptions.protocol" /> is HTTP, this will return request and response information.
-    ///     <br />
-    ///     If the <see cref="SenderOptions.protocol" /> is TCP, this will return nulls.
     /// </remarks>
     /// <exception cref="IngressError">When the request fails.</exception>
     public Task SendAsync(CancellationToken ct = default);
@@ -441,6 +447,82 @@ public interface ISender : IDisposable
 
         return this;
     }
+
+    /// <summary>
+    ///     Adds a DECIMAL64 column, coercing <paramref name="value" /> to <paramref name="scale" />
+    ///     (rounded half away from zero). On <c>ws::</c> / <c>wss::</c> (QWP) this writes a fixed
+    ///     8-byte mantissa and locks the column scale on the first non-null write. On HTTP/TCP (ILP)
+    ///     it writes the variable-length binary decimal and requires protocol version 3.
+    /// </summary>
+    /// <param name="name">The column name.</param>
+    /// <param name="value">The value, rounded half away from zero to <paramref name="scale" /> digits.</param>
+    /// <param name="scale">Number of fractional digits (0–18).</param>
+    /// <returns>The sender instance for fluent call chaining.</returns>
+    /// <exception cref="IngressError">If <paramref name="scale" /> is out of range or the value's integer part overflows the type width.</exception>
+    public ISender ColumnDecimal64(ReadOnlySpan<char> name, decimal value, byte scale);
+
+    /// <summary>
+    ///     Adds a DECIMAL128 column, coercing <paramref name="value" /> to <paramref name="scale" />
+    ///     (rounded half away from zero). Same transport behaviour as
+    ///     <see cref="ColumnDecimal64(ReadOnlySpan{char},decimal,byte)" /> with a 16-byte QWP mantissa.
+    ///     Over ILP, values whose scale exceeds 28 or whose magnitude exceeds <see cref="System.Decimal" />'s
+    ///     96-bit mantissa are rejected — use <c>ws::</c> / <c>wss::</c> for the full range.
+    /// </summary>
+    /// <param name="name">The column name.</param>
+    /// <param name="value">The value, rounded half away from zero to <paramref name="scale" /> digits.</param>
+    /// <param name="scale">Number of fractional digits (0–38).</param>
+    public ISender ColumnDecimal128(ReadOnlySpan<char> name, decimal value, byte scale);
+
+    /// <summary>
+    ///     Adds a DECIMAL256 column, coercing <paramref name="value" /> to <paramref name="scale" />
+    ///     (rounded half away from zero). Same transport behaviour as
+    ///     <see cref="ColumnDecimal64(ReadOnlySpan{char},decimal,byte)" /> with a 32-byte QWP mantissa.
+    ///     Over ILP, values whose scale exceeds 28 or whose magnitude exceeds <see cref="System.Decimal" />'s
+    ///     96-bit mantissa are rejected — use <c>ws::</c> / <c>wss::</c> for the full range.
+    /// </summary>
+    /// <param name="name">The column name.</param>
+    /// <param name="value">The value, rounded half away from zero to <paramref name="scale" /> digits.</param>
+    /// <param name="scale">Number of fractional digits (0–76).</param>
+    public ISender ColumnDecimal256(ReadOnlySpan<char> name, decimal value, byte scale);
+
+    /// <summary>
+    ///     Adds a DECIMAL64 column from the raw unscaled int64 mantissa with an explicit
+    ///     <paramref name="scale" />. Exposes the full 18-digit range that <see cref="System.Decimal" />
+    ///     cannot always represent. Over ILP this is reconstructed as a <see cref="System.Decimal" /> and
+    ///     requires protocol version 3.
+    /// </summary>
+    /// <param name="name">The column name.</param>
+    /// <param name="unscaledValue">The unscaled integer mantissa; the value is <c>unscaledValue / 10^scale</c>.</param>
+    /// <param name="scale">Number of fractional digits (0–18).</param>
+    public ISender ColumnDecimal64(ReadOnlySpan<char> name, long unscaledValue, byte scale);
+
+    /// <summary>
+    ///     Adds a DECIMAL128 column from the two two's-complement 64-bit limbs of the unscaled integer:
+    ///     <paramref name="lo" /> is the low 64 bits (unsigned magnitude), <paramref name="hi" /> the
+    ///     signed high 64 bits — i.e. <c>(hi ≪ 64) | (ulong)lo</c>. On <c>ws::</c> / <c>wss::</c> this
+    ///     uses the full 38-digit range; over ILP values beyond <see cref="System.Decimal" />'s 96-bit
+    ///     mantissa or scale 28 are rejected.
+    /// </summary>
+    /// <param name="name">The column name.</param>
+    /// <param name="lo">Low 64 bits of the unscaled integer (unsigned magnitude).</param>
+    /// <param name="hi">High 64 bits of the unscaled integer (signed).</param>
+    /// <param name="scale">Number of fractional digits (0–38).</param>
+    public ISender ColumnDecimal128(ReadOnlySpan<char> name, long lo, long hi, byte scale);
+
+    /// <summary>
+    ///     Adds a DECIMAL256 column from the four two's-complement 64-bit limbs of the unscaled integer:
+    ///     <c>l0</c>–<c>l2</c> are unsigned magnitude limbs and <c>l3</c> is the signed high limb —
+    ///     i.e. <c>(ulong)l0 | (ulong)l1≪64 | (ulong)l2≪128 | l3≪192</c>. On <c>ws::</c> / <c>wss::</c>
+    ///     this uses the full 76-digit range; over ILP values beyond <see cref="System.Decimal" />'s
+    ///     96-bit mantissa or scale 28 are rejected.
+    /// </summary>
+    /// <param name="name">The column name.</param>
+    /// <param name="l0">Bits 0–63 of the unscaled integer (unsigned magnitude limb).</param>
+    /// <param name="l1">Bits 64–127 of the unscaled integer (unsigned magnitude limb).</param>
+    /// <param name="l2">Bits 128–191 of the unscaled integer (unsigned magnitude limb).</param>
+    /// <param name="l3">Bits 192–255 of the unscaled integer (signed high limb).</param>
+    /// <param name="scale">Number of fractional digits (0–76).</param>
+    public ISender ColumnDecimal256(ReadOnlySpan<char> name, long l0, long l1, long l2, long l3, byte scale);
 
     /// <summary>
     ///     Adds a GUID column with the specified name and value to the current row.

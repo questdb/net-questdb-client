@@ -59,6 +59,8 @@ internal class HttpSender : AbstractSender
     private readonly Func<HttpRequestMessage> _sendRequestFactory;
     private readonly Func<HttpRequestMessage> _settingRequestFactory;
 
+    private Lazy<X509Certificate2>? _trustRoot;
+
     /// <summary>
     ///     Manages round-robin address rotation for failover.
     /// </summary>
@@ -93,24 +95,6 @@ internal class HttpSender : AbstractSender
     {
     }
 
-    /// <summary>
-    ///     Configure and initialize the SocketsHttpHandler and HttpClient, set TLS and authentication options, determine the
-    ///     Line Protocol version (probing /settings when set to Auto), and create the internal send buffer.
-    /// </summary>
-    /// <remarks>
-    ///     - Applies pool and connection settings from Options.
-    ///     - When using HTTPS, configures TLS protocols, optional remote-certificate validation override (when tls_verify is
-    ///     unsafe_off), optional custom root CA installation, and optional client certificates.
-    ///     - Sets connection timeout, PreAuthenticate, BaseAddress, and disables HttpClient timeout.
-    ///     - Adds Basic or Bearer Authorization header when credentials or token are provided.
-    ///     - If protocol_version is Auto, probes the server's /settings with a 1-second retry window to select the highest
-    ///     mutually supported protocol up to V3, falling back to V1 on errors or unexpected responses.
-    ///     - Initializes the Buffer with init_buf_size, max_name_len, max_buf_size, and the chosen protocol version.
-    /// </remarks>
-    /// <summary>
-    ///     Creates a configured <see cref="SocketsHttpHandler" /> for a specific host.
-    ///     Each handler is isolated to prevent TLS TargetHost conflicts between different addresses.
-    /// </summary>
     private SocketsHttpHandler CreateHandler(string host)
     {
         var handler = new SocketsHttpHandler
@@ -124,12 +108,19 @@ internal class HttpSender : AbstractSender
             handler.SslOptions.TargetHost          = host;
             handler.SslOptions.EnabledSslProtocols = SslProtocols.Tls12 | SslProtocols.Tls13;
 
+            if (_trustRoot is null && !string.IsNullOrEmpty(Options.tls_roots))
+            {
+                _trustRoot = new Lazy<X509Certificate2>(
+                    () => QwpTlsAuth.LoadTrustRoot(Options.tls_roots!, Options.tls_roots_password));
+            }
+
             if (Options.tls_verify == TlsVerifyType.unsafe_off)
             {
                 handler.SslOptions.RemoteCertificateValidationCallback += (_, _, _, _) => true;
             }
             else
             {
+                var trustRoot = _trustRoot;
                 handler.SslOptions.RemoteCertificateValidationCallback =
                     (_, certificate, chain, errors) =>
                     {
@@ -138,22 +129,18 @@ internal class HttpSender : AbstractSender
                             return false;
                         }
 
-                        if (Options.tls_roots != null)
+                        if (trustRoot is not null)
                         {
                             chain!.ChainPolicy.TrustMode = X509ChainTrustMode.CustomRootTrust;
-                            chain.ChainPolicy.CustomTrustStore.Add(
-                                X509Certificate2.CreateFromPemFile(Options.tls_roots, Options.tls_roots_password));
+                            if (chain.ChainPolicy.CustomTrustStore.Count == 0)
+                            {
+                                chain.ChainPolicy.CustomTrustStore.Add(trustRoot.Value);
+                            }
                         }
 
-                        return chain!.Build(new X509Certificate2(certificate!));
+                        using var serverCert = new X509Certificate2(certificate!);
+                        return chain!.Build(serverCert);
                     };
-            }
-
-            if (!string.IsNullOrEmpty(Options.tls_roots))
-            {
-                handler.SslOptions.ClientCertificates ??= new X509Certificate2Collection();
-                handler.SslOptions.ClientCertificates.Add(
-                    X509Certificate2.CreateFromPemFile(Options.tls_roots!, Options.tls_roots_password));
             }
 
             if (Options.client_cert is not null)
@@ -207,7 +194,8 @@ internal class HttpSender : AbstractSender
             Options.init_buf_size,
             Options.max_name_len,
             Options.max_buf_size,
-            protocolVersion
+            protocolVersion,
+            Options.convert_local_to_utc
         );
     }
 
@@ -838,6 +826,13 @@ internal class HttpSender : AbstractSender
         }
 
         _handlerCache.Clear();
+
+        if (_trustRoot is { IsValueCreated: true })
+        {
+            _trustRoot.Value.Dispose();
+        }
+        _trustRoot = null;
+
         Buffer.Clear();
         Buffer.TrimExcessBuffers();
     }

@@ -86,6 +86,66 @@ public class HttpTests
     }
 
     [Test]
+    public async Task DecimalColumns_TypedOverloads_OverIlp()
+    {
+        using var server = new DummyHttpServer(withBasicAuth: false);
+        await server.StartAsync(HttpPort, new[]
+        {
+            1, 2,
+            3,
+        });
+        using var sender =
+            Sender.New(
+                $"http::addr={Host}:{HttpPort};protocol_version=3;tls_verify=unsafe_off;auto_flush=off;");
+
+        await sender.Table("metrics")
+                    .Symbol("tag", "value")
+                    // (decimal, scale): width name is irrelevant over ILP; value is coerced to scale.
+                    .ColumnDecimal64("d64", 12.34m, 2)
+                    .ColumnDecimal64("d64_rounded", 12.345m, 2) // half away from zero -> 12.35
+                    .ColumnDecimal128("d128", 12.34m, 2)
+                    // raw-limb overloads reconstruct a System.Decimal for the ILP encoder.
+                    .ColumnDecimal64("d64_lo", 100L, 2) // 1.00
+                    .ColumnDecimal128("d128_lo", 255L, 0L, 0) // 255
+                    .ColumnDecimal256("d256_lo", -1L, -1L, -1L, -1L, 0) // -1
+                    .AtAsync(new DateTime(1970, 01, 01, 0, 0, 1));
+
+        await sender.SendAsync();
+
+        var buffer = server.GetReceivedBytes().ToArray();
+        DecimalTestHelpers.AssertDecimalField(buffer, "d64", 2, new byte[] { 0x04, 0xD2 }); // 1234
+        DecimalTestHelpers.AssertDecimalField(buffer, "d64_rounded", 2, new byte[] { 0x04, 0xD3 }); // 1235
+        DecimalTestHelpers.AssertDecimalField(buffer, "d128", 2, new byte[] { 0x04, 0xD2 });
+        DecimalTestHelpers.AssertDecimalField(buffer, "d64_lo", 2, new byte[] { 0x64 }); // 100
+        DecimalTestHelpers.AssertDecimalField(buffer, "d128_lo", 0, new byte[] { 0x00, 0xFF }); // 255 (positive, high bit set)
+        DecimalTestHelpers.AssertDecimalField(buffer, "d256_lo", 0, new byte[] { 0xFF }); // -1
+        await server.StopAsync();
+    }
+
+    [Test]
+    public async Task DecimalColumns_TypedOverloads_RejectUnrepresentableOverIlp()
+    {
+        using var server = new DummyHttpServer(withBasicAuth: false);
+        await server.StartAsync(HttpPort, new[]
+        {
+            1, 2,
+            3,
+        });
+        using var sender =
+            Sender.New(
+                $"http::addr={Host}:{HttpPort};protocol_version=3;tls_verify=unsafe_off;auto_flush=off;");
+
+        var row = sender.Table("metrics");
+        // Scale beyond the type's maximum (Decimal64 caps at 18).
+        Assert.Throws<IngressError>(() => row.ColumnDecimal64("bad_scale", 1m, 20));
+        // Scale representable on QWP (Decimal128 allows 38) but not over ILP's System.Decimal (max 28).
+        Assert.Throws<IngressError>(() => row.ColumnDecimal128("scale_29", 1L, 0L, 29));
+        // Magnitude 2^96 exceeds System.Decimal's 96-bit mantissa.
+        Assert.Throws<IngressError>(() => row.ColumnDecimal128("too_big", 0L, 0x1_0000_0000L, 0));
+        await server.StopAsync();
+    }
+
+    [Test]
     public async Task DecimalColumns()
     {
         using var server = new DummyHttpServer(withBasicAuth: false);
@@ -1406,7 +1466,7 @@ public class HttpTests
         await sender.Transaction("tableName").Symbol("foo", "bah").AtAsync(86400000000000);
         await sender.Column("foo", 123).AtAsync(86400000000000);
         await sender.Column("foo", 123d).AtAsync(86400000000000);
-        await sender.Column("foo", new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc)).AtAsync(86400000000000);
+        await sender.Column("foo", new DateTime(1970, 1, 1)).AtAsync(86400000000000);
         await sender.Column("foo", new DateTimeOffset(new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc)))
                     .AtAsync(86400000000000);
         await sender.Column("foo", false).AtAsync(86400000000000);

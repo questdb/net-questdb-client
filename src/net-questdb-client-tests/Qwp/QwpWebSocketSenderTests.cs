@@ -97,6 +97,50 @@ public class QwpWebSocketSenderTests
     }
 
     [Test]
+    public async Task Symbol_LoneSurrogateValue_DoesNotWedgeSender()
+    {
+        await using var server = StartServerWithOkAcks();
+        using var sender = NewSender(server, "auto_flush=off;");
+
+        // "\uD800" is a lone high surrogate — invalid UTF-16. Building/committing/flushing the bad
+        // row is expected to fail at some stage; tolerate a throw wherever the value is rejected.
+        try
+        {
+            sender.Table("t").Symbol("sym", "x\uD800").Column("v", 1L).At(DateTime.UtcNow);
+            sender.Send();
+        }
+        catch
+        {
+            // expected: the malformed value is rejected
+        }
+
+        // The malformed value must not have wedged the sender: a well-formed row must still flush.
+        sender.Table("t").Symbol("sym", "ok").Column("v", 2L).At(DateTime.UtcNow);
+        Assert.DoesNotThrow(() => sender.Send(),
+            "a valid row sent after a malformed symbol value still throws — the sender is wedged (data loss)");
+
+        await WaitFor(() => server.ReceivedFrames.Count >= 1);
+        Assert.That(server.ReceivedFrames.Count, Is.GreaterThanOrEqualTo(1),
+            "the valid row never reached the server");
+    }
+
+    // A malformed symbol value must surface as the library's IngressError (as a malformed table /
+    // column name already does), not as a raw System.Text.EncoderFallbackException leaking from the
+    // encoder.
+    [Test]
+    public async Task Symbol_LoneSurrogateValue_ThrowsIngressError()
+    {
+        await using var server = StartServerWithOkAcks();
+        using var sender = NewSender(server, "auto_flush=off;");
+
+        Assert.Throws<IngressError>(() =>
+        {
+            sender.Table("t").Symbol("sym", "x\uD800").Column("v", 1L).At(DateTime.UtcNow);
+            sender.Send();
+        });
+    }
+
+    [Test]
     public async Task EndToEnd_AutoFlushByRows_FiresOnThreshold()
     {
         await using var server = StartServerWithOkAcks();

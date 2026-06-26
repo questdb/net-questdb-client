@@ -95,6 +95,21 @@ internal sealed class QwpSymbolDictionary
         }
 #endif
 
+        // First sighting of this value. The symbol dictionary is re-encoded into every
+        // self-sufficient frame, so a value that is not valid UTF-8 (e.g. a lone surrogate) would
+        // throw from the encoder on every flush and permanently wedge the sender. Validate once,
+        // here, before the value is stored — repeated values return via the fast path above and
+        // never reach this check, so the hot path pays nothing.
+        try
+        {
+            _ = QwpStrictUtf8.Encoding.GetByteCount(value);
+        }
+        catch (System.Text.EncoderFallbackException ex)
+        {
+            throw new IngressError(ErrorCode.InvalidName,
+                "symbol value is not valid UTF-8 (lone surrogate)", ex);
+        }
+
         var stored = value.ToString();
         id = _values.Count;
         _values.Add(stored);

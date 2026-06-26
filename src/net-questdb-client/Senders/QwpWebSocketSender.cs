@@ -308,9 +308,12 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
     {
         ThrowIfTerminal();
         var preCount = _symbolDictionary.Count;
-        var globalId = _symbolDictionary.Add(value);
         try
         {
+            // Add validates a first-seen value's UTF-8 (a lone surrogate would otherwise throw from
+            // the encoder on every self-sufficient flush and wedge the sender). Repeated values take
+            // the dictionary's fast path, so the hot path stays free of any extra scan.
+            var globalId = _symbolDictionary.Add(value);
             EnsureCurrentTable().AppendSymbol(name, globalId);
             if (globalId > _currentBatchMaxSymbolId)
             {
@@ -319,11 +322,14 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
         }
         catch
         {
-            // CancelCurrentRow rolls back column savepoints but not the dict.
+            // Drop any dict entry Add committed and abandon the in-progress row, so a rejected
+            // value/name never leaves the buffer half-written. CancelCurrentRow is idempotent, so it
+            // is safe even when AppendSymbol already cancelled on a bad name.
             if (_symbolDictionary.Count > preCount)
             {
                 _symbolDictionary.RollbackTo(preCount);
             }
+            _currentTable?.CancelCurrentRow();
             throw;
         }
         return this;

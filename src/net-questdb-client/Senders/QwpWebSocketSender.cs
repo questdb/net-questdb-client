@@ -1143,30 +1143,41 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
         return rowsTrigger || bytesTrigger || timeTrigger;
     }
 
-    // Clamps the configured byte budget to fit under the server-advertised batch cap minus a
-    // 10% margin for schema / dict-delta / framing overhead. auto_flush_bytes=off stays off
-    // even when a cap is advertised; a cap of 0 (server didn't advertise) keeps the configured value.
+    // The size ceiling to clamp against: the server-advertised cap once known, otherwise the
+    // protocol hard limit. Until the first successful connect the server cap is 0 (unknown) —
+    // notably in initial_connect_mode=async, where rows are appended before connecting — so without
+    // this fallback the row/batch guards would be bypassed entirely in that window.
+    private int EffectiveMaxBatchCap()
+    {
+        var cap = _engine.NegotiatedMaxBatchSize;
+        return cap > 0 ? cap : QwpConstants.MaxBatchBytes;
+    }
+
+    // Clamps the configured byte budget to fit under the batch cap minus a 10% margin for schema /
+    // dict-delta / framing overhead. auto_flush_bytes=off stays off even when a cap is advertised.
+    // Before the first connect the cap falls back to the protocol limit so auto-flush can't
+    // accumulate a batch the encoder will later reject (and leave stuck in the buffer).
     private int EffectiveAutoFlushBytes()
     {
         var configured = Options.auto_flush_bytes;
         if (configured <= 0) return 0;
-        var cap = _engine.NegotiatedMaxBatchSize;
-        if (cap <= 0) return configured;
-        var safeBudget = (long)cap * 9 / 10;
+        var safeBudget = (long)EffectiveMaxBatchCap() * 9 / 10;
         return configured < safeBudget ? configured : (int)safeBudget;
     }
 
     private void GuardRowSize(QwpTableBuffer t)
     {
         var cap = _engine.NegotiatedMaxBatchSize;
-        if (cap <= 0) return;
+        var effectiveCap = cap > 0 ? cap : QwpConstants.MaxBatchBytes;
         var rowBytes = t.GetBufferedBytes() - _currentTableSnapshotBytes;
         // 10% margin matches EffectiveAutoFlushBytes: framing overhead pushes a raw-cap-sized row over.
-        var safeBudget = (long)cap * 9 / 10;
+        var safeBudget = (long)effectiveCap * 9 / 10;
         if (rowBytes <= safeBudget) return;
         t.CancelCurrentRow();
-        throw new IngressError(ErrorCode.InvalidApiCall,
-            $"row too large for server batch cap [rowBytes={rowBytes}, serverMaxBatchSize={cap}]");
+        throw new IngressError(ErrorCode.InvalidApiCall, cap > 0
+            ? $"row too large for server batch cap [rowBytes={rowBytes}, serverMaxBatchSize={cap}]"
+            : $"row too large for protocol batch limit [rowBytes={rowBytes}, "
+              + $"protocolMaxBatchSize={QwpConstants.MaxBatchBytes}, server cap not yet negotiated]");
     }
 
     private void OnRowCommitted(QwpTableBuffer t)

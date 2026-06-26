@@ -1310,6 +1310,41 @@ public class QwpWebSocketSenderTests
     }
 
     [Test]
+    public async Task OversizeRow_BeforeCapNegotiated_TripsGuardAgainstProtocolLimit()
+    {
+        // The server advertises no X-QWP-Max-Batch-Size, so NegotiatedMaxBatchSize stays 0 — the
+        // same state a sender is in before its first connect (e.g. initial_connect_mode=async).
+        // Without the protocol-limit fallback the per-row guard would be bypassed and the oversize
+        // row would be buffered and only rejected later (terminally) by the server.
+        long nextSeq = 0;
+        await using var server = new DummyQwpServer(new DummyQwpServerOptions
+        {
+            FrameHandler = _ => BuildOkAck(Interlocked.Increment(ref nextSeq) - 1),
+        });
+        await server.StartAsync();
+        using var sender = NewSender(server, "auto_flush=off;");
+
+        // Accumulate > 90% of the 16 MiB protocol limit from a reused chunk (no single huge alloc).
+        var chunk = new string('x', 512 * 1024);
+        var ex = Assert.Throws<IngressError>(() =>
+        {
+            sender.Table("t");
+            for (var i = 0; i < 32; i++)
+            {
+                sender.Column($"c{i}", chunk);
+            }
+
+            sender.At(DateTime.UtcNow);
+        });
+        Assert.That(ex!.Message, Does.Contain("row too large for protocol batch limit"));
+
+        // The oversize row is rolled back; the sender stays usable for a normal row.
+        sender.Table("t").Column("v", 1L).At(DateTime.UtcNow);
+        sender.Send();
+        await WaitFor(() => server.ReceivedFrames.Count >= 1);
+    }
+
+    [Test]
     public async Task OversizeBatch_TripsFlushGuard()
     {
         long nextSeq = 0;

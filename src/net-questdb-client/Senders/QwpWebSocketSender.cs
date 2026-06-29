@@ -27,6 +27,7 @@
 using System.Diagnostics;
 using System.Runtime.ExceptionServices;
 using QuestDB.Enums;
+using QuestDB.Pooling;
 using QuestDB.Qwp;
 using QuestDB.Qwp.Sf;
 using QuestDB.Utils;
@@ -43,7 +44,7 @@ namespace QuestDB.Senders;
 ///     frames on transient WS failures, and only terminate on permanent errors (auth, upgrade
 ///     reject, protocol violation, or reconnect-budget exhaustion).
 /// </remarks>
-internal sealed class QwpWebSocketSender : IQwpWebSocketSender
+internal sealed class QwpWebSocketSender : IQwpWebSocketSender, IPooledSlotSender
 {
     private const long TicksPerMicrosecond = 10L;
     private const int EncoderInitialCapacity = 1 << 16;
@@ -102,6 +103,13 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
         (_slotLock, _engine, _drainerPool, _errorDispatcher, _connectionEventDispatcher, _certValidator) = BuildEngineStack(options);
         _engine.SetTableEntryHandler(UpdateSeqTxnFromAck);
     }
+
+    /// <summary>
+    ///     True when there is no slot lock (RAM mode), or the slot lock the engine owns has been
+    ///     released. The pool reads this after disposing this sender to decide whether the slot index
+    ///     may be reused. See <see cref="IPooledSlotSender" />.
+    /// </summary>
+    public bool IsSlotLockReleased => _slotLock is null || _slotLock.IsReleased;
 
     private static (QwpSlotLock? slotLock, QwpCursorSendEngine engine, QwpBackgroundDrainerPool? pool, QwpSenderErrorDispatcher? dispatcher, QwpConnectionEventDispatcher? eventDispatcher, QwpTlsAuth.CertificateValidator? certValidator)
         BuildEngineStack(SenderOptions options)
@@ -210,7 +218,9 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender
                 pool = new QwpBackgroundDrainerPool(
                     options.max_background_drainers,
                     drainer);
-                var orphans = QwpOrphanScanner.ClaimOrphans(options.sf_dir!, options.sender_id);
+                var orphans = QwpOrphanScanner.ClaimOrphans(
+                    options.sf_dir!, options.sender_id,
+                    options.OrphanExcludeManagedBase, options.OrphanExcludeManagedCount);
                 var enqueued = 0;
                 try
                 {

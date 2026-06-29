@@ -54,7 +54,14 @@ internal static class QwpOrphanScanner
     /// <param name="ourSenderId">
     ///     The current sender's slot name, never claimed by the scanner.
     /// </param>
-    public static IReadOnlyList<QwpSlotLock> ClaimOrphans(string sfRoot, string ourSenderId)
+    /// <param name="managedBase">
+    ///     When non-null, slot dirs named <c>{managedBase}-{i}</c> for <c>i ∈ [0, managedCount)</c> are
+    ///     also skipped: they belong to live or future siblings of a QuestDBClient pool, so only true
+    ///     out-of-family orphans are adopted. Pass <c>null</c> for the single-sender case.
+    /// </param>
+    /// <param name="managedCount">Size of the managed slot family (see <paramref name="managedBase" />).</param>
+    public static IReadOnlyList<QwpSlotLock> ClaimOrphans(
+        string sfRoot, string ourSenderId, string? managedBase = null, int managedCount = 0)
     {
         ArgumentNullException.ThrowIfNull(sfRoot);
         ArgumentNullException.ThrowIfNull(ourSenderId);
@@ -80,7 +87,7 @@ internal static class QwpOrphanScanner
         {
             try
             {
-                TryClaim(slotDir, ourSenderId, claimed);
+                TryClaim(slotDir, ourSenderId, managedBase, managedCount, claimed);
             }
             catch (Exception)
             {
@@ -91,10 +98,37 @@ internal static class QwpOrphanScanner
         return claimed;
     }
 
-    private static void TryClaim(string slotDir, string ourSenderId, List<QwpSlotLock> claimed)
+    /// <summary>
+    ///     True if <paramref name="senderId" /> names a managed pool slot
+    ///     (<c>{managedBase}-{i}</c>, <c>i ∈ [0, managedCount)</c>), which the scanner must not adopt.
+    /// </summary>
+    internal static bool IsManagedSlot(string senderId, string? managedBase, int managedCount)
+    {
+        if (managedBase is null || managedCount <= 0)
+        {
+            return false;
+        }
+
+        var prefix = managedBase + "-";
+        if (!senderId.StartsWith(prefix, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        var suffix = senderId.AsSpan(prefix.Length);
+        return int.TryParse(suffix, out var index) && index >= 0 && index < managedCount;
+    }
+
+    private static void TryClaim(
+        string slotDir, string ourSenderId, string? managedBase, int managedCount, List<QwpSlotLock> claimed)
     {
         var senderId = new DirectoryInfo(slotDir).Name;
         if (string.Equals(senderId, ourSenderId, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        if (IsManagedSlot(senderId, managedBase, managedCount))
         {
             return;
         }

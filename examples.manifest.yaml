@@ -43,3 +43,10 @@
   header: |-
     [.NET client library](https://github.com/questdb/net-questdb-client)
   conf: ws::addr=localhost:9000;target=any;
+
+- name: sender-pool
+  lang: csharp
+  path: src/example-sender-pool/Program.cs
+  header: |-
+    [.NET client library](https://github.com/questdb/net-questdb-client)
+  conf: http::addr=localhost:9000;

@@ -85,6 +85,22 @@ internal sealed class QwpSlotLock : IDisposable
     public string LockFilePath { get; }
 
     /// <summary>
+    ///     True once the OS lock has been released (the backing <see cref="FileStream" /> disposed).
+    ///     A pool consults this after closing a sender to decide whether the slot index is safe to
+    ///     reuse, since a wedged I/O path could in principle leave the handle open.
+    /// </summary>
+    public bool IsReleased
+    {
+        get
+        {
+            lock (_stateLock)
+            {
+                return _disposed;
+            }
+        }
+    }
+
+    /// <summary>
     ///     Runs <paramref name="action" /> against <see cref="SlotDirectory" /> while holding an
     ///     internal mutex that excludes <see cref="Dispose" />. Returns <c>false</c> (without
     ///     invoking the action) if the lock has already been disposed.

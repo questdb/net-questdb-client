@@ -107,6 +107,12 @@ public record SenderOptions
     private int _maxBackgroundDrainers = 4;
     private TimeSpan _pingTimeout = TimeSpan.FromMilliseconds(5000);
     private TimeSpan _durableAckKeepaliveInterval = TimeSpan.FromMilliseconds(200);
+    private int _senderPoolMin = 1;
+    private int _senderPoolMax = 4;
+    private TimeSpan _acquireTimeout = TimeSpan.FromMilliseconds(5000);
+    private TimeSpan _idleTimeout = TimeSpan.FromMilliseconds(60000);
+    private TimeSpan _maxLifetime = TimeSpan.FromMilliseconds(1800000);
+    private TimeSpan _housekeeperInterval = TimeSpan.FromMilliseconds(5000);
     private string? _proxy;
     private string? _zone;
     private SenderErrorHandler? _errorHandler;
@@ -228,6 +234,16 @@ public record SenderOptions
         ParseMillisecondsWithDefault(nameof(request_timeout), "30000", out _requestTimeout);
         ParseMillisecondsWithDefault(nameof(retry_timeout), "10000", out _retryTimeout);
         ParseMillisecondsWithDefault(nameof(pool_timeout), "120000", out _poolTimeout);
+
+        // Connection-pool knobs (QuestDBClient handle). Protocol-agnostic; a plain Sender parses
+        // and ignores them. ValidatePoolOptions enforces the relationships.
+        ParseIntWithDefault(nameof(sender_pool_min), "1", out _senderPoolMin);
+        ParseIntWithDefault(nameof(sender_pool_max), "4", out _senderPoolMax);
+        ParseMillisecondsWithDefault(nameof(acquire_timeout_ms), "5000", out _acquireTimeout);
+        ParseMillisecondsWithDefault(nameof(idle_timeout_ms), "60000", out _idleTimeout);
+        ParseMillisecondsWithDefault(nameof(max_lifetime_ms), "1800000", out _maxLifetime);
+        ParseMillisecondsWithDefault(nameof(housekeeper_interval_ms), "5000", out _housekeeperInterval);
+
         ParseEnumWithDefault(nameof(tls_verify), "on", out _tlsVerify);
         ParseStringWithDefault(nameof(tls_roots), null, out _tlsRoots);
         ParseStringWithDefault(nameof(tls_roots_password), null, out _tlsRootsPassword);
@@ -565,6 +581,35 @@ public record SenderOptions
         ApplyInitialConnectPromotion();
         ValidateErrorInboxCapacity();
         ValidateBufferSizes();
+        ValidatePoolOptions();
+    }
+
+    /// <summary>
+    ///     Validates the <see cref="QuestDBClient" /> pool knobs. Called from <see cref="EnsureValid" />
+    ///     (connect-string path) and re-run by <c>QuestDBClientBuilder.Build</c> after programmatic
+    ///     overrides so an invalid min/max set via builder methods is still caught.
+    /// </summary>
+    internal void ValidatePoolOptions()
+    {
+        if (_senderPoolMin < 0)
+            throw new IngressError(ErrorCode.ConfigError, $"`sender_pool_min` must be ≥ 0; got {_senderPoolMin}");
+        if (_senderPoolMax < 1)
+            throw new IngressError(ErrorCode.ConfigError, $"`sender_pool_max` must be ≥ 1; got {_senderPoolMax}");
+        if (_senderPoolMin > _senderPoolMax)
+            throw new IngressError(ErrorCode.ConfigError,
+                $"`sender_pool_min` ({_senderPoolMin}) must be ≤ `sender_pool_max` ({_senderPoolMax})");
+        if (_acquireTimeout < TimeSpan.Zero)
+            throw new IngressError(ErrorCode.ConfigError, $"`acquire_timeout_ms` must be ≥ 0; got {_acquireTimeout.TotalMilliseconds}ms");
+        if (_acquireTimeout.TotalMilliseconds > int.MaxValue)
+            throw new IngressError(ErrorCode.ConfigError, $"`acquire_timeout_ms` must be ≤ {int.MaxValue}ms; got {_acquireTimeout.TotalMilliseconds}ms");
+        if (_idleTimeout <= TimeSpan.Zero)
+            throw new IngressError(ErrorCode.ConfigError, $"`idle_timeout_ms` must be > 0; got {_idleTimeout.TotalMilliseconds}ms");
+        if (_maxLifetime <= TimeSpan.Zero)
+            throw new IngressError(ErrorCode.ConfigError, $"`max_lifetime_ms` must be > 0; got {_maxLifetime.TotalMilliseconds}ms");
+        if (_housekeeperInterval < TimeSpan.FromMilliseconds(100))
+            throw new IngressError(ErrorCode.ConfigError, $"`housekeeper_interval_ms` must be ≥ 100; got {_housekeeperInterval.TotalMilliseconds}ms");
+        if (_housekeeperInterval.TotalMilliseconds > int.MaxValue)
+            throw new IngressError(ErrorCode.ConfigError, $"`housekeeper_interval_ms` must be ≤ {int.MaxValue}ms; got {_housekeeperInterval.TotalMilliseconds}ms");
     }
 
     /// <summary>
@@ -1162,6 +1207,88 @@ public record SenderOptions
         get => _poolTimeout;
         set => _poolTimeout = value;
     }
+
+    // Pool knobs are a QuestDBClient-handle concern, not part of a sender's serialized identity, so
+    // they are [JsonIgnore]d out of ToString()/PrintMembers — a plain Sender that parsed them stays
+    // byte-identical on round-trip. The pool reads them off the parsed options directly; it holds the
+    // user's original connect string, so it never relies on ToString to carry them.
+
+    /// <summary>
+    ///     Minimum number of senders the <see cref="QuestDBClient" /> pool keeps warm. Pre-created
+    ///     at construction and never reaped below. Default 1.
+    /// </summary>
+    [JsonIgnore]
+    public int sender_pool_min
+    {
+        get => _senderPoolMin;
+        set => _senderPoolMin = value;
+    }
+
+    /// <summary>
+    ///     Maximum number of senders the <see cref="QuestDBClient" /> pool will create. Borrowers
+    ///     block up to <see cref="acquire_timeout_ms" /> once this many are in use. Default 4.
+    /// </summary>
+    [JsonIgnore]
+    public int sender_pool_max
+    {
+        get => _senderPoolMax;
+        set => _senderPoolMax = value;
+    }
+
+    /// <summary>
+    ///     How long a borrow blocks waiting for a free sender before throwing. Zero means a single
+    ///     non-blocking attempt. Default 5s.
+    /// </summary>
+    [JsonIgnore]
+    public TimeSpan acquire_timeout_ms
+    {
+        get => _acquireTimeout;
+        set => _acquireTimeout = value;
+    }
+
+    /// <summary>
+    ///     Idle duration after which the housekeeper reaps a pooled sender (never below
+    ///     <see cref="sender_pool_min" />). Default 60s.
+    /// </summary>
+    [JsonIgnore]
+    public TimeSpan idle_timeout_ms
+    {
+        get => _idleTimeout;
+        set => _idleTimeout = value;
+    }
+
+    /// <summary>
+    ///     Maximum age after which the housekeeper recycles a pooled sender (never below
+    ///     <see cref="sender_pool_min" />). Default 30min.
+    /// </summary>
+    [JsonIgnore]
+    public TimeSpan max_lifetime_ms
+    {
+        get => _maxLifetime;
+        set => _maxLifetime = value;
+    }
+
+    /// <summary>
+    ///     Sweep interval of the daemon housekeeper that reaps idle / over-age pooled senders.
+    ///     Default 5s; must be ≥ 100ms.
+    /// </summary>
+    [JsonIgnore]
+    public TimeSpan housekeeper_interval_ms
+    {
+        get => _housekeeperInterval;
+        set => _housekeeperInterval = value;
+    }
+
+    /// <summary>
+    ///     Set by the QuestDBClient pool on each per-slot sender: the orphan scanner skips slot dirs
+    ///     named <c>{OrphanExcludeManagedBase}-{i}</c> for <c>i ∈ [0, OrphanExcludeManagedCount)</c> so
+    ///     a pooled sender never adopts a slot belonging to a live or future pool sibling. Internal —
+    ///     not a connect-string key, not serialized (the reflection ToString reads public props only).
+    /// </summary>
+    internal string? OrphanExcludeManagedBase { get; set; }
+
+    /// <inheritdoc cref="OrphanExcludeManagedBase" />
+    internal int OrphanExcludeManagedCount { get; set; }
 
     /// <summary>
     ///     If <c>true</c>, requests <c>STATUS_DURABLE_ACK</c> frames from the server via the

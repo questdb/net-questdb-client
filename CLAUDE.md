@@ -351,12 +351,54 @@ behaviours:
 
 ### Connection pooling
 
-HTTP is thread-safe at the underlying `HttpClient` level; the Sender
-itself is **not** thread-safe — one Sender per producer thread, or wrap
-your own pool. There is no in-tree `LineSenderPool`; the HTTP transport
-already shares `HttpClient`s under the hood via `IHttpClientFactory`
-semantics in `HttpSender`. WS / SF manage their own concurrency model
-(in-flight window, slot lock) and explicitly reject pooling.
+A single `ISender` is **not** thread-safe — one sender per producer
+thread. For multi-threaded producers there is now an in-tree pool,
+`QuestDBClient` (mirrors the Java client's `QuestDB` handle). Files live
+in `Pooling/` (public `QuestDBClient`/`IQuestDBClient`/`QuestDBClientBuilder`
+in namespace `QuestDB`; internal `SenderPool`/`PooledSender`/`PoolHousekeeper`/
+`QuestDBClientImpl` in `QuestDB.Pooling`).
+
+- **Entry points** mirror `Sender`/`ISender`: `QuestDBClient.Connect(confStr)`
+  or `QuestDBClient.Builder()…Build()` returns `IQuestDBClient`. Construct
+  once, share across threads.
+- **Borrow / return**: `BorrowSender()` (+ `BorrowSenderAsync`) returns an
+  `ISender` that is a `PooledSender` decorator; disposing it (a `using`
+  block) flushes pending rows and **returns it to the pool** — it does NOT
+  close the underlying sender. A return-flush failure discards the sender
+  instead of re-pooling it. `Sender()` / `ReleaseSender()` are the
+  thread-affine (ThreadLocal) variants for dedicated producer threads
+  (do not hold a pinned sender across `await`).
+- **Sizing**: elastic between `sender_pool_min` and `sender_pool_max`,
+  bounded by a `SemaphoreSlim` capacity gate (counts in-use senders;
+  creation happens outside the lock). `BorrowSender` blocks up to
+  `acquire_timeout_ms` then throws `IngressError(ErrorCode.PoolExhausted)`.
+  `PoolHousekeeper` (a `PeriodicTimer` background task) reaps idle /
+  over-age senders down to `min`.
+- **Config keys** (all-protocol, on `SenderOptions`, `[JsonIgnore]`d out of
+  `ToString` so a plain sender round-trips byte-identically): `sender_pool_min`
+  (1), `sender_pool_max` (4), `acquire_timeout_ms` (5000), `idle_timeout_ms`
+  (60000), `max_lifetime_ms` (1800000), `housekeeper_interval_ms` (5000).
+  Validated by `SenderOptions.ValidatePoolOptions()`.
+- **Store-and-forward**: when pooling `ws::`+`sf_dir`, each pooled sender
+  gets a distinct slot identity `sender_id = <base>-<index>` (via
+  `SenderPool.ApplySlotIdentity`) so siblings never collide on a slot
+  directory / flock. A discarded/reaped sender's index is freed only after
+  `IPooledSlotSender.IsSlotLockReleased` confirms the lock dropped (a
+  net-agnostic seam implemented by `QwpWebSocketSender`, backed by
+  `QwpSlotLock.IsReleased`); otherwise it is **retired** (`leakedSlots`)
+  and its capacity permit retained, shrinking effective `max`. Pooled
+  senders pass their managed family to `QwpOrphanScanner.ClaimOrphans(...,
+  managedBase, managedCount)` so orphan adoption skips live/future siblings
+  but still drains true out-of-family orphans (when `drain_orphans=on`).
+  In-range stranded slots recover lazily — a pooled sender replays its own
+  slot's segments on open (`QwpSegmentRing.Open`) when the index is
+  (re)allocated. **Known limitation:** unlike the Java pool, there is no
+  proactive housekeeper-driven two-pass startup drain of in-range slots
+  that are not currently allocated (e.g. a pool that permanently shrank);
+  their data stays on disk until a future run reallocates the index.
+- HTTP still shares `HttpClient`s under the hood per address inside
+  `HttpSender`; the pool is layered above the `ISender` seam and is
+  protocol-agnostic.
 
 ### Value types
 

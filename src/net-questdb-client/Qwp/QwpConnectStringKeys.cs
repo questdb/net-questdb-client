@@ -45,6 +45,11 @@ internal static class QwpConnectStringKeys
         "username", "user", "password", "pass", "token",
         "auth_timeout_ms",
         "zone", "error_inbox_capacity",
+        // Connection-pool knobs read by the QuestDBClient handle. Protocol-agnostic: accepted
+        // (and ignored) by a plain Sender on every scheme so a pool connect string also builds
+        // a sender without tripping the unknown-key check.
+        "sender_pool_min", "sender_pool_max",
+        "acquire_timeout_ms", "idle_timeout_ms", "max_lifetime_ms", "housekeeper_interval_ms",
     };
 
     /// <summary>

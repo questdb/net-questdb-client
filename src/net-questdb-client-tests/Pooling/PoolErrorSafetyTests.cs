@@ -1,0 +1,193 @@
+/*******************************************************************************
+ *     ___                  _   ____  ____
+ *    / _ \ _   _  ___  ___| |_|  _ \| __ )
+ *   | | | | | | |/ _ \/ __| __| | | |  _ \
+ *   | |_| | |_| |  __/\__ \ |_| |_| | |_) |
+ *    \__\_\\__,_|\___||___/\__|____/|____/
+ *
+ *  Copyright (c) 2014-2019 Appsicle
+ *  Copyright (c) 2019-2026 QuestDB
+ *
+ *  Licensed under the Apache License, Version 2.0 (the "License");
+ *  you may not use this file except in compliance with the License.
+ *  You may obtain a copy of the License at
+ *
+ *  http://www.apache.org/licenses/LICENSE-2.0
+ *
+ *  Unless required by applicable law or agreed to in writing, software
+ *  distributed under the License is distributed on an "AS IS" BASIS,
+ *  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ *  See the License for the specific language governing permissions and
+ *  limitations under the License.
+ *
+ ******************************************************************************/
+
+using System.Collections.Concurrent;
+using System.Diagnostics;
+using NUnit.Framework;
+using QuestDB.Pooling;
+using QuestDB.Senders;
+using QuestDB.Utils;
+
+namespace net_questdb_client_tests.Pooling;
+
+public class PoolErrorSafetyTests
+{
+    private static SenderPool MakePool(string keys)
+    {
+        var options = new SenderOptions("http::addr=localhost:9000;" + keys);
+        return new SenderPool(options, null, slot => new FakeSender(slot));
+    }
+
+    [Test]
+    public void CloseWakesBlockedBorrowerPromptly()
+    {
+        var pool = MakePool("sender_pool_min=0;sender_pool_max=1;acquire_timeout_ms=10000;");
+        var held = pool.Borrow();
+
+        Exception? caught = null;
+        var sw = new Stopwatch();
+        var t = new Thread(() =>
+        {
+            try
+            {
+                pool.Borrow();
+            }
+            catch (Exception e)
+            {
+                caught = e;
+            }
+        });
+
+        t.Start();
+        Thread.Sleep(200); // let the borrower block on the exhausted pool
+        sw.Start();
+        pool.Close();
+        t.Join(TimeSpan.FromSeconds(5));
+        sw.Stop();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(caught, Is.InstanceOf<IngressError>());
+            Assert.That(caught!.Message, Does.Contain("closed"));
+            Assert.That(sw.ElapsedMilliseconds, Is.LessThan(4000), "woke on close, not on the 10s acquire timeout");
+        });
+
+        Assert.DoesNotThrow(() => held.Dispose());
+    }
+
+    [Test]
+    public void DisposingReturnedSenderTwiceDoesNotDoubleReturn()
+    {
+        var pool = MakePool("sender_pool_min=0;sender_pool_max=2;");
+        try
+        {
+            var s = pool.Borrow();
+            s.Dispose();
+            Assert.That(pool.AvailableSize, Is.EqualTo(1));
+            s.Dispose(); // second dispose is a no-op
+            Assert.That(pool.AvailableSize, Is.EqualTo(1), "idempotent: not pooled twice");
+        }
+        finally
+        {
+            pool.Close();
+        }
+    }
+
+    [Test]
+    public void DisposingBorrowedSenderAfterHandleCloseIsSafe()
+    {
+        var pool = MakePool("sender_pool_min=0;sender_pool_max=2;");
+        var s = pool.Borrow();
+        pool.Close();
+        Assert.DoesNotThrow(() => s.Dispose());
+        Assert.That(pool.AvailableSize, Is.EqualTo(0), "not re-pooled into a closed pool");
+    }
+
+    [Test]
+    public void ConcurrentBorrowReturnAndCloseDoNotThrow()
+    {
+        var pool = MakePool("sender_pool_min=2;sender_pool_max=6;acquire_timeout_ms=2000;");
+        var errors = new ConcurrentQueue<Exception>();
+        var stop = false;
+
+        var workers = Enumerable.Range(0, 6).Select(_ => new Thread(() =>
+        {
+            while (!Volatile.Read(ref stop))
+            {
+                try
+                {
+                    var s = pool.Borrow();
+                    Thread.SpinWait(50);
+                    s.Dispose();
+                }
+                catch (IngressError)
+                {
+                    // expected once the pool closes
+                }
+                catch (Exception e)
+                {
+                    errors.Enqueue(e);
+                }
+            }
+        })).ToArray();
+
+        foreach (var w in workers)
+        {
+            w.Start();
+        }
+
+        Thread.Sleep(300);
+        pool.Close();
+        Volatile.Write(ref stop, true);
+        foreach (var w in workers)
+        {
+            w.Join(TimeSpan.FromSeconds(5));
+        }
+
+        Assert.That(errors, Is.Empty, "no unexpected exceptions under concurrent borrow/return/close");
+    }
+
+    [Test]
+    public void PooledSenderIsCastableToQwpButThrowsForNonWsTransport()
+    {
+        var pool = MakePool("sender_pool_min=0;sender_pool_max=1;");
+        try
+        {
+            ISender s = pool.Borrow();
+            Assert.That(s, Is.InstanceOf<IQwpWebSocketSender>(), "pooled senders expose the QWP surface");
+
+            var qwp = (IQwpWebSocketSender)s;
+            // The fake is not a real WS sender, so QWP-only operations must fail with a clear error.
+            Assert.Throws<IngressError>(() => qwp.Ping());
+            Assert.Throws<IngressError>(() => qwp.ColumnByte("b", 1));
+            s.Dispose();
+        }
+        finally
+        {
+            pool.Close();
+        }
+    }
+
+    [Test]
+    public void FluentMethodsReturnTheWrapperNotTheDelegate()
+    {
+        var pool = MakePool("sender_pool_min=0;sender_pool_max=1;");
+        try
+        {
+            ISender s = pool.Borrow();
+            Assert.Multiple(() =>
+            {
+                Assert.That(s.Table("t"), Is.SameAs(s));
+                Assert.That(s.Symbol("k", "v"), Is.SameAs(s));
+                Assert.That(s.Column("c", 1L), Is.SameAs(s));
+                Assert.That(s.Column("d", 1.5), Is.SameAs(s));
+            });
+            s.Dispose();
+        }
+        finally
+        {
+            pool.Close();
+        }
+    }
+}

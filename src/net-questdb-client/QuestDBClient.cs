@@ -28,7 +28,7 @@ namespace QuestDB;
 ///     Factory for <see cref="IQuestDBClient" />, a sender pool you construct once and share across
 ///     threads. Mirrors the <see cref="Sender" /> / <see cref="Senders.ISender" /> factory pairing.
 ///     <para />
-///     Use <see cref="Connect" /> when the connect string carries everything, or
+///     Use <see cref="Connect(string)" /> when the connect string carries everything, or
 ///     <see cref="Builder" /> to set pool sizes / timeouts programmatically.
 /// </summary>
 public static class QuestDBClient
@@ -42,6 +42,18 @@ public static class QuestDBClient
     {
         return Builder().FromConfig(confStr).Build();
     }
+
+#if NET7_0_OR_GREATER
+    /// <summary>
+    ///     Connects with distinct ingest and query (egress) connect strings, e.g. an <c>http</c>/<c>tcp</c>
+    ///     ingest endpoint plus a <c>ws</c>/<c>wss</c> query endpoint. The query string must be
+    ///     <c>ws</c>/<c>wss</c>. net7.0+ only.
+    /// </summary>
+    public static IQuestDBClient Connect(string ingestConfStr, string queryConfStr)
+    {
+        return Builder().IngestConfig(ingestConfStr).QueryConfig(queryConfStr).Build();
+    }
+#endif
 
     /// <summary>Opens a builder for programmatic pool configuration.</summary>
     public static QuestDBClientBuilder Builder()

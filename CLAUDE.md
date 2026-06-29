@@ -351,27 +351,29 @@ behaviours:
 
 ### Connection pooling
 
-A single `ISender` is **not** thread-safe — one sender per producer
-thread. For multi-threaded producers there is now an in-tree pool,
-`QuestDBClient` (mirrors the Java client's `QuestDB` handle). Files live
-in `Pooling/` (public `QuestDBClient`/`IQuestDBClient`/`QuestDBClientBuilder`
-in namespace `QuestDB`; internal `SenderPool`/`PooledSender`/`PoolHousekeeper`/
-`QuestDBClientImpl` in `QuestDB.Pooling`).
+A single `ISender` (or `IQwpQueryClient`) is **not** thread-safe — one per
+producer thread. For multi-threaded producers there is now an in-tree pool,
+`QuestDBClient` (mirrors the Java client's `QuestDB` handle), which pools
+**both** ingest senders and (net7.0+) egress query clients. Files live in
+`Pooling/` (public `QuestDBClient`/`IQuestDBClient`/`QuestDBClientBuilder` in
+namespace `QuestDB`; internal `SenderPool`/`PooledSender`/`QueryClientPool`/
+`PooledQueryClient`/`PoolHousekeeper`/`QuestDBClientImpl` in `QuestDB.Pooling`).
+The public `Query` builder (namespace `QuestDB`, `Query.cs`) is the query-side
+surface.
 
 - **Entry points** mirror `Sender`/`ISender`: `QuestDBClient.Connect(confStr)`
   or `QuestDBClient.Builder()…Build()` returns `IQuestDBClient`. Construct
-  once, share across threads.
+  once, share across threads. For distinct ingest/query endpoints use
+  `QuestDBClient.Connect(ingestConfStr, queryConfStr)` or
+  `Builder().IngestConfig(...).QueryConfig(...)` (Java `connect(ingest, query)`
+  parity); a single `ws`/`wss` `FromConfig` string serves both pools.
 - **Borrow / return**: `BorrowSender()` (+ `BorrowSenderAsync`) returns an
   `ISender` that is a `PooledSender` decorator; disposing it (a `using`
   block) flushes pending rows and **returns it to the pool** — it does NOT
   close the underlying sender. A return-flush failure discards the sender
-  instead of re-pooling it. `Sender()` / `ReleaseSender()` are the
-  context-affine variants: the pin lives in an `AsyncLocal` (on `SenderPool`,
-  so `PooledSender.Dispose` can `ClearPinIfCurrent`), so it follows the async
-  flow across sequential `await`s. Two documented hazards: a fan-out
-  (`Task.WhenAll`) shares one pin across parallel branches, and a missed
-  `ReleaseSender()` leaks the sender (no flow-completion hook). Prefer
-  `BorrowSender` unless those are clearly handled.
+  instead of re-pooling it. There is no context-affine / pinned-sender API —
+  borrow per unit of work and dispose to return (a single `ISender` is not
+  thread-safe, so never share a borrowed one across threads).
 - **Sizing**: elastic between `sender_pool_min` and `sender_pool_max`,
   bounded by a `SemaphoreSlim` capacity gate (counts in-use senders;
   creation happens outside the lock). `BorrowSender` blocks up to
@@ -383,6 +385,33 @@ in namespace `QuestDB`; internal `SenderPool`/`PooledSender`/`PoolHousekeeper`/
   (1), `sender_pool_max` (4), `acquire_timeout_ms` (5000), `idle_timeout_ms`
   (60000), `max_lifetime_ms` (1800000), `housekeeper_interval_ms` (5000).
   Validated by `SenderOptions.ValidatePoolOptions()`.
+- **Query pooling (net7.0+)**: `IQuestDBClient.NewQuery()` returns a fresh
+  `Query` builder (`Sql`/`Binds`/`Handler` then `ExecuteAsync`/`Execute`);
+  `ExecuteSqlAsync(sql, handler, ct)` is the convenience shortcut. There is
+  **no** public borrow/release for queries — the client lease is implicit per
+  `ExecuteAsync` and self-returns in a `finally` (Java `newQuery()`/
+  `executeSql()` parity; Java's thread-local `query()` is **not** ported). The
+  `Task` returned by `ExecuteAsync` replaces Java's `Completion`. A clean return
+  re-pools the client (`GiveBack`); any throw — transport/protocol or a hard
+  `CancellationToken` cancel (which is permanently terminal) — discards it
+  (`MarkBroken` → `DiscardBroken`), since the egress client's terminal state is
+  sticky with no reset. `Query.Cancel()` is the **cooperative** path (forwards to
+  the in-flight client's `Cancel()`; the query ends normally and the client is
+  re-pooled). `PooledQueryClient` also checks an internal `IPooledQueryClientInner.
+  IsTerminalOrDisposed` seam (implemented by `QwpQueryWebSocketClient`) before
+  re-pooling. The query pool is the **stripped sibling** of `SenderPool` — no
+  SF/slot/leak-debt machinery (read side has no store-and-forward) and no
+  AsyncLocal pin. Query-pool config: `query_pool_min` (1), `query_pool_max` (4)
+  on `SenderOptions` (`[JsonIgnore]`, in `QwpConnectStringKeys.Shared` so both
+  `SenderOptions` and `QueryOptions` accept them), validated by the separate
+  `ValidateQueryPoolOptions()` (kept out of `EnsureValid` so a plain `Sender`
+  stays lenient); the acquire/idle/lifetime/housekeeper knobs are **shared** with
+  the sender pool, and one `PoolHousekeeper` sweeps both. The query pool is built
+  only when a `ws`/`wss` query config is present (single `ws` string, explicit
+  `QueryConfig`, or `Connect(ingest, query)`); an `http`/`tcp` ingest handle with
+  no query config throws `IngressError(ConfigError)` on `NewQuery`. All query
+  members are gated `#if NET7_0_OR_GREATER` (so `IQuestDBClient` differs by TFM);
+  net6.0 keeps the sender-only surface.
 - **Store-and-forward**: when pooling `ws::`+`sf_dir`, each pooled sender
   gets a distinct slot identity `sender_id = <base>-<index>` (via
   `SenderPool.ApplySlotIdentity`) so siblings never collide on a slot

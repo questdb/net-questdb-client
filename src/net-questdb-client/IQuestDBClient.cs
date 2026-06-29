@@ -23,12 +23,15 @@
  ******************************************************************************/
 
 using QuestDB.Senders;
+#if NET7_0_OR_GREATER
+using QwpColumnBatchHandler = QuestDB.Qwp.Query.QwpColumnBatchHandler;
+#endif
 
 namespace QuestDB;
 
 /// <summary>
 ///     High-level handle that owns a pool of <see cref="ISender" /> instances. Construct once with
-///     <see cref="QuestDBClient.Connect" /> or <see cref="QuestDBClient.Builder" />, then share across
+///     <see cref="QuestDBClient.Connect(string)" /> or <see cref="QuestDBClient.Builder" />, then share across
 ///     threads — <see cref="BorrowSender" /> and <see cref="BorrowSenderAsync" /> may be called
 ///     concurrently from any thread.
 /// </summary>
@@ -57,35 +60,37 @@ public interface IQuestDBClient : IDisposable, IAsyncDisposable
     /// <param name="ct">Cancels the wait for a free sender.</param>
     ValueTask<ISender> BorrowSenderAsync(CancellationToken ct = default);
 
-    /// <summary>
-    ///     Returns a sender pinned to the calling async flow. The first call in a flow borrows one from
-    ///     the pool and pins it; later calls in the same flow return the same instance until
-    ///     <see cref="ReleaseSender" /> (or this handle is closed). The pin is held in an
-    ///     <see cref="System.Threading.AsyncLocal{T}" />, so it follows the execution context across
-    ///     sequential <c>await</c>s (unlike a thread-local pin, which would be left on the original
-    ///     thread when a continuation resumes elsewhere).
-    ///     <para />
-    ///     <b>Hazards — prefer <see cref="BorrowSender" /> unless these are clearly handled:</b>
-    ///     <list type="bullet">
-    ///         <item>
-    ///             A pinned sender is NOT safe to use from parallel branches of the same flow: a
-    ///             fan-out such as <c>Task.WhenAll(...)</c> flows the same pin into every branch, so
-    ///             concurrent calls would mutate one sender. Borrow per branch instead.
-    ///         </item>
-    ///         <item>
-    ///             You MUST call <see cref="ReleaseSender" /> on every path. There is no flow-completion
-    ///             hook, so a missed release leaks the sender (it is never returned to the pool).
-    ///         </item>
-    ///     </list>
-    /// </summary>
-    ISender Sender();
+#if NET7_0_OR_GREATER
+    /// <summary>Number of idle query clients currently parked in the pool.</summary>
+    /// <exception cref="Utils.IngressError">If the handle has no query configuration.</exception>
+    int AvailableQueryClientCount { get; }
+
+    /// <summary>Total query clients alive in the pool (idle + in-use).</summary>
+    /// <exception cref="Utils.IngressError">If the handle has no query configuration.</exception>
+    int TotalQueryClientCount { get; }
 
     /// <summary>
-    ///     Releases the calling flow's pinned <see cref="Sender" /> (if any) back to the pool and
-    ///     clears the pin. Must be called on every path that took a <see cref="Sender" /> — there is no
-    ///     flow-completion hook, so a missed release leaks the sender.
+    ///     Allocates a fresh <see cref="Query" /> bound to this handle's query-client pool. Configure it
+    ///     with <c>Sql</c> / <c>Binds</c> / <c>Handler</c>, then <c>ExecuteAsync</c>. Each execution
+    ///     borrows a pooled query client for the duration of one query and returns it automatically —
+    ///     there is no explicit borrow/release for queries (unlike senders).
+    ///     <para />
+    ///     Allocate a fresh <c>NewQuery()</c> per query when running queries concurrently; a single
+    ///     <see cref="Query" /> allows only one in-flight execution.
+    ///     <para />
+    ///     Requires a <c>ws</c>/<c>wss</c> query configuration (a single <c>ws</c> connect string, or an
+    ///     explicit <c>QueryConfig</c> / <see cref="QuestDBClient.Connect(string, string)" />); throws
+    ///     <see cref="Utils.IngressError" /> otherwise. net7.0+ only.
     /// </summary>
-    void ReleaseSender();
+    Query NewQuery();
+
+    /// <summary>
+    ///     Convenience for a bind-less query: equivalent to
+    ///     <c>NewQuery().Sql(sql).Handler(handler).ExecuteAsync(ct)</c>. Borrows a pooled query client,
+    ///     runs the query, and returns the client (or discards it on a hard cancel / transport failure).
+    /// </summary>
+    Task ExecuteSqlAsync(string sql, QwpColumnBatchHandler handler, CancellationToken ct = default);
+#endif
 
     /// <summary>
     ///     Shuts the pool down, closing every underlying sender. Idempotent. Threads blocked in

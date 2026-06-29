@@ -26,7 +26,8 @@ namespace QuestDB.Pooling;
 
 /// <summary>
 ///     Background sweeper that periodically reaps idle / over-age senders from a
-///     <see cref="SenderPool" />. Runs on a pooled <see cref="Task" /> driven by a
+///     <see cref="SenderPool" /> (and, on net7.0+, query clients from a
+///     <see cref="QueryClientPool" />). Runs on a pooled <see cref="Task" /> driven by a
 ///     <see cref="PeriodicTimer" />; the loop swallows every fault (the C# analogue of Java's
 ///     <c>catch (Throwable)</c>) so a single bad delegate teardown can never kill all future reaping.
 /// </summary>
@@ -39,6 +40,9 @@ internal sealed class PoolHousekeeper : IDisposable
     private readonly SenderPool _pool;
     private readonly PeriodicTimer _timer;
     private int _stopped;
+#if NET7_0_OR_GREATER
+    private readonly QueryClientPool? _queryPool;
+#endif
 
     internal PoolHousekeeper(SenderPool pool, TimeSpan interval)
     {
@@ -46,6 +50,17 @@ internal sealed class PoolHousekeeper : IDisposable
         _timer = new PeriodicTimer(interval);
         _loop = Task.Run(RunAsync);
     }
+
+#if NET7_0_OR_GREATER
+    /// <summary>Sweeps both the sender pool and the (optional) query pool.</summary>
+    internal PoolHousekeeper(SenderPool pool, QueryClientPool? queryPool, TimeSpan interval)
+    {
+        _pool = pool;
+        _queryPool = queryPool;
+        _timer = new PeriodicTimer(interval);
+        _loop = Task.Run(RunAsync);
+    }
+#endif
 
     public void Dispose()
     {
@@ -118,6 +133,16 @@ internal sealed class PoolHousekeeper : IDisposable
                 {
                     // Best-effort housekeeping; a delegate teardown fault must not stop the sweeper.
                 }
+#if NET7_0_OR_GREATER
+                try
+                {
+                    _queryPool?.ReapIdle();
+                }
+                catch
+                {
+                    // Independent try/catch so a query-pool fault can't stop sender reaping (or vice versa).
+                }
+#endif
             }
         }
         catch (OperationCanceledException)

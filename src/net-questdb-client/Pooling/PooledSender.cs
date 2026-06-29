@@ -75,18 +75,6 @@ internal sealed class PooledSender : IQwpWebSocketSender
     internal DateTime IdleSinceUtc { get; set; }
 
     /// <summary>
-    ///     Set when the pool closes or evicts this wrapper so a thread-pinned reference can detect it
-    ///     is stale. Read without a lock; written under the pool lock.
-    /// </summary>
-    internal volatile bool Invalidated;
-
-    /// <summary>The wrapped sender, exposed to the pool for teardown.</summary>
-    internal ISender Inner => _delegate;
-
-    /// <summary>True while a borrower holds this wrapper.</summary>
-    internal bool IsInUse => Volatile.Read(ref _inUse) == 1;
-
-    /// <summary>
     ///     True if the inner sender holds no SF slot lock or has released it — i.e. the slot index is
     ///     safe to reuse. Always true for non-SF senders (HTTP/TCP/WS-RAM). Call only after the inner
     ///     sender has been disposed.
@@ -123,10 +111,6 @@ internal sealed class PooledSender : IQwpWebSocketSender
             return;
         }
 
-        // Clear any flow pin BEFORE the wrapper becomes borrowable again, so another borrower can't
-        // grab it while this flow still holds a stale pin to it.
-        _pool.ClearPinIfCurrent(this);
-
         try
         {
             _delegate.Send();
@@ -147,8 +131,6 @@ internal sealed class PooledSender : IQwpWebSocketSender
         {
             return;
         }
-
-        _pool.ClearPinIfCurrent(this);
 
         try
         {

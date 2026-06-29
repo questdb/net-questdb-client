@@ -52,7 +52,5 @@ await Parallel.ForEachAsync(Enumerable.Range(0, 100), async (i, ct) =>
 
 Console.WriteLine($"Done. pool: {client.AvailableSenderCount} idle / {client.TotalSenderCount} total");
 
-// Dedicated long-lived producer thread? Pin one sender to the thread instead of borrowing each time:
-//   var s = client.Sender();   // first call pins; later calls on this thread return the same sender
-//   ... s.Table(...).At(...); s.Send();
-//   client.ReleaseSender();    // return the pinned sender when the thread is done
+// Borrow one sender per unit of work and dispose it (a `using` block) to return it to the pool.
+// A single sender is not thread-safe, so never share a borrowed sender across threads.

@@ -34,7 +34,7 @@ using QuestDB.Utils;
 
 namespace QuestDB.Qwp.Query;
 
-internal sealed class QwpQueryWebSocketClient : IQwpQueryClient
+internal sealed class QwpQueryWebSocketClient : IQwpQueryClient, QuestDB.Pooling.IPooledQueryClientInner
 {
     private static readonly UTF8Encoding StrictUtf8 = QwpConstants.StrictUtf8;
     private const int InitialReceiveBufferBytes = 64 * 1024;
@@ -1232,6 +1232,13 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient
     }
 
     private void MarkTerminal() => Volatile.Write(ref _terminal, 1);
+
+    /// <summary>
+    ///     Pool seam: true once the client is terminal or disposed, so a pooled wrapper can discard
+    ///     rather than re-pool it even on a non-throwing return path.
+    /// </summary>
+    bool QuestDB.Pooling.IPooledQueryClientInner.IsTerminalOrDisposed =>
+        Volatile.Read(ref _terminal) != 0 || Volatile.Read(ref _disposed) != 0;
 }
 
 #endif

@@ -22,36 +22,56 @@
  *
  ******************************************************************************/
 
+using QuestDB.Enums;
 using QuestDB.Senders;
 using QuestDB.Utils;
+#if NET7_0_OR_GREATER
+using QwpColumnBatchHandler = QuestDB.Qwp.Query.QwpColumnBatchHandler;
+#endif
 
 namespace QuestDB.Pooling;
 
 /// <summary>
-///     Default <see cref="IQuestDBClient" />: owns a <see cref="SenderPool" /> (and, from Phase 2, a
-///     housekeeper that reaps idle / over-age senders).
+///     Default <see cref="IQuestDBClient" />: owns a <see cref="SenderPool" /> and, on net7.0+ when a
+///     query config is supplied, a <see cref="QueryClientPool" />. A single
+///     <see cref="PoolHousekeeper" /> reaps idle / over-age instances from both pools.
 /// </summary>
 internal sealed class QuestDBClientImpl : IQuestDBClient
 {
     private readonly PoolHousekeeper _housekeeper;
     private readonly SenderPool _pool;
+#if NET7_0_OR_GREATER
+    private readonly QueryClientPool? _queryPool;
+#endif
 
-    internal QuestDBClientImpl(SenderOptions poolConfig, string confStr)
-        : this(new SenderPool(poolConfig, confStr), poolConfig)
+    internal QuestDBClientImpl(SenderOptions poolConfig, string ingestConfStr, string? queryConfStr)
     {
+        _pool = new SenderPool(poolConfig, ingestConfStr);
+#if NET7_0_OR_GREATER
+        _queryPool = queryConfStr is null ? null : new QueryClientPool(poolConfig, queryConfStr);
+        _housekeeper = new PoolHousekeeper(_pool, _queryPool, poolConfig.housekeeper_interval_ms);
+#else
+        _housekeeper = new PoolHousekeeper(_pool, poolConfig.housekeeper_interval_ms);
+#endif
     }
 
-    // Test seam: inject a sender factory.
+    // Test seam: inject a sender factory (sender-only handle, no query pool).
     internal QuestDBClientImpl(SenderOptions poolConfig, Func<int, ISender> senderFactory)
-        : this(new SenderPool(poolConfig, null, senderFactory), poolConfig)
     {
-    }
-
-    private QuestDBClientImpl(SenderPool pool, SenderOptions poolConfig)
-    {
-        _pool = pool;
+        _pool = new SenderPool(poolConfig, null, senderFactory);
         _housekeeper = new PoolHousekeeper(_pool, poolConfig.housekeeper_interval_ms);
     }
+
+#if NET7_0_OR_GREATER
+    // Test seam: inject both a sender factory and a query-client factory.
+    internal QuestDBClientImpl(SenderOptions poolConfig, Func<int, ISender> senderFactory,
+        Func<ValueTask<IQwpQueryClient>> queryFactory)
+    {
+        _pool = new SenderPool(poolConfig, null, senderFactory);
+        _queryPool = new QueryClientPool(poolConfig, null, queryFactory);
+        _housekeeper = new PoolHousekeeper(_pool, _queryPool, poolConfig.housekeeper_interval_ms);
+    }
+#endif
 
     public int AvailableSenderCount => _pool.AvailableSize;
     public int TotalSenderCount => _pool.TotalSize;
@@ -66,20 +86,36 @@ internal sealed class QuestDBClientImpl : IQuestDBClient
         return await _pool.BorrowAsync(ct).ConfigureAwait(false);
     }
 
-    public ISender Sender()
+#if NET7_0_OR_GREATER
+    public int AvailableQueryClientCount => RequireQueryPool().AvailableSize;
+    public int TotalQueryClientCount => RequireQueryPool().TotalSize;
+
+    public Query NewQuery()
     {
-        return _pool.PinToCurrentContext();
+        return new Query(RequireQueryPool());
     }
 
-    public void ReleaseSender()
+    public Task ExecuteSqlAsync(string sql, QwpColumnBatchHandler handler, CancellationToken ct = default)
     {
-        _pool.ReleaseCurrentContext();
+        return NewQuery().Sql(sql).Handler(handler).ExecuteAsync(ct);
     }
+
+    private QueryClientPool RequireQueryPool()
+    {
+        return _queryPool ?? throw new IngressError(ErrorCode.ConfigError,
+            "no query configuration; pass a ws:: / wss:: query config via QueryConfig() or " +
+            "QuestDBClient.Connect(ingest, query)");
+    }
+#endif
 
     public void Close()
     {
-        // Stop the sweeper before tearing the pool down so it cannot reap mid-close.
+        // Stop the sweeper before tearing the pools down so it cannot reap mid-close.
         _housekeeper.Dispose();
+#if NET7_0_OR_GREATER
+        // Query pool first (no flock/mmap); sender pool last (owns SF/flock/IO resources).
+        _queryPool?.Close();
+#endif
         _pool.Close();
     }
 
@@ -93,6 +129,12 @@ internal sealed class QuestDBClientImpl : IQuestDBClient
         // Async join so we don't block the caller for up to the housekeeper's 2s budget.
         await _housekeeper.StopAsync().ConfigureAwait(false);
         _housekeeper.Dispose();
+#if NET7_0_OR_GREATER
+        if (_queryPool is not null)
+        {
+            await _queryPool.CloseAsync().ConfigureAwait(false);
+        }
+#endif
         await _pool.CloseAsync().ConfigureAwait(false);
     }
 }

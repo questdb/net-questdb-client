@@ -109,6 +109,8 @@ public record SenderOptions
     private TimeSpan _durableAckKeepaliveInterval = TimeSpan.FromMilliseconds(200);
     private int _senderPoolMin = 1;
     private int _senderPoolMax = 4;
+    private int _queryPoolMin = 1;
+    private int _queryPoolMax = 4;
     private TimeSpan _acquireTimeout = TimeSpan.FromMilliseconds(5000);
     private TimeSpan _idleTimeout = TimeSpan.FromMilliseconds(60000);
     private TimeSpan _maxLifetime = TimeSpan.FromMilliseconds(1800000);
@@ -239,6 +241,8 @@ public record SenderOptions
         // and ignores them. ValidatePoolOptions enforces the relationships.
         ParseIntWithDefault(nameof(sender_pool_min), "1", out _senderPoolMin);
         ParseIntWithDefault(nameof(sender_pool_max), "4", out _senderPoolMax);
+        ParseIntWithDefault(nameof(query_pool_min), "1", out _queryPoolMin);
+        ParseIntWithDefault(nameof(query_pool_max), "4", out _queryPoolMax);
         ParseMillisecondsWithDefault(nameof(acquire_timeout_ms), "5000", out _acquireTimeout);
         ParseMillisecondsWithDefault(nameof(idle_timeout_ms), "60000", out _idleTimeout);
         ParseMillisecondsWithDefault(nameof(max_lifetime_ms), "1800000", out _maxLifetime);
@@ -610,6 +614,24 @@ public record SenderOptions
             throw new IngressError(ErrorCode.ConfigError, $"`housekeeper_interval_ms` must be ≥ 100; got {_housekeeperInterval.TotalMilliseconds}ms");
         if (_housekeeperInterval.TotalMilliseconds > int.MaxValue)
             throw new IngressError(ErrorCode.ConfigError, $"`housekeeper_interval_ms` must be ≤ {int.MaxValue}ms; got {_housekeeperInterval.TotalMilliseconds}ms");
+    }
+
+    /// <summary>
+    ///     Validates the <see cref="QuestDBClient" /> query-pool knobs. Kept separate from
+    ///     <see cref="ValidatePoolOptions" /> (and OUT of the unconditional <see cref="EnsureValid" />
+    ///     path) so a plain <c>Sender.New</c> stays lenient about query keys it ignores; only the query
+    ///     pool and <c>QuestDBClientBuilder.Build</c> enforce them. The shared acquire/idle/lifetime/
+    ///     housekeeper relationships are already checked by <see cref="ValidatePoolOptions" />.
+    /// </summary>
+    internal void ValidateQueryPoolOptions()
+    {
+        if (_queryPoolMin < 0)
+            throw new IngressError(ErrorCode.ConfigError, $"`query_pool_min` must be ≥ 0; got {_queryPoolMin}");
+        if (_queryPoolMax < 1)
+            throw new IngressError(ErrorCode.ConfigError, $"`query_pool_max` must be ≥ 1; got {_queryPoolMax}");
+        if (_queryPoolMin > _queryPoolMax)
+            throw new IngressError(ErrorCode.ConfigError,
+                $"`query_pool_min` ({_queryPoolMin}) must be ≤ `query_pool_max` ({_queryPoolMax})");
     }
 
     /// <summary>
@@ -1233,6 +1255,28 @@ public record SenderOptions
     {
         get => _senderPoolMax;
         set => _senderPoolMax = value;
+    }
+
+    /// <summary>
+    ///     Minimum number of query clients the <see cref="QuestDBClient" /> pool keeps warm (only when a
+    ///     query config is present). Default 1. Set to 0 for lazy first-borrow creation.
+    /// </summary>
+    [JsonIgnore]
+    public int query_pool_min
+    {
+        get => _queryPoolMin;
+        set => _queryPoolMin = value;
+    }
+
+    /// <summary>
+    ///     Maximum number of query clients the <see cref="QuestDBClient" /> pool will create. Borrowers
+    ///     block up to <see cref="acquire_timeout_ms" /> once this many are in use. Default 4.
+    /// </summary>
+    [JsonIgnore]
+    public int query_pool_max
+    {
+        get => _queryPoolMax;
+        set => _queryPoolMax = value;
     }
 
     /// <summary>

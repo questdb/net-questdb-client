@@ -52,14 +52,6 @@ internal sealed class SenderPool
     private readonly Func<int, ISender> _senderFactory;
     private readonly int _acquireTimeoutMs;
 
-    // Per-async-flow pinned sender for the Sender() / ReleaseSender() affinity API. AsyncLocal flows
-    // with the execution context, so the pin follows a sequential await chain (unlike ThreadLocal,
-    // which is left on the original thread when a continuation hops). Lives on the pool (not the handle)
-    // so PooledSender.Dispose can clear the current flow's pin before the wrapper becomes borrowable.
-    // Caveats (documented on IQuestDBClient.Sender): a fan-out (e.g. Task.WhenAll) shares one pin across
-    // parallel branches, and a missed ReleaseSender leaks the sender (no flow-end hook returns it).
-    private readonly AsyncLocal<PooledSender?> _affine = new();
-
     private readonly Stack<PooledSender> _available = new();
     private readonly List<PooledSender> _all = new();
     private bool _closed;
@@ -113,7 +105,6 @@ internal sealed class SenderPool
         catch
         {
             // A failed pre-warm (e.g. a slow/refused warm connect) must not leak the primitives.
-            // (_affine is an AsyncLocal — nothing to dispose.)
             _closeCts.Dispose();
             _capacity.Dispose();
             throw;
@@ -336,47 +327,6 @@ internal sealed class SenderPool
         return created;
     }
 
-    /// <summary>
-    ///     Returns a sender pinned to the calling async flow. The first call in a flow borrows one and
-    ///     pins it; later calls in the same flow (including after sequential <c>await</c>s) return the
-    ///     same instance until <see cref="ReleaseCurrentContext" /> or the pool closes. The pin is held
-    ///     in an <see cref="AsyncLocal{T}" />, so it follows the execution context across thread hops.
-    /// </summary>
-    internal PooledSender PinToCurrentContext()
-    {
-        ThrowIfClosed();
-        var pinned = _affine.Value;
-        if (pinned is { Invalidated: false } && pinned.IsInUse)
-        {
-            return pinned;
-        }
-
-        var ps = Borrow();
-        _affine.Value = ps;
-        return ps;
-    }
-
-    /// <summary>Returns the calling flow's pinned sender (if any) to the pool and clears the pin.</summary>
-    internal void ReleaseCurrentContext()
-    {
-        var pinned = _affine.Value;
-        _affine.Value = null;
-        if (pinned is { Invalidated: false } && pinned.IsInUse)
-        {
-            pinned.Dispose();
-        }
-    }
-
-    /// <summary>Clears the calling flow's pin if it points at <paramref name="ps" />. Called from
-    ///     <see cref="PooledSender.Dispose" /> before the wrapper re-enters the pool.</summary>
-    internal void ClearPinIfCurrent(PooledSender ps)
-    {
-        if (ReferenceEquals(_affine.Value, ps))
-        {
-            _affine.Value = null;
-        }
-    }
-
     /// <summary>Returns a borrowed sender to the pool (after the caller's return-flush succeeded).</summary>
     internal void GiveBack(PooledSender ps)
     {
@@ -397,7 +347,6 @@ internal sealed class SenderPool
     /// <summary>Evicts a sender whose return-flush failed: dispose it for real, then reclaim or retire its slot.</summary>
     internal void DiscardBroken(PooledSender ps)
     {
-        ps.Invalidated = true;
         lock (_gate)
         {
             _all.Remove(ps);
@@ -418,7 +367,6 @@ internal sealed class SenderPool
     /// <inheritdoc cref="DiscardBroken" />
     internal async ValueTask DiscardBrokenAsync(PooledSender ps)
     {
-        ps.Invalidated = true;
         lock (_gate)
         {
             _all.Remove(ps);
@@ -484,7 +432,6 @@ internal sealed class SenderPool
                 if ((overIdle || overAge) && _all.Count > _min)
                 {
                     _all.Remove(ps);
-                    ps.Invalidated = true;
                     (toDispose ??= new List<PooledSender>()).Add(ps);
                 }
                 else
@@ -539,7 +486,6 @@ internal sealed class SenderPool
 
         foreach (var ps in snapshot)
         {
-            ps.Invalidated = true;
             try
             {
                 ps.DisposeInner();
@@ -564,7 +510,6 @@ internal sealed class SenderPool
 
         foreach (var ps in snapshot)
         {
-            ps.Invalidated = true;
             try
             {
                 await ps.DisposeInnerAsync().ConfigureAwait(false);
@@ -610,7 +555,6 @@ internal sealed class SenderPool
 
     private void DisposePrimitives()
     {
-        // _affine is an AsyncLocal — not IDisposable; its pins drop out of scope with their flows.
         _closeCts.Dispose();
         _capacity.Dispose();
     }

@@ -123,8 +123,8 @@ internal sealed class PooledSender : IQwpWebSocketSender
             return;
         }
 
-        // Clear any thread pin BEFORE the wrapper becomes borrowable again, so another thread can't
-        // grab it while this thread still holds a stale pin to it.
+        // Clear any flow pin BEFORE the wrapper becomes borrowable again, so another borrower can't
+        // grab it while this flow still holds a stale pin to it.
         _pool.ClearPinIfCurrent(this);
 
         try

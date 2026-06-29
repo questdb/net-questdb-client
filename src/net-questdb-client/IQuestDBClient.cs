@@ -58,21 +58,32 @@ public interface IQuestDBClient : IDisposable, IAsyncDisposable
     ValueTask<ISender> BorrowSenderAsync(CancellationToken ct = default);
 
     /// <summary>
-    ///     Returns a sender pinned to the calling thread. The first call on a thread borrows one from
-    ///     the pool and pins it; later calls on the same thread return the same instance until
-    ///     <see cref="ReleaseSender" /> (or this handle is closed). Use this for dedicated, long-lived
-    ///     producer threads where borrow / return overhead would dominate.
+    ///     Returns a sender pinned to the calling async flow. The first call in a flow borrows one from
+    ///     the pool and pins it; later calls in the same flow return the same instance until
+    ///     <see cref="ReleaseSender" /> (or this handle is closed). The pin is held in an
+    ///     <see cref="System.Threading.AsyncLocal{T}" />, so it follows the execution context across
+    ///     sequential <c>await</c>s (unlike a thread-local pin, which would be left on the original
+    ///     thread when a continuation resumes elsewhere).
     ///     <para />
-    ///     <b>Threading:</b> the pin is thread-affine. Do NOT hold a pinned sender across an
-    ///     <c>await</c> — the continuation may resume on another thread. For async or short-lived
-    ///     callers prefer <see cref="BorrowSender" />.
+    ///     <b>Hazards — prefer <see cref="BorrowSender" /> unless these are clearly handled:</b>
+    ///     <list type="bullet">
+    ///         <item>
+    ///             A pinned sender is NOT safe to use from parallel branches of the same flow: a
+    ///             fan-out such as <c>Task.WhenAll(...)</c> flows the same pin into every branch, so
+    ///             concurrent calls would mutate one sender. Borrow per branch instead.
+    ///         </item>
+    ///         <item>
+    ///             You MUST call <see cref="ReleaseSender" /> on every path. There is no flow-completion
+    ///             hook, so a missed release leaks the sender (it is never returned to the pool).
+    ///         </item>
+    ///     </list>
     /// </summary>
     ISender Sender();
 
     /// <summary>
-    ///     Releases the calling thread's pinned <see cref="Sender" /> (if any) back to the pool. Call
-    ///     this before a borrowed thread (e.g. a thread-pool / event-loop thread) is recycled so a
-    ///     sender is not pinned for the lifetime of a thread that no longer needs it.
+    ///     Releases the calling flow's pinned <see cref="Sender" /> (if any) back to the pool and
+    ///     clears the pin. Must be called on every path that took a <see cref="Sender" /> — there is no
+    ///     flow-completion hook, so a missed release leaks the sender.
     /// </summary>
     void ReleaseSender();
 

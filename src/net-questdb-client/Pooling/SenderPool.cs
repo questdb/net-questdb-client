@@ -52,10 +52,13 @@ internal sealed class SenderPool
     private readonly Func<int, ISender> _senderFactory;
     private readonly int _acquireTimeoutMs;
 
-    // Per-thread pinned sender for the Sender() / ReleaseSender() affinity API. Lives on the pool (not
-    // the handle) so PooledSender.Dispose can clear the current thread's pin before the wrapper becomes
-    // borrowable again.
-    private readonly ThreadLocal<PooledSender?> _affine = new();
+    // Per-async-flow pinned sender for the Sender() / ReleaseSender() affinity API. AsyncLocal flows
+    // with the execution context, so the pin follows a sequential await chain (unlike ThreadLocal,
+    // which is left on the original thread when a continuation hops). Lives on the pool (not the handle)
+    // so PooledSender.Dispose can clear the current flow's pin before the wrapper becomes borrowable.
+    // Caveats (documented on IQuestDBClient.Sender): a fan-out (e.g. Task.WhenAll) shares one pin across
+    // parallel branches, and a missed ReleaseSender leaks the sender (no flow-end hook returns it).
+    private readonly AsyncLocal<PooledSender?> _affine = new();
 
     private readonly Stack<PooledSender> _available = new();
     private readonly List<PooledSender> _all = new();
@@ -110,7 +113,7 @@ internal sealed class SenderPool
         catch
         {
             // A failed pre-warm (e.g. a slow/refused warm connect) must not leak the primitives.
-            _affine.Dispose();
+            // (_affine is an AsyncLocal — nothing to dispose.)
             _closeCts.Dispose();
             _capacity.Dispose();
             throw;
@@ -334,78 +337,43 @@ internal sealed class SenderPool
     }
 
     /// <summary>
-    ///     Returns a sender pinned to the calling thread. The first call on a thread borrows one and
-    ///     pins it; later calls return the same instance until <see cref="ReleaseCurrentThread" /> (or
-    ///     the pool closes). For dedicated long-lived producer threads only — do not hold a pinned
-    ///     sender across an <c>await</c>, since the continuation may resume on a different thread.
+    ///     Returns a sender pinned to the calling async flow. The first call in a flow borrows one and
+    ///     pins it; later calls in the same flow (including after sequential <c>await</c>s) return the
+    ///     same instance until <see cref="ReleaseCurrentContext" /> or the pool closes. The pin is held
+    ///     in an <see cref="AsyncLocal{T}" />, so it follows the execution context across thread hops.
     /// </summary>
-    internal PooledSender PinToCurrentThread()
+    internal PooledSender PinToCurrentContext()
     {
         ThrowIfClosed();
-        PooledSender? pinned;
-        try
-        {
-            pinned = _affine.Value;
-        }
-        catch (ObjectDisposedException)
-        {
-            throw Closed();
-        }
-
+        var pinned = _affine.Value;
         if (pinned is { Invalidated: false } && pinned.IsInUse)
         {
             return pinned;
         }
 
         var ps = Borrow();
-        try
-        {
-            _affine.Value = ps;
-        }
-        catch (ObjectDisposedException)
-        {
-            // Pool closed between the borrow and the pin: return the sender and surface closed.
-            ps.Dispose();
-            throw Closed();
-        }
-
+        _affine.Value = ps;
         return ps;
     }
 
-    /// <summary>Returns the calling thread's pinned sender (if any) to the pool and clears the pin.</summary>
-    internal void ReleaseCurrentThread()
+    /// <summary>Returns the calling flow's pinned sender (if any) to the pool and clears the pin.</summary>
+    internal void ReleaseCurrentContext()
     {
-        PooledSender? pinned;
-        try
-        {
-            pinned = _affine.Value;
-            _affine.Value = null;
-        }
-        catch (ObjectDisposedException)
-        {
-            return;
-        }
-
+        var pinned = _affine.Value;
+        _affine.Value = null;
         if (pinned is { Invalidated: false } && pinned.IsInUse)
         {
             pinned.Dispose();
         }
     }
 
-    /// <summary>Clears the calling thread's pin if it points at <paramref name="ps" />. Called from
+    /// <summary>Clears the calling flow's pin if it points at <paramref name="ps" />. Called from
     ///     <see cref="PooledSender.Dispose" /> before the wrapper re-enters the pool.</summary>
     internal void ClearPinIfCurrent(PooledSender ps)
     {
-        try
+        if (ReferenceEquals(_affine.Value, ps))
         {
-            if (ReferenceEquals(_affine.Value, ps))
-            {
-                _affine.Value = null;
-            }
-        }
-        catch (ObjectDisposedException)
-        {
-            // pool closed concurrently; nothing to clear
+            _affine.Value = null;
         }
     }
 
@@ -642,7 +610,7 @@ internal sealed class SenderPool
 
     private void DisposePrimitives()
     {
-        _affine.Dispose();
+        // _affine is an AsyncLocal — not IDisposable; its pins drop out of scope with their flows.
         _closeCts.Dispose();
         _capacity.Dispose();
     }

@@ -366,8 +366,12 @@ in namespace `QuestDB`; internal `SenderPool`/`PooledSender`/`PoolHousekeeper`/
   block) flushes pending rows and **returns it to the pool** — it does NOT
   close the underlying sender. A return-flush failure discards the sender
   instead of re-pooling it. `Sender()` / `ReleaseSender()` are the
-  thread-affine (ThreadLocal) variants for dedicated producer threads
-  (do not hold a pinned sender across `await`).
+  context-affine variants: the pin lives in an `AsyncLocal` (on `SenderPool`,
+  so `PooledSender.Dispose` can `ClearPinIfCurrent`), so it follows the async
+  flow across sequential `await`s. Two documented hazards: a fan-out
+  (`Task.WhenAll`) shares one pin across parallel branches, and a missed
+  `ReleaseSender()` leaks the sender (no flow-completion hook). Prefer
+  `BorrowSender` unless those are clearly handled.
 - **Sizing**: elastic between `sender_pool_min` and `sender_pool_max`,
   bounded by a `SemaphoreSlim` capacity gate (counts in-use senders;
   creation happens outside the lock). `BorrowSender` blocks up to

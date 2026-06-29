@@ -68,12 +68,12 @@ internal sealed class QuestDBClientImpl : IQuestDBClient
 
     public ISender Sender()
     {
-        return _pool.PinToCurrentThread();
+        return _pool.PinToCurrentContext();
     }
 
     public void ReleaseSender()
     {
-        _pool.ReleaseCurrentThread();
+        _pool.ReleaseCurrentContext();
     }
 
     public void Close()

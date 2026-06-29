@@ -40,14 +40,31 @@ public class PoolAffinityTests
     }
 
     [Test]
-    public void SenderPinsToCallingThread()
+    public void SenderPinsToCallingContext()
     {
         using var client = MakeClient("sender_pool_min=0;sender_pool_max=2;");
         var a = client.Sender();
         var b = client.Sender();
-        Assert.That(b, Is.SameAs(a), "same thread gets the same pinned sender");
+        Assert.That(b, Is.SameAs(a), "same flow gets the same pinned sender");
         Assert.That(client.TotalSenderCount, Is.EqualTo(1), "only one sender borrowed");
         client.ReleaseSender();
+    }
+
+    [Test]
+    public async Task PinFlowsAcrossAwait()
+    {
+        // The AsyncLocal pin follows the execution context across awaits, even when the continuation
+        // resumes on a different thread — the property a ThreadLocal pin could not guarantee.
+        using var client = MakeClient("sender_pool_min=0;sender_pool_max=2;");
+        var before = client.Sender();
+        await Task.Yield();
+        await Task.Delay(1);
+        var after = client.Sender();
+
+        Assert.That(after, Is.SameAs(before), "pin survives the await hop");
+        Assert.That(client.TotalSenderCount, Is.EqualTo(1), "no second sender borrowed");
+        client.ReleaseSender();
+        Assert.That(client.AvailableSenderCount, Is.EqualTo(1));
     }
 
     [Test]
@@ -80,10 +97,12 @@ public class PoolAffinityTests
     }
 
     [Test]
-    public void PinsArePerThread()
+    public void PinsAreScopedPerExecutionContext()
     {
         using var client = MakeClient("sender_pool_min=0;sender_pool_max=4;");
 
+        // Two independent threads start with independent execution contexts, so each pins its own
+        // sender — the AsyncLocal value set in one flow does not bleed into the other.
         ISender? fromA = null;
         ISender? fromB = null;
         var ta = new Thread(() =>
@@ -101,7 +120,7 @@ public class PoolAffinityTests
 
         Assert.That(fromA, Is.Not.Null);
         Assert.That(fromB, Is.Not.Null);
-        Assert.That(fromA, Is.Not.SameAs(fromB), "different threads get distinct pinned senders");
+        Assert.That(fromA, Is.Not.SameAs(fromB), "independent flows get distinct pinned senders");
         Assert.That(client.TotalSenderCount, Is.EqualTo(2));
     }
 

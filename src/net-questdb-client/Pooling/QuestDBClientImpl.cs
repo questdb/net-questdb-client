@@ -46,20 +46,65 @@ internal sealed class QuestDBClientImpl : IQuestDBClient
 
     internal QuestDBClientImpl(SenderOptions poolConfig, string ingestConfStr, string? queryConfStr)
     {
-        _pool = new SenderPool(poolConfig, ingestConfStr);
+        SenderPool? pool = null;
+        PoolHousekeeper? housekeeper = null;
 #if NET7_0_OR_GREATER
-        _queryPool = queryConfStr is null ? null : new QueryClientPool(poolConfig, queryConfStr);
-        _housekeeper = new PoolHousekeeper(_pool, _queryPool, poolConfig.housekeeper_interval_ms);
+        QueryClientPool? queryPool = null;
+#endif
+        // The sender pool warms `sender_pool_min` live connections (and, in ws::+sf_dir mode, takes
+        // slot flocks / mmaps) the moment it is constructed. If a later step throws — most realistically
+        // the query pool's live /read/v1 prewarm against a down endpoint — the half-built handle is
+        // never returned, so Close() never runs and everything already built leaks. Tear it down here.
+        try
+        {
+            pool = new SenderPool(poolConfig, ingestConfStr);
+#if NET7_0_OR_GREATER
+            queryPool = queryConfStr is null ? null : new QueryClientPool(poolConfig, queryConfStr);
+            housekeeper = new PoolHousekeeper(pool, queryPool, poolConfig.housekeeper_interval_ms);
 #else
-        _housekeeper = new PoolHousekeeper(_pool, poolConfig.housekeeper_interval_ms);
+            housekeeper = new PoolHousekeeper(pool, poolConfig.housekeeper_interval_ms);
+#endif
+        }
+        catch
+        {
+            // Same order as Close(): stop the sweeper, then query pool, then sender pool (owns SF/IO).
+            SafeTeardownOnConstructionFailure(housekeeper,
+#if NET7_0_OR_GREATER
+                queryPool,
+#endif
+                pool);
+            throw;
+        }
+
+        _pool = pool;
+        _housekeeper = housekeeper;
+#if NET7_0_OR_GREATER
+        _queryPool = queryPool;
 #endif
     }
 
     // Test seam: inject a sender factory (sender-only handle, no query pool).
     internal QuestDBClientImpl(SenderOptions poolConfig, Func<int, ISender> senderFactory)
     {
-        _pool = new SenderPool(poolConfig, null, senderFactory);
-        _housekeeper = new PoolHousekeeper(_pool, poolConfig.housekeeper_interval_ms);
+        SenderPool? pool = null;
+        PoolHousekeeper? housekeeper = null;
+        try
+        {
+            pool = new SenderPool(poolConfig, null, senderFactory);
+            housekeeper = new PoolHousekeeper(pool, poolConfig.housekeeper_interval_ms);
+        }
+        catch
+        {
+            SafeTeardownOnConstructionFailure(housekeeper,
+#if NET7_0_OR_GREATER
+                null,
+#endif
+                pool);
+            throw;
+        }
+
+        _pool = pool;
+        _housekeeper = housekeeper;
     }
 
 #if NET7_0_OR_GREATER
@@ -67,11 +112,65 @@ internal sealed class QuestDBClientImpl : IQuestDBClient
     internal QuestDBClientImpl(SenderOptions poolConfig, Func<int, ISender> senderFactory,
         Func<ValueTask<IQwpQueryClient>> queryFactory)
     {
-        _pool = new SenderPool(poolConfig, null, senderFactory);
-        _queryPool = new QueryClientPool(poolConfig, null, queryFactory);
-        _housekeeper = new PoolHousekeeper(_pool, _queryPool, poolConfig.housekeeper_interval_ms);
+        SenderPool? pool = null;
+        QueryClientPool? queryPool = null;
+        PoolHousekeeper? housekeeper = null;
+        try
+        {
+            pool = new SenderPool(poolConfig, null, senderFactory);
+            queryPool = new QueryClientPool(poolConfig, null, queryFactory);
+            housekeeper = new PoolHousekeeper(pool, queryPool, poolConfig.housekeeper_interval_ms);
+        }
+        catch
+        {
+            SafeTeardownOnConstructionFailure(housekeeper, queryPool, pool);
+            throw;
+        }
+
+        _pool = pool;
+        _queryPool = queryPool;
+        _housekeeper = housekeeper;
     }
 #endif
+
+    // Best-effort teardown of whatever was built before a constructor threw. Each step is independently
+    // guarded so one failing teardown can't strand the resources owned by the others.
+    private static void SafeTeardownOnConstructionFailure(
+        PoolHousekeeper? housekeeper,
+#if NET7_0_OR_GREATER
+        QueryClientPool? queryPool,
+#endif
+        SenderPool? pool)
+    {
+        try
+        {
+            housekeeper?.Dispose();
+        }
+        catch
+        {
+            // best effort
+        }
+
+#if NET7_0_OR_GREATER
+        try
+        {
+            queryPool?.Close();
+        }
+        catch
+        {
+            // best effort
+        }
+#endif
+
+        try
+        {
+            pool?.Close();
+        }
+        catch
+        {
+            // best effort
+        }
+    }
 
     public int AvailableSenderCount => _pool.AvailableSize;
     public int TotalSenderCount => _pool.TotalSize;

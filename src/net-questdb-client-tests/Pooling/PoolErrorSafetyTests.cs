@@ -25,9 +25,13 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using NUnit.Framework;
+using QuestDB.Enums;
 using QuestDB.Pooling;
 using QuestDB.Senders;
 using QuestDB.Utils;
+#if NET7_0_OR_GREATER
+using QuestDB.Qwp.Query;
+#endif
 
 namespace net_questdb_client_tests.Pooling;
 
@@ -168,6 +172,37 @@ public class PoolErrorSafetyTests
             pool.Close();
         }
     }
+
+#if NET7_0_OR_GREATER
+    [Test]
+    public void CtorDisposesSenderPoolWhenQueryPoolPrewarmThrows()
+    {
+        // Distinct-endpoint shape: ingest is healthy (sender pool warms fine) but the query endpoint is
+        // down (query-pool prewarm throws). The half-built handle is never returned, so unless the ctor
+        // tears down on failure the warm ingest senders (and SF flocks) leak — one per Connect retry.
+        var options = new SenderOptions(
+            "ws::addr=localhost:9000;sender_pool_min=2;sender_pool_max=4;query_pool_min=1;query_pool_max=4;");
+        var senders = new ConcurrentBag<FakeSender>();
+
+        var ex = Assert.Throws<IngressError>(() => _ = new QuestDBClientImpl(
+            options,
+            slot =>
+            {
+                var s = new FakeSender(slot);
+                senders.Add(s);
+                return s;
+            },
+            () => throw new IngressError(ErrorCode.SocketError, "query endpoint down")));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(ex!.Message, Does.Contain("query endpoint down"));
+            Assert.That(senders, Is.Not.Empty, "sender pool pre-warmed before the query pool threw");
+            Assert.That(senders, Has.All.Matches<FakeSender>(s => s.Disposed),
+                "warmed senders disposed when query-pool construction throws (no leak)");
+        });
+    }
+#endif
 
     [Test]
     public void FluentMethodsReturnTheWrapperNotTheDelegate()

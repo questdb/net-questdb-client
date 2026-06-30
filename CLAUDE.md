@@ -356,7 +356,7 @@ producer thread. For multi-threaded producers there is now an in-tree pool,
 `QuestDBClient` (mirrors the Java client's `QuestDB` handle), which pools
 **both** ingest senders and (net7.0+) egress query clients. Files live in
 `Pooling/` (public `QuestDBClient`/`IQuestDBClient`/`QuestDBClientBuilder` in
-namespace `QuestDB`; internal `SenderPool`/`PooledSender`/`QueryClientPool`/
+namespace `QuestDB`; internal `SenderPool`/`PooledSender`/`BorrowedSender`/`QueryClientPool`/
 `PooledQueryClient`/`PoolHousekeeper`/`QuestDBClientImpl` in `QuestDB.Pooling`).
 The public `Query` builder (namespace `QuestDB`, `Query.cs`) is the query-side
 surface.
@@ -368,12 +368,16 @@ surface.
   `Builder().IngestConfig(...).QueryConfig(...)` (Java `connect(ingest, query)`
   parity); a single `ws`/`wss` `FromConfig` string serves both pools.
 - **Borrow / return**: `BorrowSender()` (+ `BorrowSenderAsync`) returns an
-  `ISender` that is a `PooledSender` decorator; disposing it (a `using`
-  block) flushes pending rows and **returns it to the pool** — it does NOT
-  close the underlying sender. A return-flush failure discards the sender
-  instead of re-pooling it. There is no context-affine / pinned-sender API —
-  borrow per unit of work and dispose to return (a single `ISender` is not
-  thread-safe, so never share a borrowed one across threads).
+  `ISender` that is a fresh per-borrow `BorrowedSender` handle wrapping a
+  reusable `PooledSender` pool entry; disposing it (a `using` block) flushes
+  pending rows and **returns the entry to the pool** — it does NOT close the
+  underlying sender. A return-flush failure discards the sender instead of
+  re-pooling it. The handle is **use-after-return safe**: once disposed every
+  ingest member throws `ObjectDisposedException` (so a stale reference can't
+  alias the entry a later borrower now holds), and a second dispose is a
+  tolerated no-op. There is no context-affine / pinned-sender API — borrow per
+  unit of work and dispose to return (a single `ISender` is not thread-safe, so
+  never share a borrowed one across threads).
 - **Sizing**: elastic between `sender_pool_min` and `sender_pool_max`,
   bounded by a `SemaphoreSlim` capacity gate (counts in-use senders;
   creation happens outside the lock). `BorrowSender` blocks up to

@@ -32,8 +32,11 @@ namespace QuestDB.Pooling;
 ///     Decorator that lends a real <see cref="IQwpQueryClient" /> from a <see cref="QueryClientPool" />.
 ///     One decorator is allocated per pooled client and reused across borrows.
 ///     <para />
-///     Unlike <see cref="PooledSender" /> there is no flush on return (queries are request/response).
-///     <see cref="Dispose" /> / <see cref="DisposeAsync" /> route the client back to the pool: a clean
+///     Unlike a borrowed ingest sender (<see cref="BorrowedSender" />) there is no flush on return
+///     (queries are request/response), and — because the query client is never handed to the user (the
+///     <see cref="Query" /> runner borrows and returns it internally per execute) — there is no
+///     use-after-return hazard to guard, so the entry is reused directly rather than behind a per-borrow
+///     handle. <see cref="Dispose" /> / <see cref="DisposeAsync" /> route the client back to the pool: a clean
 ///     borrow re-pools it (<see cref="QueryClientPool.GiveBack" />); a borrow that failed
 ///     (<see cref="MarkBroken" />) or left the client terminal/disposed is discarded
 ///     (<see cref="QueryClientPool.DiscardBroken" />), because the egress client's terminal state is

@@ -99,6 +99,41 @@ public class PoolErrorSafetyTests
     }
 
     [Test]
+    public void UsingABorrowedSenderAfterDisposeThrowsObjectDisposed()
+    {
+        // The use-after-return guard: once a borrowed handle is disposed (returned to the pool), every
+        // ingest member is inert. A caller hanging on to the stale reference therefore cannot reach — and
+        // corrupt — the entry the pool may have since lent to a different borrower.
+        var pool = MakePool("sender_pool_min=0;sender_pool_max=2;");
+        try
+        {
+            var s = pool.Borrow();
+            s.Table("t").Column("x", 1L).At(DateTime.UtcNow); // fine while borrowed
+            s.Dispose();
+
+            Assert.Multiple(() =>
+            {
+                Assert.Throws<ObjectDisposedException>(() => s.Table("t"));
+                Assert.Throws<ObjectDisposedException>(() => s.Column("x", 1L));
+                Assert.Throws<ObjectDisposedException>(() => s.At(DateTime.UtcNow));
+                Assert.Throws<ObjectDisposedException>(() => s.Send());
+                Assert.Throws<ObjectDisposedException>(() => _ = s.RowCount);
+                Assert.Throws<ObjectDisposedException>(() => _ = s.Options);
+                // The dispose guard runs before the not-a-WS-sender check, so it surfaces as disposed.
+                Assert.Throws<ObjectDisposedException>(() => _ = ((IQwpWebSocketSender)s).AckedFsn);
+            });
+
+            // A second dispose is a tolerated no-op (no double-return, no throw).
+            Assert.DoesNotThrow(() => s.Dispose());
+            Assert.That(pool.AvailableSize, Is.EqualTo(1), "idempotent: returned exactly once");
+        }
+        finally
+        {
+            pool.Close();
+        }
+    }
+
+    [Test]
     public void DisposingBorrowedSenderAfterHandleCloseIsSafe()
     {
         var pool = MakePool("sender_pool_min=0;sender_pool_max=2;");

@@ -29,8 +29,9 @@ using QuestDB.Utils;
 namespace QuestDB.Pooling;
 
 /// <summary>
-///     Elastic pool of <see cref="ISender" /> instances, each wrapped in a reusable
-///     <see cref="PooledSender" /> decorator. Keeps at least <c>min</c> senders warm, grows on
+///     Elastic pool of <see cref="ISender" /> instances, each boxed in a reusable
+///     <see cref="PooledSender" /> entry and lent out per borrow as a fresh
+///     <see cref="BorrowedSender" /> handle. Keeps at least <c>min</c> senders warm, grows on
 ///     demand to <c>max</c>, and (via <see cref="ReapIdle" />, driven by the housekeeper) reaps
 ///     idle / over-age senders down to <c>min</c>.
 ///     <para />
@@ -207,8 +208,9 @@ internal sealed class SenderPool
         }
     }
 
-    /// <summary>Borrows a sender, blocking up to <c>acquire_timeout_ms</c>.</summary>
-    internal PooledSender Borrow()
+    /// <summary>Borrows a sender, blocking up to <c>acquire_timeout_ms</c>. The returned
+    ///     <see cref="BorrowedSender" /> is a single-use handle: dispose it to flush and return.</summary>
+    internal BorrowedSender Borrow()
     {
         ThrowIfClosed();
         bool acquired;
@@ -230,11 +232,11 @@ internal sealed class SenderPool
             throw Exhausted();
         }
 
-        return TakeOrCreate();
+        return new BorrowedSender(TakeOrCreate(), this);
     }
 
     /// <inheritdoc cref="Borrow" />
-    internal async ValueTask<PooledSender> BorrowAsync(CancellationToken ct = default)
+    internal async ValueTask<BorrowedSender> BorrowAsync(CancellationToken ct = default)
     {
         ThrowIfClosed();
         bool acquired;
@@ -276,10 +278,10 @@ internal sealed class SenderPool
             throw Exhausted();
         }
 
-        return TakeOrCreate();
+        return new BorrowedSender(TakeOrCreate(), this);
     }
 
-    // Permit already held. Reuse an idle sender or create a fresh one outside the lock.
+    // Permit already held. Reuse an idle entry or create a fresh one outside the lock.
     private PooledSender TakeOrCreate()
     {
         int slotIndex;
@@ -293,9 +295,7 @@ internal sealed class SenderPool
 
             if (_available.Count > 0)
             {
-                var reused = _available.Pop();
-                reused.MarkBorrowed();
-                return reused;
+                return _available.Pop();
             }
 
             slotIndex = AllocateSlotIndex();
@@ -345,7 +345,6 @@ internal sealed class SenderPool
             _all.Add(created);
         }
 
-        created.MarkBorrowed();
         return created;
     }
 
@@ -700,7 +699,7 @@ internal sealed class SenderPool
     private PooledSender CreateSender(int slotIndex)
     {
         var inner = _senderFactory(slotIndex);
-        return new PooledSender(inner, this, slotIndex);
+        return new PooledSender(inner, slotIndex);
     }
 
     private ISender CreateDefaultInner(int slotIndex)

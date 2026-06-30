@@ -49,7 +49,7 @@ public class SfPoolConcurrencyTests
     // SF pool over the fake-sender seam: ws + sf_dir flips the pool into store-and-forward mode (slot
     // indices, leak debt) without touching a socket or the filesystem. `ownerByIndex[i]` is the fake
     // currently backing slot i — written by the factory at creation; since a slot index is held
-    // continuously by one PooledSender until that sender is discarded/reaped, a borrower can map its
+    // continuously by one PooledSender entry until that entry is discarded/reaped, a borrower can map its
     // slot index back to its inner fake (to drive retire) with no race.
     private static SenderPool MakeSfPool(
         string keys, out ConcurrentBag<FakeSender> created, out FakeSender?[] ownerByIndex)
@@ -76,7 +76,7 @@ public class SfPoolConcurrencyTests
     // in [0, Max), and one more times out with the documented PoolExhausted error. Leaves the pool empty.
     private static void AssertEffectiveCapacity(SenderPool pool, int expected)
     {
-        var held = new List<PooledSender>(expected);
+        var held = new List<BorrowedSender>(expected);
         for (var i = 0; i < expected; i++)
         {
             held.Add(pool.Borrow());
@@ -189,7 +189,7 @@ public class SfPoolConcurrencyTests
             {
                 while (Interlocked.Decrement(ref remaining) >= 0)
                 {
-                    PooledSender ps;
+                    BorrowedSender ps;
                     try
                     {
                         ps = pool.Borrow();
@@ -312,7 +312,7 @@ public class SfPoolConcurrencyTests
             var n = 0;
             while (!Volatile.Read(ref stop))
             {
-                PooledSender ps;
+                BorrowedSender ps;
                 try
                 {
                     ps = pool.Borrow();

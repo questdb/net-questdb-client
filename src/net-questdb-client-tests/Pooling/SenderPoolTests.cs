@@ -61,7 +61,7 @@ public class SenderPoolTests
     }
 
     [Test]
-    public void BorrowReturnRecyclesSameDecorator()
+    public void BorrowReturnReusesUnderlyingSenderButHandsOutFreshHandle()
     {
         using var g = new PoolGuard(MakePool("sender_pool_min=1;sender_pool_max=1;", out var created));
         var pool = g.Pool;
@@ -70,8 +70,9 @@ public class SenderPoolTests
         s1.Dispose();
         var s2 = pool.Borrow();
 
-        Assert.That(s2, Is.SameAs(s1));
-        Assert.That(created, Has.Count.EqualTo(1), "no new underlying sender created on reuse");
+        Assert.That(s2, Is.Not.SameAs(s1),
+            "each borrow gets a fresh handle so a returned-then-reused reference can't alias the next borrower");
+        Assert.That(created, Has.Count.EqualTo(1), "the underlying sender is reused: no new one created on re-borrow");
         s2.Dispose();
     }
 

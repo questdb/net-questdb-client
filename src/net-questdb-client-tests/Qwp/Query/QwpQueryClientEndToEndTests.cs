@@ -1206,9 +1206,55 @@ public class QwpQueryClientEndToEndTests
             sw.Stop();
 
             Assert.That(ex!.code, Is.EqualTo(ErrorCode.SocketError));
-            StringAssert.Contains("auth_timeout", ex.Message);
+            // auth_timeout_ms is the legacy alias of connect_timeout on the egress path; the bound is
+            // surfaced under the canonical connect_timeout name.
+            StringAssert.Contains("connect_timeout", ex.Message);
             Assert.That(sw.ElapsedMilliseconds, Is.LessThan(3000),
-                "auth_timeout=300ms should bound connect well below OS-level TCP timeout");
+                "auth_timeout_ms=300ms should bound connect well below OS-level TCP timeout");
+        }
+        finally
+        {
+            acceptCts.Cancel();
+            listener.Stop();
+            foreach (var c in held) try { c.Close(); } catch { }
+        }
+    }
+
+    [Test]
+    public void ConnectTimeout_BoundsUpgradeToBlackholeHost()
+    {
+        // The TCP connect succeeds (listener accepts) but the WebSocket upgrade never completes, so
+        // connect_timeout must abort the attempt at the upgrade layer.
+        var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        var port = ((IPEndPoint)listener.LocalEndpoint).Port;
+        var held = new List<TcpClient>();
+        using var acceptCts = new CancellationTokenSource();
+        var acceptTask = Task.Run(async () =>
+        {
+            try
+            {
+                while (!acceptCts.IsCancellationRequested)
+                {
+                    var c = await listener.AcceptTcpClientAsync(acceptCts.Token);
+                    held.Add(c);
+                }
+            }
+            catch { }
+        });
+
+        try
+        {
+            var conn = $"ws::addr=127.0.0.1:{port};path={QwpConstants.ReadPath};" +
+                       "connect_timeout=300;failover=off;";
+            var sw = Stopwatch.StartNew();
+            var ex = Assert.Throws<IngressError>(() => QueryClient.New(conn));
+            sw.Stop();
+
+            Assert.That(ex!.code, Is.EqualTo(ErrorCode.SocketError));
+            StringAssert.Contains("connect_timeout", ex.Message);
+            Assert.That(sw.ElapsedMilliseconds, Is.LessThan(3000),
+                "connect_timeout=300ms should bound the upgrade well below OS-level TCP timeout");
         }
         finally
         {

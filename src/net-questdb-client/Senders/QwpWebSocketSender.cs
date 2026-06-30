@@ -1324,7 +1324,7 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender, IPooledSlotSende
             };
 
             return new QwpTrackedCursorTransport(new QwpWebSocketTransport(transportOpts), tracker, idx,
-                options.auth_timeout);
+                options.EffectiveConnectTimeout);
         };
     }
 

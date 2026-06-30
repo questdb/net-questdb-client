@@ -316,9 +316,10 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient, QuestDB.Pooling
                 candidate = BuildTransport(addr);
 
                 QwpServerInfo? info = null;
+                var connectBudget = _options.EffectiveConnectTimeout;
                 using (var upgradeCts = CancellationTokenSource.CreateLinkedTokenSource(ct))
                 {
-                    upgradeCts.CancelAfter(_options.auth_timeout_ms);
+                    upgradeCts.CancelAfter(connectBudget);
                     try
                     {
                         await candidate.ConnectAsync(upgradeCts.Token).ConfigureAwait(false);
@@ -326,7 +327,7 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient, QuestDB.Pooling
                     catch (OperationCanceledException) when (upgradeCts.IsCancellationRequested && !ct.IsCancellationRequested)
                     {
                         throw new IngressError(ErrorCode.SocketError,
-                            $"WebSocket upgrade for {addr} exceeded auth_timeout={_options.auth_timeout_ms.TotalMilliseconds}ms");
+                            $"WebSocket upgrade for {addr} exceeded connect_timeout={connectBudget.TotalMilliseconds}ms");
                     }
                 }
 

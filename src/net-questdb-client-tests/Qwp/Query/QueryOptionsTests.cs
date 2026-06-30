@@ -76,6 +76,37 @@ public class QueryOptionsTests
     }
 
     [Test]
+    public void ConnectTimeout_Default_InheritsAuthTimeoutMs()
+    {
+        var o = new QueryOptions("ws::addr=h:9000;");
+        Assert.That(o.connect_timeout, Is.Null);
+        Assert.That(o.EffectiveConnectTimeout, Is.EqualTo(o.auth_timeout_ms));
+    }
+
+    [Test]
+    public void Parse_ConnectTimeout_OverridesAuthTimeoutMs()
+    {
+        var o = new QueryOptions("ws::addr=h:9000;auth_timeout_ms=4000;connect_timeout=2000;");
+        Assert.That(o.connect_timeout!.Value, Is.EqualTo(TimeSpan.FromMilliseconds(2000)));
+        Assert.That(o.EffectiveConnectTimeout, Is.EqualTo(TimeSpan.FromMilliseconds(2000)));
+    }
+
+    [Test]
+    public void ConnectTimeout_Unset_InheritsExplicitAuthTimeoutMs()
+    {
+        var o = new QueryOptions("ws::addr=h:9000;auth_timeout_ms=4000;");
+        Assert.That(o.EffectiveConnectTimeout, Is.EqualTo(TimeSpan.FromMilliseconds(4000)));
+    }
+
+    [Test]
+    public void ConnectTimeout_NonPositive_Rejected()
+    {
+        var o = new QueryOptions { addr = "h:9000", connect_timeout = TimeSpan.Zero };
+        var ex = Assert.Throws<IngressError>(() => o.EnsureValid());
+        StringAssert.Contains("connect_timeout", ex!.Message);
+    }
+
+    [Test]
     public void Parse_MinimalWs_AssignsAddr()
     {
         var o = new QueryOptions("ws::addr=db.internal:9000;");
@@ -352,6 +383,8 @@ public class QueryOptionsTests
     [TestCase(1)]
     [TestCase(5)]
     [TestCase(9)]
+    [TestCase(10)]
+    [TestCase(22)]
     public void Parse_CompressionLevelInRange_Accepted(int level)
     {
         Assert.DoesNotThrow(() => new QueryOptions(

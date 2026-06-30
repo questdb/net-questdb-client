@@ -22,6 +22,7 @@
  *
  ******************************************************************************/
 
+using System.ComponentModel;
 using System.Data.Common;
 using System.Globalization;
 using QuestDB.Enums;
@@ -187,8 +188,19 @@ public sealed class QueryOptions
     public TimeSpan failover_backoff_max_ms { get; set; } = TimeSpan.FromMilliseconds(1000);
     /// <summary>Total wall-clock budget for the failover loop across all attempts; <see cref="TimeSpan.Zero" /> = unbounded. Whichever of <see cref="failover_max_attempts" /> or this fires first ends the loop.</summary>
     public TimeSpan failover_max_duration_ms { get; set; } = TimeSpan.FromSeconds(30);
-    /// <summary>Per-endpoint timeout applied to the WebSocket upgrade (TCP+TLS+HTTP+SERVER_INFO). Without this, an unreachable address can block on OS-level TCP timeouts (~21s Linux, ~75s macOS).</summary>
+    /// <summary>Supported for backward compatibility but not advertised; use <see cref="connect_timeout" /> instead. Per-endpoint timeout applied to the WebSocket upgrade (TCP+TLS+HTTP+SERVER_INFO) when <see cref="connect_timeout" /> is unset. Defaults to 15 seconds.</summary>
+    [EditorBrowsable(EditorBrowsableState.Never)]
     public TimeSpan auth_timeout_ms { get; set; } = TimeSpan.FromSeconds(15);
+
+    /// <summary>
+    ///     Total wall-clock budget for bringing up the egress connection (TCP socket connect + TLS +
+    ///     WebSocket upgrade). Aborts the attempt when exceeded. When unset, the effective budget is
+    ///     15 seconds. Read the value actually applied via <see cref="EffectiveConnectTimeout" />.
+    /// </summary>
+    public TimeSpan? connect_timeout { get; set; }
+
+    /// <summary>The connect budget actually applied: <see cref="connect_timeout" /> when set, otherwise the compatibility fallback.</summary>
+    internal TimeSpan EffectiveConnectTimeout => connect_timeout ?? auth_timeout_ms;
 
     /// <summary>
     ///     Client zone identifier (opaque, case-insensitive; e.g. <c>eu-west-1a</c>). When set with
@@ -338,6 +350,10 @@ public sealed class QueryOptions
             ReadInt(builder, "failover_max_duration_ms", 30000));
         auth_timeout_ms = TimeSpan.FromMilliseconds(
             ReadInt(builder, "auth_timeout_ms", 15000));
+        if (builder.ContainsKey("connect_timeout"))
+        {
+            connect_timeout = TimeSpan.FromMilliseconds(ReadInt(builder, "connect_timeout", 15000));
+        }
         zone = ReadString(builder, "zone");
 
         if (builder.ContainsKey("max_batch_rows"))
@@ -485,6 +501,21 @@ public sealed class QueryOptions
         {
             throw new IngressError(ErrorCode.ConfigError,
                 "`auth_timeout_ms` must be positive");
+        }
+
+        if (connect_timeout is { } ct)
+        {
+            if (ct <= TimeSpan.Zero)
+            {
+                throw new IngressError(ErrorCode.ConfigError,
+                    "`connect_timeout` must be positive");
+            }
+
+            if (ct.TotalMilliseconds > maxBackoffMillis)
+            {
+                throw new IngressError(ErrorCode.ConfigError,
+                    $"`connect_timeout` must be <= {maxBackoffMillis}ms (~24.8 days)");
+            }
         }
 
         if (max_batch_rows < 0)

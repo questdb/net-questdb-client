@@ -43,7 +43,7 @@ internal static class QwpConnectStringKeys
     {
         "addr", "protocol", "tls_verify", "tls_roots", "tls_roots_password",
         "username", "user", "password", "pass", "token",
-        "auth_timeout_ms",
+        "auth_timeout_ms", "connect_timeout",
         "zone", "error_inbox_capacity",
         // Connection-pool knobs read by the QuestDBClient handle. Protocol-agnostic: accepted
         // (and ignored) by a plain Sender on every scheme so a pool connect string also builds

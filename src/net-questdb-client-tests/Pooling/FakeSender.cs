@@ -138,7 +138,6 @@ internal sealed class FakeSender : ISender, IPooledSlotSender
     public ISender ColumnDecimal64(ReadOnlySpan<char> name, decimal value, byte scale) => this;
     public ISender ColumnDecimal128(ReadOnlySpan<char> name, decimal value, byte scale) => this;
     public ISender ColumnDecimal256(ReadOnlySpan<char> name, decimal value, byte scale) => this;
-    public ISender ColumnDecimal64(ReadOnlySpan<char> name, long unscaledValue, byte scale) => this;
     public ISender ColumnDecimal128(ReadOnlySpan<char> name, long lo, long hi, byte scale) => this;
     public ISender ColumnDecimal256(ReadOnlySpan<char> name, long l0, long l1, long l2, long l3, byte scale) => this;
     public ISender Column(ReadOnlySpan<char> name, Guid value) => this;

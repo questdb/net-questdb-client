@@ -24,9 +24,12 @@
 
 #if NET7_0_OR_GREATER
 
+using System.Diagnostics;
 using NUnit.Framework;
+using QuestDB.Enums;
 using QuestDB.Qwp;
 using QuestDB.Qwp.Sf;
+using QuestDB.Utils;
 
 namespace net_questdb_client_tests.Qwp.Sf;
 
@@ -133,6 +136,46 @@ public class QwpTrackedCursorTransportTests
         Assert.That(tracker.GetZoneTier(0), Is.EqualTo(QwpZoneTier.Unknown),
             "a server that advertises no zone must leave the tier untouched");
         Assert.That(tracker.GetState(0), Is.EqualTo(QwpHostState.Healthy));
+    }
+
+    [Test]
+    public void ConnectTimeout_ExpiresOnStalledUpgrade_ThrowsConnectTimeoutAndRecordsTransportError()
+    {
+        // The inner transport never completes the upgrade; the connect_timeout deadline must abort it
+        // (not the caller's token) and surface the canonical connect_timeout message.
+        var tracker = new QwpHostHealthTracker(new[] { "h1:9000" }, clientZone: null, targetIsPrimary: true);
+        var tracked = new QwpTrackedCursorTransport(new StallingStub(), tracker, hostIndex: 0,
+            TimeSpan.FromMilliseconds(150));
+
+        var sw = Stopwatch.StartNew();
+        var ex = Assert.ThrowsAsync<IngressError>(
+            async () => await tracked.ConnectAsync(CancellationToken.None));
+        sw.Stop();
+
+        Assert.That(ex!.code, Is.EqualTo(ErrorCode.SocketError));
+        Assert.That(ex.Message, Does.Contain("connect_timeout"));
+        Assert.That(sw.ElapsedMilliseconds, Is.LessThan(3000),
+            "connect_timeout=150ms must abort the stalled upgrade promptly");
+        Assert.That(tracker.GetState(0), Is.Not.EqualTo(QwpHostState.Healthy));
+    }
+
+    private sealed class StallingStub : IQwpCursorTransport
+    {
+        public (string Host, int Port)? Endpoint => ("h", 9000);
+
+        // Blocks until the (connect_timeout-linked) token cancels, then throws OperationCanceledException.
+        public Task ConnectAsync(CancellationToken cancellationToken) =>
+            Task.Delay(System.Threading.Timeout.Infinite, cancellationToken);
+
+        public Task SendBinaryAsync(ReadOnlyMemory<byte> data, CancellationToken cancellationToken) =>
+            Task.CompletedTask;
+
+        public Task<int> ReceiveFrameAsync(Memory<byte> destination, CancellationToken cancellationToken) =>
+            Task.FromResult(0);
+
+        public Task CloseAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+
+        public void Dispose() { }
     }
 
     private sealed class RejectingStub : IQwpCursorTransport

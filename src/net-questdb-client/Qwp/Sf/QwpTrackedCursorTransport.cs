@@ -84,7 +84,7 @@ internal sealed class QwpTrackedCursorTransport : IQwpCursorTransport
         {
             _tracker.RecordTransportError(_hostIndex);
             throw new IngressError(ErrorCode.SocketError,
-                $"WebSocket upgrade exceeded auth_timeout={_connectTimeout.TotalMilliseconds}ms");
+                $"WebSocket upgrade exceeded connect_timeout={_connectTimeout.TotalMilliseconds}ms");
         }
         catch (QwpIngressRoleRejectedException ex)
         {

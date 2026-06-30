@@ -235,12 +235,6 @@ internal sealed class BorrowedSender : IQwpWebSocketSender
         return this;
     }
 
-    public ISender ColumnDecimal64(ReadOnlySpan<char> name, long unscaledValue, byte scale)
-    {
-        Active().ColumnDecimal64(name, unscaledValue, scale);
-        return this;
-    }
-
     public ISender ColumnDecimal128(ReadOnlySpan<char> name, long lo, long hi, byte scale)
     {
         Active().ColumnDecimal128(name, lo, hi, scale);

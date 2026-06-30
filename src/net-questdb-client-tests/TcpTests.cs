@@ -23,7 +23,9 @@
  ******************************************************************************/
 
 
+using System.Diagnostics;
 using System.Net;
+using System.Net.Sockets;
 using System.Text;
 using NUnit.Framework;
 using Org.BouncyCastle.Asn1.Sec;
@@ -31,6 +33,7 @@ using Org.BouncyCastle.Crypto.Parameters;
 using Org.BouncyCastle.Math;
 using Org.BouncyCastle.Security;
 using QuestDB;
+using QuestDB.Enums;
 using QuestDB.Utils;
 
 #pragma warning disable CS0618 // Type or member is obsolete
@@ -651,6 +654,48 @@ public class TcpTests
             Throws.TypeOf<AggregateException>()
         );
         return Task.CompletedTask;
+    }
+
+    [Test]
+    public void ConnectTimeout_BoundsTlsHandshakeToStalledHost()
+    {
+        // The raw listener accepts the TCP connection but never answers the TLS ClientHello, so
+        // connect_timeout must abort the attempt at the handshake layer instead of hanging.
+        var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        var port = ((IPEndPoint)listener.LocalEndpoint).Port;
+        var held = new List<TcpClient>();
+        using var acceptCts = new CancellationTokenSource();
+        var acceptTask = Task.Run(async () =>
+        {
+            try
+            {
+                while (!acceptCts.IsCancellationRequested)
+                {
+                    held.Add(await listener.AcceptTcpClientAsync(acceptCts.Token));
+                }
+            }
+            catch { }
+        });
+
+        try
+        {
+            var conn = $"tcps::addr=127.0.0.1:{port};tls_verify=unsafe_off;connect_timeout=300;auto_flush=off;";
+            var sw = Stopwatch.StartNew();
+            var ex = Assert.Throws<IngressError>(() => Sender.New(conn));
+            sw.Stop();
+
+            Assert.That(ex!.code, Is.EqualTo(ErrorCode.TlsError));
+            StringAssert.Contains("connect_timeout", ex.Message);
+            Assert.That(sw.ElapsedMilliseconds, Is.LessThan(3000),
+                "connect_timeout=300ms should bound the TLS handshake well below OS-level timeouts");
+        }
+        finally
+        {
+            acceptCts.Cancel();
+            listener.Stop();
+            foreach (var c in held) try { c.Close(); } catch { }
+        }
     }
 
     [Test]

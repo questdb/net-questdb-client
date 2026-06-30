@@ -25,6 +25,7 @@
 // ReSharper disable CommentTypo
 
 
+using System.ComponentModel;
 using System.Data.Common;
 using System.Reflection;
 using System.Runtime.CompilerServices;
@@ -54,6 +55,11 @@ public record SenderOptions
     private string _addr = "localhost:9000";
     private List<string> _addresses = new();
     private TimeSpan _authTimeout = TimeSpan.FromMilliseconds(15000);
+    // Nullable so "unset" is distinct from any concrete value: a null falls back to the compatibility
+    // default, and the config binder (which round-trips every writable property) never writes a null
+    // back — so binding
+    // from appsettings can't spuriously pin it.
+    private TimeSpan? _connectTimeout;
     private AutoFlushType _autoFlush = AutoFlushType.on;
     private int _autoFlushBytes = int.MaxValue;
     private bool _autoFlushBytesUserSet;
@@ -235,6 +241,14 @@ public record SenderOptions
         }
         ParseMillisecondsWithDefault(nameof(request_timeout), "30000", out _requestTimeout);
         ParseMillisecondsWithDefault(nameof(retry_timeout), "10000", out _retryTimeout);
+        // All-protocol: total wall-clock budget for establishing a connection (socket + TLS + WS
+        // upgrade + auth). Left null when absent so it falls back to the compatibility default,
+        // keeping the released HTTP connect wiring and the WS upgrade bound byte-compatible.
+        if (ReadOptionFromBuilder(nameof(connect_timeout)) is not null)
+        {
+            ParseMillisecondsWithDefault(nameof(connect_timeout), "15000", out var ct);
+            _connectTimeout = ct;
+        }
         ParseMillisecondsWithDefault(nameof(pool_timeout), "120000", out _poolTimeout);
 
         // Connection-pool knobs (QuestDBClient handle). Protocol-agnostic; a plain Sender parses
@@ -536,6 +550,15 @@ public record SenderOptions
     {
         if (_authTimeout <= TimeSpan.Zero)
             throw new IngressError(ErrorCode.ConfigError, $"`auth_timeout` must be > 0; got {_authTimeout.TotalMilliseconds}ms");
+        if (_connectTimeout is { } connectTimeout)
+        {
+            if (connectTimeout <= TimeSpan.Zero)
+                throw new IngressError(ErrorCode.ConfigError, $"`connect_timeout` must be > 0; got {connectTimeout.TotalMilliseconds}ms");
+            // Armed via CancellationTokenSource(TimeSpan)/CancelAfter and SocketsHttpHandler.ConnectTimeout,
+            // all of which reject a delay past int.MaxValue ms (~24.8 days).
+            if (connectTimeout.TotalMilliseconds > int.MaxValue)
+                throw new IngressError(ErrorCode.ConfigError, $"`connect_timeout` must be ≤ {int.MaxValue}ms (~24.8 days); got {connectTimeout.TotalMilliseconds}ms");
+        }
         if (_requestTimeout <= TimeSpan.Zero)
             throw new IngressError(ErrorCode.ConfigError, $"`request_timeout` must be > 0; got {_requestTimeout.TotalMilliseconds}ms");
         if (_retryTimeout < TimeSpan.Zero)
@@ -1117,14 +1140,35 @@ public record SenderOptions
 
 
     /// <summary>
-    ///     Timeout for authentication requests.
-    ///     Defaults to 15 seconds.
+    ///     Supported for backward compatibility but not advertised; use <see cref="connect_timeout" />
+    ///     instead. When <see cref="connect_timeout" /> is unset this value is the connection budget,
+    ///     and on TCP it bounds the ECDSA auth exchange. Defaults to 15 seconds.
     /// </summary>
+    [EditorBrowsable(EditorBrowsableState.Never)]
     public TimeSpan auth_timeout
     {
         get => _authTimeout;
         set => _authTimeout = value;
     }
+
+    /// <summary>
+    ///     Total wall-clock budget for bringing up a usable connection across every layer — TCP
+    ///     socket connect, TLS handshake, WebSocket upgrade, and (TCP) the ECDSA auth exchange. The
+    ///     attempt is aborted if the budget is exceeded. Applies to every transport (HTTP / TCP / WS,
+    ///     ingest and egress). When unset, the effective budget is 15 seconds. Read the value actually
+    ///     applied via <see cref="EffectiveConnectTimeout" />.
+    /// </summary>
+    public TimeSpan? connect_timeout
+    {
+        get => _connectTimeout;
+        set => _connectTimeout = value;
+    }
+
+    /// <summary>
+    ///     The connect budget actually applied at runtime: <see cref="connect_timeout" /> when set,
+    ///     otherwise the compatibility fallback.
+    /// </summary>
+    internal TimeSpan EffectiveConnectTimeout => _connectTimeout ?? _authTimeout;
 
     /// <summary>
     ///     Specifies a minimum expect network throughput when sending data to QuestDB.

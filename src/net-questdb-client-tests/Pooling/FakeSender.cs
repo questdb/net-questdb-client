@@ -56,7 +56,9 @@ internal sealed class FakeSender : ISender, IPooledSlotSender
     public volatile bool DisposedDuringSend;
 
     // Pretend this sender holds a slot lock that does (true) or does not (false) release on dispose.
-    public bool SlotLockReleased = true;
+    // Volatile: SF concurrency stress tests flip this from a housekeeper thread while the pool reads it
+    // under its gate on another thread.
+    public volatile bool SlotLockReleased = true;
 
     public FakeSender(int slotIndex)
     {

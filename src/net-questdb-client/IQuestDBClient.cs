@@ -51,6 +51,14 @@ public interface IQuestDBClient : IDisposable, IAsyncDisposable
     ///     <para />
     ///     Blocks up to <c>acquire_timeout_ms</c> when every sender up to <c>sender_pool_max</c> is in
     ///     use, then throws.
+    ///     <para />
+    ///     <b>Do not use the sender after disposing it.</b> Dispose returns the instance to the pool,
+    ///     where another thread may immediately re-borrow it; the wrapper does not guard against
+    ///     post-return calls, so any <c>Table</c>/<c>Column</c>/<c>At</c>/<c>Send</c> after dispose
+    ///     forwards to a delegate that may already be in use elsewhere — racing a non-thread-safe sender
+    ///     and corrupting data. Borrow per unit of work, drop the reference when the <c>using</c> scope
+    ///     ends, and never cache or share a borrowed sender across threads. There is no thread-affine /
+    ///     pinned-sender API.
     /// </summary>
     /// <returns>A sender leased from the pool; release it with <see cref="IDisposable.Dispose" />.</returns>
     /// <exception cref="Utils.IngressError">If the pool is exhausted past the acquire timeout, or the handle is closed.</exception>

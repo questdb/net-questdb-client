@@ -39,6 +39,11 @@ namespace QuestDB.Pooling;
 ///     <see cref="QuestDBClient" /> handle is disposed. A second <see cref="Dispose" /> after a
 ///     return is a no-op (idempotent).
 ///     <para />
+///     Use-after-return is undefined: once <see cref="Dispose" /> returns the wrapper, the pool may
+///     hand it (and its non-thread-safe delegate) to another borrower, possibly on another thread.
+///     The delegation members below do NOT check the borrowed state, so any call after dispose races
+///     that new borrower. Callers must drop the reference at the end of the borrow scope.
+///     <para />
 ///     Implements <see cref="IQwpWebSocketSender" /> so a borrowed <c>ws::</c> / <c>wss::</c> sender
 ///     can be cast to the full QWP surface (QWP-only column types, <c>Ping</c>, seqTxn watermarks);
 ///     those members throw a clear <see cref="IngressError" /> when the pool's transport is HTTP/TCP.

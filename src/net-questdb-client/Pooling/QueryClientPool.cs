@@ -32,8 +32,8 @@ namespace QuestDB.Pooling;
 /// <summary>
 ///     Elastic pool of <see cref="IQwpQueryClient" /> instances, each wrapped in a reusable
 ///     <see cref="PooledQueryClient" /> decorator. The read-side analog of <see cref="SenderPool" />,
-///     deliberately stripped of all store-and-forward slot machinery (queries have no SF), the
-///     leaked-slot / leak-debt accounting, and the AsyncLocal pin.
+///     deliberately stripped of all store-and-forward slot machinery (queries have no SF) and the
+///     leaked-slot / leak-debt accounting.
 ///     <para />
 ///     Capacity is bounded by a <see cref="SemaphoreSlim" /> counting in-use clients: a permit is
 ///     taken on borrow and released on return. A client is only created when no idle one exists and a

@@ -243,8 +243,20 @@ internal sealed class SenderPool
         {
             // Reading _closeCts.Token must be inside the try: a concurrent Close that disposes the CTS
             // makes the getter throw, which we want surfaced as the friendly closed error.
-            linked = CancellationTokenSource.CreateLinkedTokenSource(ct, _closeCts.Token);
-            acquired = await _capacity.WaitAsync(_acquireTimeoutMs, linked.Token).ConfigureAwait(false);
+            // Skip the linked-source allocation on the common ct=default path: WaitAsync takes a single
+            // token, so pass _closeCts.Token straight through and only link when the caller can also cancel.
+            CancellationToken waitToken;
+            if (ct.CanBeCanceled)
+            {
+                linked = CancellationTokenSource.CreateLinkedTokenSource(ct, _closeCts.Token);
+                waitToken = linked.Token;
+            }
+            else
+            {
+                waitToken = _closeCts.Token;
+            }
+
+            acquired = await _capacity.WaitAsync(_acquireTimeoutMs, waitToken).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (_closeCts.IsCancellationRequested)
         {

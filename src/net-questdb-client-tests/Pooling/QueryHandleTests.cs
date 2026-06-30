@@ -182,6 +182,42 @@ public class QueryHandleTests
     }
 
     [Test]
+    public async Task CancelAfterCompletionDoesNotCancelReborrowedClient()
+    {
+        // Pool size 1: q2 re-borrows the exact same inner client q1 just returned. A late Cancel() on the
+        // already-completed q1 must not forward to that re-borrowed client and abort q2's in-flight query.
+        // Guards the lease null-out in Query.ExecuteAsync's finally (the only thing scoping a cancel to its
+        // own execution — there is no generation token).
+        using var h = MakeHandle("query_pool_min=1;query_pool_max=1;", out var created);
+        var fake = created.Single();
+
+        var q1 = h.NewQuery().Sql("a").Handler(new NoopQueryHandler());
+        await q1.ExecuteAsync(); // completes cleanly; client re-pooled, q1's lease nulled
+
+        fake.Gate = new TaskCompletionSource<bool>();
+        var q2 = h.NewQuery().Sql("b").Handler(new NoopQueryHandler());
+        var t2 = q2.ExecuteAsync(); // re-borrows the same inner; parks in flight on the gate
+
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        while (Volatile.Read(ref fake.ExecuteCount) < 2 && sw.ElapsedMilliseconds < 2000)
+        {
+            await Task.Delay(5);
+        }
+
+        Assert.That(fake.ExecuteCount, Is.EqualTo(2), "q2 re-borrowed the same client and is in flight");
+
+        q1.Cancel(); // late cancel on the finished query — must be a no-op, not reach q2's client
+
+        Assert.That(fake.CancelCount, Is.EqualTo(0),
+            "a cancel on a completed query must not reach the re-borrowed client running q2");
+
+        fake.Gate.SetResult(true);
+        await t2;
+
+        Assert.That(fake.CancelCount, Is.EqualTo(0), "q2 completed without a stray cancel");
+    }
+
+    [Test]
     public async Task ConcurrentNewQueriesGetDistinctClients()
     {
         // Shared gate keeps every borrowed client in flight so the pool must hand out distinct ones.

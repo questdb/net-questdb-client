@@ -58,17 +58,26 @@ internal sealed class SenderPool
 
     // Store-and-forward slot management. Each pooled WS+SF sender owns a distinct slot identity
     // (`<base>-<index>`) so siblings never collide on a slot directory / flock. `_slotInUse[i]` tracks
-    // index ownership; a leaked index (lock never released after dispose) stays set forever and counts
-    // against effective capacity, matching the Java pool's `leakedSlots`.
+    // index ownership; a retired index (lock not yet released after dispose) stays set and counts
+    // against effective capacity, matching the Java pool's `leakedSlots`. Unlike a permanent leak, the
+    // housekeeper re-tests retired slots (`ReclaimRetiredSlots`) and frees the index + permit once the
+    // engine's deferred teardown finally releases the lock, so `_leakedSlots` is a live gauge of
+    // currently-retired slots, not a monotonic counter.
     private readonly bool _storeAndForward;
     private readonly string _slotBaseId;
     private readonly bool[] _slotInUse;
     private int _leakedSlots;
 
-    // Permits owed to retired (leaked) slots. Retiring a slot must permanently remove one unit of
-    // capacity so the semaphore never advertises more in-use slots than the bitmap can allocate. A
-    // discarded sender held a permit (paid down when its return-flush path releases); a reaped sender
-    // held none, so the debt is settled by draining an available permit now or at the next release.
+    // Senders retired with their slot lock still held, awaiting reclaim. The housekeeper re-tests each
+    // entry's IsInnerSlotLockReleased and, once true, frees the index and returns the withheld permit.
+    private readonly List<PooledSender> _retired = new();
+
+    // Permits owed to retired (leaked) slots. Retiring a slot removes one unit of capacity so the
+    // semaphore never advertises more in-use slots than the bitmap can allocate. A discarded sender held
+    // a permit (paid down when its return-flush path releases); a reaped sender held none, so the debt is
+    // settled by draining an available permit now or at the next release. Reclaiming a slot reverses one
+    // removal: it cancels a still-pending debt, or releases the permit back when the debt was already
+    // settled physically.
     private int _leakDebt;
 
     /// <summary>Production constructor: pool sizes come from <paramref name="poolConfig" />, senders are
@@ -146,7 +155,8 @@ internal sealed class SenderPool
         }
     }
 
-    /// <summary>Count of SF slot indices permanently retired because a sender failed to release its lock.</summary>
+    /// <summary>Count of SF slot indices currently retired because a sender has not yet released its lock.
+    ///     Reclaimed back toward zero by the housekeeper once the lock releases (see <see cref="ReclaimRetiredSlots" />).</summary>
     internal int LeakedSlotCount
     {
         get
@@ -426,7 +436,8 @@ internal sealed class SenderPool
     // A discarded sender held a capacity permit. If its slot lock dropped, free the index. Otherwise
     // retire the index — RetireSlotIndex records the leak debt, and the ReleaseCapacity below pays it
     // down (the permit stays out of circulation) so effective max shrinks by one. Mirrors the Java
-    // pool's leaked-slot accounting.
+    // pool's leaked-slot accounting. The shrink is reversible: the housekeeper re-tests retired slots
+    // and reclaims the index + permit once the (possibly deferred) lock release lands.
     private void FinishDiscard(PooledSender ps)
     {
         lock (_gate)
@@ -437,7 +448,7 @@ internal sealed class SenderPool
             }
             else
             {
-                RetireSlotIndex(ps.SlotIndex);
+                RetireSlotIndex(ps);
             }
         }
 
@@ -508,8 +519,72 @@ internal sealed class SenderPool
                 }
                 else
                 {
-                    RetireSlotIndex(ps.SlotIndex);
+                    RetireSlotIndex(ps);
                 }
+            }
+        }
+    }
+
+    /// <summary>
+    ///     Re-tests slots retired by a deferred / wedged teardown and reclaims any whose slot lock has
+    ///     since released — freeing the index and returning the withheld capacity permit. Driven by the
+    ///     housekeeper. Turns the slot retirement of a transient teardown stall into a temporary capacity
+    ///     dip rather than a permanent shrink toward <c>PoolExhausted</c>.
+    /// </summary>
+    internal void ReclaimRetiredSlots()
+    {
+        if (!_storeAndForward)
+        {
+            return;
+        }
+
+        var releaseCount = 0;
+        lock (_gate)
+        {
+            if (_closed || _retired.Count == 0)
+            {
+                return;
+            }
+
+            for (var i = _retired.Count - 1; i >= 0; i--)
+            {
+                var ps = _retired[i];
+                if (!ps.IsInnerSlotLockReleased)
+                {
+                    continue;
+                }
+
+                _retired.RemoveAt(i);
+                FreeSlotIndex(ps.SlotIndex);
+                _leakedSlots--;
+
+                // Reverse the one capacity unit this slot removed. A still-pending debt means the permit
+                // was never physically taken, so just cancel the obligation; otherwise the permit was
+                // drained and must be released back to borrowers (below, outside the lock).
+                if (_leakDebt > 0)
+                {
+                    _leakDebt--;
+                }
+                else
+                {
+                    releaseCount++;
+                }
+            }
+        }
+
+        for (var i = 0; i < releaseCount; i++)
+        {
+            try
+            {
+                _capacity.Release();
+            }
+            catch (ObjectDisposedException)
+            {
+                break;
+            }
+            catch (SemaphoreFullException)
+            {
+                break;
             }
         }
     }
@@ -587,6 +662,9 @@ internal sealed class SenderPool
             idle = new List<PooledSender>(_available);
             _all.Clear();
             _available.Clear();
+            // Drop references to retired-but-unreclaimed senders; their OS locks release independently
+            // (deferred continuation / process exit) and the pool no longer needs to track them.
+            _retired.Clear();
         }
 
         try
@@ -679,11 +757,12 @@ internal sealed class SenderPool
     }
 
     // The sender at this index disposed without releasing its slot lock: keep the bitmap bit set so the
-    // index is never reused, and permanently remove one unit of capacity so the semaphore stays in
-    // lock-step with the allocatable-index count. Caller holds _gate.
-    private void RetireSlotIndex(int idx)
+    // index is not reused, remove one unit of capacity so the semaphore stays in lock-step with the
+    // allocatable-index count, and remember the sender so the housekeeper can reclaim the index + permit
+    // once its (possibly deferred) lock release lands. Caller holds _gate.
+    private void RetireSlotIndex(PooledSender ps)
     {
-        if (!_storeAndForward || idx < 0)
+        if (!_storeAndForward || ps.SlotIndex < 0)
         {
             return;
         }
@@ -691,6 +770,7 @@ internal sealed class SenderPool
         _leakedSlots++;
         _leakDebt++;
         SettleLeakDebtLocked();
+        _retired.Add(ps);
         // _slotInUse[idx] stays true: the directory / flock may still be held.
     }
 

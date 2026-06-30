@@ -133,6 +133,17 @@ internal sealed class PoolHousekeeper : IDisposable
                 {
                     // Best-effort housekeeping; a delegate teardown fault must not stop the sweeper.
                 }
+
+                try
+                {
+                    // Recover capacity from slots retired by a deferred / wedged teardown whose lock has
+                    // since released, so a transient stall does not permanently shrink effective max.
+                    _pool.ReclaimRetiredSlots();
+                }
+                catch
+                {
+                    // Best-effort; a faulty reclaim sweep must not stop future housekeeping.
+                }
 #if NET7_0_OR_GREATER
                 try
                 {

@@ -419,7 +419,15 @@ surface.
   `IPooledSlotSender.IsSlotLockReleased` confirms the lock dropped (a
   net-agnostic seam implemented by `QwpWebSocketSender`, backed by
   `QwpSlotLock.IsReleased`); otherwise it is **retired** (`leakedSlots`)
-  and its capacity permit retained, shrinking effective `max`. Pooled
+  and its capacity permit retained, shrinking effective `max`. This shrink
+  is **not permanent**: when a wedged/deferred engine teardown
+  (`QwpCursorSendEngine.Dispose` defers `ReleaseSharedResources` past its 5 s
+  pump-join budget) leaves the lock still held at dispose time, the retired
+  sender is parked on `_retired` and the housekeeper's `ReclaimRetiredSlots`
+  re-tests `IsInnerSlotLockReleased` each sweep — once it flips true the index
+  is freed and the withheld permit returned (cancelling pending leak debt, or
+  `_capacity.Release()` if the debt was already settled). So `leakedSlots` is a
+  live gauge of currently-retired slots, not a monotonic counter. Pooled
   senders pass their managed family to `QwpOrphanScanner.ClaimOrphans(...,
   managedBase, managedCount)` so orphan adoption skips live/future siblings
   but still drains true out-of-family orphans (when `drain_orphans=on`).

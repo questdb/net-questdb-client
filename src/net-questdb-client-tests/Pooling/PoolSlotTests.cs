@@ -195,6 +195,85 @@ public class PoolSlotTests
         }
     }
 
+    [Test]
+    public void ReclaimRestoresCapacityWhenRetiredSlotLockReleases()
+    {
+        // Fix for the deferred-teardown capacity-shrink bug: a slot retired because its lock had not yet
+        // released at dispose time must be reclaimed (index + permit restored) once the lock releases, so
+        // a transient / wedged teardown does not permanently shrink effective max toward PoolExhausted.
+        var pool = MakeSfPool("sender_pool_min=0;sender_pool_max=2;acquire_timeout_ms=150;", out var created);
+        try
+        {
+            var a = pool.Borrow(); // slot 0
+            var b = pool.Borrow(); // slot 1
+
+            // Slot-0 sender breaks AND has not released its lock yet -> the index is retired and effective
+            // max shrinks to 1 (mirrors a deferred engine teardown still holding the slot lock).
+            var fakeA = created.Single(s => s.SlotIndex == 0);
+            fakeA.SlotLockReleased = false;
+            fakeA.ThrowOnSend = true;
+            a.Dispose();
+
+            Assert.That(pool.LeakedSlotCount, Is.EqualTo(1), "slot retired while lock held");
+
+            // Reclaim is a no-op while the lock is still held.
+            pool.ReclaimRetiredSlots();
+            Assert.That(pool.LeakedSlotCount, Is.EqualTo(1), "not reclaimed while lock held");
+
+            // The deferred teardown finally releases the lock; the housekeeper sweep reclaims the slot.
+            fakeA.SlotLockReleased = true;
+            pool.ReclaimRetiredSlots();
+            Assert.That(pool.LeakedSlotCount, Is.EqualTo(0), "retired slot reclaimed once lock released");
+
+            // Effective max is back to 2: with b still held, a fresh borrow now succeeds and reuses the
+            // reclaimed lowest-free index 0 — no permanent shrink.
+            var c = pool.Borrow();
+            Assert.That(c.SlotIndex, Is.EqualTo(0), "reclaimed index reused");
+            c.Dispose();
+            b.Dispose();
+        }
+        finally
+        {
+            pool.Close();
+        }
+    }
+
+    [Test]
+    public void ReclaimRestoresCapacityForReapedRetiredSlot()
+    {
+        // Same reclaim, but via the reap path (idle sender whose lock was held when reaped). Exercises the
+        // leak-debt branch where the retired permit was paid from an available permit (debt settled), so
+        // reclaim must Release a real permit rather than just cancel pending debt.
+        var pool = MakeSfPool("sender_pool_min=0;sender_pool_max=2;idle_timeout_ms=1;acquire_timeout_ms=150;", out var created);
+        try
+        {
+            var a = pool.Borrow(); // slot 0
+            var b = pool.Borrow(); // slot 1
+            a.Dispose();
+            b.Dispose();
+
+            created.Single(s => s.SlotIndex == 0).SlotLockReleased = false;
+            Thread.Sleep(25);
+            pool.ReapIdle();
+            Assert.That(pool.LeakedSlotCount, Is.EqualTo(1));
+
+            // Lock releases later; reclaim restores effective max to 2 (two concurrent borrows now work).
+            created.Single(s => s.SlotIndex == 0).SlotLockReleased = true;
+            pool.ReclaimRetiredSlots();
+            Assert.That(pool.LeakedSlotCount, Is.EqualTo(0));
+
+            var c = pool.Borrow();
+            var d = pool.Borrow();
+            Assert.That(new[] { c.SlotIndex, d.SlotIndex }.OrderBy(i => i), Is.EqualTo(new[] { 0, 1 }));
+            c.Dispose();
+            d.Dispose();
+        }
+        finally
+        {
+            pool.Close();
+        }
+    }
+
     [TestCase("default-0", "default", 4, true)]
     [TestCase("default-3", "default", 4, true)]
     [TestCase("default-4", "default", 4, false)] // out of managed range -> a true orphan

@@ -111,6 +111,19 @@ public class QueryOptionsTests
         Assert.That(o.protocol, Is.EqualTo(ProtocolType.wss));
     }
 
+    // The ingest parser (SenderOptions) and QuestDBClientBuilder.IsWebSocketScheme both accept
+    // the scheme case-insensitively; the egress parser must match so an uppercased ws::/wss::
+    // string that builds a query pool doesn't get rejected at query time.
+    [TestCase("WS::addr=h:9000;", ProtocolType.ws)]
+    [TestCase("Ws::addr=h:9000;", ProtocolType.ws)]
+    [TestCase("WSS::addr=h:443;", ProtocolType.wss)]
+    [TestCase("Wss::addr=h:443;", ProtocolType.wss)]
+    public void Parse_SchemeIsCaseInsensitive(string connStr, ProtocolType expected)
+    {
+        var o = new QueryOptions(connStr);
+        Assert.That(o.protocol, Is.EqualTo(expected));
+    }
+
     [Test]
     public void Parse_AllEgressKnobs_RoundTrip()
     {

@@ -246,7 +246,7 @@ public sealed class QueryOptions
         }
 
         var schemeText = connStr.Substring(0, sep);
-        if (!Enum.TryParse(schemeText, out ProtocolType scheme)
+        if (!Enum.TryParse(schemeText, ignoreCase: true, out ProtocolType scheme)
             || (scheme != ProtocolType.ws && scheme != ProtocolType.wss))
         {
             throw new IngressError(ErrorCode.ConfigError,

@@ -362,22 +362,6 @@ public class QwpEncoderTests
     }
 
     [Test]
-    public void Encode_Decimal64Column_LimbForm_WritesScaleAndUnscaledLimb()
-    {
-        var t = new QwpTableBuffer("t");
-        t.AppendDecimal64("p", 1234567890123L, scale: 4);
-        t.At(0);
-
-        var bytes = QwpEncoder.Encode(new[] { t }, new QwpSymbolDictionary());
-        var pos = FindFirstColumnDataOffset(bytes, tableNameLen: 1, userColCount: 1, userColDefSize: 1 + 1 + 1);
-
-        Assert.That(bytes[pos++], Is.EqualTo(0x00), "null flag");
-        Assert.That(bytes[pos++], Is.EqualTo((byte)4), "scale = 4");
-        Assert.That(BinaryPrimitives.ReadInt64LittleEndian(bytes.AsSpan(pos, 8)),
-            Is.EqualTo(1234567890123L));
-    }
-
-    [Test]
     public void Encode_Decimal128Column_LimbForm_WritesLoThenHiLittleEndian()
     {
         var t = new QwpTableBuffer("t");

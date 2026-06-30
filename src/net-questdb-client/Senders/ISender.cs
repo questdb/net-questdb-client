@@ -486,17 +486,6 @@ public interface ISender : IDisposable, IAsyncDisposable
     public ISender ColumnDecimal256(ReadOnlySpan<char> name, decimal value, byte scale);
 
     /// <summary>
-    ///     Adds a DECIMAL64 column from the raw unscaled int64 mantissa with an explicit
-    ///     <paramref name="scale" />. Exposes the full 18-digit range that <see cref="System.Decimal" />
-    ///     cannot always represent. Over ILP this is reconstructed as a <see cref="System.Decimal" /> and
-    ///     requires protocol version 3.
-    /// </summary>
-    /// <param name="name">The column name.</param>
-    /// <param name="unscaledValue">The unscaled integer mantissa; the value is <c>unscaledValue / 10^scale</c>.</param>
-    /// <param name="scale">Number of fractional digits (0–18).</param>
-    public ISender ColumnDecimal64(ReadOnlySpan<char> name, long unscaledValue, byte scale);
-
-    /// <summary>
     ///     Adds a DECIMAL128 column from the two two's-complement 64-bit limbs of the unscaled integer:
     ///     <paramref name="lo" /> is the low 64 bits (unsigned magnitude), <paramref name="hi" /> the
     ///     signed high 64 bits — i.e. <c>(hi ≪ 64) | (ulong)lo</c>. On <c>ws::</c> / <c>wss::</c> this

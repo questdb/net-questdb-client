@@ -548,14 +548,6 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender, IPooledSlotSende
     }
 
     /// <inheritdoc />
-    public ISender ColumnDecimal64(ReadOnlySpan<char> name, long unscaledValue, byte scale)
-    {
-        ThrowIfTerminal();
-        EnsureCurrentTable().AppendDecimal64(name, unscaledValue, scale);
-        return this;
-    }
-
-    /// <inheritdoc />
     public ISender ColumnDecimal128(ReadOnlySpan<char> name, long lo, long hi, byte scale)
     {
         ThrowIfTerminal();

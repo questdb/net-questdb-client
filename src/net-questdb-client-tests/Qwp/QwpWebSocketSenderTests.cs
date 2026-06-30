@@ -1301,8 +1301,13 @@ public class QwpWebSocketSenderTests
         var ws = (IQwpWebSocketSender)sender;
 
         sender.Table("t");
-        ws.ColumnDecimal64("p", unscaledValue: 1234567890123L, scale: 4);
+        ws.ColumnDecimal64("p", 123456789.0123m, scale: 4);
         sender.At(DateTime.UtcNow);
+        
+        sender.Table("t");
+        ws.ColumnDecimal64("p", 123456789.01m, scale: 4);
+        sender.At(DateTime.UtcNow);
+        
         await sender.SendAsync();
         await ws.PingAsync();
 
@@ -1312,7 +1317,7 @@ public class QwpWebSocketSenderTests
         // After type code: TS col def (nameLen=0, type 0x10), then user col data: null flag + scale + 8-byte LE.
         var scaleOffset = typeCodeOffset + 1 + 2 + 1;
         Assert.That(payload[scaleOffset], Is.EqualTo((byte)4), "scale prefix");
-        Assert.That(System.Buffers.Binary.BinaryPrimitives.ReadInt64LittleEndian(payload.Slice(scaleOffset + 1, 8)),
+        Assert.That(BinaryPrimitives.ReadInt64LittleEndian(payload.Slice(scaleOffset + 1, 8)),
             Is.EqualTo(1234567890123L));
     }
 

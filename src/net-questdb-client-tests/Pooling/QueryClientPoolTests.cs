@@ -200,6 +200,33 @@ public class QueryClientPoolTests
         });
     }
 
+    [Test]
+    public void CloseCancelsBorrowedClientAndLeavesTeardownToBorrower()
+    {
+        // Close disposes only idle clients; an in-flight one is merely cancelled (so a blocked
+        // ExecuteAsync unwinds) and torn down by its borrower on return — never disposed by Close, which
+        // would race the borrower's still-running query on the non-thread-safe client.
+        var pool = MakePool("query_pool_min=2;query_pool_max=2;", out var created);
+
+        var borrowed = pool.Borrow(); // 1 in-use, 1 idle
+
+        pool.Close();
+
+        var inUse = created.Single(c => !c.Disposed); // the borrowed client survived close (only cancelled)
+        Assert.Multiple(() =>
+        {
+            Assert.That(created.Count(c => c.Disposed), Is.EqualTo(1), "idle client disposed by close");
+            Assert.That(inUse.CancelCount, Is.EqualTo(1), "in-flight client cancelled so a blocked query unwinds");
+            Assert.That(inUse.DisposeCount, Is.EqualTo(0), "close did not dispose the in-use client");
+        });
+
+        borrowed.Dispose(); // borrower returns post-close: teardown happens here, on this thread
+
+        Assert.That(inUse.DisposeCount, Is.EqualTo(1), "inner disposed exactly once, by the borrower");
+
+        Assert.DoesNotThrow(() => pool.Close(), "second close is idempotent");
+    }
+
     private sealed class PoolGuard : IDisposable
     {
         public PoolGuard(QueryClientPool pool) => Pool = pool;

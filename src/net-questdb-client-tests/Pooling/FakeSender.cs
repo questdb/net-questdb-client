@@ -44,6 +44,17 @@ internal sealed class FakeSender : ISender, IPooledSlotSender
     public bool ThrowOnSend;
     public bool ThrowOnDispose;
 
+    // When set, Send() parks here (simulating an in-flight flush) until the test releases it. Lets a test
+    // hold a borrowed sender mid-flush while another thread closes the pool.
+    public ManualResetEventSlim? SendGate;
+
+    // True while Send() is executing; flipped by Send(). Used to detect a Dispose racing an in-flight Send.
+    public volatile bool SendInProgress;
+
+    // Set true if Dispose() was ever called while Send() was in progress — the exact non-thread-safe
+    // race a borrowed sender must never be subjected to by pool teardown.
+    public volatile bool DisposedDuringSend;
+
     // Pretend this sender holds a slot lock that does (true) or does not (false) release on dispose.
     public bool SlotLockReleased = true;
 
@@ -64,6 +75,11 @@ internal sealed class FakeSender : ISender, IPooledSlotSender
 
     public void Dispose()
     {
+        if (SendInProgress)
+        {
+            DisposedDuringSend = true;
+        }
+
         Interlocked.Increment(ref DisposeCount);
         if (ThrowOnDispose)
         {
@@ -79,7 +95,17 @@ internal sealed class FakeSender : ISender, IPooledSlotSender
 
     public void Send(CancellationToken ct = default)
     {
-        Interlocked.Increment(ref SendCount);
+        SendInProgress = true;
+        try
+        {
+            SendGate?.Wait(ct);
+            Interlocked.Increment(ref SendCount);
+        }
+        finally
+        {
+            SendInProgress = false;
+        }
+
         if (ThrowOnSend)
         {
             throw new IngressError(ErrorCode.ServerFlushError, "fake flush failure");

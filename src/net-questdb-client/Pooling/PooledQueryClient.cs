@@ -137,7 +137,7 @@ internal sealed class PooledQueryClient : IQwpQueryClient
         }
         else
         {
-            _pool.GiveBack(this);
+            await _pool.GiveBackAsync(this).ConfigureAwait(false);
         }
     }
 

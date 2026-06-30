@@ -326,18 +326,57 @@ internal sealed class QueryClientPool
     /// <summary>Returns a borrowed query client to the pool.</summary>
     internal void GiveBack(PooledQueryClient pc)
     {
-        lock (_gate)
+        if (GiveBackOrTakeOwnership(pc))
         {
-            if (!_closed)
+            try
             {
-                pc.IdleSinceUtc = DateTime.UtcNow;
-                _available.Push(pc);
+                pc.DisposeInner();
             }
-
-            // Closed: Close() owns delegate teardown via its _all snapshot, so just drop the reference.
+            catch
+            {
+                // best effort
+            }
         }
 
         ReleaseCapacity();
+    }
+
+    /// <inheritdoc cref="GiveBack" />
+    internal async ValueTask GiveBackAsync(PooledQueryClient pc)
+    {
+        if (GiveBackOrTakeOwnership(pc))
+        {
+            try
+            {
+                await pc.DisposeInnerAsync().ConfigureAwait(false);
+            }
+            catch
+            {
+                // best effort
+            }
+        }
+
+        ReleaseCapacity();
+    }
+
+    // Re-pool an idle-again client, or — if the pool closed while it was on loan — hand teardown back to
+    // the caller. Close() only disposes idle clients and merely *cancels* in-flight ones; it never
+    // disposes an in-use client (that would race the borrower's still-running query on the
+    // non-thread-safe client). So a client returning post-close is disposed here by its borrower, on the
+    // borrower's own stack after its query already unwound. Returns true when the caller must dispose.
+    private bool GiveBackOrTakeOwnership(PooledQueryClient pc)
+    {
+        lock (_gate)
+        {
+            if (_closed)
+            {
+                return true;
+            }
+
+            pc.IdleSinceUtc = DateTime.UtcNow;
+            _available.Push(pc);
+            return false;
+        }
     }
 
     /// <summary>Evicts a broken / terminal client: dispose it for real and release its permit. Unlike the
@@ -435,7 +474,9 @@ internal sealed class QueryClientPool
         }
     }
 
-    /// <summary>Shuts the pool down, closing every underlying client. Idempotent.</summary>
+    /// <summary>Shuts the pool down, closing every idle underlying client. Idempotent. Clients currently
+    ///     borrowed are only *cancelled* here (so a blocked ExecuteAsync unwinds) and torn down by their
+    ///     borrower on return — never disposed here, to avoid racing a non-thread-safe in-flight query.</summary>
     internal void Close()
     {
         var snapshot = BeginClose();
@@ -444,9 +485,15 @@ internal sealed class QueryClientPool
             return;
         }
 
-        foreach (var pc in snapshot)
+        // Cancel in-flight queries first so blocked ExecuteAsync calls unwind and return their clients
+        // (GiveBack/DiscardBroken dispose them). Never dispose an in-use client here.
+        foreach (var pc in snapshot.Value.InUse)
         {
             CancelInner(pc);
+        }
+
+        foreach (var pc in snapshot.Value.Idle)
+        {
             try
             {
                 pc.DisposeInner();
@@ -469,9 +516,13 @@ internal sealed class QueryClientPool
             return;
         }
 
-        foreach (var pc in snapshot)
+        foreach (var pc in snapshot.Value.InUse)
         {
             CancelInner(pc);
+        }
+
+        foreach (var pc in snapshot.Value.Idle)
+        {
             try
             {
                 await pc.DisposeInnerAsync().ConfigureAwait(false);
@@ -501,9 +552,24 @@ internal sealed class QueryClientPool
         }
     }
 
-    private List<PooledQueryClient>? BeginClose()
+    // Idle clients are disposed by Close(); in-use clients are only cancelled there and disposed by their
+    // borrower on return. Splitting them keeps Close from disposing a client whose query is still running.
+    private readonly struct CloseSet
     {
-        List<PooledQueryClient> snapshot;
+        internal CloseSet(List<PooledQueryClient> idle, List<PooledQueryClient> inUse)
+        {
+            Idle = idle;
+            InUse = inUse;
+        }
+
+        internal List<PooledQueryClient> Idle { get; }
+        internal List<PooledQueryClient> InUse { get; }
+    }
+
+    private CloseSet? BeginClose()
+    {
+        List<PooledQueryClient> idle;
+        List<PooledQueryClient> inUse;
         lock (_gate)
         {
             if (_closed)
@@ -512,7 +578,17 @@ internal sealed class QueryClientPool
             }
 
             _closed = true;
-            snapshot = new List<PooledQueryClient>(_all);
+            idle = new List<PooledQueryClient>(_available);
+            var idleSet = new HashSet<PooledQueryClient>(_available, ReferenceEqualityComparer.Instance);
+            inUse = new List<PooledQueryClient>();
+            foreach (var pc in _all)
+            {
+                if (!idleSet.Contains(pc))
+                {
+                    inUse.Add(pc);
+                }
+            }
+
             _all.Clear();
             _available.Clear();
         }
@@ -526,7 +602,7 @@ internal sealed class QueryClientPool
             // already torn down
         }
 
-        return snapshot;
+        return new CloseSet(idle, inUse);
     }
 
     private void DisposePrimitives()

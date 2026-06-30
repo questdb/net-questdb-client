@@ -330,18 +330,57 @@ internal sealed class SenderPool
     /// <summary>Returns a borrowed sender to the pool (after the caller's return-flush succeeded).</summary>
     internal void GiveBack(PooledSender ps)
     {
-        lock (_gate)
+        if (GiveBackOrTakeOwnership(ps))
         {
-            if (!_closed)
+            try
             {
-                ps.IdleSinceUtc = DateTime.UtcNow;
-                _available.Push(ps);
+                ps.DisposeInner();
             }
-
-            // Closed: Close() owns delegate teardown via its _all snapshot, so just drop the reference.
+            catch
+            {
+                // best effort
+            }
         }
 
         ReleaseCapacity();
+    }
+
+    /// <inheritdoc cref="GiveBack" />
+    internal async ValueTask GiveBackAsync(PooledSender ps)
+    {
+        if (GiveBackOrTakeOwnership(ps))
+        {
+            try
+            {
+                await ps.DisposeInnerAsync().ConfigureAwait(false);
+            }
+            catch
+            {
+                // best effort
+            }
+        }
+
+        ReleaseCapacity();
+    }
+
+    // Re-pool an idle-again sender, or — if the pool closed while it was on loan — hand teardown back to
+    // the caller. Close() only disposes idle senders, never an in-use one (it may be mid-flush in the
+    // borrower's Dispose on a non-thread-safe inner), so a sender returning post-close is disposed here
+    // by its borrower, on the borrower's own stack after its return-flush already completed. Exactly one
+    // party ever disposes a given inner. Returns true when the caller must dispose the inner.
+    private bool GiveBackOrTakeOwnership(PooledSender ps)
+    {
+        lock (_gate)
+        {
+            if (_closed)
+            {
+                return true;
+            }
+
+            ps.IdleSinceUtc = DateTime.UtcNow;
+            _available.Push(ps);
+            return false;
+        }
     }
 
     /// <summary>Evicts a sender whose return-flush failed: dispose it for real, then reclaim or retire its slot.</summary>
@@ -475,7 +514,9 @@ internal sealed class SenderPool
         }
     }
 
-    /// <summary>Shuts the pool down, closing every underlying sender. Idempotent.</summary>
+    /// <summary>Shuts the pool down, closing every idle underlying sender. Idempotent. Senders currently
+    ///     borrowed are torn down by their borrower on return (never disposed here, to avoid racing a
+    ///     non-thread-safe in-use sender) — return all borrowed senders before closing the handle.</summary>
     internal void Close()
     {
         var snapshot = BeginClose();
@@ -527,7 +568,7 @@ internal sealed class SenderPool
 
     private List<PooledSender>? BeginClose()
     {
-        List<PooledSender> snapshot;
+        List<PooledSender> idle;
         lock (_gate)
         {
             if (_closed)
@@ -536,7 +577,14 @@ internal sealed class SenderPool
             }
 
             _closed = true;
-            snapshot = new List<PooledSender>(_all);
+
+            // Tear down only the idle senders here. A borrowed (in-use) sender is non-thread-safe and may
+            // be mid-flush inside its borrower's Dispose(); disposing it concurrently would corrupt its
+            // buffer / transport. Its owning borrower disposes it instead when it returns post-close (see
+            // GiveBackOrTakeOwnership / DiscardBroken), so each inner is torn down by exactly one party.
+            // Callers wanting a hard "all I/O has stopped" guarantee must return every borrowed sender
+            // before closing the handle.
+            idle = new List<PooledSender>(_available);
             _all.Clear();
             _available.Clear();
         }
@@ -550,7 +598,7 @@ internal sealed class SenderPool
             // already torn down
         }
 
-        return snapshot;
+        return idle;
     }
 
     private void DisposePrimitives()

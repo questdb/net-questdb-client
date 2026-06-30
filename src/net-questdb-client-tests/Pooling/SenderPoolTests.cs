@@ -199,6 +199,76 @@ public class SenderPoolTests
     }
 
     [Test]
+    public void CloseLeavesBorrowedSenderForBorrowerToTearDown()
+    {
+        // Close must dispose only idle senders; an in-use one is torn down by its borrower on return,
+        // never by Close (which would race the borrower's flush on a non-thread-safe inner).
+        var pool = MakePool("sender_pool_min=2;sender_pool_max=2;", out var created);
+
+        var borrowed = pool.Borrow(); // 1 in-use, 1 idle
+
+        pool.Close();
+
+        var inUse = created.Single(s => !s.Disposed); // the borrowed sender survived close untouched
+        Assert.Multiple(() =>
+        {
+            Assert.That(created.Count(s => s.Disposed), Is.EqualTo(1), "idle sender disposed by close");
+            Assert.That(inUse.SendCount, Is.EqualTo(0), "no flush yet — borrower hasn't returned");
+        });
+
+        borrowed.Dispose(); // borrower returns post-close: flush, then teardown, on this same thread
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(inUse.SendCount, Is.EqualTo(1), "return flush ran exactly once");
+            Assert.That(inUse.DisposeCount, Is.EqualTo(1), "inner disposed exactly once, by the borrower");
+            Assert.That(inUse.DisposedDuringSend, Is.False, "flush and dispose never overlapped");
+        });
+
+        Assert.DoesNotThrow(() => pool.Close(), "second close is idempotent");
+    }
+
+    [Test]
+    public void CloseDoesNotDisposeASenderWhileItIsFlushing()
+    {
+        // The actual M1 race: Close() running concurrently with a borrower's return-flush on the same
+        // non-thread-safe inner sender. The gate parks the borrowed sender mid-flush so Close is forced
+        // to run during that exact window.
+        using var gate = new ManualResetEventSlim(false);
+        var pool = MakePool("sender_pool_min=2;sender_pool_max=2;", out var created);
+        foreach (var s in created)
+        {
+            s.SendGate = gate; // only the borrowed sender actually calls Send and parks here
+        }
+
+        var borrowed = pool.Borrow(); // 1 in-use, 1 idle
+
+        var ret = Task.Run(() => borrowed.Dispose()); // enters the return-flush, parks inside Send
+        Assert.That(SpinWait.SpinUntil(() => created.Any(s => s.SendInProgress), TimeSpan.FromSeconds(5)),
+            Is.True, "borrowed sender reached its flush");
+        var flushing = created.Single(s => s.SendInProgress);
+
+        pool.Close(); // concurrent with the parked flush
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(flushing.Disposed, Is.False, "close must not dispose a sender mid-flush");
+            Assert.That(flushing.DisposedDuringSend, Is.False, "no Dispose raced the in-flight Send");
+            Assert.That(created.Count(s => s.Disposed), Is.EqualTo(1), "only the idle sender was disposed");
+        });
+
+        gate.Set(); // let the flush finish; borrower now tears its sender down (post-close return path)
+        Assert.That(ret.Wait(TimeSpan.FromSeconds(5)), Is.True, "return completed");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(flushing.SendCount, Is.EqualTo(1));
+            Assert.That(flushing.DisposeCount, Is.EqualTo(1), "inner disposed exactly once, by its borrower");
+            Assert.That(flushing.DisposedDuringSend, Is.False);
+        });
+    }
+
+    [Test]
     public async Task AsyncBorrowAndReturn()
     {
         using var g = new PoolGuard(MakePool("sender_pool_min=0;sender_pool_max=1;", out var created));

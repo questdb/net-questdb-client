@@ -142,7 +142,7 @@ internal sealed class PooledSender : IQwpWebSocketSender
             return;
         }
 
-        _pool.GiveBack(this);
+        await _pool.GiveBackAsync(this).ConfigureAwait(false);
     }
 
     // ---- Pure delegation below. Fluent methods return `this` so chaining stays on the wrapper. ----

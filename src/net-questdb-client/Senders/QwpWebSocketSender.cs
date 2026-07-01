@@ -756,8 +756,10 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender, IPooledSlotSende
     {
         // Standalone (SendAwaitsAck): Send drains (flush + await ACK) so "Send() before Dispose" delivers
         // even though Dispose no longer drains. Pooled: fast flush-to-ring; the pool ships async and
-        // delivery is confirmed via IQuestDBClient.Flush().
-        if (Options.SendAwaitsAck)
+        // delivery is confirmed via IQuestDBClient.Flush(). close_flush_timeout_millis=0 is the documented
+        // "fast, don't wait" opt-out — a 0ms drain can never observe an ACK, so treat it as flush-to-ring
+        // rather than a spurious timeout.
+        if (Options.SendAwaitsAck && Options.close_flush_timeout_millis > TimeSpan.Zero)
         {
             return SendDrainAsync(ct);
         }
@@ -778,7 +780,7 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender, IPooledSlotSende
     /// <inheritdoc />
     public void Send(CancellationToken ct = default)
     {
-        if (Options.SendAwaitsAck)
+        if (Options.SendAwaitsAck && Options.close_flush_timeout_millis > TimeSpan.Zero)
         {
             if (!Flush(Options.close_flush_timeout_millis, ct))
             {

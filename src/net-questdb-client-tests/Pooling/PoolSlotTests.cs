@@ -274,6 +274,59 @@ public class PoolSlotTests
         }
     }
 
+    [Test]
+    public void ConcurrentBorrowDuringReapDisposeWindowDoesNotSpuriouslyThrow()
+    {
+        // Regression: a reaped idle SF sender is removed from _all/_available under the pool lock, but its
+        // slot index is freed only AFTER the (slow WS+SF) DisposeInner runs outside the lock. A reaped
+        // sender holds no capacity permit, so during that dispose window the semaphore used to advertise a
+        // free permit whose slot index was still locked -> a concurrent Borrow acquired the permit, found no
+        // free index (AllocateSlotIndex -> -1), and threw a spurious PoolExhausted. The fix withholds the
+        // permit for the whole window, so the borrow waits for real capacity instead of failing.
+        var pool = MakeSfPool(
+            "sender_pool_min=1;sender_pool_max=2;idle_timeout_ms=1;acquire_timeout_ms=5000;", out var created);
+        BorrowedSender? held = null;
+        try
+        {
+            held = pool.Borrow(); // slot 0 stays borrowed (the "min" sender), so reap can't touch it
+            var warm = pool.Borrow(); // slot 1
+            warm.Dispose(); // slot 1 now idle and reapable
+
+            var slot1 = created.Single(s => s.SlotIndex == 1);
+            slot1.DisposeEntered = new ManualResetEventSlim(false);
+            slot1.DisposeGate = new ManualResetEventSlim(false);
+
+            Thread.Sleep(25); // exceed idle_timeout so slot 1 is over-idle
+
+            var reap = Task.Run(() => pool.ReapIdle());
+            Assert.That(slot1.DisposeEntered.Wait(TimeSpan.FromSeconds(5)), Is.True,
+                "reap reached the (blocked) dispose window: slot 1 out of _all/_available, index still held");
+
+            // The window is now open — slot 1's index is reserved while its dispose is parked. Race a borrow.
+            var borrow = Task.Run(() => pool.Borrow());
+
+            // Before the fix the borrow threw immediately (faulting the task); after it, the borrow must be
+            // parked waiting for real capacity to come back.
+            Thread.Sleep(300);
+            Assert.That(borrow.IsCompleted, Is.False,
+                "borrow waits for capacity instead of spuriously throwing PoolExhausted");
+
+            slot1.DisposeGate.Set(); // let the teardown finish -> slot index + withheld permit reclaimed
+            Assert.That(reap.Wait(TimeSpan.FromSeconds(5)), Is.True, "reap completed");
+            Assert.That(borrow.Wait(TimeSpan.FromSeconds(5)), Is.True, "borrow completed once capacity freed");
+
+            var s2 = borrow.Result; // throws if the borrow faulted (the pre-fix behaviour)
+            Assert.That(s2.SlotIndex, Is.EqualTo(1), "reclaimed slot index reused");
+            Assert.That(pool.LeakedSlotCount, Is.EqualTo(0));
+            s2.Dispose();
+        }
+        finally
+        {
+            held?.Dispose();
+            pool.Close();
+        }
+    }
+
     [TestCase("default-0", "default", 4, true)]
     [TestCase("default-3", "default", 4, true)]
     [TestCase("default-4", "default", 4, false)] // out of managed range -> a true orphan

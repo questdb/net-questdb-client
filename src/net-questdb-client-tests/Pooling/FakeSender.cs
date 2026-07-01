@@ -56,6 +56,12 @@ internal sealed class FakeSender : ISender, IPooledSlotSender
     // Clear instead of sending). Lets a test hold a borrowed sender mid-return while another thread closes.
     public ManualResetEventSlim? ClearGate;
 
+    // When set, Dispose() signals DisposeEntered then parks here until released — simulating a slow WS+SF
+    // teardown so a test can observe the pool's reap-dispose window (slot index held, sender already out of
+    // _all/_available) and race a concurrent Borrow against it.
+    public ManualResetEventSlim? DisposeGate;
+    public ManualResetEventSlim? DisposeEntered;
+
     // True while Send() is executing; flipped by Send(). Used to detect a Dispose racing an in-flight Send.
     public volatile bool SendInProgress;
 
@@ -100,6 +106,9 @@ internal sealed class FakeSender : ISender, IPooledSlotSender
         {
             DisposedDuringClear = true;
         }
+
+        DisposeEntered?.Set();
+        DisposeGate?.Wait();
 
         Interlocked.Increment(ref DisposeCount);
         if (ThrowOnDispose)

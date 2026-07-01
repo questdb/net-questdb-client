@@ -52,6 +52,7 @@ internal sealed class SenderPool
     private readonly int _min;
     private readonly Func<int, ISender> _senderFactory;
     private readonly int _acquireTimeoutMs;
+    private readonly TimeSpan _defaultFlushTimeout;
 
     private readonly Stack<PooledSender> _available = new();
     private readonly List<PooledSender> _all = new();
@@ -75,7 +76,7 @@ internal sealed class SenderPool
 
     // Permits owed to retired (leaked) slots. Retiring a slot removes one unit of capacity so the
     // semaphore never advertises more in-use slots than the bitmap can allocate. A discarded sender held
-    // a permit (paid down when its return-flush path releases); a reaped sender held none, so the debt is
+    // a permit (paid down when its Dispose/return path releases); a reaped sender held none, so the debt is
     // settled by draining an available permit now or at the next release. Reclaiming a slot reverses one
     // removal: it cancels a still-pending debt, or releases the permit back when the debt was already
     // settled physically.
@@ -98,6 +99,7 @@ internal sealed class SenderPool
         _min = poolConfig.sender_pool_min;
         _max = poolConfig.sender_pool_max;
         _acquireTimeoutMs = checked((int)poolConfig.acquire_timeout_ms.TotalMilliseconds);
+        _defaultFlushTimeout = poolConfig.close_flush_timeout_millis;
         _idleTimeout = poolConfig.idle_timeout_ms;
         _maxLifetime = poolConfig.max_lifetime_ms;
         _confStr = confStr;
@@ -209,7 +211,8 @@ internal sealed class SenderPool
     }
 
     /// <summary>Borrows a sender, blocking up to <c>acquire_timeout_ms</c>. The returned
-    ///     <see cref="BorrowedSender" /> is a single-use handle: dispose it to flush and return.</summary>
+    ///     <see cref="BorrowedSender" /> is a single-use handle: dispose it to return it to the pool
+    ///     (dispose does not send — call Send()/Flush() first for delivery).</summary>
     internal BorrowedSender Borrow()
     {
         ThrowIfClosed();
@@ -281,6 +284,98 @@ internal sealed class SenderPool
         return new BorrowedSender(TakeOrCreate(), this);
     }
 
+    /// <summary>
+    ///     Drains every sender currently in the pool: flushes each one's buffered rows and blocks until the
+    ///     server has acknowledged them, or <paramref name="timeout" /> elapses (per sender). This is the
+    ///     pool-wide delivery barrier — the equivalent of calling <c>Flush</c> on each borrowed sender.
+    ///     <para />
+    ///     <b>Quiescence barrier:</b> intended to be called when no senders are borrowed (all returned). It
+    ///     does not synchronise against a concurrent borrow — draining a sender another thread is actively
+    ///     writing to is a data race. Returns <c>true</c> only if every sender drained fully within the
+    ///     timeout; <c>false</c> if any timed out or latched an error.
+    /// </summary>
+    internal bool Flush(TimeSpan timeout, CancellationToken ct = default)
+    {
+        ThrowIfClosed();
+        var ok = true;
+        foreach (var ps in SnapshotAll())
+        {
+            try
+            {
+                ok &= ps.Inner.Flush(timeout, ct);
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch
+            {
+                // One sender's terminal error must not abort draining the rest; report it as not-drained.
+                ok = false;
+            }
+        }
+
+        return ok;
+    }
+
+    /// <inheritdoc cref="Flush(TimeSpan, CancellationToken)" />
+    internal bool Flush(CancellationToken ct = default) => Flush(_defaultFlushTimeout, ct);
+
+    /// <inheritdoc cref="Flush(TimeSpan, CancellationToken)" />
+    internal async ValueTask<bool> FlushAsync(TimeSpan timeout, CancellationToken ct = default)
+    {
+        ThrowIfClosed();
+        var snapshot = SnapshotAll();
+        if (snapshot.Count == 0)
+        {
+            return true;
+        }
+
+        // Drain the senders concurrently — they are independent connections, so this is safe and turns the
+        // barrier's wall-clock cost into the slowest single drain rather than their sum.
+        var tasks = new List<Task<bool>>(snapshot.Count);
+        foreach (var ps in snapshot)
+        {
+            tasks.Add(DrainOneAsync(ps, timeout, ct));
+        }
+
+        var results = await Task.WhenAll(tasks).ConfigureAwait(false);
+        var ok = true;
+        foreach (var r in results)
+        {
+            ok &= r;
+        }
+
+        return ok;
+    }
+
+    /// <inheritdoc cref="Flush(TimeSpan, CancellationToken)" />
+    internal ValueTask<bool> FlushAsync(CancellationToken ct = default) => FlushAsync(_defaultFlushTimeout, ct);
+
+    private static async Task<bool> DrainOneAsync(PooledSender ps, TimeSpan timeout, CancellationToken ct)
+    {
+        try
+        {
+            return await ps.Inner.FlushAsync(timeout, ct).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private List<PooledSender> SnapshotAll()
+    {
+        lock (_gate)
+        {
+            return new List<PooledSender>(_all);
+        }
+    }
+
     // Permit already held. Reuse an idle entry or create a fresh one outside the lock.
     private PooledSender TakeOrCreate()
     {
@@ -348,7 +443,7 @@ internal sealed class SenderPool
         return created;
     }
 
-    /// <summary>Returns a borrowed sender to the pool (after the caller's return-flush succeeded).</summary>
+    /// <summary>Returns a borrowed sender to the pool (after Dispose discarded its un-sent rows).</summary>
     internal void GiveBack(PooledSender ps)
     {
         if (GiveBackOrTakeOwnership(ps))
@@ -385,10 +480,10 @@ internal sealed class SenderPool
     }
 
     // Re-pool an idle-again sender, or — if the pool closed while it was on loan — hand teardown back to
-    // the caller. Close() only disposes idle senders, never an in-use one (it may be mid-flush in the
-    // borrower's Dispose on a non-thread-safe inner), so a sender returning post-close is disposed here
-    // by its borrower, on the borrower's own stack after its return-flush already completed. Exactly one
-    // party ever disposes a given inner. Returns true when the caller must dispose the inner.
+    // the caller. Close() only disposes idle senders, never an in-use one (its borrower may be mid-clear in
+    // Dispose on a non-thread-safe inner), so a sender returning post-close is disposed here by its
+    // borrower, on the borrower's own stack after Dispose finished. Exactly one party ever disposes a given
+    // inner. Returns true when the caller must dispose the inner.
     private bool GiveBackOrTakeOwnership(PooledSender ps)
     {
         lock (_gate)
@@ -404,7 +499,8 @@ internal sealed class SenderPool
         }
     }
 
-    /// <summary>Evicts a sender whose return-flush failed: dispose it for real, then reclaim or retire its slot.</summary>
+    /// <summary>Evicts a sender that can't be re-pooled (its buffer couldn't be cleared — terminally
+    ///     failed): dispose it for real, then reclaim or retire its slot.</summary>
     internal void DiscardBroken(PooledSender ps)
     {
         lock (_gate)
@@ -665,7 +761,7 @@ internal sealed class SenderPool
             _closed = true;
 
             // Tear down only the idle senders here. A borrowed (in-use) sender is non-thread-safe and may
-            // be mid-flush inside its borrower's Dispose(); disposing it concurrently would corrupt its
+            // be mid-clear inside its borrower's Dispose(); disposing it concurrently would corrupt its
             // buffer / transport. Its owning borrower disposes it instead when it returns post-close (see
             // GiveBackOrTakeOwnership / DiscardBroken), so each inner is torn down by exactly one party.
             // Callers wanting a hard "all I/O has stopped" guarantee must return every borrowed sender
@@ -712,6 +808,10 @@ internal sealed class SenderPool
 
         // Each sender gets independent options parsed from the original connect string.
         var options = new SenderOptions(_confStr);
+        // Pooled senders don't drain on Send() — the pooled connection survives the borrow's return and
+        // ships asynchronously; delivery is confirmed via the pool-wide IQuestDBClient.Flush(). (Standalone
+        // senders keep SendAwaitsAck=true so "Send() before Dispose" delivers.)
+        options.SendAwaitsAck = false;
         if (_storeAndForward)
         {
             if (slotIndex < 0)

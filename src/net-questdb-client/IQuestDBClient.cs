@@ -45,20 +45,27 @@ public interface IQuestDBClient : IDisposable, IAsyncDisposable
 
     /// <summary>
     ///     Borrows a sender from the pool. The caller MUST dispose the returned instance (a
-    ///     <c>using</c> block is the idiom) to release it back to the pool: disposing a pooled sender
-    ///     flushes pending rows and returns it — the real connection is only closed when this handle is
-    ///     disposed.
+    ///     <c>using</c> block is the idiom) to release it back to the pool.
+    ///     <para />
+    ///     <b>Disposing does NOT send.</b> It discards any buffered-but-unsent rows and returns the sender
+    ///     to the pool; the real connection is only closed when this handle is disposed. Call
+    ///     <see cref="ISender.Send(CancellationToken)" /> (hand rows to the transport) — and, for delivery
+    ///     confirmation, <see cref="ISender.Flush(TimeSpan, CancellationToken)" /> per sender or
+    ///     <see cref="Flush(TimeSpan, CancellationToken)" /> across the whole pool — <b>before</b> disposing.
     ///     <para />
     ///     Blocks up to <c>acquire_timeout_ms</c> when every sender up to <c>sender_pool_max</c> is in
     ///     use, then throws.
     ///     <para />
     ///     <b>Do not use the sender after disposing it.</b> Dispose returns the instance to the pool,
-    ///     where another thread may immediately re-borrow it; the wrapper does not guard against
-    ///     post-return calls, so any <c>Table</c>/<c>Column</c>/<c>At</c>/<c>Send</c> after dispose
-    ///     forwards to a delegate that may already be in use elsewhere — racing a non-thread-safe sender
-    ///     and corrupting data. Borrow per unit of work, drop the reference when the <c>using</c> scope
-    ///     ends, and never cache or share a borrowed sender across threads. There is no thread-affine /
-    ///     pinned-sender API.
+    ///     where another thread may immediately re-borrow it. The returned handle is inert, not aliased:
+    ///     every ingest member (<c>Table</c> / <c>Column</c> / <c>At</c> / <c>Send</c>, …) throws
+    ///     <see cref="ObjectDisposedException" /> once disposed, so a stale reference can never reach — or
+    ///     corrupt — the entry the pool has since lent to a different borrower (a second dispose is a
+    ///     tolerated no-op). That guard makes accidental misuse fail loudly; it is not a licence to share a
+    ///     <em>live</em> borrowed sender across threads — a single <see cref="ISender" /> is not
+    ///     thread-safe. Borrow per unit of work, drop the reference when the <c>using</c> scope ends, and
+    ///     never cache or share a borrowed sender across threads. There is no thread-affine / pinned-sender
+    ///     API.
     /// </summary>
     /// <returns>A sender leased from the pool; release it with <see cref="IDisposable.Dispose" />.</returns>
     /// <exception cref="Utils.IngressError">If the pool is exhausted past the acquire timeout, or the handle is closed.</exception>
@@ -67,6 +74,30 @@ public interface IQuestDBClient : IDisposable, IAsyncDisposable
     /// <inheritdoc cref="BorrowSender" />
     /// <param name="ct">Cancels the wait for a free sender.</param>
     ValueTask<ISender> BorrowSenderAsync(CancellationToken ct = default);
+
+    /// <summary>
+    ///     Drains every sender in the pool: flushes each one's buffered rows and blocks until the server has
+    ///     acknowledged them, or <paramref name="timeout" /> elapses (applied per sender). The pool-wide
+    ///     delivery barrier — the analogue of Java's <c>drain()</c> at pool scope.
+    ///     <para />
+    ///     <b>Call this during quiescence</b> — after every borrowed sender has been returned. It does not
+    ///     synchronise against a concurrent borrow (draining a sender another thread is writing to is a data
+    ///     race). Typical use: producers finish and return their senders, then the coordinator calls
+    ///     <c>Flush</c> and only marks the batch done when it returns <c>true</c>.
+    /// </summary>
+    /// <param name="timeout">Upper bound on the ACK wait, per sender.</param>
+    /// <param name="ct">Cancels the flush and the wait.</param>
+    /// <returns><c>true</c> if every sender drained fully; <c>false</c> if any timed out or latched an error.</returns>
+    bool Flush(TimeSpan timeout, CancellationToken ct = default);
+
+    /// <summary>Convenience overload using <c>close_flush_timeout_millis</c> as the per-sender drain timeout.</summary>
+    bool Flush(CancellationToken ct = default);
+
+    /// <inheritdoc cref="Flush(TimeSpan, CancellationToken)" />
+    ValueTask<bool> FlushAsync(TimeSpan timeout, CancellationToken ct = default);
+
+    /// <inheritdoc cref="Flush(CancellationToken)" />
+    ValueTask<bool> FlushAsync(CancellationToken ct = default);
 
 #if NET7_0_OR_GREATER
     /// <summary>Number of idle query clients currently parked in the pool.</summary>

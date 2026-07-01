@@ -1379,6 +1379,16 @@ public record SenderOptions
     internal int OrphanExcludeManagedCount { get; set; }
 
     /// <summary>
+    ///     Whether a WS <c>Send()</c> / <c>SendAsync()</c> drains (flushes then blocks until the server
+    ///     acknowledges) rather than just handing the frame to the ring. Default <c>true</c> for a
+    ///     standalone sender, so "Send() before Dispose" delivers even though Dispose no longer drains.
+    ///     The QuestDBClient pool sets it <c>false</c> on pooled senders: their connection survives the
+    ///     borrow's return and ships asynchronously, and delivery is confirmed via the pool-wide
+    ///     <c>IQuestDBClient.Flush()</c>. Internal — not a connect-string key, not serialized.
+    /// </summary>
+    internal bool SendAwaitsAck { get; set; } = true;
+
+    /// <summary>
     ///     If <c>true</c>, requests <c>STATUS_DURABLE_ACK</c> frames from the server via the
     ///     <c>X-QWP-Request-Durable-Ack</c> upgrade header. Off by default.
     /// </summary>
@@ -1632,9 +1642,10 @@ public record SenderOptions
     }
 
     /// <summary>
-    ///     Maximum time to wait for unacked SF frames to drain on <c>Sender.Dispose</c>.
-    ///     Defaults to 60 s, matching the Java client — a wide default so close() does not
-    ///     silently drop unacked rows on slow/backlogged consumers.
+    ///     Default drain timeout used by the no-argument <c>ISender.Flush()</c> /
+    ///     <c>IQuestDBClient.Flush()</c> overloads — the maximum time to wait for un-acked frames to be
+    ///     acknowledged. Defaults to 60 s. <b>Note:</b> <c>Dispose</c> no longer drains (it is pure resource
+    ///     release); call <c>Send()</c> then <c>Flush()</c> explicitly for delivery confirmation.
     /// </summary>
     public TimeSpan close_flush_timeout_millis
     {

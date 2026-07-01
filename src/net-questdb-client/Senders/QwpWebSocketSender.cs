@@ -24,8 +24,6 @@
 
 #if NET7_0_OR_GREATER
 
-using System.Diagnostics;
-using System.Runtime.ExceptionServices;
 using QuestDB.Enums;
 using QuestDB.Pooling;
 using QuestDB.Qwp;
@@ -756,17 +754,67 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender, IPooledSlotSende
     /// <inheritdoc />
     public Task SendAsync(CancellationToken ct = default)
     {
+        // Standalone (SendAwaitsAck): Send drains (flush + await ACK) so "Send() before Dispose" delivers
+        // even though Dispose no longer drains. Pooled: fast flush-to-ring; the pool ships async and
+        // delivery is confirmed via IQuestDBClient.Flush().
+        if (Options.SendAwaitsAck)
+        {
+            return SendDrainAsync(ct);
+        }
+
         ThrowIfTerminal();
         EnsureNoRowInProgress();
         return FlushAsyncCore(deferCommit: false, ct).AsTask();
     }
 
+    private async Task SendDrainAsync(CancellationToken ct)
+    {
+        if (!await FlushAsync(Options.close_flush_timeout_millis, ct).ConfigureAwait(false))
+        {
+            ThrowSendDrainTimeout();
+        }
+    }
+
     /// <inheritdoc />
     public void Send(CancellationToken ct = default)
     {
+        if (Options.SendAwaitsAck)
+        {
+            if (!Flush(Options.close_flush_timeout_millis, ct))
+            {
+                ThrowSendDrainTimeout();
+            }
+
+            return;
+        }
+
         ThrowIfTerminal();
         EnsureNoRowInProgress();
         FlushSync(deferCommit: false, ct);
+    }
+
+    private void ThrowSendDrainTimeout() =>
+        throw new IngressError(ErrorCode.ServerFlushError,
+            $"Send timed out after {Options.close_flush_timeout_millis.TotalMilliseconds:F0}ms waiting for the " +
+            "server to acknowledge; data may not have been delivered");
+
+    /// <inheritdoc />
+    public bool Flush(TimeSpan timeout, CancellationToken ct = default)
+        => FlushCore(timeout, ct).GetAwaiter().GetResult();
+
+    /// <inheritdoc />
+    public Task<bool> FlushAsync(TimeSpan timeout, CancellationToken ct = default)
+        => FlushCore(timeout, ct);
+
+    // Drain = flush buffered rows into the ring (publishing them) then wait for the ACK watermark to reach
+    // that published frame. Reuses FlushAndGetSequenceAsync so the deferred-commit / commit-frame handling
+    // stays in one place.
+    private async Task<bool> FlushCore(TimeSpan timeout, CancellationToken ct)
+    {
+        ThrowIfTerminal();
+        EnsureNoRowInProgress();
+        var publishedFsn = await FlushAndGetSequenceAsync(ct).ConfigureAwait(false);
+        return await AwaitAckedFsnAsync(publishedFsn, timeout, ct).ConfigureAwait(false);
     }
 
     private void EnsureNoRowInProgress()
@@ -1046,124 +1094,25 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender, IPooledSlotSende
         await DisposeStackAsync().ConfigureAwait(false);
     }
 
+    // Dispose is pure resource release: no flush, no ACK wait, no throw. Buffered-but-unsent rows are
+    // discarded. Callers wanting delivery must Send() (hand rows to the ring) and, for confirmation,
+    // Flush(timeout) (await ACK) BEFORE disposing. Already-sent frames are unaffected: in SF mode they
+    // persist in the mmap ring and replay on the next run; in RAM mode they ship best-effort until
+    // teardown. Sync and async teardown are identical — the cursor engine's own Dispose is synchronous
+    // (it defers a wedged pump-join past its budget), so there is nothing to await.
     private void DisposeStackSync()
     {
-        ExceptionDispatchInfo? toRethrow = null;
-        try
-        {
-            toRethrow = DrainOnClose(
-                encode: () => FlushSync(deferCommit: false, CancellationToken.None),
-                wait: () => _engine.FlushAsync(Options.close_flush_timeout_millis).GetAwaiter().GetResult());
-        }
-        finally
-        {
-            SfCleanup.Dispose(_drainerPool);
-            SfCleanup.Dispose(_engine);
-            SfCleanup.Dispose(_errorDispatcher);
-            SfCleanup.Dispose(_connectionEventDispatcher);
-            SfCleanup.Dispose(_certValidator);
-        }
-
-        toRethrow?.Throw();
+        SfCleanup.Dispose(_drainerPool);
+        SfCleanup.Dispose(_engine);
+        SfCleanup.Dispose(_errorDispatcher);
+        SfCleanup.Dispose(_connectionEventDispatcher);
+        SfCleanup.Dispose(_certValidator);
     }
 
-    private async ValueTask DisposeStackAsync()
+    private ValueTask DisposeStackAsync()
     {
-        ExceptionDispatchInfo? toRethrow = null;
-        try
-        {
-            toRethrow = await DrainOnCloseAsync(
-                encode: () => FlushAsyncCore(deferCommit: false, CancellationToken.None),
-                wait: () => new ValueTask(_engine.FlushAsync(Options.close_flush_timeout_millis))).ConfigureAwait(false);
-        }
-        finally
-        {
-            SfCleanup.Dispose(_drainerPool);
-            SfCleanup.Dispose(_engine);
-            SfCleanup.Dispose(_errorDispatcher);
-            SfCleanup.Dispose(_connectionEventDispatcher);
-            SfCleanup.Dispose(_certValidator);
-        }
-
-        toRethrow?.Throw();
-    }
-
-    private ExceptionDispatchInfo? DrainOnClose(Action encode, Action wait)
-    {
-        var timeoutMs = Options.close_flush_timeout_millis.TotalMilliseconds;
-        if (timeoutMs <= 0)
-        {
-            // Explicit "don't wait" close. Still encode buffered rows into the on-disk ring in SF mode
-            // (a local append bounded by sf_append_deadline, not a network wait) so they replay after
-            // restart; best-effort and never throws. In RAM mode the ring is torn down un-sent, so
-            // there is nothing useful to encode.
-            if (!string.IsNullOrEmpty(Options.sf_dir))
-            {
-                try { encode(); }
-                catch { }
-            }
-            return null;
-        }
-
-        try
-        {
-            encode();
-            wait();
-        }
-        catch (TimeoutException ex)
-        {
-            LogCloseFlushTimeoutWarn(timeoutMs);
-            return CaptureTerminalForRethrow() ?? ExceptionDispatchInfo.Capture(ex);
-        }
-        catch { }
-
-        return CaptureTerminalForRethrow();
-    }
-
-    private async ValueTask<ExceptionDispatchInfo?> DrainOnCloseAsync(Func<ValueTask> encode, Func<ValueTask> wait)
-    {
-        var timeoutMs = Options.close_flush_timeout_millis.TotalMilliseconds;
-        if (timeoutMs <= 0)
-        {
-            // See DrainOnClose: encode best-effort into the on-disk ring in SF mode even when the
-            // ack-wait is skipped, so buffered rows survive to replay; never throws.
-            if (!string.IsNullOrEmpty(Options.sf_dir))
-            {
-                try { await encode().ConfigureAwait(false); }
-                catch { }
-            }
-            return null;
-        }
-
-        try
-        {
-            await encode().ConfigureAwait(false);
-            await wait().ConfigureAwait(false);
-        }
-        catch (TimeoutException ex)
-        {
-            LogCloseFlushTimeoutWarn(timeoutMs);
-            return CaptureTerminalForRethrow() ?? ExceptionDispatchInfo.Capture(ex);
-        }
-        catch { }
-
-        return CaptureTerminalForRethrow();
-    }
-
-    private ExceptionDispatchInfo? CaptureTerminalForRethrow()
-    {
-        var terminal = _engine.TerminalError;
-        if (terminal is null) return null;
-        if (_errorDispatcher?.HasDeliveredToCustomHandler == true) return null;
-        return ExceptionDispatchInfo.Capture(terminal);
-    }
-
-    private void LogCloseFlushTimeoutWarn(double timeoutMs)
-    {
-        Trace.TraceWarning(
-            "QWP close: close_flush_timeout ({0:F0} ms) expired with un-acked frames pending; pending data {1}.",
-            timeoutMs,
-            !string.IsNullOrEmpty(Options.sf_dir) ? "remains on disk (SF mode)" : "is lost (Memory mode)");
+        DisposeStackSync();
+        return default;
     }
 
     private QwpTableBuffer EnsureCurrentTable()

@@ -369,15 +369,31 @@ surface.
   parity); a single `ws`/`wss` `FromConfig` string serves both pools.
 - **Borrow / return**: `BorrowSender()` (+ `BorrowSenderAsync`) returns an
   `ISender` that is a fresh per-borrow `BorrowedSender` handle wrapping a
-  reusable `PooledSender` pool entry; disposing it (a `using` block) flushes
-  pending rows and **returns the entry to the pool** — it does NOT close the
-  underlying sender. A return-flush failure discards the sender instead of
-  re-pooling it. The handle is **use-after-return safe**: once disposed every
-  ingest member throws `ObjectDisposedException` (so a stale reference can't
-  alias the entry a later borrower now holds), and a second dispose is a
-  tolerated no-op. There is no context-affine / pinned-sender API — borrow per
-  unit of work and dispose to return (a single `ISender` is not thread-safe, so
-  never share a borrowed one across threads).
+  reusable `PooledSender` pool entry. **Dispose does not send** — it is pure
+  resource release: it discards any buffered-but-unsent rows (`Clear`),
+  **returns the entry to the pool** (it does NOT close the underlying sender),
+  and **never throws**. Call `Send()`/`SendAsync()` to hand rows to the
+  transport, and `Flush(timeout)`/`FlushAsync(timeout)` (drain = send + await
+  ACK) for delivery confirmation, **before** disposing; a sender whose buffer
+  can't be cleared (terminally failed) is discarded instead of re-pooled.
+  **Pooled WS `Send()` is fast flush-to-ring** (the pool sets
+  `SenderOptions.SendAwaitsAck=false`): the pooled connection ships async after
+  return and delivery is confirmed via the pool-wide `Flush` below — unlike a
+  **standalone** WS `Send()`, which drains (`SendAwaitsAck=true` default) so
+  `Send()`-before-`Dispose` delivers on its own. The
+  handle is **use-after-return safe**: once disposed every ingest member throws
+  `ObjectDisposedException` (so a stale reference can't alias the entry a later
+  borrower now holds), and a second dispose is a tolerated no-op. There is no
+  context-affine / pinned-sender API — borrow per unit of work and dispose to
+  return (a single `ISender` is not thread-safe, so never share a borrowed one
+  across threads).
+- **Pool-wide drain**: `IQuestDBClient.Flush(timeout)` / `FlushAsync(timeout)`
+  (→ `SenderPool.Flush`) fans `ISender.Flush` across every pooled sender — the
+  quiescence barrier for "confirm everything landed, then mark done". Call it
+  after all borrowed senders are returned; it does not synchronise against a
+  concurrent borrow. Returns `true` only if every sender drained within the
+  timeout. `close_flush_timeout_millis` is the default timeout for the no-arg
+  `Flush()` overloads (it no longer governs Dispose, which does not drain).
 - **Sizing**: elastic between `sender_pool_min` and `sender_pool_max`,
   bounded by a `SemaphoreSlim` capacity gate (counts in-use senders;
   creation happens outside the lock). `BorrowSender` blocks up to

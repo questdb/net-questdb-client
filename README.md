@@ -78,8 +78,22 @@ This is equivalent to a config string of:
 using var sender = Sender.New("http:addr=localhost:9000;auto_flush=on;auto_flush_rows=75000;auto_flush_interval=1000;");
 ```
 
-A final flush or send should always be used, as auto flush is not guaranteed to send all pending data before
-the sender is disposed.
+You must call `Send()` / `SendAsync()` explicitly before disposing — **`Dispose` no longer sends**. It is
+pure resource release: any buffered-but-unsent rows are discarded and it never throws. Auto-flush is also not
+guaranteed to have sent all pending rows by the time you dispose.
+
+Delivery semantics of `Send()`/`SendAsync()`:
+
+- **HTTP** — synchronous; returns once the server has committed the batch.
+- **Standalone `ws`/`wss`** — **drains**: flushes and blocks until the server acknowledges (bounded by
+  `close_flush_timeout_millis`, throwing on timeout), so `Send()` before `Dispose` reliably delivers.
+- **Pooled `ws`/`wss`** (from `IQuestDBClient.BorrowSender`) — hands the frame to the ring and returns
+  immediately; the pooled connection ships it asynchronously. Confirm delivery with the pool-wide
+  `IQuestDBClient.Flush(timeout)` once your producers have returned their senders.
+
+For an explicit bounded, bool-returning drain on any sender use `Flush(timeout)` / `FlushAsync(timeout)`;
+for the whole pool use `IQuestDBClient.Flush(timeout)`. The identical `Send()`-before-dispose code works for
+both standalone and pooled senders — only the fast bulk path differs (auto-flush + a final `Flush`).
 
 #### Flush every 1000 rows or every 1 second
 
@@ -306,7 +320,7 @@ The config string format is:
 | `reconnect_max_backoff_millis`    | `5000`       | Cap on per-attempt backoff.                                                                              |
 | `reconnect_max_duration_millis`   | `300000`     | Total per-outage budget; sender becomes terminal if exceeded.                                            |
 | `initial_connect_retry`           | `off`        | `on` makes the first connect honour the same backoff loop. Default is "fail fast on first connect".      |
-| `close_flush_timeout_millis`      | `60000`      | Max wait at `Dispose` for the SF engine to drain (matches Java). `0` or `-1` for fast close.             |
+| `close_flush_timeout_millis`      | `60000`      | Drain timeout for a standalone `Send()` and the no-arg `Flush()` / `FlushAsync()`. **`Dispose` does not drain.** |
 | `drain_orphans`                   | `off`        | `on` adopts unlocked sibling slots on startup and drains them in the background.                         |
 | `max_background_drainers`         | `4`          | Cap on concurrent orphan-drain workers.                                                                  |
 

@@ -219,7 +219,7 @@ public class SfPoolConcurrencyTests
                         if (inner != null)
                         {
                             inner.SlotLockReleased = false;
-                            inner.ThrowOnSend = true;
+                            inner.ThrowOnClear = true;
                         }
                     }
 
@@ -340,7 +340,7 @@ public class SfPoolConcurrencyTests
                     if (inner != null)
                     {
                         inner.SlotLockReleased = false;
-                        inner.ThrowOnSend = true;
+                        inner.ThrowOnClear = true;
                     }
                 }
 

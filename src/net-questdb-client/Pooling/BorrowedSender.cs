@@ -33,10 +33,12 @@ namespace QuestDB.Pooling;
 ///     <see cref="SenderPool.BorrowAsync" />. A <b>fresh</b> handle is allocated per borrow and wraps a
 ///     reusable <see cref="PooledSender" /> pool entry; it is the only object the caller ever touches.
 ///     <para />
-///     <see cref="Dispose" /> (and <see cref="DisposeAsync" />) flush pending rows and return the
-///     underlying entry to the pool — they do NOT close the real sender (that happens only when the
-///     owning <see cref="QuestDBClient" /> handle is closed). Two invariants make a borrowed handle
-///     misuse-proof:
+///     <see cref="Dispose" /> (and <see cref="DisposeAsync" />) are pure resource release: they discard any
+///     buffered-but-unsent rows and return the underlying entry to the pool — they do NOT send, and do NOT
+///     close the real sender (that happens only when the owning <see cref="QuestDBClient" /> handle is
+///     closed). Call <see cref="Send" /> / <see cref="SendAsync" /> (and, on <c>ws</c>,
+///     <see cref="Flush(TimeSpan, CancellationToken)" /> to await ACK) before disposing if the data must
+///     land. Two invariants make a borrowed handle misuse-proof:
 ///     <list type="bullet">
 ///         <item><b>No use after return.</b> Once disposed, every ingest member throws
 ///         <see cref="ObjectDisposedException" />. Because each borrow gets its own handle, a caller
@@ -76,45 +78,52 @@ internal sealed class BorrowedSender : IQwpWebSocketSender
     /// <inheritdoc />
     public void Dispose()
     {
-        // First dispose returns the entry; any later call is an idempotent no-op. The pool — not Dispose —
-        // is what tears the real sender down.
+        // First dispose returns the entry; any later call is an idempotent no-op. Dispose is pure resource
+        // release: it does NOT send — buffered-but-unsent rows are discarded so the reused entry starts
+        // clean — and it never throws. Call Send()/Flush() before disposing for delivery. The pool — not
+        // Dispose — tears the real sender down.
         if (Interlocked.Exchange(ref _disposed, 1) != 0)
         {
             return;
         }
 
-        try
+        if (TryDiscardUnsent())
         {
-            _inner.Send();
+            _pool.GiveBack(_entry);
         }
-        catch
+        else
         {
             _pool.DiscardBroken(_entry);
-            return;
         }
-
-        _pool.GiveBack(_entry);
     }
 
     /// <inheritdoc />
-    public async ValueTask DisposeAsync()
+    public ValueTask DisposeAsync()
     {
         if (Interlocked.Exchange(ref _disposed, 1) != 0)
         {
-            return;
+            return default;
         }
 
+        return TryDiscardUnsent()
+            ? _pool.GiveBackAsync(_entry)
+            : _pool.DiscardBrokenAsync(_entry);
+    }
+
+    // Discard this borrow's un-sent rows so the reused entry starts with a clean buffer. Returns false
+    // (→ discard, don't re-pool) when the inner sender is terminally failed and cannot be cleared, so a
+    // dead sender never aliases a later borrower. Never throws — Dispose must not throw.
+    private bool TryDiscardUnsent()
+    {
         try
         {
-            await _inner.SendAsync().ConfigureAwait(false);
+            _inner.Clear();
+            return true;
         }
         catch
         {
-            await _pool.DiscardBrokenAsync(_entry).ConfigureAwait(false);
-            return;
+            return false;
         }
-
-        await _pool.GiveBackAsync(_entry).ConfigureAwait(false);
     }
 
     // Gate + reach the delegate in one step: throws if this handle was already returned, otherwise hands
@@ -150,6 +159,10 @@ internal sealed class BorrowedSender : IQwpWebSocketSender
     public void Commit(CancellationToken ct = default) => Active().Commit(ct);
     public Task SendAsync(CancellationToken ct = default) => Active().SendAsync(ct);
     public void Send(CancellationToken ct = default) => Active().Send(ct);
+    public bool Flush(TimeSpan timeout, CancellationToken ct = default) => Active().Flush(timeout, ct);
+    public Task<bool> FlushAsync(TimeSpan timeout, CancellationToken ct = default) => Active().FlushAsync(timeout, ct);
+    public bool Flush(CancellationToken ct = default) => Active().Flush(ct);
+    public Task<bool> FlushAsync(CancellationToken ct = default) => Active().FlushAsync(ct);
 
     public ISender Table(ReadOnlySpan<char> name)
     {

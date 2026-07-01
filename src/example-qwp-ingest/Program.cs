@@ -33,7 +33,8 @@ using QuestDB.Senders;
 //   addr                 host:port (default port 9000, shared with HTTP)
 //   auto_flush_rows      rows before an automatic flush is triggered (default 1000 for ws)
 //   auto_flush_interval  milliseconds before an automatic flush (default 100 for ws)
-//   close_timeout        ms to wait for in-flight ACKs on Dispose / Ping (default 5000)
+//   close_flush_timeout_millis  drain timeout (default 60000) for a standalone Send() and the no-arg
+//                        Flush(). NOTE: Dispose does NOT drain — a standalone Send() delivers on its own.
 //   request_durable_ack  on/off — opt in to per-table durable seqTxn watermarks
 //   username/password    Basic auth, or
 //   token                Bearer auth
@@ -53,6 +54,9 @@ await sender.Table("trades")
     .Column("amount", 0.001)
     .AtAsync(DateTime.UtcNow);
 
+// A standalone ws:: Send drains — it flushes the buffered rows AND blocks until the server acknowledges
+// them — so "Send before dispose" reliably delivers even though Dispose does not wait. (Send throws on a
+// drain timeout, bounded by close_flush_timeout_millis; use Flush(timeout) for a bounded, bool-returning drain.)
 await sender.SendAsync();
 
 // When `request_durable_ack=on` is set, the WebSocket sender exposes per-table seqTxn watermarks

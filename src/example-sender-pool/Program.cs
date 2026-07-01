@@ -28,8 +28,9 @@ using System.Threading.Tasks;
 using QuestDB;
 
 // A single ISender is not thread-safe. To ingest from many threads, construct one shared
-// QuestDBClient pool and borrow a sender per unit of work. Disposing the borrowed sender flushes
-// its rows and returns it to the pool — the underlying connection stays open and is reused.
+// QuestDBClient pool and borrow a sender per unit of work. Call Send()/SendAsync() to send your rows;
+// disposing the borrowed sender does NOT send — it discards anything un-sent and returns the sender to
+// the pool (the underlying connection stays open and is reused).
 
 await using var client = QuestDBClient.Builder()
     .FromConfig("http::addr=localhost:9000;")
@@ -50,7 +51,12 @@ await Parallel.ForEachAsync(Enumerable.Range(0, 100), async (i, ct) =>
     await sender.SendAsync(ct);
 }); // each `using` returns its sender to the pool
 
-Console.WriteLine($"Done. pool: {client.AvailableSenderCount} idle / {client.TotalSenderCount} total");
+// Pool-wide drain barrier: flush every pooled sender and block until the server has acknowledged.
+// Call it once all borrowed senders have been returned (as here). Over HTTP it returns immediately;
+// over ws:: it waits for the ACK watermark, so `true` means every row has landed.
+var delivered = await client.FlushAsync(TimeSpan.FromSeconds(30));
+
+Console.WriteLine($"Done (delivered={delivered}). pool: {client.AvailableSenderCount} idle / {client.TotalSenderCount} total");
 
 // Borrow one sender per unit of work and dispose it (a `using` block) to return it to the pool.
 // A single sender is not thread-safe, so never share a borrowed sender across threads.

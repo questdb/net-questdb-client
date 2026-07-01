@@ -41,19 +41,33 @@ internal sealed class FakeSender : ISender, IPooledSlotSender
     public int SlotIndex { get; }
     public int DisposeCount;
     public int SendCount;
+    public int ClearCount;
+    public int FlushCount;
     public bool ThrowOnSend;
+    public bool ThrowOnClear;
+    public bool ThrowOnFlush;
     public bool ThrowOnDispose;
 
     // When set, Send() parks here (simulating an in-flight flush) until the test releases it. Lets a test
     // hold a borrowed sender mid-flush while another thread closes the pool.
     public ManualResetEventSlim? SendGate;
 
+    // When set, Clear() parks here — the return path Dispose() now runs (it discards un-sent rows via
+    // Clear instead of sending). Lets a test hold a borrowed sender mid-return while another thread closes.
+    public ManualResetEventSlim? ClearGate;
+
     // True while Send() is executing; flipped by Send(). Used to detect a Dispose racing an in-flight Send.
     public volatile bool SendInProgress;
+
+    // True while Clear() is executing; flipped by Clear(). Detects a Dispose racing an in-flight return.
+    public volatile bool ClearInProgress;
 
     // Set true if Dispose() was ever called while Send() was in progress — the exact non-thread-safe
     // race a borrowed sender must never be subjected to by pool teardown.
     public volatile bool DisposedDuringSend;
+
+    // Set true if Dispose() was ever called while Clear() (the return path) was in progress.
+    public volatile bool DisposedDuringClear;
 
     // Pretend this sender holds a slot lock that does (true) or does not (false) release on dispose.
     // Volatile: SF concurrency stress tests flip this from a housekeeper thread while the pool reads it
@@ -80,6 +94,11 @@ internal sealed class FakeSender : ISender, IPooledSlotSender
         if (SendInProgress)
         {
             DisposedDuringSend = true;
+        }
+
+        if (ClearInProgress)
+        {
+            DisposedDuringClear = true;
         }
 
         Interlocked.Increment(ref DisposeCount);
@@ -119,6 +138,19 @@ internal sealed class FakeSender : ISender, IPooledSlotSender
         Send(ct);
         return Task.CompletedTask;
     }
+
+    public bool Flush(TimeSpan timeout, CancellationToken ct = default)
+    {
+        Interlocked.Increment(ref FlushCount);
+        if (ThrowOnFlush)
+        {
+            throw new IngressError(ErrorCode.ServerFlushError, "fake flush failure");
+        }
+
+        return true;
+    }
+
+    public Task<bool> FlushAsync(TimeSpan timeout, CancellationToken ct = default) => Task.FromResult(Flush(timeout, ct));
 
     public ISender Transaction(ReadOnlySpan<char> tableName) => this;
     public void Rollback() { }
@@ -164,5 +196,23 @@ internal sealed class FakeSender : ISender, IPooledSlotSender
 
     public void Truncate() { }
     public void CancelRow() { }
-    public void Clear() { }
+
+    public void Clear()
+    {
+        ClearInProgress = true;
+        try
+        {
+            ClearGate?.Wait();
+            Interlocked.Increment(ref ClearCount);
+        }
+        finally
+        {
+            ClearInProgress = false;
+        }
+
+        if (ThrowOnClear)
+        {
+            throw new IngressError(ErrorCode.ServerFlushError, "fake clear failure");
+        }
+    }
 }

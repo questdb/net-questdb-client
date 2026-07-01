@@ -110,7 +110,7 @@ public class PoolSlotTests
             Assert.That(new[] { a.SlotIndex, b.SlotIndex, c.SlotIndex }, Is.EqualTo(new[] { 0, 1, 2 }));
 
             // Break the slot-1 sender so it is discarded (lock releases cleanly), freeing index 1.
-            created.Single(s => s.SlotIndex == 1).ThrowOnSend = true;
+            created.Single(s => s.SlotIndex == 1).ThrowOnClear = true;
             b.Dispose();
 
             var d = pool.Borrow();
@@ -139,7 +139,7 @@ public class PoolSlotTests
             // Slot-0 sender breaks AND refuses to release its lock -> the index must be retired.
             var fakeA = created.Single(s => s.SlotIndex == 0);
             fakeA.SlotLockReleased = false;
-            fakeA.ThrowOnSend = true;
+            fakeA.ThrowOnClear = true;
             a.Dispose();
 
             Assert.That(pool.LeakedSlotCount, Is.EqualTo(1), "leaked slot retired");
@@ -211,7 +211,7 @@ public class PoolSlotTests
             // max shrinks to 1 (mirrors a deferred engine teardown still holding the slot lock).
             var fakeA = created.Single(s => s.SlotIndex == 0);
             fakeA.SlotLockReleased = false;
-            fakeA.ThrowOnSend = true;
+            fakeA.ThrowOnClear = true;
             a.Dispose();
 
             Assert.That(pool.LeakedSlotCount, Is.EqualTo(1), "slot retired while lock held");

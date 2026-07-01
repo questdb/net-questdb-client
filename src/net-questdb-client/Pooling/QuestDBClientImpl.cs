@@ -185,6 +185,14 @@ internal sealed class QuestDBClientImpl : IQuestDBClient
         return await _pool.BorrowAsync(ct).ConfigureAwait(false);
     }
 
+    public bool Flush(TimeSpan timeout, CancellationToken ct = default) => _pool.Flush(timeout, ct);
+
+    public bool Flush(CancellationToken ct = default) => _pool.Flush(ct);
+
+    public ValueTask<bool> FlushAsync(TimeSpan timeout, CancellationToken ct = default) => _pool.FlushAsync(timeout, ct);
+
+    public ValueTask<bool> FlushAsync(CancellationToken ct = default) => _pool.FlushAsync(ct);
+
 #if NET7_0_OR_GREATER
     public int AvailableQueryClientCount => RequireQueryPool().AvailableSize;
     public int TotalQueryClientCount => RequireQueryPool().TotalSize;

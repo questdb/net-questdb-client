@@ -51,6 +51,7 @@ internal static class QwpConnectStringKeys
         "sender_pool_min", "sender_pool_max",
         "query_pool_min", "query_pool_max",
         "acquire_timeout_ms", "idle_timeout_ms", "max_lifetime_ms", "housekeeper_interval_ms",
+        "lazy_connect",
     };
 
     /// <summary>

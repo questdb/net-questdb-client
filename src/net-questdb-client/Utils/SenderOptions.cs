@@ -121,6 +121,7 @@ public record SenderOptions
     private TimeSpan _idleTimeout = TimeSpan.FromMilliseconds(60000);
     private TimeSpan _maxLifetime = TimeSpan.FromMilliseconds(1800000);
     private TimeSpan _housekeeperInterval = TimeSpan.FromMilliseconds(5000);
+    private bool _lazyConnect;
     private string? _proxy;
     private string? _zone;
     private SenderErrorHandler? _errorHandler;
@@ -261,6 +262,7 @@ public record SenderOptions
         ParseMillisecondsWithDefault(nameof(idle_timeout_ms), "60000", out _idleTimeout);
         ParseMillisecondsWithDefault(nameof(max_lifetime_ms), "1800000", out _maxLifetime);
         ParseMillisecondsWithDefault(nameof(housekeeper_interval_ms), "5000", out _housekeeperInterval);
+        ParseBoolOnOff(nameof(lazy_connect), "off", out _lazyConnect);
 
         ParseEnumWithDefault(nameof(tls_verify), "on", out _tlsVerify);
         ParseStringWithDefault(nameof(tls_roots), null, out _tlsRoots);
@@ -1366,6 +1368,35 @@ public record SenderOptions
         get => _housekeeperInterval;
         set => _housekeeperInterval = value;
     }
+
+    /// <summary>
+    ///     Tolerant-startup flag for the <see cref="QuestDBClient" /> handle. When <c>on</c>/<c>true</c>
+    ///     the handle builds even while the server is down: the ingest side connects asynchronously
+    ///     (buffering writes meanwhile) and the read pool defaults to <see cref="query_pool_min" /> 0 so
+    ///     nothing connects eagerly — a query connects lazily on first borrow once the server is up.
+    ///     Conflicting knobs that force a blocking / fail-fast startup (an explicit
+    ///     <c>initial_connect_retry</c> other than <c>async</c>, or an explicit <c>query_pool_min</c> &gt; 0)
+    ///     are rejected by <c>QuestDBClientBuilder.Build</c>. A plain <see cref="Sender" /> ignores this
+    ///     key. Default <c>off</c>.
+    /// </summary>
+    [JsonIgnore]
+    public bool lazy_connect
+    {
+        get => _lazyConnect;
+        set => _lazyConnect = value;
+    }
+
+    /// <summary>
+    ///     True when <c>initial_connect_retry</c> / <c>initial_connect_mode</c> was set explicitly by the
+    ///     user (connect string or programmatic setter), as opposed to left at its default or promoted
+    ///     internally. Used by the pool facade to detect a <c>lazy_connect</c> conflict without treating
+    ///     the reconnect-tuning promotion as a user choice.
+    /// </summary>
+    internal bool IsInitialConnectModeExplicit =>
+        _initialConnectModeUserSet || IsKeyExplicit(nameof(initial_connect_retry));
+
+    /// <summary>True when <c>query_pool_min</c> appeared explicitly in this connect string.</summary>
+    internal bool IsQueryPoolMinExplicit => IsKeyExplicit(nameof(query_pool_min));
 
     /// <summary>
     ///     Set by the QuestDBClient pool on each per-slot sender: the orphan scanner skips slot dirs

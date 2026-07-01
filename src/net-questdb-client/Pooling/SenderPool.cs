@@ -54,6 +54,10 @@ internal sealed class SenderPool
     private readonly int _acquireTimeoutMs;
     private readonly TimeSpan _defaultFlushTimeout;
 
+    // lazy_connect: pooled ws senders connect asynchronously so a down server doesn't fail-fast the
+    // pre-warm; writes buffer until the wire is up. No effect on non-ws senders.
+    private readonly bool _forceWsAsyncConnect;
+
     private readonly Stack<PooledSender> _available = new();
     private readonly List<PooledSender> _all = new();
     private bool _closed;
@@ -83,15 +87,17 @@ internal sealed class SenderPool
     private int _leakDebt;
 
     /// <summary>Production constructor: pool sizes come from <paramref name="poolConfig" />, senders are
-    ///     built from <paramref name="confStr" />.</summary>
-    internal SenderPool(SenderOptions poolConfig, string confStr)
-        : this(poolConfig, confStr, null)
+    ///     built from <paramref name="confStr" />. <paramref name="forceWsAsyncConnect" /> is set by the
+    ///     <c>lazy_connect</c> facade path so pooled ws senders connect asynchronously.</summary>
+    internal SenderPool(SenderOptions poolConfig, string confStr, bool forceWsAsyncConnect = false)
+        : this(poolConfig, confStr, null, forceWsAsyncConnect)
     {
     }
 
     /// <summary>Test seam: inject a sender factory so unit tests need no live server. <paramref name="confStr" />
     ///     may be null when a factory is supplied.</summary>
-    internal SenderPool(SenderOptions poolConfig, string? confStr, Func<int, ISender>? senderFactory)
+    internal SenderPool(SenderOptions poolConfig, string? confStr, Func<int, ISender>? senderFactory,
+        bool forceWsAsyncConnect = false)
     {
         // Re-validate: builder methods may have mutated min/max after the connect-string parse.
         poolConfig.ValidatePoolOptions();
@@ -104,6 +110,7 @@ internal sealed class SenderPool
         _maxLifetime = poolConfig.max_lifetime_ms;
         _confStr = confStr;
         _senderFactory = senderFactory ?? CreateDefaultInner;
+        _forceWsAsyncConnect = forceWsAsyncConnect;
         _capacity = new SemaphoreSlim(_max, _max);
 
         _storeAndForward = poolConfig.IsWebSocket() && !string.IsNullOrEmpty(poolConfig.sf_dir);
@@ -812,6 +819,14 @@ internal sealed class SenderPool
         // ships asynchronously; delivery is confirmed via the pool-wide IQuestDBClient.Flush(). (Standalone
         // senders keep SendAwaitsAck=true so "Send() before Dispose" delivers.)
         options.SendAwaitsAck = false;
+        // lazy_connect: the ingest side must not block the pre-warm on a down server. The builder has
+        // already rejected an explicit non-async initial_connect_retry, so forcing async here is either a
+        // no-op (already async) or the intended injection (unset / reconnect-promoted). ws only — the flag
+        // is off for http/tcp handles.
+        if (_forceWsAsyncConnect && options.IsWebSocket())
+        {
+            options.initial_connect_mode = InitialConnectMode.async;
+        }
         if (_storeAndForward)
         {
             if (slotIndex < 0)

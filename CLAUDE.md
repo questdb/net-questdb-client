@@ -403,8 +403,21 @@ surface.
 - **Config keys** (all-protocol, on `SenderOptions`, `[JsonIgnore]`d out of
   `ToString` so a plain sender round-trips byte-identically): `sender_pool_min`
   (1), `sender_pool_max` (4), `acquire_timeout_ms` (5000), `idle_timeout_ms`
-  (60000), `max_lifetime_ms` (1800000), `housekeeper_interval_ms` (5000).
-  Validated by `SenderOptions.ValidatePoolOptions()`.
+  (60000), `max_lifetime_ms` (1800000), `housekeeper_interval_ms` (5000),
+  `lazy_connect` (off). Validated by `SenderOptions.ValidatePoolOptions()`.
+- **Tolerant startup (`lazy_connect=on`)**: a facade-only pool key (also
+  `QuestDBClientBuilder.LazyConnect()`) — in `QwpConnectStringKeys.Shared`, so a
+  plain `Sender` parses and ignores it on every scheme. It lets
+  `QuestDBClient` build while the server is down: the `ws`/`wss` ingest side
+  connects asynchronously (buffering writes) and the read pool defaults
+  `query_pool_min=0` so nothing connects eagerly — the read pool stays
+  **enabled** and a query connects lazily on first `NewQuery`. `QuestDBClientBuilder.Build`
+  reads it (`ResolveLazyConnect`), injects `initial_connect_retry=async` for the
+  pooled ws senders (via `SenderPool`'s `forceWsAsyncConnect`) when unset, and
+  rejects a conflicting blocking-startup knob up front (`IngressError`/`ConfigError`):
+  an explicit `initial_connect_retry` other than `async`, or an explicit
+  `query_pool_min > 0` (connect string or `QueryPoolMin(...)` builder call, tracked
+  across ingest + separate-query configs). Mirrors java-questdb-client `lazy_connect`.
 - **Query pooling (net7.0+)**: `IQuestDBClient.NewQuery()` returns a fresh
   `Query` builder (`Sql`/`Binds`/`Handler` then `ExecuteAsync`/`Execute`);
   `ExecuteSqlAsync(sql, handler, ct)` is the convenience shortcut. There is

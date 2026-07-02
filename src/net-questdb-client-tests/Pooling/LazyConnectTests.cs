@@ -85,7 +85,7 @@ public class LazyConnectTests
     {
         var o = new SenderOptions("ws::addr=localhost:9000;");
         var forceAsync = QuestDBClientBuilder.ResolveLazyConnect(
-            lazy: true, o, ingestIsWebSocket: true, queryPoolMinExplicit: false, queryPoolMinExplicitPositive: false);
+            lazy: true, o, ingestIsWebSocket: true, queryPoolMinExplicit: false);
         Assert.Multiple(() =>
         {
             Assert.That(forceAsync, Is.True);
@@ -98,7 +98,7 @@ public class LazyConnectTests
     {
         var o = new SenderOptions("http::addr=localhost:9000;");
         var forceAsync = QuestDBClientBuilder.ResolveLazyConnect(
-            lazy: true, o, ingestIsWebSocket: false, queryPoolMinExplicit: false, queryPoolMinExplicitPositive: false);
+            lazy: true, o, ingestIsWebSocket: false, queryPoolMinExplicit: false);
         Assert.Multiple(() =>
         {
             Assert.That(forceAsync, Is.False);
@@ -111,7 +111,7 @@ public class LazyConnectTests
     {
         var o = new SenderOptions("ws::addr=localhost:9000;"); // query_pool_min default 1
         var forceAsync = QuestDBClientBuilder.ResolveLazyConnect(
-            lazy: false, o, ingestIsWebSocket: true, queryPoolMinExplicit: false, queryPoolMinExplicitPositive: false);
+            lazy: false, o, ingestIsWebSocket: true, queryPoolMinExplicit: false);
         Assert.Multiple(() =>
         {
             Assert.That(forceAsync, Is.False);
@@ -124,7 +124,7 @@ public class LazyConnectTests
     {
         var o = new SenderOptions("ws::addr=localhost:9000;query_pool_min=0;");
         Assert.DoesNotThrow(() => QuestDBClientBuilder.ResolveLazyConnect(
-            lazy: true, o, ingestIsWebSocket: true, queryPoolMinExplicit: true, queryPoolMinExplicitPositive: false));
+            lazy: true, o, ingestIsWebSocket: true, queryPoolMinExplicit: true));
         Assert.That(o.query_pool_min, Is.EqualTo(0));
     }
 
@@ -133,7 +133,7 @@ public class LazyConnectTests
     {
         var o = new SenderOptions("ws::addr=localhost:9000;initial_connect_retry=async;");
         Assert.DoesNotThrow(() => QuestDBClientBuilder.ResolveLazyConnect(
-            lazy: true, o, ingestIsWebSocket: true, queryPoolMinExplicit: false, queryPoolMinExplicitPositive: false));
+            lazy: true, o, ingestIsWebSocket: true, queryPoolMinExplicit: false));
         Assert.That(o.query_pool_min, Is.EqualTo(0));
     }
 
@@ -144,7 +144,7 @@ public class LazyConnectTests
     {
         var o = new SenderOptions($"ws::addr=localhost:9000;initial_connect_retry={mode};");
         var ex = Assert.Throws<IngressError>(() => QuestDBClientBuilder.ResolveLazyConnect(
-            lazy: true, o, ingestIsWebSocket: true, queryPoolMinExplicit: false, queryPoolMinExplicitPositive: false));
+            lazy: true, o, ingestIsWebSocket: true, queryPoolMinExplicit: false));
         Assert.Multiple(() =>
         {
             Assert.That(ex!.code, Is.EqualTo(ErrorCode.ConfigError));
@@ -157,7 +157,7 @@ public class LazyConnectTests
     {
         var o = new SenderOptions("ws::addr=localhost:9000;query_pool_min=2;");
         var ex = Assert.Throws<IngressError>(() => QuestDBClientBuilder.ResolveLazyConnect(
-            lazy: true, o, ingestIsWebSocket: true, queryPoolMinExplicit: true, queryPoolMinExplicitPositive: true));
+            lazy: true, o, ingestIsWebSocket: true, queryPoolMinExplicit: true));
         Assert.Multiple(() =>
         {
             Assert.That(ex!.code, Is.EqualTo(ErrorCode.ConfigError));
@@ -204,6 +204,19 @@ public class LazyConnectTests
             Assert.That(ex!.code, Is.EqualTo(ErrorCode.ConfigError));
             Assert.That(ex.Message, Does.Contain("query_pool_min"));
         });
+    }
+
+    [Test]
+    public void Lazy_QueryPoolMinLoweredToZeroViaBuilder_DoesNotConflict()
+    {
+        // The config string asks for query_pool_min=2, but the higher-precedence builder call overrides it
+        // back to 0. The effective value is 0, so lazy_connect must not fire the eager-read-pool conflict.
+        using var h = QuestDBClient.Builder()
+            .FromConfig("ws::addr=localhost:9000;query_pool_min=2;sender_pool_min=0;")
+            .LazyConnect()
+            .QueryPoolMin(0)
+            .Build();
+        Assert.That(h.TotalQueryClientCount, Is.EqualTo(0));
     }
 
     [Test]

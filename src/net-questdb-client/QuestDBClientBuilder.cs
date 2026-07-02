@@ -223,14 +223,12 @@ public sealed class QuestDBClientBuilder
         queryConfStr = null;
 
         // lazy_connect may be carried by the ingest config or the (separate) query config, and an
-        // explicit builder call wins over either. Two query_pool_min signals are tracked across all three
-        // sources: `Explicit` (any source set it — drives the default-to-0 decision, against the effective
-        // post-precedence value) and `ExplicitPositive` (any source set it > 0 — drives the conflict
-        // rejection: lazy_connect is refused when any source asked for an eager read pool, even if a
-        // higher-precedence source overrides the effective value to 0).
+        // explicit builder call wins over either. `queryPoolMinExplicit` tracks whether any source set
+        // query_pool_min at all (drives the default-to-0 decision); the conflict-rejection signal is
+        // derived from the effective post-precedence value inside ResolveLazyConnect, not accumulated here,
+        // so a higher-precedence source lowering the effective value back to 0 clears the conflict.
         var configLazy = poolConfig.lazy_connect;
         var queryPoolMinExplicit = poolConfig.IsQueryPoolMinExplicit;
-        var queryPoolMinExplicitPositive = poolConfig.IsQueryPoolMinExplicit && poolConfig.query_pool_min > 0;
         var ingestIsWebSocket = IsWebSocketScheme(_confStr);
 
 #if NET7_0_OR_GREATER
@@ -254,7 +252,6 @@ public sealed class QuestDBClientBuilder
             {
                 poolConfig.query_pool_min = queryOpts.query_pool_min;
                 queryPoolMinExplicit = true;
-                queryPoolMinExplicitPositive = queryPoolMinExplicitPositive || queryOpts.query_pool_min > 0;
             }
 
             if (queryOpts.IsQueryPoolMaxExplicit)
@@ -269,7 +266,6 @@ public sealed class QuestDBClientBuilder
         {
             poolConfig.query_pool_min = _queryPoolMin.Value;
             queryPoolMinExplicit = true;
-            queryPoolMinExplicitPositive = queryPoolMinExplicitPositive || _queryPoolMin.Value > 0;
         }
 
         if (_queryPoolMax.HasValue)
@@ -280,7 +276,7 @@ public sealed class QuestDBClientBuilder
 
         var lazy = _lazyConnect ?? configLazy;
         forceWsAsyncConnect = ResolveLazyConnect(
-            lazy, poolConfig, ingestIsWebSocket, queryPoolMinExplicit, queryPoolMinExplicitPositive);
+            lazy, poolConfig, ingestIsWebSocket, queryPoolMinExplicit);
 
 #if NET7_0_OR_GREATER
         if (queryConfStr is not null)
@@ -302,12 +298,13 @@ public sealed class QuestDBClientBuilder
     ///     <c>async</c>, or an explicit <c>query_pool_min</c> &gt; 0.
     ///     <para />
     ///     <paramref name="queryPoolMinExplicit" /> is true when any source set <c>query_pool_min</c> at all
-    ///     (drives the default-to-0 decision); <paramref name="queryPoolMinExplicitPositive" /> is true when
-    ///     any source set it &gt; 0 (drives the conflict rejection).
+    ///     (drives the default-to-0 decision); the conflict rejection is driven by the effective
+    ///     post-precedence value, so a higher-precedence source that overrides it back to 0 clears the
+    ///     conflict.
     /// </summary>
     internal static bool ResolveLazyConnect(
         bool lazy, SenderOptions poolConfig, bool ingestIsWebSocket,
-        bool queryPoolMinExplicit, bool queryPoolMinExplicitPositive)
+        bool queryPoolMinExplicit)
     {
         if (!lazy)
         {
@@ -322,7 +319,7 @@ public sealed class QuestDBClientBuilder
                 "blocking mode; drop `initial_connect_retry` or set it to `async` to use `lazy_connect`");
         }
 
-        if (queryPoolMinExplicitPositive)
+        if (queryPoolMinExplicit && poolConfig.query_pool_min > 0)
         {
             throw new IngressError(ErrorCode.ConfigError,
                 "`lazy_connect` defers the read connect, but `query_pool_min` is set > 0 which pre-warms " +

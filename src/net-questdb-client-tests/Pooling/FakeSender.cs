@@ -35,7 +35,7 @@ namespace net_questdb_client_tests.Pooling;
 ///     Implements <see cref="IPooledSlotSender" /> so SF slot reclaim / retire can be exercised, and
 ///     <see cref="IPooledTransactionalSender" /> so the staged-uncommitted-rows discard path can be too.
 /// </summary>
-internal class FakeSender : ISender, IPooledSlotSender, IPooledTransactionalSender
+internal class FakeSender : ISender, IPooledSlotSender, IPooledTransactionalSender, IPooledDrainAwareSender
 {
     private static readonly SenderOptions Opts = new("http::addr=localhost:9000;");
 
@@ -87,6 +87,13 @@ internal class FakeSender : ISender, IPooledSlotSender, IPooledTransactionalSend
     }
 
     public bool IsSlotLockReleased => SlotLockReleased;
+
+    // Pretend this sender's cursor-engine ring still holds un-acked frames (false) or has fully drained
+    // (true). Volatile: reaper tests flip it from the test thread while the pool reads it under its gate.
+    // Defaults to drained so existing reaper tests (which expect prompt reaping) are unaffected.
+    public volatile bool FullyDrained = true;
+
+    public bool IsFullyDrained => FullyDrained;
 
     // Pretend this sender has transactional rows staged server-side awaiting commit (ws transaction=on
     // after a deferred auto-flush). The return path must discard such a sender, not re-pool it.

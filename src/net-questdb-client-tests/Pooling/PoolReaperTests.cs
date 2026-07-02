@@ -178,6 +178,74 @@ public class PoolReaperTests
     }
 
     [Test]
+    public void ReapIdleSkipsSendersWithUnAckedData()
+    {
+        var pool = MakePool("sender_pool_min=0;sender_pool_max=4;idle_timeout_ms=1;", out var created);
+        try
+        {
+            Churn(pool, 3);
+            foreach (var s in created)
+            {
+                s.FullyDrained = false; // ring still holds un-acked frames
+            }
+
+            Thread.Sleep(25);
+            pool.ReapIdle();
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(pool.TotalSize, Is.EqualTo(3), "un-drained senders are never reaped, even over idle timeout");
+                Assert.That(created.Count(s => s.Disposed), Is.EqualTo(0));
+            });
+
+            // Once the rings drain, the next sweep reaps them (idle clock started at drain).
+            foreach (var s in created)
+            {
+                s.FullyDrained = true;
+            }
+
+            Thread.Sleep(25);
+            pool.ReapIdle();
+            Assert.That(pool.TotalSize, Is.EqualTo(0), "drained senders reap normally on the next sweep");
+        }
+        finally
+        {
+            pool.Close();
+        }
+    }
+
+    [Test]
+    public void ReapIdleByMaxLifetimeSkipsUnAckedData()
+    {
+        // Even the max-lifetime path must not drop un-acked data: an over-age but un-drained sender survives.
+        var pool = MakePool("sender_pool_min=0;sender_pool_max=2;idle_timeout_ms=600000;max_lifetime_ms=1;", out var created);
+        try
+        {
+            Churn(pool, 2);
+            foreach (var s in created)
+            {
+                s.FullyDrained = false;
+            }
+
+            Thread.Sleep(25);
+            pool.ReapIdle();
+            Assert.That(pool.TotalSize, Is.EqualTo(2), "over-age senders with un-acked data are not aged out");
+
+            foreach (var s in created)
+            {
+                s.FullyDrained = true;
+            }
+
+            pool.ReapIdle();
+            Assert.That(pool.TotalSize, Is.EqualTo(0), "once drained, the over-age sender is recycled");
+        }
+        finally
+        {
+            pool.Close();
+        }
+    }
+
+    [Test]
     public void HousekeeperReapsInBackground()
     {
         var bag = new ConcurrentBag<FakeSender>();

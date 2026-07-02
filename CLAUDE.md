@@ -413,7 +413,18 @@ surface.
   creation happens outside the lock). `BorrowSender` blocks up to
   `acquire_timeout_ms` then throws `IngressError(ErrorCode.PoolExhausted)`.
   `PoolHousekeeper` (a `PeriodicTimer` background task) reaps idle /
-  over-age senders down to `min`.
+  over-age senders down to `min`. Reaping is **gated on full drain**: an
+  idle ws sender whose cursor-engine ring still holds un-acked frames is
+  skipped by both the idle and max-lifetime paths (`ReapIdle` refreshes
+  its `IdleSinceUtc` so the idle clock effectively starts at full-drain),
+  because tearing it down would, in RAM mode, free the ring and silently
+  drop those frames — the pool-wide `Flush` can't cover an already-reaped
+  sender. Surfaced via the net-agnostic `IPooledDrainAwareSender.IsFullyDrained`
+  seam (implemented by `QwpWebSocketSender` → `QwpCursorSendEngine.IsFullyDrained`;
+  HTTP/TCP deliver synchronously and are always drained). There is **no
+  bound**: a permanently wedged sender that never drains lives until the
+  pool is closed (data retained, not silently dropped) — consistent with
+  the "Flush before close" contract, since Dispose does not drain.
 - **Config keys** (all-protocol, on `SenderOptions`, `[JsonIgnore]`d out of
   `ToString` so a plain sender round-trips byte-identically): `sender_pool_min`
   (1), `sender_pool_max` (4), `acquire_timeout_ms` (5000), `idle_timeout_ms`

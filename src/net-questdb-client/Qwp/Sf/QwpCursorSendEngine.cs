@@ -218,6 +218,23 @@ internal sealed class QwpCursorSendEngine : IDisposable
         }
     }
 
+    /// <summary>
+    ///     True when the ring holds no un-acked frames (<c>AckedFsn &gt;= NextFsn</c>). The pool reads this
+    ///     to hold off idle reaping until in-flight data has been delivered — tearing the engine down
+    ///     while un-acked frames remain frees the ring (in RAM mode, dropping them with no error). A
+    ///     disposed engine reports drained: there is nothing left to protect.
+    /// </summary>
+    public bool IsFullyDrained
+    {
+        get
+        {
+            lock (_stateLock)
+            {
+                return _disposed || _ackedFsn >= _ring.NextFsn;
+            }
+        }
+    }
+
     public long TotalFramesSent => Volatile.Read(ref _totalFramesSent);
     public long TotalAcks => Volatile.Read(ref _totalAcks);
     public long TotalServerErrors => Volatile.Read(ref _totalServerErrors);

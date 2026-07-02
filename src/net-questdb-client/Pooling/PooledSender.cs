@@ -72,6 +72,14 @@ internal sealed class PooledSender
     /// </summary>
     internal bool IsInnerSlotLockReleased => _inner is not IPooledSlotSender s || s.IsSlotLockReleased;
 
+    /// <summary>
+    ///     True when the inner sender owes no un-acked in-flight data, or isn't drain-aware (HTTP / TCP,
+    ///     which deliver synchronously). The pool holds the idle-reap clock while this is false so a WS
+    ///     sender whose ring still carries un-acked frames is never reaped — in RAM mode that would free
+    ///     the ring and drop the frames with no error. See <see cref="IPooledDrainAwareSender" />.
+    /// </summary>
+    internal bool IsInnerFullyDrained => _inner is not IPooledDrainAwareSender d || d.IsFullyDrained;
+
     /// <summary>Disposes the underlying sender for real. Called only by the pool (close / discard / reap). Idempotent.</summary>
     internal void DisposeInner()
     {

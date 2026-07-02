@@ -630,6 +630,19 @@ internal sealed class SenderPool
             _available.Clear();
             foreach (var ps in idle)
             {
+                // Don't start the idle/age clock until every in-flight frame is acked. Reaping a WS
+                // sender whose ring still holds un-acked data would, in RAM mode, free that data with no
+                // delivery and no error (the pool-wide Flush can't cover an already-reaped sender). Keep
+                // refreshing IdleSinceUtc so the idle timer effectively starts at full-drain; a wedged
+                // sender that never drains simply lives until the pool is closed (its data is retained,
+                // not silently dropped). No-op for HTTP/TCP, which deliver synchronously.
+                if (!ps.IsInnerFullyDrained)
+                {
+                    ps.IdleSinceUtc = now;
+                    _available.Push(ps);
+                    continue;
+                }
+
                 var overIdle = now - ps.IdleSinceUtc >= _idleTimeout;
                 var overAge = now - ps.CreatedAtUtc >= _maxLifetime;
                 if ((overIdle || overAge) && _all.Count > _min)

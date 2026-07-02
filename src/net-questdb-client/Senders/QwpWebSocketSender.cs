@@ -42,7 +42,7 @@ namespace QuestDB.Senders;
 ///     frames on transient WS failures, and only terminate on permanent errors (auth, upgrade
 ///     reject, protocol violation, or reconnect-budget exhaustion).
 /// </remarks>
-internal sealed class QwpWebSocketSender : IQwpWebSocketSender, IPooledSlotSender, IPooledTransactionalSender
+internal sealed class QwpWebSocketSender : IQwpWebSocketSender, IPooledSlotSender, IPooledTransactionalSender, IPooledDrainAwareSender
 {
     private const long TicksPerMicrosecond = 10L;
     private const int EncoderInitialCapacity = 1 << 16;
@@ -115,6 +115,14 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender, IPooledSlotSende
     ///     discarded rather than re-pooled. See <see cref="IPooledTransactionalSender" />.
     /// </summary>
     public bool HasUncommittedDeferredRows => _hasDeferredMessages;
+
+    /// <summary>
+    ///     True when the cursor engine's ring holds no un-acked frames. The pool reads this to keep the
+    ///     idle-reap clock from starting until in-flight rows are delivered, so an idle pooled sender is
+    ///     never torn down (freeing its RAM-backed ring) while it still owes un-acked data. See
+    ///     <see cref="IPooledDrainAwareSender" />.
+    /// </summary>
+    public bool IsFullyDrained => _engine.IsFullyDrained;
 
     private static (QwpSlotLock? slotLock, QwpCursorSendEngine engine, QwpBackgroundDrainerPool? pool, QwpSenderErrorDispatcher? dispatcher, QwpConnectionEventDispatcher? eventDispatcher, QwpTlsAuth.CertificateValidator? certValidator)
         BuildEngineStack(SenderOptions options)

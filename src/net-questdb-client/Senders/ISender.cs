@@ -28,8 +28,14 @@ using QuestDB.Utils;
 namespace QuestDB.Senders;
 
 /// <summary>
-///     Interface representing <see cref="Sender" /> implementations. For <c>ws::</c> / <c>wss::</c>
-///     senders prefer <c>await using var</c> so the close-time ACK drain doesn't block the caller.
+///     Interface representing <see cref="Sender" /> implementations.
+///     <para />
+///     <b>Dispose does not send.</b> <see cref="IDisposable.Dispose" /> (and
+///     <see cref="IAsyncDisposable.DisposeAsync" />) are pure resource release: any buffered-but-unsent
+///     rows are discarded and no exception is thrown. Call <see cref="Send" /> / <see cref="SendAsync" />
+///     to hand rows to the transport, and (for delivery confirmation on <c>ws::</c>)
+///     <see cref="Flush(TimeSpan, CancellationToken)" /> / <see cref="FlushAsync(TimeSpan, CancellationToken)" />
+///     to block until the server has acknowledged them, <b>before</b> disposing.
 /// </summary>
 public interface ISender : IDisposable, IAsyncDisposable
 {
@@ -98,12 +104,58 @@ public interface ISender : IDisposable, IAsyncDisposable
     /// </summary>
     /// <remarks>
     ///     Only usable outside of a transaction. If there are no pending rows, then this is a no-op.
+    ///     <para />
+    ///     Delivery semantics: HTTP is synchronous (returns once the server has committed the batch). A
+    ///     <b>standalone</b> <c>ws</c>/<c>wss</c> sender <b>drains</b> — it flushes and then blocks until the
+    ///     server acknowledges (bounded by <c>close_flush_timeout_millis</c>, throwing on timeout) — so
+    ///     <c>Send()</c> before <c>Dispose</c> reliably delivers even though Dispose no longer drains. A
+    ///     <b>pooled</b> ws sender (from <c>IQuestDBClient.BorrowSender</c>) instead hands the frame to the
+    ///     ring and returns immediately; the pooled connection ships it asynchronously and delivery is
+    ///     confirmed via <see cref="Flush(TimeSpan, CancellationToken)" /> / <c>IQuestDBClient.Flush</c>.
+    ///     For an explicit bounded, bool-returning drain on any sender, call <c>Flush</c>.
     /// </remarks>
-    /// <exception cref="IngressError">When the request fails.</exception>
+    /// <exception cref="IngressError">When the request fails, or a standalone ws drain times out.</exception>
     public Task SendAsync(CancellationToken ct = default);
 
     /// <inheritdoc cref="SendAsync" />
     public void Send(CancellationToken ct = default);
+
+    /// <summary>
+    ///     Drains the sender: flushes any buffered rows (like <see cref="Send" />) and then blocks until
+    ///     the server has acknowledged every frame this sender has published, or <paramref name="timeout" />
+    ///     elapses. This is the delivery-confirmation barrier — the non-pooled analogue of the pool-wide
+    ///     drain on <c>IQuestDBClient.Flush</c>.
+    /// </summary>
+    /// <remarks>
+    ///     On <c>ws</c>/<c>wss</c> this waits for the ACK watermark to catch up to the published frame
+    ///     sequence. On HTTP/TCP there are no frame-level ACKs, so the flush happens and the method returns
+    ///     <c>true</c> immediately (HTTP's <see cref="Send" /> is already synchronous and confirmed).
+    /// </remarks>
+    /// <param name="timeout">Upper bound on the wait for acknowledgement.</param>
+    /// <param name="ct">Cancels the flush and the wait.</param>
+    /// <returns><c>true</c> if everything published was acknowledged on return; <c>false</c> on timeout.</returns>
+    /// <exception cref="IngressError">If the transport has latched a terminal error.</exception>
+    public bool Flush(TimeSpan timeout, CancellationToken ct = default)
+    {
+        Send(ct);
+        return true;
+    }
+
+    /// <inheritdoc cref="Flush(TimeSpan, CancellationToken)" />
+    public async Task<bool> FlushAsync(TimeSpan timeout, CancellationToken ct = default)
+    {
+        await SendAsync(ct).ConfigureAwait(false);
+        return true;
+    }
+
+    /// <summary>
+    ///     Convenience overload of <see cref="Flush(TimeSpan, CancellationToken)" /> using
+    ///     <see cref="SenderOptions.close_flush_timeout_millis" /> as the drain timeout.
+    /// </summary>
+    public bool Flush(CancellationToken ct = default) => Flush(Options.close_flush_timeout_millis, ct);
+
+    /// <inheritdoc cref="Flush(CancellationToken)" />
+    public Task<bool> FlushAsync(CancellationToken ct = default) => FlushAsync(Options.close_flush_timeout_millis, ct);
 
     /// <summary>
     ///     Set table (measurement) name for the next row.
@@ -484,17 +536,6 @@ public interface ISender : IDisposable, IAsyncDisposable
     /// <param name="value">The value, rounded half away from zero to <paramref name="scale" /> digits.</param>
     /// <param name="scale">Number of fractional digits (0–76).</param>
     public ISender ColumnDecimal256(ReadOnlySpan<char> name, decimal value, byte scale);
-
-    /// <summary>
-    ///     Adds a DECIMAL64 column from the raw unscaled int64 mantissa with an explicit
-    ///     <paramref name="scale" />. Exposes the full 18-digit range that <see cref="System.Decimal" />
-    ///     cannot always represent. Over ILP this is reconstructed as a <see cref="System.Decimal" /> and
-    ///     requires protocol version 3.
-    /// </summary>
-    /// <param name="name">The column name.</param>
-    /// <param name="unscaledValue">The unscaled integer mantissa; the value is <c>unscaledValue / 10^scale</c>.</param>
-    /// <param name="scale">Number of fractional digits (0–18).</param>
-    public ISender ColumnDecimal64(ReadOnlySpan<char> name, long unscaledValue, byte scale);
 
     /// <summary>
     ///     Adds a DECIMAL128 column from the two two's-complement 64-bit limbs of the unscaled integer:

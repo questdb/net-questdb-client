@@ -234,7 +234,7 @@ internal sealed class QwpSegmentRing : IDisposable
                     if (curr.BaseFsn != expected)
                     {
                         throw new IngressError(ErrorCode.ConfigError,
-                            $"SF segment FSN gap at `{System.IO.Path.GetFileName(curr.Path)}`: " +
+                            $"SF segment FSN gap at `{Path.GetFileName(curr.Path)}`: " +
                             $"expected baseFsn={expected}, got {curr.BaseFsn}");
                     }
                 }
@@ -484,7 +484,7 @@ internal sealed class QwpSegmentRing : IDisposable
         catch (Exception ex)
         {
             // An msync/IO failure here defeats SF's on-disk durability promise — surface it.
-            System.Diagnostics.Trace.TraceWarning(
+            Trace.TraceWarning(
                 "QWP SF: flushing the active segment failed: {0}", ex);
         }
     }
@@ -756,7 +756,7 @@ internal sealed class QwpSegmentRing : IDisposable
             var hex = name.AsSpan(FilenamePrefix.Length,
                 name.Length - FilenamePrefix.Length - FilenameSuffix.Length);
             if (hex.Length != 16) continue;
-            if (!long.TryParse(hex, System.Globalization.NumberStyles.HexNumber,
+            if (!long.TryParse(hex, NumberStyles.HexNumber,
                     CultureInfo.InvariantCulture, out var gen)) continue;
             if (gen > max) max = gen;
         }

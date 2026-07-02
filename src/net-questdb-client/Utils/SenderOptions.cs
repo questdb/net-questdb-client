@@ -25,6 +25,7 @@
 // ReSharper disable CommentTypo
 
 
+using System.ComponentModel;
 using System.Data.Common;
 using System.Reflection;
 using System.Runtime.CompilerServices;
@@ -54,6 +55,11 @@ public record SenderOptions
     private string _addr = "localhost:9000";
     private List<string> _addresses = new();
     private TimeSpan _authTimeout = TimeSpan.FromMilliseconds(15000);
+    // Nullable so "unset" is distinct from any concrete value: a null falls back to the compatibility
+    // default, and the config binder (which round-trips every writable property) never writes a null
+    // back — so binding
+    // from appsettings can't spuriously pin it.
+    private TimeSpan? _connectTimeout;
     private AutoFlushType _autoFlush = AutoFlushType.on;
     private int _autoFlushBytes = int.MaxValue;
     private bool _autoFlushBytesUserSet;
@@ -107,6 +113,15 @@ public record SenderOptions
     private int _maxBackgroundDrainers = 4;
     private TimeSpan _pingTimeout = TimeSpan.FromMilliseconds(5000);
     private TimeSpan _durableAckKeepaliveInterval = TimeSpan.FromMilliseconds(200);
+    private int _senderPoolMin = 1;
+    private int _senderPoolMax = 4;
+    private int _queryPoolMin = 1;
+    private int _queryPoolMax = 4;
+    private TimeSpan _acquireTimeout = TimeSpan.FromMilliseconds(5000);
+    private TimeSpan _idleTimeout = TimeSpan.FromMilliseconds(60000);
+    private TimeSpan _maxLifetime = TimeSpan.FromMilliseconds(1800000);
+    private TimeSpan _housekeeperInterval = TimeSpan.FromMilliseconds(5000);
+    private bool _lazyConnect;
     private string? _proxy;
     private string? _zone;
     private SenderErrorHandler? _errorHandler;
@@ -227,7 +242,28 @@ public record SenderOptions
         }
         ParseMillisecondsWithDefault(nameof(request_timeout), "30000", out _requestTimeout);
         ParseMillisecondsWithDefault(nameof(retry_timeout), "10000", out _retryTimeout);
+        // All-protocol: total wall-clock budget for establishing a connection (socket + TLS + WS
+        // upgrade + auth). Left null when absent so it falls back to the compatibility default,
+        // keeping the released HTTP connect wiring and the WS upgrade bound byte-compatible.
+        if (ReadOptionFromBuilder(nameof(connect_timeout)) is not null)
+        {
+            ParseMillisecondsWithDefault(nameof(connect_timeout), "15000", out var ct);
+            _connectTimeout = ct;
+        }
         ParseMillisecondsWithDefault(nameof(pool_timeout), "120000", out _poolTimeout);
+
+        // Connection-pool knobs (QuestDBClient handle). Protocol-agnostic; a plain Sender parses
+        // and ignores them. ValidatePoolOptions enforces the relationships.
+        ParseIntWithDefault(nameof(sender_pool_min), "1", out _senderPoolMin);
+        ParseIntWithDefault(nameof(sender_pool_max), "4", out _senderPoolMax);
+        ParseIntWithDefault(nameof(query_pool_min), "1", out _queryPoolMin);
+        ParseIntWithDefault(nameof(query_pool_max), "4", out _queryPoolMax);
+        ParseMillisecondsWithDefault(nameof(acquire_timeout_ms), "5000", out _acquireTimeout);
+        ParseMillisecondsWithDefault(nameof(idle_timeout_ms), "60000", out _idleTimeout);
+        ParseMillisecondsWithDefault(nameof(max_lifetime_ms), "1800000", out _maxLifetime);
+        ParseMillisecondsWithDefault(nameof(housekeeper_interval_ms), "5000", out _housekeeperInterval);
+        ParseBoolOnOff(nameof(lazy_connect), "off", out _lazyConnect);
+
         ParseEnumWithDefault(nameof(tls_verify), "on", out _tlsVerify);
         ParseStringWithDefault(nameof(tls_roots), null, out _tlsRoots);
         ParseStringWithDefault(nameof(tls_roots_password), null, out _tlsRootsPassword);
@@ -516,6 +552,15 @@ public record SenderOptions
     {
         if (_authTimeout <= TimeSpan.Zero)
             throw new IngressError(ErrorCode.ConfigError, $"`auth_timeout` must be > 0; got {_authTimeout.TotalMilliseconds}ms");
+        if (_connectTimeout is { } connectTimeout)
+        {
+            if (connectTimeout <= TimeSpan.Zero)
+                throw new IngressError(ErrorCode.ConfigError, $"`connect_timeout` must be > 0; got {connectTimeout.TotalMilliseconds}ms");
+            // Armed via CancellationTokenSource(TimeSpan)/CancelAfter and SocketsHttpHandler.ConnectTimeout,
+            // all of which reject a delay past int.MaxValue ms (~24.8 days).
+            if (connectTimeout.TotalMilliseconds > int.MaxValue)
+                throw new IngressError(ErrorCode.ConfigError, $"`connect_timeout` must be ≤ {int.MaxValue}ms (~24.8 days); got {connectTimeout.TotalMilliseconds}ms");
+        }
         if (_requestTimeout <= TimeSpan.Zero)
             throw new IngressError(ErrorCode.ConfigError, $"`request_timeout` must be > 0; got {_requestTimeout.TotalMilliseconds}ms");
         if (_retryTimeout < TimeSpan.Zero)
@@ -565,6 +610,53 @@ public record SenderOptions
         ApplyInitialConnectPromotion();
         ValidateErrorInboxCapacity();
         ValidateBufferSizes();
+        ValidatePoolOptions();
+    }
+
+    /// <summary>
+    ///     Validates the <see cref="QuestDBClient" /> pool knobs. Called from <see cref="EnsureValid" />
+    ///     (connect-string path) and re-run by <c>QuestDBClientBuilder.Build</c> after programmatic
+    ///     overrides so an invalid min/max set via builder methods is still caught.
+    /// </summary>
+    internal void ValidatePoolOptions()
+    {
+        if (_senderPoolMin < 0)
+            throw new IngressError(ErrorCode.ConfigError, $"`sender_pool_min` must be ≥ 0; got {_senderPoolMin}");
+        if (_senderPoolMax < 1)
+            throw new IngressError(ErrorCode.ConfigError, $"`sender_pool_max` must be ≥ 1; got {_senderPoolMax}");
+        if (_senderPoolMin > _senderPoolMax)
+            throw new IngressError(ErrorCode.ConfigError,
+                $"`sender_pool_min` ({_senderPoolMin}) must be ≤ `sender_pool_max` ({_senderPoolMax})");
+        if (_acquireTimeout < TimeSpan.Zero)
+            throw new IngressError(ErrorCode.ConfigError, $"`acquire_timeout_ms` must be ≥ 0; got {_acquireTimeout.TotalMilliseconds}ms");
+        if (_acquireTimeout.TotalMilliseconds > int.MaxValue)
+            throw new IngressError(ErrorCode.ConfigError, $"`acquire_timeout_ms` must be ≤ {int.MaxValue}ms; got {_acquireTimeout.TotalMilliseconds}ms");
+        if (_idleTimeout <= TimeSpan.Zero)
+            throw new IngressError(ErrorCode.ConfigError, $"`idle_timeout_ms` must be > 0; got {_idleTimeout.TotalMilliseconds}ms");
+        if (_maxLifetime <= TimeSpan.Zero)
+            throw new IngressError(ErrorCode.ConfigError, $"`max_lifetime_ms` must be > 0; got {_maxLifetime.TotalMilliseconds}ms");
+        if (_housekeeperInterval < TimeSpan.FromMilliseconds(100))
+            throw new IngressError(ErrorCode.ConfigError, $"`housekeeper_interval_ms` must be ≥ 100; got {_housekeeperInterval.TotalMilliseconds}ms");
+        if (_housekeeperInterval.TotalMilliseconds > int.MaxValue)
+            throw new IngressError(ErrorCode.ConfigError, $"`housekeeper_interval_ms` must be ≤ {int.MaxValue}ms; got {_housekeeperInterval.TotalMilliseconds}ms");
+    }
+
+    /// <summary>
+    ///     Validates the <see cref="QuestDBClient" /> query-pool knobs. Kept separate from
+    ///     <see cref="ValidatePoolOptions" /> (and OUT of the unconditional <see cref="EnsureValid" />
+    ///     path) so a plain <c>Sender.New</c> stays lenient about query keys it ignores; only the query
+    ///     pool and <c>QuestDBClientBuilder.Build</c> enforce them. The shared acquire/idle/lifetime/
+    ///     housekeeper relationships are already checked by <see cref="ValidatePoolOptions" />.
+    /// </summary>
+    internal void ValidateQueryPoolOptions()
+    {
+        if (_queryPoolMin < 0)
+            throw new IngressError(ErrorCode.ConfigError, $"`query_pool_min` must be ≥ 0; got {_queryPoolMin}");
+        if (_queryPoolMax < 1)
+            throw new IngressError(ErrorCode.ConfigError, $"`query_pool_max` must be ≥ 1; got {_queryPoolMax}");
+        if (_queryPoolMin > _queryPoolMax)
+            throw new IngressError(ErrorCode.ConfigError,
+                $"`query_pool_min` ({_queryPoolMin}) must be ≤ `query_pool_max` ({_queryPoolMax})");
     }
 
     /// <summary>
@@ -687,6 +779,20 @@ public record SenderOptions
         {
             throw new IngressError(ErrorCode.ConfigError,
                 $"`sf_durability` only accepts 'memory' in v1, got `{_sfDurability}`");
+        }
+
+        // Transactional staging is connection-scoped (the server drops staged deferred rows when the
+        // connection closes), but store-and-forward deliberately outlives connections: it persists
+        // frames and replays them after reconnects, restarts, and slot re-adoption. A replayed
+        // FLAG_DEFER_COMMIT frame re-stages rows whose commit decision is lost — possibly abandoned —
+        // and the next commit on that connection silently publishes them. The two promises are
+        // irreconcilable, so reject the combination outright.
+        if (_transaction && !string.IsNullOrEmpty(_sfDir))
+        {
+            throw new IngressError(ErrorCode.ConfigError,
+                "`transaction=on` cannot be combined with `sf_dir`: store-and-forward replays persisted " +
+                "frames across connections, which would re-stage and later publish uncommitted " +
+                "(possibly abandoned) transactional rows");
         }
 
         // Programmatic init's field initializer is the no-SF default (128 MiB); promote when sf_dir
@@ -1050,14 +1156,35 @@ public record SenderOptions
 
 
     /// <summary>
-    ///     Timeout for authentication requests.
-    ///     Defaults to 15 seconds.
+    ///     Supported for backward compatibility but not advertised; use <see cref="connect_timeout" />
+    ///     instead. When <see cref="connect_timeout" /> is unset this value is the connection budget,
+    ///     and on TCP it bounds the ECDSA auth exchange. Defaults to 15 seconds.
     /// </summary>
+    [EditorBrowsable(EditorBrowsableState.Never)]
     public TimeSpan auth_timeout
     {
         get => _authTimeout;
         set => _authTimeout = value;
     }
+
+    /// <summary>
+    ///     Total wall-clock budget for bringing up a usable connection across every layer — TCP
+    ///     socket connect, TLS handshake, WebSocket upgrade, and (TCP) the ECDSA auth exchange. The
+    ///     attempt is aborted if the budget is exceeded. Applies to every transport (HTTP / TCP / WS,
+    ///     ingest and egress). When unset, the effective budget is 15 seconds. Read the value actually
+    ///     applied via <see cref="EffectiveConnectTimeout" />.
+    /// </summary>
+    public TimeSpan? connect_timeout
+    {
+        get => _connectTimeout;
+        set => _connectTimeout = value;
+    }
+
+    /// <summary>
+    ///     The connect budget actually applied at runtime: <see cref="connect_timeout" /> when set,
+    ///     otherwise the compatibility fallback.
+    /// </summary>
+    internal TimeSpan EffectiveConnectTimeout => _connectTimeout ?? _authTimeout;
 
     /// <summary>
     ///     Specifies a minimum expect network throughput when sending data to QuestDB.
@@ -1163,6 +1290,152 @@ public record SenderOptions
         set => _poolTimeout = value;
     }
 
+    // Pool knobs are a QuestDBClient-handle concern, not part of a sender's serialized identity, so
+    // they are [JsonIgnore]d out of ToString()/PrintMembers — a plain Sender that parsed them stays
+    // byte-identical on round-trip. The pool reads them off the parsed options directly; it holds the
+    // user's original connect string, so it never relies on ToString to carry them.
+
+    /// <summary>
+    ///     Minimum number of senders the <see cref="QuestDBClient" /> pool keeps warm. Pre-created
+    ///     at construction and never reaped below. Default 1.
+    /// </summary>
+    [JsonIgnore]
+    public int sender_pool_min
+    {
+        get => _senderPoolMin;
+        set => _senderPoolMin = value;
+    }
+
+    /// <summary>
+    ///     Maximum number of senders the <see cref="QuestDBClient" /> pool will create. Borrowers
+    ///     block up to <see cref="acquire_timeout_ms" /> once this many are in use. Default 4.
+    /// </summary>
+    [JsonIgnore]
+    public int sender_pool_max
+    {
+        get => _senderPoolMax;
+        set => _senderPoolMax = value;
+    }
+
+    /// <summary>
+    ///     Minimum number of query clients the <see cref="QuestDBClient" /> pool keeps warm (only when a
+    ///     query config is present). Default 1. Set to 0 for lazy first-borrow creation.
+    /// </summary>
+    [JsonIgnore]
+    public int query_pool_min
+    {
+        get => _queryPoolMin;
+        set => _queryPoolMin = value;
+    }
+
+    /// <summary>
+    ///     Maximum number of query clients the <see cref="QuestDBClient" /> pool will create. Borrowers
+    ///     block up to <see cref="acquire_timeout_ms" /> once this many are in use. Default 4.
+    /// </summary>
+    [JsonIgnore]
+    public int query_pool_max
+    {
+        get => _queryPoolMax;
+        set => _queryPoolMax = value;
+    }
+
+    /// <summary>
+    ///     How long a borrow blocks waiting for a free sender before throwing. Zero means a single
+    ///     non-blocking attempt. Default 5s.
+    /// </summary>
+    [JsonIgnore]
+    public TimeSpan acquire_timeout_ms
+    {
+        get => _acquireTimeout;
+        set => _acquireTimeout = value;
+    }
+
+    /// <summary>
+    ///     Idle duration after which the housekeeper reaps a pooled sender (never below
+    ///     <see cref="sender_pool_min" />). Default 60s.
+    /// </summary>
+    [JsonIgnore]
+    public TimeSpan idle_timeout_ms
+    {
+        get => _idleTimeout;
+        set => _idleTimeout = value;
+    }
+
+    /// <summary>
+    ///     Maximum age after which the housekeeper recycles a pooled sender (never below
+    ///     <see cref="sender_pool_min" />). Default 30min.
+    /// </summary>
+    [JsonIgnore]
+    public TimeSpan max_lifetime_ms
+    {
+        get => _maxLifetime;
+        set => _maxLifetime = value;
+    }
+
+    /// <summary>
+    ///     Sweep interval of the daemon housekeeper that reaps idle / over-age pooled senders.
+    ///     Default 5s; must be ≥ 100ms.
+    /// </summary>
+    [JsonIgnore]
+    public TimeSpan housekeeper_interval_ms
+    {
+        get => _housekeeperInterval;
+        set => _housekeeperInterval = value;
+    }
+
+    /// <summary>
+    ///     Tolerant-startup flag for the <see cref="QuestDBClient" /> handle. When <c>on</c>/<c>true</c>
+    ///     the handle builds even while the server is down: the ingest side connects asynchronously
+    ///     (buffering writes meanwhile) and the read pool defaults to <see cref="query_pool_min" /> 0 so
+    ///     nothing connects eagerly — a query connects lazily on first borrow once the server is up.
+    ///     Conflicting knobs that force a blocking / fail-fast startup (an explicit
+    ///     <c>initial_connect_retry</c> other than <c>async</c>, or an explicit <c>query_pool_min</c> &gt; 0)
+    ///     are rejected by <c>QuestDBClientBuilder.Build</c>. A plain <see cref="Sender" /> ignores this
+    ///     key. Default <c>off</c>.
+    /// </summary>
+    [JsonIgnore]
+    public bool lazy_connect
+    {
+        get => _lazyConnect;
+        set => _lazyConnect = value;
+    }
+
+    /// <summary>
+    ///     True when <c>initial_connect_retry</c> / <c>initial_connect_mode</c> was set explicitly by the
+    ///     user (connect string or programmatic setter), as opposed to left at its default or promoted
+    ///     internally. Used by the pool facade to detect a <c>lazy_connect</c> conflict without treating
+    ///     the reconnect-tuning promotion as a user choice.
+    /// </summary>
+    internal bool IsInitialConnectModeExplicit =>
+        _initialConnectModeUserSet || IsKeyExplicit(nameof(initial_connect_retry));
+
+    /// <summary>True when <c>query_pool_min</c> appeared explicitly in this connect string.</summary>
+    internal bool IsQueryPoolMinExplicit => IsKeyExplicit(nameof(query_pool_min));
+
+    /// <summary>True when <c>query_pool_max</c> appeared explicitly in this connect string.</summary>
+    internal bool IsQueryPoolMaxExplicit => IsKeyExplicit(nameof(query_pool_max));
+
+    /// <summary>
+    ///     Set by the QuestDBClient pool on each per-slot sender: the orphan scanner skips slot dirs
+    ///     named <c>{OrphanExcludeManagedBase}-{i}</c> for <c>i ∈ [0, OrphanExcludeManagedCount)</c> so
+    ///     a pooled sender never adopts a slot belonging to a live or future pool sibling. Internal —
+    ///     not a connect-string key, not serialized (the reflection ToString reads public props only).
+    /// </summary>
+    internal string? OrphanExcludeManagedBase { get; set; }
+
+    /// <inheritdoc cref="OrphanExcludeManagedBase" />
+    internal int OrphanExcludeManagedCount { get; set; }
+
+    /// <summary>
+    ///     Whether a WS <c>Send()</c> / <c>SendAsync()</c> drains (flushes then blocks until the server
+    ///     acknowledges) rather than just handing the frame to the ring. Default <c>true</c> for a
+    ///     standalone sender, so "Send() before Dispose" delivers even though Dispose no longer drains.
+    ///     The QuestDBClient pool sets it <c>false</c> on pooled senders: their connection survives the
+    ///     borrow's return and ships asynchronously, and delivery is confirmed via the pool-wide
+    ///     <c>IQuestDBClient.Flush()</c>. Internal — not a connect-string key, not serialized.
+    /// </summary>
+    internal bool SendAwaitsAck { get; set; } = true;
+
     /// <summary>
     ///     If <c>true</c>, requests <c>STATUS_DURABLE_ACK</c> frames from the server via the
     ///     <c>X-QWP-Request-Durable-Ack</c> upgrade header. Off by default.
@@ -1176,9 +1449,11 @@ public record SenderOptions
     /// <summary>
     ///     Enables WebSocket transactional mode (connect-string key <c>transaction=on</c>). Auto-flush
     ///     ships frames with <c>FLAG_DEFER_COMMIT</c> so the server appends without committing; an
-    ///     explicit <c>Send()</c>/<c>Commit()</c> (or dispose) ships a non-deferred frame that triggers
+    ///     explicit <c>Send()</c>/<c>Commit()</c> ships a non-deferred frame that triggers
     ///     the server-side WAL commit. Lets a producer stage a dataset larger than the server recv
-    ///     buffer and commit it atomically per table. WebSocket-only; off by default.
+    ///     buffer and commit it atomically per table. WebSocket-only; off by default. Mutually
+    ///     exclusive with <see cref="sf_dir" />: store-and-forward replays persisted frames across
+    ///     connections, which cannot honour connection-scoped transactional staging.
     /// </summary>
     public bool transaction
     {
@@ -1417,9 +1692,10 @@ public record SenderOptions
     }
 
     /// <summary>
-    ///     Maximum time to wait for unacked SF frames to drain on <c>Sender.Dispose</c>.
-    ///     Defaults to 60 s, matching the Java client — a wide default so close() does not
-    ///     silently drop unacked rows on slow/backlogged consumers.
+    ///     Default drain timeout used by the no-argument <c>ISender.Flush()</c> /
+    ///     <c>IQuestDBClient.Flush()</c> overloads — the maximum time to wait for un-acked frames to be
+    ///     acknowledged. Defaults to 60 s. <b>Note:</b> <c>Dispose</c> no longer drains (it is pure resource
+    ///     release); call <c>Send()</c> then <c>Flush()</c> explicitly for delivery confirmation.
     /// </summary>
     public TimeSpan close_flush_timeout_millis
     {

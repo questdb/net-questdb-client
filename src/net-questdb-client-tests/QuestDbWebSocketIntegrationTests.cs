@@ -253,6 +253,7 @@ public class QuestDbWebSocketIntegrationTests
         await DropTableAsync("test_ws_restart");
         var endpoint = _questDb!.GetWebSocketEndpoint();
         var sfRoot = Path.Combine(Path.GetTempPath(), "qdb-int-restart-" + Guid.NewGuid().ToString("N"));
+        Task? restart = null;
         try
         {
             using (var sender = Sender.New(
@@ -267,22 +268,36 @@ public class QuestDbWebSocketIntegrationTests
                 {
                     sender.Table("test_ws_restart").Column("v", (long)i).At(DateTime.UtcNow);
                 }
-                await sender.SendAsync();
 
-                await _questDb.StartAsync();
-
-                var qwp = (IQwpWebSocketSender)sender;
-                for (var i = 0; i < 200; i++)
+                // SendAsync drains: it flushes the buffered rows into the store-and-forward ring and
+                // then blocks until the server ACKs them. With the DB down that ACK can only arrive
+                // once the SF engine reconnects, so the DB must come back *while* SendAsync is
+                // awaiting — bring it up concurrently, within the reconnect budget, and let the
+                // engine replay the buffered rows across the restart. (Restarting only *after*
+                // awaiting SendAsync would deadlock: the send can never complete against a dead DB.)
+                restart = Task.Run(async () =>
                 {
-                    try { await qwp.PingAsync(); break; }
-                    catch { await Task.Delay(100); }
-                }
+                    await Task.Delay(1000);
+                    await _questDb.StartAsync();
+                });
+                await sender.SendAsync();
+                await restart;
             }
 
             await VerifyTableRowCountAsync("test_ws_restart", expected: 30, maxAttempts: 150);
         }
         finally
         {
+            // The shared fixture DB must be left running for the remaining tests in this fixture,
+            // regardless of how this test exited (StartAsync is a no-op when it is already up).
+            // Without this, a failure here strands the DB down and cascades into every subsequent
+            // WebSocket test as "connection refused".
+            if (restart is not null)
+            {
+                try { await restart; } catch { /* surfaced by the await/assert above */ }
+            }
+            await _questDb!.StartAsync();
+
             if (Directory.Exists(sfRoot))
             {
                 try { Directory.Delete(sfRoot, recursive: true); } catch { }

@@ -342,6 +342,29 @@ public class SenderOptionsTests
     }
 
     [Test]
+    public void Transaction_WithSfDir_Throws()
+    {
+        // Connection-scoped transactional staging cannot coexist with cross-connection SF replay:
+        // a replayed deferred frame would re-stage abandoned rows for the next commit to publish.
+        Assert.That(
+            () => new SenderOptions("ws::addr=localhost:9000;transaction=on;sf_dir=/tmp;"),
+            Throws.TypeOf<IngressError>().With.Message.Contains("transaction=on").And.Message.Contains("sf_dir"));
+
+        // Programmatic-init path is caught by the same EnsureValid pass.
+        var opts = new SenderOptions
+        {
+            protocol = ProtocolType.ws, addr = "h:9000",
+            transaction = true, sf_dir = "/tmp",
+        };
+        Assert.That(() => opts.EnsureValid(),
+            Throws.TypeOf<IngressError>().With.Message.Contains("transaction=on"));
+
+        // Each key remains valid on its own.
+        Assert.That(() => new SenderOptions("ws::addr=localhost:9000;transaction=on;"), Throws.Nothing);
+        Assert.That(() => new SenderOptions("ws::addr=localhost:9000;sf_dir=/tmp;"), Throws.Nothing);
+    }
+
+    [Test]
     public void Sf_KeysOnHttpScheme_Throws()
     {
         Assert.That(
@@ -625,6 +648,99 @@ public class SenderOptionsTests
     {
         var opts = new SenderOptions("http::addr=localhost:9000;auth_timeout=4000;");
         Assert.That(opts.ToString(), Does.Contain("auth_timeout=4000"));
+    }
+
+    [Test]
+    public void ConnectTimeout_Default_IsUnsetAndInheritsAuthTimeout()
+    {
+        var opts = new SenderOptions("http::addr=localhost:9000;");
+        Assert.That(opts.connect_timeout, Is.Null);
+        // Unset connect_timeout inherits auth_timeout (default 15s).
+        Assert.That(opts.EffectiveConnectTimeout, Is.EqualTo(opts.auth_timeout));
+    }
+
+    [TestCase("http")]
+    [TestCase("https")]
+    [TestCase("tcp")]
+    [TestCase("tcps")]
+    [TestCase("ws")]
+    [TestCase("wss")]
+    public void ConnectTimeout_ParsesOnEveryScheme(string scheme)
+    {
+        var addr = scheme.StartsWith("tcp") ? "addr=localhost:9009" : "addr=localhost:9000";
+        var opts = new SenderOptions($"{scheme}::{addr};connect_timeout=2500;");
+        Assert.That(opts.connect_timeout!.Value, Is.EqualTo(TimeSpan.FromMilliseconds(2500)));
+        Assert.That(opts.EffectiveConnectTimeout, Is.EqualTo(TimeSpan.FromMilliseconds(2500)));
+    }
+
+    [Test]
+    public void ConnectTimeout_Unset_InheritsExplicitAuthTimeout()
+    {
+        // auth_timeout is the alias of connect_timeout where there is no separate auth step (HTTP).
+        var opts = new SenderOptions("http::addr=localhost:9000;auth_timeout=4000;");
+        Assert.That(opts.EffectiveConnectTimeout, Is.EqualTo(TimeSpan.FromMilliseconds(4000)));
+    }
+
+    [Test]
+    public void ConnectTimeout_Explicit_OverridesAuthTimeout()
+    {
+        var opts = new SenderOptions("http::addr=localhost:9000;auth_timeout=4000;connect_timeout=2000;");
+        Assert.That(opts.EffectiveConnectTimeout, Is.EqualTo(TimeSpan.FromMilliseconds(2000)));
+        // auth_timeout retains its own value for the (TCP) auth step.
+        Assert.That(opts.auth_timeout, Is.EqualTo(TimeSpan.FromMilliseconds(4000)));
+    }
+
+    [TestCase("connect_timeout=0")]
+    [TestCase("connect_timeout=-5")]
+    public void ConnectTimeout_NonPositive_Rejected(string kv)
+    {
+        var ex = Assert.Throws<IngressError>(
+            () => new SenderOptions($"http::addr=localhost:9000;{kv};"));
+        Assert.That(ex!.Message, Does.Contain("connect_timeout"));
+    }
+
+    [Test]
+    public void ConnectTimeout_ToString_OmittedWhenUnset_PreservesInheritance()
+    {
+        var s = new SenderOptions("http::addr=localhost:9000;auth_timeout=4000;").ToString();
+        Assert.That(s, Does.Not.Contain("connect_timeout"));
+        // Re-parse keeps connect_timeout unset, so it still inherits the (round-tripped) auth_timeout.
+        var rt = new SenderOptions(s);
+        Assert.That(rt.EffectiveConnectTimeout, Is.EqualTo(TimeSpan.FromMilliseconds(4000)));
+    }
+
+    [TestCase("http::addr=localhost:9000;connect_timeout=7000;")]
+    [TestCase("ws::addr=localhost:9000;connect_timeout=7000;")]
+    public void ConnectTimeout_ToString_RoundTripsWhenSet(string confStr)
+    {
+        var opts = new SenderOptions(confStr);
+        var s = opts.ToString();
+        Assert.That(s, Does.Contain("connect_timeout=7000"));
+        var rt = new SenderOptions(s);
+        Assert.That(rt.connect_timeout!.Value, Is.EqualTo(TimeSpan.FromMilliseconds(7000)));
+        Assert.That(rt.EffectiveConnectTimeout, Is.EqualTo(TimeSpan.FromMilliseconds(7000)));
+    }
+
+    [Test]
+    public void ConnectTimeout_ProgrammaticSet_OverridesAuthTimeout()
+    {
+        var opts = new SenderOptions { auth_timeout = TimeSpan.FromSeconds(9) };
+        // Unset programmatically → inherits auth_timeout.
+        Assert.That(opts.connect_timeout, Is.Null);
+        Assert.That(opts.EffectiveConnectTimeout, Is.EqualTo(TimeSpan.FromSeconds(9)));
+
+        opts.connect_timeout = TimeSpan.FromSeconds(2);
+        Assert.That(opts.EffectiveConnectTimeout, Is.EqualTo(TimeSpan.FromSeconds(2)));
+    }
+
+    [Test]
+    public void ConnectTimeout_ProgrammaticOverflow_RejectedByEnsureValid()
+    {
+        // The connect-string parser is int-ms so it can't express this; the TimeSpan setter can,
+        // and EnsureValid (run by Build) must reject it before it reaches CancellationTokenSource.
+        var opts = new SenderOptions { connect_timeout = TimeSpan.FromDays(30) };
+        var ex = Assert.Throws<IngressError>(() => opts.EnsureValid());
+        Assert.That(ex!.Message, Does.Contain("connect_timeout"));
     }
 
     [TestCase("off", InitialConnectMode.off)]

@@ -666,6 +666,51 @@ public class QwpQueryClientEndToEndTests
     }
 
     [Test]
+    public async Task StaleCancelRequest_DoesNotRegressTheCancelMarker()
+    {
+        // A pooled cancel resolved against an earlier query can dispatch late, after newer queries
+        // ran on the same client. CancelCore's marker must be monotonic: the stale rid must neither
+        // send a CANCEL nor overwrite a newer pending cancel's marker (which would erase that
+        // query's failover abort, checked by rid equality in ExecuteCoreAsync).
+        var schema = new ResultSchema { Columns = { new SchemaColumn("c", QwpTypeCode.Long) } };
+        await using var server = new DummyQwpServer(new DummyQwpServerOptions
+        {
+            Path = QwpConstants.ReadPath,
+            NegotiatedVersion = "1",
+            FrameHandlerMulti = frame =>
+            {
+                if (frame[0] != QwpConstants.MsgKindQueryRequest) return null;
+                var rid = BinaryPrimitives.ReadInt64LittleEndian(frame.AsSpan(1, 8));
+                return new[]
+                {
+                    QwpEgressFrameBuilder.BuildResultBatch(rid, 0L, schema,
+                        new ResultBatchData { RowCount = 1, Columns = { new FixedColumnData { DenseBytes = LongLe(1L) } } }),
+                    QwpEgressFrameBuilder.BuildResultEnd(rid, 0L, 1L),
+                };
+            },
+        });
+        await server.StartAsync();
+
+        using var client = QueryClient.New(BuildConnString(server));
+        var inner = (QwpQueryWebSocketClient)client;
+        var seam = (QuestDB.Pooling.IPooledQueryClientInner)client;
+
+        client.Execute("SELECT 1", new RecordingHandler()); // rid 1, completes
+        client.Execute("SELECT 2", new RecordingHandler()); // rid 2, completes
+
+        seam.CancelRequest(2);
+        Assert.That(inner.CancelTargetRid, Is.EqualTo(2L));
+
+        seam.CancelRequest(1); // stale cancel dispatched late — must not regress the marker
+        Assert.That(inner.CancelTargetRid, Is.EqualTo(2L), "a stale rid must never regress the cancel marker");
+
+        // The stale rids matched no in-flight query, so nothing was cancelled and the client is intact.
+        var handler = new RecordingHandler();
+        client.Execute("SELECT 3", handler);
+        Assert.That(handler.Ended, Is.True);
+    }
+
+    [Test]
     public async Task SqlExceedingMaxLength_Throws()
     {
         await using var server = new DummyQwpServer(new DummyQwpServerOptions
@@ -1206,9 +1251,55 @@ public class QwpQueryClientEndToEndTests
             sw.Stop();
 
             Assert.That(ex!.code, Is.EqualTo(ErrorCode.SocketError));
-            StringAssert.Contains("auth_timeout", ex.Message);
+            // auth_timeout_ms is the legacy alias of connect_timeout on the egress path; the bound is
+            // surfaced under the canonical connect_timeout name.
+            StringAssert.Contains("connect_timeout", ex.Message);
             Assert.That(sw.ElapsedMilliseconds, Is.LessThan(3000),
-                "auth_timeout=300ms should bound connect well below OS-level TCP timeout");
+                "auth_timeout_ms=300ms should bound connect well below OS-level TCP timeout");
+        }
+        finally
+        {
+            acceptCts.Cancel();
+            listener.Stop();
+            foreach (var c in held) try { c.Close(); } catch { }
+        }
+    }
+
+    [Test]
+    public void ConnectTimeout_BoundsUpgradeToBlackholeHost()
+    {
+        // The TCP connect succeeds (listener accepts) but the WebSocket upgrade never completes, so
+        // connect_timeout must abort the attempt at the upgrade layer.
+        var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        var port = ((IPEndPoint)listener.LocalEndpoint).Port;
+        var held = new List<TcpClient>();
+        using var acceptCts = new CancellationTokenSource();
+        var acceptTask = Task.Run(async () =>
+        {
+            try
+            {
+                while (!acceptCts.IsCancellationRequested)
+                {
+                    var c = await listener.AcceptTcpClientAsync(acceptCts.Token);
+                    held.Add(c);
+                }
+            }
+            catch { }
+        });
+
+        try
+        {
+            var conn = $"ws::addr=127.0.0.1:{port};path={QwpConstants.ReadPath};" +
+                       "connect_timeout=300;failover=off;";
+            var sw = Stopwatch.StartNew();
+            var ex = Assert.Throws<IngressError>(() => QueryClient.New(conn));
+            sw.Stop();
+
+            Assert.That(ex!.code, Is.EqualTo(ErrorCode.SocketError));
+            StringAssert.Contains("connect_timeout", ex.Message);
+            Assert.That(sw.ElapsedMilliseconds, Is.LessThan(3000),
+                "connect_timeout=300ms should bound the upgrade well below OS-level TCP timeout");
         }
         finally
         {

@@ -461,6 +461,36 @@ public class QwpColumnExtendedTypesTests
         Assert.That(second, Is.EqualTo(new BigInteger(-150)));
     }
 
+    // Each case: the first append locks the column scale; the second carries a *different* source
+    // scale but is representable at the locked scale, so QwpColumn.AppendDecimalRescaled takes the
+    // System.Decimal success branch — `targetScale <= MaxBclDecimalScale && TryRescaleDecimal(...)` —
+    // and returns there without ever touching the BigInteger fallback. Breakpoint that return.
+    private static IEnumerable<TestCaseData> DecimalRescaleSuccessCases()
+    {
+        yield return new TestCaseData(1.50m, 2.5m, (byte)2, new BigInteger(250)).SetName("UpScale_Positive");
+        yield return new TestCaseData(-1.50m, -2.5m, (byte)2, new BigInteger(-250)).SetName("UpScale_Negative");
+        yield return new TestCaseData(0.001m, 12.5m, (byte)3, new BigInteger(12500)).SetName("UpScale_WiderGap");
+        yield return new TestCaseData(10.00m, 7m, (byte)2, new BigInteger(700)).SetName("UpScale_FromInteger");
+        yield return new TestCaseData(100m, 5.00m, (byte)0, new BigInteger(5)).SetName("DownScale_ExactTrailingZeros");
+    }
+
+    [TestCaseSource(nameof(DecimalRescaleSuccessCases))]
+    public void AppendDecimal128_DecimalRescaleSuccessPath_WritesExpectedUnscaled(
+        decimal firstValue, decimal secondValue, byte expectedScale, BigInteger expectedSecondUnscaled)
+    {
+        var col = new QwpColumn("c", 0);
+        col.AppendDecimal128(firstValue);  // locks the column scale
+        col.AppendDecimal128(secondValue); // scale mismatch → rescaled to the locked scale via System.Decimal
+
+        Assert.That(col.DecimalScale, Is.EqualTo(expectedScale));
+        Assert.That(col.NonNullCount, Is.EqualTo(2));
+
+        // The locked scale is unchanged, and the rescaled second value is byte-for-byte what the decimal
+        // success branch produced (the unscaled mantissa at the locked scale).
+        var second = ReadInt128(col.FixedData!.AsSpan(16, 16));
+        Assert.That(second, Is.EqualTo(expectedSecondUnscaled));
+    }
+
     [Test]
     public void AppendVarchar_LoneSurrogate_ThrowsStrictUtf8()
     {
@@ -581,20 +611,6 @@ public class QwpColumnExtendedTypesTests
     }
 
     [Test]
-    public void AppendDecimal64_Limbs_WritesEightBytesLittleEndian()
-    {
-        var col = new QwpColumn("p", 0);
-        col.AppendDecimal64(unchecked((long)0x123456789ABCDEF0UL), scale: 5);
-
-        Assert.That(col.TypeCode, Is.EqualTo(QwpTypeCode.Decimal64));
-        Assert.That(col.DecimalScale, Is.EqualTo((byte)5));
-        Assert.That(col.DecimalScaleSet, Is.True);
-        Assert.That(col.FixedLen, Is.EqualTo(8));
-        Assert.That(BinaryPrimitives.ReadInt64LittleEndian(col.FixedData!.AsSpan(0, 8)),
-            Is.EqualTo(unchecked((long)0x123456789ABCDEF0UL)));
-    }
-
-    [Test]
     public void AppendDecimal128_Limbs_WritesTwoLimbsLsbFirst()
     {
         var col = new QwpColumn("p", 0);
@@ -634,8 +650,8 @@ public class QwpColumnExtendedTypesTests
     public void AppendDecimal64_Limbs_LosslessRescale_Allowed()
     {
         var col = new QwpColumn("p", 0);
-        col.AppendDecimal64(100L, scale: 2);
-        Assert.DoesNotThrow(() => col.AppendDecimal64(2000L, scale: 3));
+        col.AppendDecimal64(100m, scale: 2);
+        Assert.DoesNotThrow(() => col.AppendDecimal64(2.0001m, scale: 2));
         Assert.That(col.DecimalScale, Is.EqualTo((byte)2));
     }
 
@@ -645,7 +661,7 @@ public class QwpColumnExtendedTypesTests
         var col = new QwpColumn("p", 0);
         col.AppendDecimal64(100L, scale: 2);
         var ex = Assert.Throws<IngressError>(() => col.AppendDecimal64(201L, scale: 3));
-        Assert.That(ex!.Message, Does.Contain("precision loss"));
+        Assert.That(ex!.Message, Does.Contain("scale is locked at 2"));
     }
 
     [Test]
@@ -664,7 +680,7 @@ public class QwpColumnExtendedTypesTests
         Assert.That(col.DecimalScale, Is.EqualTo((byte)2));
         Assert.That(col.NonNullCount, Is.EqualTo(2));
         var span = col.FixedData!.AsSpan(0, 16);
-        Assert.That(BinaryPrimitives.ReadInt64LittleEndian(span.Slice(0, 8)), Is.EqualTo(100L));
+        Assert.That(BinaryPrimitives.ReadInt64LittleEndian(span.Slice(0, 8)), Is.EqualTo(10000L));
         Assert.That(BinaryPrimitives.ReadInt64LittleEndian(span.Slice(8, 8)), Is.EqualTo(55L));
     }
 

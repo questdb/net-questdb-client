@@ -221,6 +221,36 @@ public class QuestDbQueryIntegrationTests
                 .At(DateTime.UtcNow);
         }
         await sender.SendAsync();
+
+        // ILP SendAsync returns once the rows are durably in the WAL, but the WAL applies to the
+        // table asynchronously. Block setup until all five rows are queryable so no test can race
+        // the apply — otherwise the first reader of this table (Bind_ParameterFiltersTable, which
+        // runs before SelectFromSeededTable alphabetically) intermittently sees zero rows.
+        await WaitForSeededRowsAsync("qwp_egress_int_test", expected: 5);
+    }
+
+    private async Task WaitForSeededRowsAsync(string table, long expected)
+    {
+        using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
+        var endpoint = _questDb!.GetHttpEndpoint();
+        for (var attempt = 0; attempt < 120; attempt++)
+        {
+            using var resp = await http.GetAsync(
+                $"http://{endpoint}/exec?query={Uri.EscapeDataString($"SELECT count(*) FROM {table}")}");
+            if (resp.IsSuccessStatusCode)
+            {
+                var body = await resp.Content.ReadAsStringAsync();
+                using var json = JsonDocument.Parse(body);
+                if (json.RootElement.TryGetProperty("dataset", out var ds)
+                    && ds.GetArrayLength() > 0 && ds[0].GetArrayLength() > 0
+                    && ds[0][0].GetInt64() >= expected)
+                {
+                    return;
+                }
+            }
+            await Task.Delay(250);
+        }
+        Assert.Fail($"Seed of {expected} rows into {table} did not become queryable");
     }
 
     private sealed class RecordingHandler : QwpColumnBatchHandler

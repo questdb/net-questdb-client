@@ -62,6 +62,12 @@ public sealed class Query
     // serving another query.
     private volatile PooledQueryClient? _inFlightLease;
 
+    // Excludes Cancel()'s lease-read + request-id resolution against the lease-clear in
+    // ExecuteAsync's finally: a lease seen non-null under this gate cannot have been returned to
+    // the pool yet, so the request id resolved is this execution's own (or -1), never a successor
+    // borrower's. Held only for those field reads — never across the cancel send.
+    private readonly object _cancelGate = new();
+
     internal Query(QueryClientPool pool)
     {
         _pool = pool;
@@ -142,7 +148,11 @@ public sealed class Query
             finally
             {
                 // Clear the lease BEFORE returning the client so a late Cancel() can't reach it.
-                _inFlightLease = null;
+                lock (_cancelGate)
+                {
+                    _inFlightLease = null;
+                }
+
                 await pooled.DisposeAsync().ConfigureAwait(false);
             }
         }
@@ -166,7 +176,20 @@ public sealed class Query
     /// </summary>
     public void Cancel()
     {
-        _inFlightLease?.Cancel();
+        PooledQueryClient? lease;
+        long requestId;
+        lock (_cancelGate)
+        {
+            lease = _inFlightLease;
+            if (lease is null) return;
+            requestId = lease.CurrentRequestId;
+        }
+
+        if (requestId < 0) return;
+        // Dispatched outside the gate: the CANCEL is addressed to this exact request id (ids are
+        // unique per client), so even if the client is returned and re-borrowed before the frame is
+        // sent, the client drops it rather than cancelling the new borrower's query.
+        lease.CancelRequest(requestId);
     }
 }
 #endif

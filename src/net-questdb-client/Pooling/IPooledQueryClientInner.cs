@@ -36,4 +36,14 @@ internal interface IPooledQueryClientInner
 {
     /// <summary>True when the client has transitioned to a non-recoverable (terminal) or disposed state.</summary>
     bool IsTerminalOrDisposed { get; }
+
+    /// <summary>The request id of the in-flight query, or -1 when none. Ids are unique per client.</summary>
+    long CurrentRequestId { get; }
+
+    /// <summary>
+    ///     Cooperatively cancels the query with exactly this request id; a no-op if that query is no
+    ///     longer the in-flight one. Lets a caller that resolved the id while it provably owned the
+    ///     client dispatch the cancel late without ever hitting a successor borrower's query.
+    /// </summary>
+    void CancelRequest(long requestId);
 }

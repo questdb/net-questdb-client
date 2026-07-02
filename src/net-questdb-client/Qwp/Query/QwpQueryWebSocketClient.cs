@@ -405,10 +405,34 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient, QuestDB.Pooling
     {
         var rid = Interlocked.Read(ref _currentRequestId);
         if (rid < 0) return;
-        // Record the exact rid being cancelled. If this thread is pre-empted between the read above
-        // and here while query `rid` finishes and the next query starts, the stale rid no longer
-        // matches the running requestId, so the failover-path checks ignore it.
-        Interlocked.Exchange(ref _cancelTargetRid, rid);
+        CancelCore(rid);
+    }
+
+    long QuestDB.Pooling.IPooledQueryClientInner.CurrentRequestId => Interlocked.Read(ref _currentRequestId);
+
+    void QuestDB.Pooling.IPooledQueryClientInner.CancelRequest(long requestId)
+    {
+        if (requestId < 0) return;
+        CancelCore(requestId);
+    }
+
+    // Test seam: lets tests pin CancelCore's never-regress guarantee on the cancel marker.
+    internal long CancelTargetRid => Interlocked.Read(ref _cancelTargetRid);
+
+    private void CancelCore(long rid)
+    {
+        // Record the exact rid being cancelled. If this thread is pre-empted between the caller's
+        // read and here while query `rid` finishes and the next query starts, the stale rid no
+        // longer matches the running requestId, so the failover-path checks ignore it. Never
+        // regress the marker: rids are monotonic, so a stale cancel arriving late must not
+        // overwrite a newer query's pending cancel.
+        long seen;
+        do
+        {
+            seen = Interlocked.Read(ref _cancelTargetRid);
+            if (rid < seen) break;
+        } while (Interlocked.CompareExchange(ref _cancelTargetRid, rid, seen) != seen);
+
         if (Volatile.Read(ref _disposed) != 0) return;
 
         try

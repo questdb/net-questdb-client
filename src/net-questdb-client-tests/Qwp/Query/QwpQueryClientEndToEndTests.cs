@@ -666,6 +666,51 @@ public class QwpQueryClientEndToEndTests
     }
 
     [Test]
+    public async Task StaleCancelRequest_DoesNotRegressTheCancelMarker()
+    {
+        // A pooled cancel resolved against an earlier query can dispatch late, after newer queries
+        // ran on the same client. CancelCore's marker must be monotonic: the stale rid must neither
+        // send a CANCEL nor overwrite a newer pending cancel's marker (which would erase that
+        // query's failover abort, checked by rid equality in ExecuteCoreAsync).
+        var schema = new ResultSchema { Columns = { new SchemaColumn("c", QwpTypeCode.Long) } };
+        await using var server = new DummyQwpServer(new DummyQwpServerOptions
+        {
+            Path = QwpConstants.ReadPath,
+            NegotiatedVersion = "1",
+            FrameHandlerMulti = frame =>
+            {
+                if (frame[0] != QwpConstants.MsgKindQueryRequest) return null;
+                var rid = BinaryPrimitives.ReadInt64LittleEndian(frame.AsSpan(1, 8));
+                return new[]
+                {
+                    QwpEgressFrameBuilder.BuildResultBatch(rid, 0L, schema,
+                        new ResultBatchData { RowCount = 1, Columns = { new FixedColumnData { DenseBytes = LongLe(1L) } } }),
+                    QwpEgressFrameBuilder.BuildResultEnd(rid, 0L, 1L),
+                };
+            },
+        });
+        await server.StartAsync();
+
+        using var client = QueryClient.New(BuildConnString(server));
+        var inner = (QwpQueryWebSocketClient)client;
+        var seam = (QuestDB.Pooling.IPooledQueryClientInner)client;
+
+        client.Execute("SELECT 1", new RecordingHandler()); // rid 1, completes
+        client.Execute("SELECT 2", new RecordingHandler()); // rid 2, completes
+
+        seam.CancelRequest(2);
+        Assert.That(inner.CancelTargetRid, Is.EqualTo(2L));
+
+        seam.CancelRequest(1); // stale cancel dispatched late — must not regress the marker
+        Assert.That(inner.CancelTargetRid, Is.EqualTo(2L), "a stale rid must never regress the cancel marker");
+
+        // The stale rids matched no in-flight query, so nothing was cancelled and the client is intact.
+        var handler = new RecordingHandler();
+        client.Execute("SELECT 3", handler);
+        Assert.That(handler.Ended, Is.True);
+    }
+
+    [Test]
     public async Task SqlExceedingMaxLength_Throws()
     {
         await using var server = new DummyQwpServer(new DummyQwpServerOptions

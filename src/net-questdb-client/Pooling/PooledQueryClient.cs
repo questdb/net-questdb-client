@@ -81,6 +81,19 @@ internal sealed class PooledQueryClient : IQwpQueryClient
     private bool IsInnerTerminalOrDisposed =>
         _delegate is IPooledQueryClientInner s && s.IsTerminalOrDisposed;
 
+    /// <summary>The in-flight request id (-1 when none), so <see cref="Query.Cancel" /> can scope a cancel to it.</summary>
+    internal long CurrentRequestId =>
+        _delegate is IPooledQueryClientInner s ? s.CurrentRequestId : -1;
+
+    /// <summary>Cancels only the query with this request id; a no-op once that query is no longer in flight.</summary>
+    internal void CancelRequest(long requestId)
+    {
+        if (_delegate is IPooledQueryClientInner s)
+        {
+            s.CancelRequest(requestId);
+        }
+    }
+
     /// <summary>Marks this wrapper as handed out and clears the broken flag. Called by the pool under its lock.</summary>
     internal void MarkBorrowed()
     {

@@ -186,8 +186,7 @@ public class QueryHandleTests
     {
         // Pool size 1: q2 re-borrows the exact same inner client q1 just returned. A late Cancel() on the
         // already-completed q1 must not forward to that re-borrowed client and abort q2's in-flight query.
-        // Guards the lease null-out in Query.ExecuteAsync's finally (the only thing scoping a cancel to its
-        // own execution — there is no generation token).
+        // Guards the lease null-out in Query.ExecuteAsync's finally.
         using var h = MakeHandle("query_pool_min=1;query_pool_max=1;", out var created);
         var fake = created.Single();
 
@@ -210,6 +209,52 @@ public class QueryHandleTests
 
         Assert.That(fake.CancelCount, Is.EqualTo(0),
             "a cancel on a completed query must not reach the re-borrowed client running q2");
+
+        fake.Gate.SetResult(true);
+        await t2;
+
+        Assert.That(fake.CancelCount, Is.EqualTo(0), "q2 completed without a stray cancel");
+    }
+
+    [Test]
+    public async Task CancelRacingWithCompletionAndReborrowDoesNotCancelSuccessorQuery()
+    {
+        // The TOCTOU window: Cancel() resolves its target while q1 is still in flight, but the CANCEL
+        // dispatch lands only after q1 completed, its client was re-pooled, and q2 re-borrowed it.
+        // The cancel must be scoped to q1's request id so the late dispatch is dropped rather than
+        // cancelling q2. CancelGate parks the dispatch inside the client to pin that interleaving.
+        using var h = MakeHandle("query_pool_min=1;query_pool_max=1;", out var created);
+        var fake = created.Single();
+        fake.Gate = new TaskCompletionSource<bool>();
+        fake.CancelGate = new TaskCompletionSource<bool>();
+
+        var q1 = h.NewQuery().Sql("a").Handler(new NoopQueryHandler());
+        var t1 = q1.ExecuteAsync(); // in flight, parked on the gate; fake rid 1
+
+        var cancelDispatch = Task.Run(q1.Cancel); // resolves rid 1, then parks on CancelGate
+        var resolvedRid = await fake.CancelRequestEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.That(resolvedRid, Is.EqualTo(1), "cancel resolved q1's own request id");
+
+        fake.Gate.SetResult(true); // q1 completes and its client is returned to the pool
+        await t1;
+
+        fake.Gate = new TaskCompletionSource<bool>();
+        var q2 = h.NewQuery().Sql("b").Handler(new NoopQueryHandler());
+        var t2 = q2.ExecuteAsync(); // re-borrows the same inner client; fake rid 2
+
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        while (Volatile.Read(ref fake.ExecuteCount) < 2 && sw.ElapsedMilliseconds < 2000)
+        {
+            await Task.Delay(5);
+        }
+
+        Assert.That(fake.ExecuteCount, Is.EqualTo(2), "q2 re-borrowed the same client and is in flight");
+
+        fake.CancelGate.SetResult(true); // stale cancel for rid 1 finally dispatches
+        await cancelDispatch;
+
+        Assert.That(fake.CancelCount, Is.EqualTo(0),
+            "a cancel resolved against q1 must not cancel q2 on the re-borrowed client");
 
         fake.Gate.SetResult(true);
         await t2;

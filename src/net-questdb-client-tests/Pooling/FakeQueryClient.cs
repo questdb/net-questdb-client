@@ -50,6 +50,17 @@ internal sealed class FakeQueryClient : IQwpQueryClient, IPooledQueryClientInner
     // When set, an in-flight ExecuteAsync parks on this until the test completes it.
     public TaskCompletionSource<bool>? Gate;
 
+    // When set, CancelRequest signals CancelRequestEntered (with the rid it was called with) and
+    // then parks on this before applying — lets a test hold a cancel dispatch across a
+    // return-and-re-borrow to reproduce the stale-cancel race deterministically.
+    public TaskCompletionSource<bool>? CancelGate;
+    public readonly TaskCompletionSource<long> CancelRequestEntered =
+        new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    // Mimics the real client's per-execution request ids: unique, monotonic, -1 while idle.
+    private long _nextRid;
+    private long _currentRid = -1;
+
     public bool Disposed => Volatile.Read(ref DisposeCount) > 0;
 
     public QwpServerInfo? ServerInfo => null;
@@ -72,6 +83,18 @@ internal sealed class FakeQueryClient : IQwpQueryClient, IPooledQueryClientInner
 
     public void Cancel() => Interlocked.Increment(ref CancelCount);
 
+    public long CurrentRequestId => Interlocked.Read(ref _currentRid);
+
+    public void CancelRequest(long requestId)
+    {
+        CancelRequestEntered.TrySetResult(requestId);
+        CancelGate?.Task.GetAwaiter().GetResult();
+        if (requestId >= 0 && requestId == Interlocked.Read(ref _currentRid))
+        {
+            Interlocked.Increment(ref CancelCount);
+        }
+    }
+
     public void Dispose() => Interlocked.Increment(ref DisposeCount);
 
     public ValueTask DisposeAsync()
@@ -84,14 +107,22 @@ internal sealed class FakeQueryClient : IQwpQueryClient, IPooledQueryClientInner
     {
         Interlocked.Increment(ref ExecuteCount);
         LastSql = sql;
-        if (CancelOnExecute)
+        Interlocked.Exchange(ref _currentRid, Interlocked.Increment(ref _nextRid));
+        try
         {
-            throw new OperationCanceledException();
-        }
+            if (CancelOnExecute)
+            {
+                throw new OperationCanceledException();
+            }
 
-        if (ThrowOnExecute)
+            if (ThrowOnExecute)
+            {
+                throw new IngressError(ErrorCode.SocketError, "fake execute failure");
+            }
+        }
+        finally
         {
-            throw new IngressError(ErrorCode.SocketError, "fake execute failure");
+            Interlocked.Exchange(ref _currentRid, -1);
         }
     }
 
@@ -99,19 +130,27 @@ internal sealed class FakeQueryClient : IQwpQueryClient, IPooledQueryClientInner
     {
         Interlocked.Increment(ref ExecuteCount);
         LastSql = sql;
-        if (Gate is not null)
+        Interlocked.Exchange(ref _currentRid, Interlocked.Increment(ref _nextRid));
+        try
         {
-            await Gate.Task.WaitAsync(ct).ConfigureAwait(false);
-        }
+            if (Gate is not null)
+            {
+                await Gate.Task.WaitAsync(ct).ConfigureAwait(false);
+            }
 
-        if (CancelOnExecute)
-        {
-            throw new OperationCanceledException();
-        }
+            if (CancelOnExecute)
+            {
+                throw new OperationCanceledException();
+            }
 
-        if (ThrowOnExecute)
+            if (ThrowOnExecute)
+            {
+                throw new IngressError(ErrorCode.SocketError, "fake execute failure");
+            }
+        }
+        finally
         {
-            throw new IngressError(ErrorCode.SocketError, "fake execute failure");
+            Interlocked.Exchange(ref _currentRid, -1);
         }
     }
 }

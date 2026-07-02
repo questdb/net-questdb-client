@@ -332,6 +332,9 @@ public class PoolSlotTests
     [TestCase("default-4", "default", 4, false)] // out of managed range -> a true orphan
     [TestCase("default", "default", 4, false)] // no -index suffix
     [TestCase("default-x", "default", 4, false)] // non-numeric suffix
+    [TestCase("default-03", "default", 4, false)] // parses to 3 but pool only ever allocates "default-3"
+    [TestCase("default-+3", "default", 4, false)] // signed lookalike, same reasoning
+    [TestCase("default- 3", "default", 4, false)] // whitespace lookalike, same reasoning
     [TestCase("other-1", "default", 4, false)] // different base
     [TestCase("default-1", null, 0, false)] // no managed family configured
     public void OrphanScannerIdentifiesManagedSlots(string senderId, string? managedBase, int managedCount, bool expected)

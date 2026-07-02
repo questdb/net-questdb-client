@@ -174,6 +174,14 @@ public sealed class QuestDBClientBuilder
     /// <summary>Builds and pre-warms the pool.</summary>
     public IQuestDBClient Build()
     {
+        var poolConfig = BuildPoolConfig(out var queryConfStr, out var forceWsAsyncConnect);
+        return new QuestDBClientImpl(poolConfig, _confStr!, queryConfStr, forceWsAsyncConnect);
+    }
+
+    // Assembles the effective pool config without constructing any pool — split out so tests can
+    // assert precedence without pre-warming live connections.
+    internal SenderOptions BuildPoolConfig(out string? queryConfStr, out bool forceWsAsyncConnect)
+    {
         if (_confStr is null)
         {
             throw new IngressError(ErrorCode.ConfigError,
@@ -212,13 +220,14 @@ public sealed class QuestDBClientBuilder
         }
 
         poolConfig.ValidatePoolOptions();
+        queryConfStr = null;
 
         // lazy_connect may be carried by the ingest config or the (separate) query config, and an
         // explicit builder call wins over either. Two query_pool_min signals are tracked across all three
         // sources: `Explicit` (any source set it — drives the default-to-0 decision, against the effective
         // post-precedence value) and `ExplicitPositive` (any source set it > 0 — drives the conflict
-        // rejection, so an ingest-string query_pool_min>0 isn't silently dropped when a separate query
-        // config overrides sizing).
+        // rejection: lazy_connect is refused when any source asked for an eager read pool, even if a
+        // higher-precedence source overrides the effective value to 0).
         var configLazy = poolConfig.lazy_connect;
         var queryPoolMinExplicit = poolConfig.IsQueryPoolMinExplicit;
         var queryPoolMinExplicitPositive = poolConfig.IsQueryPoolMinExplicit && poolConfig.query_pool_min > 0;
@@ -228,23 +237,32 @@ public sealed class QuestDBClientBuilder
         // Resolve the query config: an explicit QueryConfig wins; otherwise a ws/wss ingest string
         // serves both pools (Java parity). An http/tcp ingest handle with no QueryConfig has no query
         // pool (NewQuery then throws a clear ConfigError).
-        var queryConfStr = _queryConfStr;
+        queryConfStr = _queryConfStr;
         if (queryConfStr is null && ingestIsWebSocket)
         {
             queryConfStr = _confStr;
         }
 
         // Query-pool sizing precedence: explicit builder call > query-config value > ingest-config
-        // value > default. poolConfig (parsed from the ingest string) already carries the ingest value.
+        // value > default. poolConfig (parsed from the ingest string) already carries the ingest value,
+        // so a query-config key overwrites it only when carried explicitly — a bare query config must
+        // not stomp explicit ingest-string sizing with defaults.
         if (queryConfStr is not null && !ReferenceEquals(queryConfStr, _confStr))
         {
             var queryOpts = new SenderOptions(queryConfStr);
-            poolConfig.query_pool_min = queryOpts.query_pool_min;
-            poolConfig.query_pool_max = queryOpts.query_pool_max;
+            if (queryOpts.IsQueryPoolMinExplicit)
+            {
+                poolConfig.query_pool_min = queryOpts.query_pool_min;
+                queryPoolMinExplicit = true;
+                queryPoolMinExplicitPositive = queryPoolMinExplicitPositive || queryOpts.query_pool_min > 0;
+            }
+
+            if (queryOpts.IsQueryPoolMaxExplicit)
+            {
+                poolConfig.query_pool_max = queryOpts.query_pool_max;
+            }
+
             configLazy = configLazy || queryOpts.lazy_connect;
-            queryPoolMinExplicit = queryOpts.IsQueryPoolMinExplicit;
-            queryPoolMinExplicitPositive = queryPoolMinExplicitPositive
-                || (queryOpts.IsQueryPoolMinExplicit && queryOpts.query_pool_min > 0);
         }
 
         if (_queryPoolMin.HasValue)
@@ -261,7 +279,7 @@ public sealed class QuestDBClientBuilder
 #endif
 
         var lazy = _lazyConnect ?? configLazy;
-        var forceWsAsyncConnect = ResolveLazyConnect(
+        forceWsAsyncConnect = ResolveLazyConnect(
             lazy, poolConfig, ingestIsWebSocket, queryPoolMinExplicit, queryPoolMinExplicitPositive);
 
 #if NET7_0_OR_GREATER
@@ -269,11 +287,9 @@ public sealed class QuestDBClientBuilder
         {
             poolConfig.ValidateQueryPoolOptions();
         }
-
-        return new QuestDBClientImpl(poolConfig, _confStr, queryConfStr, forceWsAsyncConnect);
-#else
-        return new QuestDBClientImpl(poolConfig, _confStr, null, forceWsAsyncConnect);
 #endif
+
+        return poolConfig;
     }
 
     /// <summary>

@@ -116,7 +116,14 @@ internal static class QwpOrphanScanner
         }
 
         var suffix = senderId.AsSpan(prefix.Length);
-        return int.TryParse(suffix, out var index) && index >= 0 && index < managedCount;
+        if (!int.TryParse(suffix, out var index) || index < 0 || index >= managedCount)
+        {
+            return false;
+        }
+
+        // Pool slots are exactly "{base}-{index}": a lookalike like "default-03" parses to 3 but is
+        // never allocated by the pool, so treating it as managed would strand it — nothing drains it.
+        return suffix.Equals(index.ToString(), StringComparison.Ordinal);
     }
 
     private static void TryClaim(

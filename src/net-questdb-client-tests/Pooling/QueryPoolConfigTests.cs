@@ -128,5 +128,94 @@ public class QueryPoolConfigTests
             QuestDBClient.Builder().IngestConfig("http::addr=localhost:9000;").QueryConfig("http::addr=localhost:9000;"));
         Assert.That(ex!.code, Is.EqualTo(ErrorCode.ConfigError));
     }
+
+    // ---- sizing precedence with a separate query config (builder call > query config > ingest config
+    // > default), asserted on the assembled config so no pool is pre-warmed ----
+
+    [Test]
+    public void SeparateQueryConfigWithoutSizingKeepsIngestSizing()
+    {
+        var cfg = QuestDBClient.Builder()
+            .IngestConfig("ws::addr=ingest:9000;query_pool_min=3;query_pool_max=8;")
+            .QueryConfig("wss::addr=query:9000;")
+            .BuildPoolConfig(out var queryConfStr, out _);
+        Assert.Multiple(() =>
+        {
+            Assert.That(queryConfStr, Is.EqualTo("wss::addr=query:9000;"));
+            Assert.That(cfg.query_pool_min, Is.EqualTo(3));
+            Assert.That(cfg.query_pool_max, Is.EqualTo(8));
+        });
+    }
+
+    [Test]
+    public void SeparateQueryConfigExplicitSizingWinsOverIngest()
+    {
+        var cfg = QuestDBClient.Builder()
+            .IngestConfig("ws::addr=ingest:9000;query_pool_min=3;query_pool_max=8;")
+            .QueryConfig("wss::addr=query:9000;query_pool_min=2;query_pool_max=6;")
+            .BuildPoolConfig(out _, out _);
+        Assert.Multiple(() =>
+        {
+            Assert.That(cfg.query_pool_min, Is.EqualTo(2));
+            Assert.That(cfg.query_pool_max, Is.EqualTo(6));
+        });
+    }
+
+    [Test]
+    public void SeparateQueryConfigOverridesPerKeyNotWholesale()
+    {
+        var cfg = QuestDBClient.Builder()
+            .IngestConfig("ws::addr=ingest:9000;query_pool_min=3;query_pool_max=8;")
+            .QueryConfig("wss::addr=query:9000;query_pool_max=6;")
+            .BuildPoolConfig(out _, out _);
+        Assert.Multiple(() =>
+        {
+            Assert.That(cfg.query_pool_min, Is.EqualTo(3), "min not carried by the query config survives from ingest");
+            Assert.That(cfg.query_pool_max, Is.EqualTo(6), "max carried by the query config wins");
+        });
+    }
+
+    [Test]
+    public void SeparateQueryConfigExplicitDefaultEqualValuesStillWin()
+    {
+        // Explicitness is key presence, not value: 0 and the default 4 carried by the query config
+        // must beat the ingest values, not be mistaken for "unset".
+        var cfg = QuestDBClient.Builder()
+            .IngestConfig("ws::addr=ingest:9000;query_pool_min=3;query_pool_max=8;")
+            .QueryConfig("wss::addr=query:9000;query_pool_min=0;query_pool_max=4;")
+            .BuildPoolConfig(out _, out _);
+        Assert.Multiple(() =>
+        {
+            Assert.That(cfg.query_pool_min, Is.EqualTo(0));
+            Assert.That(cfg.query_pool_max, Is.EqualTo(4));
+        });
+    }
+
+    [Test]
+    public void BuilderSizingWinsOverBothConfigs()
+    {
+        var cfg = QuestDBClient.Builder()
+            .IngestConfig("ws::addr=ingest:9000;query_pool_min=3;query_pool_max=8;")
+            .QueryConfig("wss::addr=query:9000;query_pool_min=5;query_pool_max=6;")
+            .QueryPoolMin(2)
+            .QueryPoolMax(9)
+            .BuildPoolConfig(out _, out _);
+        Assert.Multiple(() =>
+        {
+            Assert.That(cfg.query_pool_min, Is.EqualTo(2));
+            Assert.That(cfg.query_pool_max, Is.EqualTo(9));
+        });
+    }
+
+    [Test]
+    public void MergedCrossConfigSizingIsValidated()
+    {
+        // min from the ingest string, max from the query config — the merged pair must still validate.
+        var ex = Assert.Throws<IngressError>(() => QuestDBClient.Builder()
+            .IngestConfig("ws::addr=ingest:9000;query_pool_min=6;")
+            .QueryConfig("wss::addr=query:9000;query_pool_max=2;")
+            .BuildPoolConfig(out _, out _));
+        Assert.That(ex!.code, Is.EqualTo(ErrorCode.ConfigError));
+    }
 #endif
 }

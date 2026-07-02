@@ -296,5 +296,39 @@ public class LazyConnectTests
             Assert.That(ex.Message, Does.Contain("query_pool_min"));
         });
     }
+
+    [Test]
+    public void Conflict_QueryConfigQueryPoolMin_Throws()
+    {
+        // A query_pool_min>0 carried by the separate query config (the winning sizing source) must also
+        // trip the lazy_connect conflict — dropping it would eagerly pre-warm the read pool.
+        var ex = Assert.Throws<IngressError>(() => QuestDBClient.Builder()
+            .FromConfig("ws::addr=localhost:9000;sender_pool_min=0;")
+            .QueryConfig("wss::addr=localhost:9000;query_pool_min=2;")
+            .LazyConnect()
+            .BuildPoolConfig(out _, out _));
+        Assert.Multiple(() =>
+        {
+            Assert.That(ex!.code, Is.EqualTo(ErrorCode.ConfigError));
+            Assert.That(ex.Message, Does.Contain("query_pool_min"));
+        });
+    }
+
+    [Test]
+    public void Lazy_BareSeparateQueryConfigStillDefaultsQueryPoolMinZero()
+    {
+        // A bare separate query config must not count as an explicit query_pool_min: lazy_connect still
+        // defaults the read pool to 0 (no eager pre-warm) and forces the ws ingest side async.
+        var cfg = QuestDBClient.Builder()
+            .IngestConfig("ws::addr=localhost:9000;sender_pool_min=0;")
+            .QueryConfig("wss::addr=localhost:9000;")
+            .LazyConnect()
+            .BuildPoolConfig(out _, out var forceWsAsyncConnect);
+        Assert.Multiple(() =>
+        {
+            Assert.That(cfg.query_pool_min, Is.EqualTo(0));
+            Assert.That(forceWsAsyncConnect, Is.True);
+        });
+    }
 #endif
 }

@@ -1412,6 +1412,9 @@ public record SenderOptions
     /// <summary>True when <c>query_pool_min</c> appeared explicitly in this connect string.</summary>
     internal bool IsQueryPoolMinExplicit => IsKeyExplicit(nameof(query_pool_min));
 
+    /// <summary>True when <c>query_pool_max</c> appeared explicitly in this connect string.</summary>
+    internal bool IsQueryPoolMaxExplicit => IsKeyExplicit(nameof(query_pool_max));
+
     /// <summary>
     ///     Set by the QuestDBClient pool on each per-slot sender: the orphan scanner skips slot dirs
     ///     named <c>{OrphanExcludeManagedBase}-{i}</c> for <c>i ∈ [0, OrphanExcludeManagedCount)</c> so

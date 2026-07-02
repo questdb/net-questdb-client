@@ -35,7 +35,7 @@ namespace net_questdb_client_tests.Pooling;
 ///     Implements <see cref="IPooledSlotSender" /> so SF slot reclaim / retire can be exercised, and
 ///     <see cref="IPooledTransactionalSender" /> so the staged-uncommitted-rows discard path can be too.
 /// </summary>
-internal sealed class FakeSender : ISender, IPooledSlotSender, IPooledTransactionalSender
+internal class FakeSender : ISender, IPooledSlotSender, IPooledTransactionalSender
 {
     private static readonly SenderOptions Opts = new("http::addr=localhost:9000;");
 

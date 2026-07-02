@@ -119,8 +119,6 @@ public class PoolErrorSafetyTests
                 Assert.Throws<ObjectDisposedException>(() => s.Send());
                 Assert.Throws<ObjectDisposedException>(() => _ = s.RowCount);
                 Assert.Throws<ObjectDisposedException>(() => _ = s.Options);
-                // The dispose guard runs before the not-a-WS-sender check, so it surfaces as disposed.
-                Assert.Throws<ObjectDisposedException>(() => _ = ((IQwpWebSocketSender)s).AckedFsn);
             });
 
             // A second dispose is a tolerated no-op (no double-return, no throw).
@@ -188,19 +186,46 @@ public class PoolErrorSafetyTests
     }
 
     [Test]
-    public void PooledSenderIsCastableToQwpButThrowsForNonWsTransport()
+    public void PooledSenderFromNonWsPoolDoesNotMatchQwpCapabilityProbe()
     {
+        // The documented probe — `if (sender is IQwpWebSocketSender ws)` — must answer per transport,
+        // same as a standalone Sender.New: a borrowed handle from a non-WS pool must NOT match, so
+        // callers never get a "capable" handle whose QWP members would only throw at runtime.
         var pool = MakePool("sender_pool_min=0;sender_pool_max=1;");
         try
         {
             ISender s = pool.Borrow();
-            Assert.That(s, Is.InstanceOf<IQwpWebSocketSender>(), "pooled senders expose the QWP surface");
+            Assert.That(s, Is.Not.InstanceOf<IQwpWebSocketSender>(),
+                "a non-WS pool must hand out a handle without the QWP surface");
+            s.Dispose();
+        }
+        finally
+        {
+            pool.Close();
+        }
+    }
+
+    [Test]
+    public void PooledSenderFromWsPoolExposesQwpSurfaceAndForwards()
+    {
+        var options = new SenderOptions("ws::addr=localhost:9000;sender_pool_min=0;sender_pool_max=1;");
+        var pool = new SenderPool(options, null, slot => new FakeQwpSender(slot));
+        try
+        {
+            ISender s = pool.Borrow();
+            Assert.That(s, Is.InstanceOf<IQwpWebSocketSender>(),
+                "a WS pool's handle matches the QWP capability probe");
 
             var qwp = (IQwpWebSocketSender)s;
-            // The fake is not a real WS sender, so QWP-only operations must fail with a clear error.
-            Assert.Throws<IngressError>(() => qwp.Ping());
-            Assert.Throws<IngressError>(() => qwp.ColumnByte("b", 1));
+            qwp.Ping();
+            Assert.That(qwp.ColumnByte("b", 1), Is.SameAs(s), "fluent QWP calls chain on the handle");
+            Assert.That(qwp.AckedFsn, Is.EqualTo(-1));
+
             s.Dispose();
+            // Same use-after-return gate as the ISender members.
+            Assert.Throws<ObjectDisposedException>(() => qwp.Ping());
+            Assert.Throws<ObjectDisposedException>(() => _ = qwp.AckedFsn);
+            Assert.Throws<ObjectDisposedException>(() => qwp.ColumnByte("b", 1));
         }
         finally
         {

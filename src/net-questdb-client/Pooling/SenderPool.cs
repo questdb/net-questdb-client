@@ -242,7 +242,7 @@ internal sealed class SenderPool
             throw Exhausted();
         }
 
-        return new BorrowedSender(TakeOrCreate(), this);
+        return BorrowedSender.For(TakeOrCreate(), this);
     }
 
     /// <inheritdoc cref="Borrow" />
@@ -288,7 +288,7 @@ internal sealed class SenderPool
             throw Exhausted();
         }
 
-        return new BorrowedSender(TakeOrCreate(), this);
+        return BorrowedSender.For(TakeOrCreate(), this);
     }
 
     /// <summary>

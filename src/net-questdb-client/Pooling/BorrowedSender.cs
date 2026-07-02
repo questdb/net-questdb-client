@@ -22,7 +22,6 @@
  *
  ******************************************************************************/
 
-using QuestDB.Enums;
 using QuestDB.Senders;
 using QuestDB.Utils;
 
@@ -50,11 +49,12 @@ namespace QuestDB.Pooling;
 ///     A single <see cref="ISender" /> is still not thread-safe: a borrowed handle must not be shared
 ///     across threads. Borrow one per unit of work and dispose it to return.
 ///     <para />
-///     Implements <see cref="IQwpWebSocketSender" /> so a borrowed <c>ws::</c> / <c>wss::</c> sender can
-///     be cast to the full QWP surface (QWP-only column types, <c>Ping</c>, seqTxn watermarks); those
-///     members throw a clear <see cref="IngressError" /> when the pool's transport is HTTP/TCP.
+///     When the pool's transport is <c>ws::</c> / <c>wss::</c>, <see cref="For" /> hands out the
+///     <see cref="BorrowedQwpSender" /> subtype instead, so the standard capability probe
+///     (<c>sender is IQwpWebSocketSender</c>) answers truthfully per transport: it matches on a WS
+///     pool and fails on HTTP/TCP, exactly as it does for a standalone <see cref="Sender.New(string)" />.
 /// </summary>
-internal sealed class BorrowedSender : IQwpWebSocketSender
+internal class BorrowedSender : ISender
 {
     private readonly ISender _inner;
     private readonly PooledSender _entry;
@@ -64,11 +64,21 @@ internal sealed class BorrowedSender : IQwpWebSocketSender
     // semantics atomic; every ingest member reads it first and throws if it has flipped.
     private int _disposed;
 
-    internal BorrowedSender(PooledSender entry, SenderPool pool)
+    private protected BorrowedSender(PooledSender entry, SenderPool pool)
     {
         _entry = entry;
         _pool = pool;
         _inner = entry.Inner;
+    }
+
+    /// <summary>Allocates the per-borrow handle, picking the QWP-capable subtype when (and only when)
+    ///     the entry's real sender exposes the QWP surface — the inner's type is fixed at entry creation,
+    ///     so the capability is known at borrow time.</summary>
+    internal static BorrowedSender For(PooledSender entry, SenderPool pool)
+    {
+        return entry.Inner is IQwpWebSocketSender
+            ? new BorrowedQwpSender(entry, pool)
+            : new BorrowedSender(entry, pool);
     }
 
     /// <summary>SF slot index the backing entry owns, or -1 when store-and-forward is disabled. Pool-internal
@@ -135,7 +145,7 @@ internal sealed class BorrowedSender : IQwpWebSocketSender
     // Gate + reach the delegate in one step: throws if this handle was already returned, otherwise hands
     // back the inner sender to forward the call to. Centralises the use-after-return check so every member
     // below is a one-liner that cannot forget it.
-    private ISender Active()
+    private protected ISender Active()
     {
         if (_disposed != 0)
         {
@@ -325,84 +335,4 @@ internal sealed class BorrowedSender : IQwpWebSocketSender
     public void Truncate() => Active().Truncate();
     public void CancelRow() => Active().CancelRow();
     public void Clear() => Active().Clear();
-
-    // ---- QWP (ws::/wss::) superset. Forwarded to the inner WS sender; throws cleanly on HTTP/TCP. ----
-
-    private IQwpWebSocketSender Qwp
-    {
-        get
-        {
-            // Active() runs the use-after-return gate; the cast then guards against a non-WS transport.
-            return Active() as IQwpWebSocketSender
-                ?? throw new IngressError(ErrorCode.InvalidApiCall,
-                    "this pooled sender is not a ws:: / wss:: sender; QWP-only operations are unavailable");
-        }
-    }
-
-    public long GetHighestAckedSeqTxn(string tableName) => Qwp.GetHighestAckedSeqTxn(tableName);
-    public long GetHighestDurableSeqTxn(string tableName) => Qwp.GetHighestDurableSeqTxn(tableName);
-    public void Ping(CancellationToken ct = default) => Qwp.Ping(ct);
-    public ValueTask PingAsync(CancellationToken ct = default) => Qwp.PingAsync(ct);
-    public long AckedFsn => Qwp.AckedFsn;
-    public Task<long> FlushAndGetSequenceAsync(CancellationToken ct = default) => Qwp.FlushAndGetSequenceAsync(ct);
-
-    public Task<bool> AwaitAckedFsnAsync(long targetFsn, TimeSpan timeout, CancellationToken ct = default) =>
-        Qwp.AwaitAckedFsnAsync(targetFsn, timeout, ct);
-
-    public IQwpWebSocketSender ColumnBinary(ReadOnlySpan<char> name, ReadOnlySpan<byte> value)
-    {
-        Qwp.ColumnBinary(name, value);
-        return this;
-    }
-
-    public IQwpWebSocketSender ColumnIPv4(ReadOnlySpan<char> name, System.Net.IPAddress addr)
-    {
-        Qwp.ColumnIPv4(name, addr);
-        return this;
-    }
-
-    public IQwpWebSocketSender ColumnByte(ReadOnlySpan<char> name, sbyte value)
-    {
-        Qwp.ColumnByte(name, value);
-        return this;
-    }
-
-    public IQwpWebSocketSender ColumnShort(ReadOnlySpan<char> name, short value)
-    {
-        Qwp.ColumnShort(name, value);
-        return this;
-    }
-
-    public IQwpWebSocketSender ColumnFloat(ReadOnlySpan<char> name, float value)
-    {
-        Qwp.ColumnFloat(name, value);
-        return this;
-    }
-
-    public IQwpWebSocketSender ColumnDate(ReadOnlySpan<char> name, long millisSinceEpoch)
-    {
-        Qwp.ColumnDate(name, millisSinceEpoch);
-        return this;
-    }
-
-    public IQwpWebSocketSender ColumnGeohash(ReadOnlySpan<char> name, ulong hash, int precisionBits)
-    {
-        Qwp.ColumnGeohash(name, hash, precisionBits);
-        return this;
-    }
-
-    public IQwpWebSocketSender ColumnLong256(ReadOnlySpan<char> name, System.Numerics.BigInteger value)
-    {
-        Qwp.ColumnLong256(name, value);
-        return this;
-    }
-
-    public long DroppedErrorNotifications => Qwp.DroppedErrorNotifications;
-    public long DroppedConnectionNotifications => Qwp.DroppedConnectionNotifications;
-    public long TotalErrorNotificationsDelivered => Qwp.TotalErrorNotificationsDelivered;
-    public long TotalFramesSent => Qwp.TotalFramesSent;
-    public long TotalAcks => Qwp.TotalAcks;
-    public long TotalServerErrors => Qwp.TotalServerErrors;
-    public long TotalReconnectAttempts => Qwp.TotalReconnectAttempts;
-    public long TotalReconnectsSucceeded => Qwp.TotalReconnectsSucceeded;
 }

@@ -781,6 +781,20 @@ public record SenderOptions
                 $"`sf_durability` only accepts 'memory' in v1, got `{_sfDurability}`");
         }
 
+        // Transactional staging is connection-scoped (the server drops staged deferred rows when the
+        // connection closes), but store-and-forward deliberately outlives connections: it persists
+        // frames and replays them after reconnects, restarts, and slot re-adoption. A replayed
+        // FLAG_DEFER_COMMIT frame re-stages rows whose commit decision is lost — possibly abandoned —
+        // and the next commit on that connection silently publishes them. The two promises are
+        // irreconcilable, so reject the combination outright.
+        if (_transaction && !string.IsNullOrEmpty(_sfDir))
+        {
+            throw new IngressError(ErrorCode.ConfigError,
+                "`transaction=on` cannot be combined with `sf_dir`: store-and-forward replays persisted " +
+                "frames across connections, which would re-stage and later publish uncommitted " +
+                "(possibly abandoned) transactional rows");
+        }
+
         // Programmatic init's field initializer is the no-SF default (128 MiB); promote when sf_dir
         // is set and the user didn't pick their own value. Equality-on-128MiB would falsely promote
         // an explicit user 128 MiB.
@@ -1432,9 +1446,11 @@ public record SenderOptions
     /// <summary>
     ///     Enables WebSocket transactional mode (connect-string key <c>transaction=on</c>). Auto-flush
     ///     ships frames with <c>FLAG_DEFER_COMMIT</c> so the server appends without committing; an
-    ///     explicit <c>Send()</c>/<c>Commit()</c> (or dispose) ships a non-deferred frame that triggers
+    ///     explicit <c>Send()</c>/<c>Commit()</c> ships a non-deferred frame that triggers
     ///     the server-side WAL commit. Lets a producer stage a dataset larger than the server recv
-    ///     buffer and commit it atomically per table. WebSocket-only; off by default.
+    ///     buffer and commit it atomically per table. WebSocket-only; off by default. Mutually
+    ///     exclusive with <see cref="sf_dir" />: store-and-forward replays persisted frames across
+    ///     connections, which cannot honour connection-scoped transactional staging.
     /// </summary>
     public bool transaction
     {

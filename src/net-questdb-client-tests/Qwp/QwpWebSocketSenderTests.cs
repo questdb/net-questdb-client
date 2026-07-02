@@ -759,6 +759,30 @@ public class QwpWebSocketSenderTests
     }
 
     [Test]
+    public async Task Transaction_HasUncommittedDeferredRows_TracksOwedCommit()
+    {
+        await using var server = StartServerWithOkAcks();
+        using var sender = NewSender(server,
+            "transaction=on;auto_flush_rows=1;auto_flush_interval=off;auto_flush_bytes=off;");
+        // The pool reads this seam on return to decide re-pool vs discard; pin its transitions here.
+        QuestDB.Pooling.IPooledTransactionalSender seam = sender;
+
+        Assert.That(seam.HasUncommittedDeferredRows, Is.False, "no commit owed before any flush");
+
+        sender.Table("t").Column("v", 1L).At(TxnTs); // auto-flush row=1 → deferred frame
+        await WaitFor(() => server.ReceivedFrames.Count >= 1);
+        Assert.That(seam.HasUncommittedDeferredRows, Is.True, "deferred auto-flush leaves a commit owed");
+
+        // Clear() resets local buffers only — the staged rows remain on the server, commit still owed.
+        sender.Clear();
+        Assert.That(seam.HasUncommittedDeferredRows, Is.True, "Clear() cannot un-stage shipped rows");
+
+        sender.Commit();
+        await WaitFor(() => server.ReceivedFrames.Count >= 2);
+        Assert.That(seam.HasUncommittedDeferredRows, Is.False, "explicit commit settles the owed commit");
+    }
+
+    [Test]
     public async Task NonTransactional_FramesNeverDefer()
     {
         await using var server = StartServerWithOkAcks();

@@ -42,7 +42,7 @@ namespace QuestDB.Senders;
 ///     frames on transient WS failures, and only terminate on permanent errors (auth, upgrade
 ///     reject, protocol violation, or reconnect-budget exhaustion).
 /// </remarks>
-internal sealed class QwpWebSocketSender : IQwpWebSocketSender, IPooledSlotSender
+internal sealed class QwpWebSocketSender : IQwpWebSocketSender, IPooledSlotSender, IPooledTransactionalSender
 {
     private const long TicksPerMicrosecond = 10L;
     private const int EncoderInitialCapacity = 1 << 16;
@@ -108,6 +108,13 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender, IPooledSlotSende
     ///     may be reused. See <see cref="IPooledSlotSender" />.
     /// </summary>
     public bool IsSlotLockReleased => _slotLock is null || _slotLock.IsReleased;
+
+    /// <summary>
+    ///     True while auto-flushed transactional rows are staged server-side awaiting a commit frame.
+    ///     The pool reads this on return: staged rows cannot be rolled back, so the entry must be
+    ///     discarded rather than re-pooled. See <see cref="IPooledTransactionalSender" />.
+    /// </summary>
+    public bool HasUncommittedDeferredRows => _hasDeferredMessages;
 
     private static (QwpSlotLock? slotLock, QwpCursorSendEngine engine, QwpBackgroundDrainerPool? pool, QwpSenderErrorDispatcher? dispatcher, QwpConnectionEventDispatcher? eventDispatcher, QwpTlsAuth.CertificateValidator? certValidator)
         BuildEngineStack(SenderOptions options)
@@ -755,7 +762,7 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender, IPooledSlotSende
     public Task SendAsync(CancellationToken ct = default)
     {
         // Standalone (SendAwaitsAck): Send drains (flush + await ACK) so "Send() before Dispose" delivers
-        // even though Dispose no longer drains. Pooled: fast flush-to-ring; the pool ships async and
+        // even though Dispose does not drain. Pooled: fast flush-to-ring; the pool ships async and
         // delivery is confirmed via IQuestDBClient.Flush(). close_flush_timeout_millis=0 is the documented
         // "fast, don't wait" opt-out — a 0ms drain can never observe an ACK, so treat it as flush-to-ring
         // rather than a spurious timeout.

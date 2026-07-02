@@ -330,6 +330,12 @@ behaviours:
   via `ValidateWebSocketKeys` (string-ctor path) or
   `ValidateWebSocketKeysAgainstDefaults` (programmatic-init path,
   default-comparison heuristic).
+- `transaction=on` (WS-only): connection-scoped transactional mode —
+  auto-flush stages rows with `FLAG_DEFER_COMMIT`, `Send()`/`Commit()`
+  commits, and the server drops staged rows on connection close.
+  **Mutually exclusive with `sf_dir`** (`ConfigError`): SF replays
+  persisted frames across connections, which would re-stage and later
+  publish uncommitted (possibly abandoned) transactional rows.
 - `auto_flush=off` zeros `auto_flush_rows` / `auto_flush_bytes` /
   `auto_flush_interval` to `-1`. WS-specific defaults
   (`auto_flush_rows=1000`, `auto_flush_bytes=8 MiB`, `auto_flush_interval=100ms`)
@@ -375,7 +381,15 @@ surface.
   and **never throws**. Call `Send()`/`SendAsync()` to hand rows to the
   transport, and `Flush(timeout)`/`FlushAsync(timeout)` (drain = send + await
   ACK) for delivery confirmation, **before** disposing; a sender whose buffer
-  can't be cleared (terminally failed) is discarded instead of re-pooled.
+  can't be cleared (terminally failed) is discarded instead of re-pooled, as is
+  a transactional (`transaction=on`) ws sender still owing a commit for
+  auto-flushed rows staged server-side under `FLAG_DEFER_COMMIT` (the
+  `IPooledTransactionalSender` seam) — QWP has no rollback, so re-pooling the
+  live connection would let the next borrower's first commit publish the
+  abandoned rows; discarding closes the connection, which drops them. This is
+  airtight only because `transaction=on` + `sf_dir` is rejected at config
+  validation — SF replay would otherwise resurrect the discarded borrower's
+  deferred frames into the successor slot's connection.
   **Pooled WS `Send()` is fast flush-to-ring** (the pool sets
   `SenderOptions.SendAwaitsAck=false`): the pooled connection ships async after
   return and delivery is confirmed via the pool-wide `Flush` below — unlike a

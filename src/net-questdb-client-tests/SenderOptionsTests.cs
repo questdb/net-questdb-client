@@ -342,6 +342,29 @@ public class SenderOptionsTests
     }
 
     [Test]
+    public void Transaction_WithSfDir_Throws()
+    {
+        // Connection-scoped transactional staging cannot coexist with cross-connection SF replay:
+        // a replayed deferred frame would re-stage abandoned rows for the next commit to publish.
+        Assert.That(
+            () => new SenderOptions("ws::addr=localhost:9000;transaction=on;sf_dir=/tmp;"),
+            Throws.TypeOf<IngressError>().With.Message.Contains("transaction=on").And.Message.Contains("sf_dir"));
+
+        // Programmatic-init path is caught by the same EnsureValid pass.
+        var opts = new SenderOptions
+        {
+            protocol = ProtocolType.ws, addr = "h:9000",
+            transaction = true, sf_dir = "/tmp",
+        };
+        Assert.That(() => opts.EnsureValid(),
+            Throws.TypeOf<IngressError>().With.Message.Contains("transaction=on"));
+
+        // Each key remains valid on its own.
+        Assert.That(() => new SenderOptions("ws::addr=localhost:9000;transaction=on;"), Throws.Nothing);
+        Assert.That(() => new SenderOptions("ws::addr=localhost:9000;sf_dir=/tmp;"), Throws.Nothing);
+    }
+
+    [Test]
     public void Sf_KeysOnHttpScheme_Throws()
     {
         Assert.That(

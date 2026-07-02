@@ -545,8 +545,8 @@ internal sealed class SenderPool
         }
     }
 
-    /// <summary>Evicts a sender that can't be re-pooled (its buffer couldn't be cleared — terminally
-    ///     failed): dispose it for real, then reclaim or retire its slot.</summary>
+    /// <summary>Evicts a sender that can't be re-pooled (terminally failed, or holding un-rollback-able
+    ///     transactional state): dispose it for real, then reclaim or retire its slot.</summary>
     internal void DiscardBroken(PooledSender ps)
     {
         lock (_gate)

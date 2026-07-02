@@ -138,6 +138,63 @@ public class SenderPoolTests
     }
 
     [Test]
+    public void TransactionalSenderWithStagedRowsIsDiscardedNotReturned()
+    {
+        using var g = new PoolGuard(MakePool("sender_pool_min=0;sender_pool_max=2;", out var created));
+        var pool = g.Pool;
+
+        var s = pool.Borrow();
+        // Rows already shipped under FLAG_DEFER_COMMIT can't be rolled back: re-pooling would let the
+        // next borrower's first commit publish them. The return must discard the entry instead.
+        created.Single().HasUncommittedDeferredRows = true;
+        s.Dispose();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(pool.AvailableSize, Is.EqualTo(0), "sender owing a commit not re-pooled");
+            Assert.That(pool.TotalSize, Is.EqualTo(0), "sender owing a commit removed from pool");
+            Assert.That(created.Single().ClearCount, Is.EqualTo(1), "local buffers still discarded first");
+            Assert.That(created.Single().Disposed, Is.True, "disposed for real — closing the connection drops the staged rows");
+        });
+
+        // capacity restored: a fresh sender can still be borrowed
+        var s2 = pool.Borrow();
+        Assert.That(created, Has.Count.EqualTo(2));
+        s2.Dispose();
+    }
+
+    [Test]
+    public void TransactionalSenderWithNoStagedRowsIsRepooled()
+    {
+        using var g = new PoolGuard(MakePool("sender_pool_min=0;sender_pool_max=1;", out var created));
+        var pool = g.Pool;
+
+        var s = pool.Borrow();
+        created.Single().HasUncommittedDeferredRows = false; // commit not owed (committed, or never deferred)
+        s.Dispose();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(pool.AvailableSize, Is.EqualTo(1), "clean transactional sender re-pools as usual");
+            Assert.That(created.Single().Disposed, Is.False);
+        });
+    }
+
+    [Test]
+    public async Task AsyncTransactionalSenderWithStagedRowsIsDiscarded()
+    {
+        using var g = new PoolGuard(MakePool("sender_pool_min=0;sender_pool_max=1;", out var created));
+        var pool = g.Pool;
+
+        var s = await pool.BorrowAsync();
+        created.Single().HasUncommittedDeferredRows = true;
+        await s.DisposeAsync();
+
+        Assert.That(pool.TotalSize, Is.EqualTo(0));
+        Assert.That(created.Single().Disposed, Is.True);
+    }
+
+    [Test]
     public void DisposeNeverThrows()
     {
         using var g = new PoolGuard(MakePool("sender_pool_min=1;sender_pool_max=1;", out var created));

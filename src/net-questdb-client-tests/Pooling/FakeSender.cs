@@ -32,9 +32,10 @@ namespace net_questdb_client_tests.Pooling;
 /// <summary>
 ///     A no-op <see cref="ISender" /> used to unit-test the pool without a live server. Tracks
 ///     dispose / flush counts and can be told to throw on flush to exercise the broken-sender path.
-///     Implements <see cref="IPooledSlotSender" /> so SF slot reclaim / retire can be exercised.
+///     Implements <see cref="IPooledSlotSender" /> so SF slot reclaim / retire can be exercised, and
+///     <see cref="IPooledTransactionalSender" /> so the staged-uncommitted-rows discard path can be too.
 /// </summary>
-internal sealed class FakeSender : ISender, IPooledSlotSender
+internal sealed class FakeSender : ISender, IPooledSlotSender, IPooledTransactionalSender
 {
     private static readonly SenderOptions Opts = new("http::addr=localhost:9000;");
 
@@ -86,6 +87,10 @@ internal sealed class FakeSender : ISender, IPooledSlotSender
     }
 
     public bool IsSlotLockReleased => SlotLockReleased;
+
+    // Pretend this sender has transactional rows staged server-side awaiting commit (ws transaction=on
+    // after a deferred auto-flush). The return path must discard such a sender, not re-pool it.
+    public bool HasUncommittedDeferredRows { get; set; }
 
     public bool Disposed => Volatile.Read(ref DisposeCount) > 0;
 

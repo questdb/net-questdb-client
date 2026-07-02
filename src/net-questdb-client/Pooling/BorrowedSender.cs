@@ -111,14 +111,20 @@ internal sealed class BorrowedSender : IQwpWebSocketSender
     }
 
     // Discard this borrow's un-sent rows so the reused entry starts with a clean buffer. Returns false
-    // (→ discard, don't re-pool) when the inner sender is terminally failed and cannot be cleared, so a
-    // dead sender never aliases a later borrower. Never throws — Dispose must not throw.
+    // (→ discard, don't re-pool) when the inner sender is terminally failed and cannot be cleared — so a
+    // dead sender never aliases a later borrower — or when it still owes a transactional commit for rows
+    // staged server-side. Never throws — Dispose must not throw.
     private bool TryDiscardUnsent()
     {
         try
         {
             _inner.Clear();
-            return true;
+
+            // A transactional (`transaction=on`) ws sender whose auto-flush staged rows server-side under
+            // FLAG_DEFER_COMMIT still owes a commit; Clear() only resets local buffers. QWP has no rollback,
+            // so re-pooling the live connection would let the next borrower's first commit silently publish
+            // this borrow's abandoned rows. Discarding closes the connection, which drops the staged rows.
+            return _inner is not IPooledTransactionalSender t || !t.HasUncommittedDeferredRows;
         }
         catch
         {

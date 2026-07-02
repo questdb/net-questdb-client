@@ -304,22 +304,44 @@ internal sealed class SenderPool
     internal bool Flush(TimeSpan timeout, CancellationToken ct = default)
     {
         ThrowIfClosed();
-        var ok = true;
-        foreach (var ps in SnapshotAll())
+        var snapshot = SnapshotAll();
+        if (snapshot.Count == 0)
         {
-            try
+            return true;
+        }
+
+        // Drain the senders concurrently on the thread pool — they are independent connections, so this
+        // turns the barrier's wall-clock cost into the slowest single drain rather than their sum, mirroring
+        // FlushAsync. DrainOneSync swallows a sender's terminal error (reports not-drained) and re-throws
+        // OperationCanceledException, so the only fault WaitAll can surface is cancellation.
+        var tasks = new Task<bool>[snapshot.Count];
+        for (var i = 0; i < snapshot.Count; i++)
+        {
+            var ps = snapshot[i];
+            tasks[i] = Task.Run(() => DrainOneSync(ps, timeout, ct));
+        }
+
+        try
+        {
+            Task.WaitAll(tasks);
+        }
+        catch (AggregateException ex)
+        {
+            foreach (var inner in ex.InnerExceptions)
             {
-                ok &= ps.Inner.Flush(timeout, ct);
+                if (inner is OperationCanceledException oce)
+                {
+                    throw oce;
+                }
             }
-            catch (OperationCanceledException)
-            {
-                throw;
-            }
-            catch
-            {
-                // One sender's terminal error must not abort draining the rest; report it as not-drained.
-                ok = false;
-            }
+
+            throw;
+        }
+
+        var ok = true;
+        foreach (var t in tasks)
+        {
+            ok &= t.Result;
         }
 
         return ok;
@@ -371,6 +393,23 @@ internal sealed class SenderPool
         }
         catch
         {
+            return false;
+        }
+    }
+
+    private static bool DrainOneSync(PooledSender ps, TimeSpan timeout, CancellationToken ct)
+    {
+        try
+        {
+            return ps.Inner.Flush(timeout, ct);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch
+        {
+            // One sender's terminal error must not abort draining the rest; report it as not-drained.
             return false;
         }
     }

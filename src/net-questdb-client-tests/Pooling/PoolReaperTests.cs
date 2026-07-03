@@ -246,6 +246,106 @@ public class PoolReaperTests
     }
 
     [Test]
+    public void ReapStopsAtFirstEntryWithinIdleTimeout()
+    {
+        // The idle deque is sorted by idle time (borrowers pop/push the hot end), so the sweep scans from
+        // the cold end and stops at the first entry inside its timeout: the long-idle sender is reaped,
+        // the freshly-returned one behind it survives without being visited. Margins are ~1.5s so a
+        // loaded CI runner cannot tip the young entry over the timeout before the sweep runs.
+        var pool = MakePool("sender_pool_min=0;sender_pool_max=2;idle_timeout_ms=1500;", out var created);
+        try
+        {
+            var a = pool.Borrow();
+            var b = pool.Borrow();
+            var fakes = created.ToArray();
+            a.Dispose(); // cold: idles past the timeout below
+            Thread.Sleep(2000);
+            b.Dispose(); // hot: freshly idle
+
+            pool.ReapIdle();
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(pool.TotalSize, Is.EqualTo(1), "only the over-idle cold entry is reaped");
+                Assert.That(fakes.Count(s => s.Disposed), Is.EqualTo(1));
+            });
+        }
+        finally
+        {
+            pool.Close();
+        }
+    }
+
+    [Test]
+    public void OverAgeSenderReapedDespiteYoungerColdEntryInFront()
+    {
+        // The deque is idle-sorted, not age-sorted, so an over-age sender at the hot end hides behind
+        // the younger-created (but colder) entry the idle sweep stops at. The max_lifetime walk (gated
+        // on the oldest parked CreatedAtUtc) must reap it anyway — and leave the young entry alone.
+        var pool = MakePool("sender_pool_min=0;sender_pool_max=2;idle_timeout_ms=600000;max_lifetime_ms=1500;", out var created);
+        try
+        {
+            var a = pool.Borrow(); // created now; held past max_lifetime
+            var fakeA = created.Single();
+            Thread.Sleep(2000);
+            var b = pool.Borrow(); // created young
+            var fakeB = created.Single(s => !ReferenceEquals(s, fakeA));
+            b.Dispose(); // young entry at the cold end
+            a.Dispose(); // over-age, at the hot end behind it
+
+            pool.ReapIdle();
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(pool.TotalSize, Is.EqualTo(1), "over-age entry reaped despite returning last");
+                Assert.That(fakeA.Disposed, Is.True, "the over-age sender was the one reaped");
+                Assert.That(fakeB.Disposed, Is.False, "the young sender survives");
+            });
+        }
+        finally
+        {
+            pool.Close();
+        }
+    }
+
+    [Test]
+    public void SenderCrossingMaxLifetimeWhileParkedIsReaped()
+    {
+        // Regression: an entry that goes over-age only AFTER being returned sits at the hot end where
+        // the cold-end idle sweep never inspects it. The _idleOldestCreatedUtc-gated walk must catch it
+        // — reaping the aged sender, not the younger cold entry in front of it.
+        var pool = MakePool("sender_pool_min=0;sender_pool_max=2;idle_timeout_ms=600000;max_lifetime_ms=3000;", out var created);
+        try
+        {
+            var a = pool.Borrow(); // A created at t0
+            var fakeA = created.Single();
+            Thread.Sleep(1200);
+            var b = pool.Borrow(); // B created young, at t1200
+            var fakeB = created.Single(s => !ReferenceEquals(s, fakeA));
+            b.Dispose(); // B parks first: cold end
+            a.Dispose(); // A parks under-age (~1.2s < 3s): hot end, NOT over-age yet
+
+            pool.ReapIdle();
+            Assert.That(pool.TotalSize, Is.EqualTo(2), "nothing over-age or over-idle yet");
+
+            Thread.Sleep(2400); // t3600: A (3.6s) crossed max_lifetime while parked; B (2.4s) still young
+
+            pool.ReapIdle();
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(pool.TotalSize, Is.EqualTo(1), "the entry that aged while parked is reaped");
+                Assert.That(fakeA.Disposed, Is.True, "A crossed max_lifetime while parked");
+                Assert.That(fakeB.Disposed, Is.False, "young B survives at the cold end");
+            });
+        }
+        finally
+        {
+            pool.Close();
+        }
+    }
+
+    [Test]
     public void HousekeeperReapsInBackground()
     {
         var bag = new ConcurrentBag<FakeSender>();

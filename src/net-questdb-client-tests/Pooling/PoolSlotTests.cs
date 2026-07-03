@@ -99,7 +99,7 @@ public class PoolSlotTests
     }
 
     [Test]
-    public void FreedSlotIndexIsReusedLowestFirst()
+    public void FreedSlotIndexIsReusedMostRecentFirst()
     {
         var pool = MakeSfPool("sender_pool_min=0;sender_pool_max=4;", out var created);
         try
@@ -113,8 +113,10 @@ public class PoolSlotTests
             created.Single(s => s.SlotIndex == 1).ThrowOnClear = true;
             b.Dispose();
 
+            // LIFO free-index reuse: the just-freed index comes back before the never-used 3, keeping the
+            // on-disk working set of slot directories compact.
             var d = pool.Borrow();
-            Assert.That(d.SlotIndex, Is.EqualTo(1), "lowest free index reused");
+            Assert.That(d.SlotIndex, Is.EqualTo(1), "most recently freed index reused");
             Assert.That(pool.LeakedSlotCount, Is.EqualTo(0));
 
             a.Dispose();
@@ -226,7 +228,7 @@ public class PoolSlotTests
             Assert.That(pool.LeakedSlotCount, Is.EqualTo(0), "retired slot reclaimed once lock released");
 
             // Effective max is back to 2: with b still held, a fresh borrow now succeeds and reuses the
-            // reclaimed lowest-free index 0 — no permanent shrink.
+            // reclaimed index 0 — no permanent shrink.
             var c = pool.Borrow();
             Assert.That(c.SlotIndex, Is.EqualTo(0), "reclaimed index reused");
             c.Dispose();
@@ -241,9 +243,9 @@ public class PoolSlotTests
     [Test]
     public void ReclaimRestoresCapacityForReapedRetiredSlot()
     {
-        // Same reclaim, but via the reap path (idle sender whose lock was held when reaped). Exercises the
-        // leak-debt branch where the retired permit was paid from an available permit (debt settled), so
-        // reclaim must Release a real permit rather than just cancel pending debt.
+        // Same reclaim, but via the reap path (idle sender whose lock was held when reaped). The reaper
+        // withheld the sender's permit from the free pool up front (TryWithholdPermit), so reclaim must
+        // Release a real permit back.
         var pool = MakeSfPool("sender_pool_min=0;sender_pool_max=2;idle_timeout_ms=1;acquire_timeout_ms=150;", out var created);
         try
         {
@@ -275,9 +277,58 @@ public class PoolSlotTests
     }
 
     [Test]
+    public void BorrowRacingReapNeverSpuriouslyExhausts()
+    {
+        // M2 regression. The old up-front retire in ReapIdle withheld its permit best-effort
+        // (SettleLeakDebtLocked's Wait(0)): a borrower that had already drained the last free permit —
+        // mid-Borrow, between _capacity.Wait and TakeOrCreate — left the reaper unable to withhold, yet
+        // the reap proceeded. The idle sender left the idle deque, its slot index stayed reserved for the
+        // dispose window, and the mid-flight borrower found neither an idle sender nor a free index ->
+        // instant spurious PoolExhausted, ignoring acquire_timeout_ms. Now the reaper only proceeds when
+        // it atomically takes a permit (TryWithholdPermit) and otherwise skips, leaving the idle sender
+        // for that borrower to reuse. Race the two continuously: a legitimate second borrower in a max-2
+        // pool must never see PoolExhausted, whichever side wins.
+        var pool = MakeSfPool(
+            "sender_pool_min=1;sender_pool_max=2;idle_timeout_ms=1;acquire_timeout_ms=5000;", out _);
+        try
+        {
+            using var held = pool.Borrow(); // pin slot 0 so the reaper only ever sees one idle sender
+            for (var i = 0; i < 300; i++)
+            {
+                var warm = pool.Borrow();
+                warm.Dispose();
+                Thread.Sleep(2); // exceed idle_timeout so the parked sender is reap-eligible
+
+                using var start = new ManualResetEventSlim(false);
+                var reap = Task.Run(() =>
+                {
+                    start.Wait();
+                    pool.ReapIdle();
+                });
+                var borrow = Task.Run(() =>
+                {
+                    start.Wait();
+                    return pool.Borrow();
+                });
+                start.Set();
+
+                Assert.That(reap.Wait(TimeSpan.FromSeconds(10)), Is.True, "reap completed");
+                Assert.That(borrow.Wait(TimeSpan.FromSeconds(10)), Is.True, "borrow completed");
+                borrow.Result.Dispose(); // faults here if the borrow spuriously threw (pre-fix behaviour)
+            }
+
+            Assert.That(pool.LeakedSlotCount, Is.EqualTo(0));
+        }
+        finally
+        {
+            pool.Close();
+        }
+    }
+
+    [Test]
     public void ConcurrentBorrowDuringReapDisposeWindowDoesNotSpuriouslyThrow()
     {
-        // Regression: a reaped idle SF sender is removed from _all/_available under the pool lock, but its
+        // Regression: a reaped idle SF sender is removed from _all/_idle under the pool lock, but its
         // slot index is freed only AFTER the (slow WS+SF) DisposeInner runs outside the lock. A reaped
         // sender holds no capacity permit, so during that dispose window the semaphore used to advertise a
         // free permit whose slot index was still locked -> a concurrent Borrow acquired the permit, found no
@@ -300,7 +351,7 @@ public class PoolSlotTests
 
             var reap = Task.Run(() => pool.ReapIdle());
             Assert.That(slot1.DisposeEntered.Wait(TimeSpan.FromSeconds(5)), Is.True,
-                "reap reached the (blocked) dispose window: slot 1 out of _all/_available, index still held");
+                "reap reached the (blocked) dispose window: slot 1 out of _all/_idle, index still held");
 
             // The window is now open — slot 1's index is reserved while its dispose is parked. Race a borrow.
             var borrow = Task.Run(() => pool.Borrow());

@@ -410,16 +410,25 @@ surface.
   `Flush()` overloads (it no longer governs Dispose, which does not drain).
 - **Sizing**: elastic between `sender_pool_min` and `sender_pool_max`,
   bounded by a `SemaphoreSlim` capacity gate (counts in-use senders;
-  creation happens outside the lock). `BorrowSender` blocks up to
-  `acquire_timeout_ms` then throws `IngressError(ErrorCode.PoolExhausted)`.
-  `PoolHousekeeper` (a `PeriodicTimer` background task) reaps idle /
-  over-age senders down to `min`. Reaping is **gated on full drain**: an
-  idle ws sender whose cursor-engine ring still holds un-acked frames is
-  skipped by both the idle and max-lifetime paths (`ReapIdle` refreshes
-  its `IdleSinceUtc` so the idle clock effectively starts at full-drain),
-  because tearing it down would, in RAM mode, free the ring and silently
-  drop those frames — the pool-wide `Flush` can't cover an already-reaped
-  sender. Surfaced via the net-agnostic `IPooledDrainAwareSender.IsFullyDrained`
+  creation happens outside the lock). Idle senders sit in an
+  idle-time-sorted deque: borrowers pop/push the hot end (LIFO reuse, so
+  the excess goes genuinely cold and shrinks toward `min`), and the
+  housekeeper's `ReapIdle` sweeps from the cold end, stopping at the
+  first entry inside its timeout — O(reaped), not O(idle). `max_lifetime`
+  follows `CreatedAtUtc` (which the deque is NOT sorted by — an entry
+  can cross it while parked), so it runs as a separate walk gated on
+  `_idleOldestCreatedUtc`, a conservative lower bound over parked
+  entries' creation times that only fires when something actually
+  crossed the lifetime.
+  `BorrowSender` blocks up to `acquire_timeout_ms` then throws
+  `IngressError(ErrorCode.PoolExhausted)`. Reaping is **gated on full
+  drain**: an idle ws sender whose cursor-engine ring still holds
+  un-acked frames is skipped by both the idle and max-lifetime paths
+  (the idle sweep re-parks it at the hot end with a refreshed
+  `IdleSinceUtc`, so the idle clock effectively restarts at full-drain;
+  the age walk just leaves it for the next sweep), because tearing it down
+  would, in RAM mode, free the ring and silently drop those frames — the
+  pool-wide `Flush` can't cover an already-reaped sender. Surfaced via the net-agnostic `IPooledDrainAwareSender.IsFullyDrained`
   seam (implemented by `QwpWebSocketSender` → `QwpCursorSendEngine.IsFullyDrained`;
   HTTP/TCP deliver synchronously and are always drained). There is **no
   bound**: a permanently wedged sender that never drains lives until the
@@ -473,19 +482,25 @@ surface.
 - **Store-and-forward**: when pooling `ws::`+`sf_dir`, each pooled sender
   gets a distinct slot identity `sender_id = <base>-<index>` (via
   `SenderPool.ApplySlotIdentity`) so siblings never collide on a slot
-  directory / flock. A discarded/reaped sender's index is freed only after
+  directory / flock. Free indices live in a LIFO stack (most recently freed
+  reused first, keeping the on-disk slot-directory working set compact). A
+  discarded/reaped sender's index is freed only after
   `IPooledSlotSender.IsSlotLockReleased` confirms the lock dropped (a
   net-agnostic seam implemented by `QwpWebSocketSender`, backed by
-  `QwpSlotLock.IsReleased`); otherwise it is **retired** (`leakedSlots`)
-  and its capacity permit retained, shrinking effective `max`. This shrink
-  is **not permanent**: when a wedged/deferred engine teardown
+  `QwpSlotLock.IsReleased`); otherwise it is **retired** (`_retired`) and one
+  capacity permit stays physically withheld on its behalf, shrinking effective
+  `max` (a discarded sender's own permit is simply not released; the reaper
+  competes through the same gate as borrowers — it takes a free permit up
+  front via `TryWithholdPermit` and **stops the sweep** when a mid-borrow
+  thread already drained the last one — that borrower reuses the idle
+  sender instead, so a legitimate borrow never sees a spurious `PoolExhausted`).
+  This shrink is **not permanent**: when a wedged/deferred engine teardown
   (`QwpCursorSendEngine.Dispose` defers `ReleaseSharedResources` past its 5 s
-  pump-join budget) leaves the lock still held at dispose time, the retired
-  sender is parked on `_retired` and the housekeeper's `ReclaimRetiredSlots`
-  re-tests `IsInnerSlotLockReleased` each sweep — once it flips true the index
-  is freed and the withheld permit returned (cancelling pending leak debt, or
-  `_capacity.Release()` if the debt was already settled). So `leakedSlots` is a
-  live gauge of currently-retired slots, not a monotonic counter. Pooled
+  pump-join budget) leaves the lock still held at dispose time, the housekeeper's
+  `ReclaimRetiredSlots` re-tests `IsInnerSlotLockReleased` each sweep — once it
+  flips true the index is freed and the withheld permit released
+  (`_capacity.Release()`). So `LeakedSlotCount` (= `_retired.Count`) is a live
+  gauge of currently-retired slots, not a monotonic counter. Pooled
   senders pass their managed family to `QwpOrphanScanner.ClaimOrphans(...,
   managedBase, managedCount)` so orphan adoption skips live/future siblings
   but still drains true out-of-family orphans (when `drain_orphans=on`).

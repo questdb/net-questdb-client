@@ -38,7 +38,11 @@ namespace QuestDB.Pooling;
 ///     Capacity is bounded by a <see cref="SemaphoreSlim" /> that counts in-use senders: a permit is
 ///     taken on borrow and released on return. A sender is only created when no idle one exists and a
 ///     permit is held, which keeps the total alive count ≤ <c>max</c>. Sender construction (TLS / DNS
-///     / connect) happens OUTSIDE the lock so a slow connect cannot block other borrowers.
+///     / connect) happens OUTSIDE the lock so a slow connect cannot block other borrowers. The reaper
+///     competes through the same gate (<see cref="TryWithholdPermit" />): it only removes an idle
+///     sender after taking a permit for it, and a reaped or retired SF sender keeps that permit
+///     physically withheld until its slot index is reusable, so the semaphore never advertises
+///     capacity whose slot is still locked.
 /// </summary>
 internal sealed class SenderPool
 {
@@ -58,33 +62,38 @@ internal sealed class SenderPool
     // pre-warm; writes buffer until the wire is up. No effect on non-ws senders.
     private readonly bool _forceWsAsyncConnect;
 
-    private readonly Stack<PooledSender> _available = new();
+    // Idle senders as a deque sorted by idle time: index 0 is the coldest (longest idle), the tail the
+    // hottest. Borrowers pop/push the hot end — LIFO reuse concentrates traffic on few senders so the
+    // excess goes genuinely cold and shrinks toward min — which keeps the list IdleSinceUtc-ordered, so
+    // the reaper only ever inspects the cold end and stops at the first entry inside its timeout:
+    // O(reaped), not O(idle). max_lifetime is NOT covered by that order (age follows CreatedAtUtc, not
+    // IdleSinceUtc), so it is handled by a separate walk gated on _idleOldestCreatedUtc: a conservative
+    // lower bound over the parked entries' CreatedAtUtc, only lowered when an entry is parked and
+    // retightened by the walk itself — the walk therefore runs only when some parked entry has actually
+    // crossed max_lifetime, keeping the common sweep O(reaped).
+    private readonly List<PooledSender> _idle = new();
+    private DateTime _idleOldestCreatedUtc = DateTime.MaxValue;
     private readonly List<PooledSender> _all = new();
     private bool _closed;
 
     // Store-and-forward slot management. Each pooled WS+SF sender owns a distinct slot identity
-    // (`<base>-<index>`) so siblings never collide on a slot directory / flock. `_slotInUse[i]` tracks
-    // index ownership; a retired index (lock not yet released after dispose) stays set and counts
-    // against effective capacity, matching the Java pool's `leakedSlots`. Unlike a permanent leak, the
-    // housekeeper re-tests retired slots (`ReclaimRetiredSlots`) and frees the index + permit once the
-    // engine's deferred teardown finally releases the lock, so `_leakedSlots` is a live gauge of
-    // currently-retired slots, not a monotonic counter.
+    // (`<base>-<index>`) so siblings never collide on a slot directory / flock. `_freeSlots` holds the
+    // indices owned by no live (or not-yet-fully-torn-down) sender; LIFO reuse keeps the on-disk
+    // working set of slot directories compact. A retired index (lock not yet released after dispose) is
+    // simply absent from the stack and counts against effective capacity, matching the Java pool's
+    // `leakedSlots`. Unlike a permanent leak, the housekeeper re-tests retired slots
+    // (`ReclaimRetiredSlots`) and frees the index + permit once the engine's deferred teardown finally
+    // releases the lock, so retirement is a live shrink, not a monotonic counter.
     private readonly bool _storeAndForward;
     private readonly string _slotBaseId;
-    private readonly bool[] _slotInUse;
-    private int _leakedSlots;
+    private readonly Stack<int> _freeSlots = new();
 
-    // Senders retired with their slot lock still held, awaiting reclaim. The housekeeper re-tests each
-    // entry's IsInnerSlotLockReleased and, once true, frees the index and returns the withheld permit.
+    // Senders retired with their slot lock still held, awaiting reclaim. Every entry has exactly one
+    // capacity permit physically withheld on its behalf: a discarded sender's own permit is simply not
+    // released, and the reap path takes a free permit up front — skipping the reap entirely when none is
+    // free (see ReapIdle). Reclaiming therefore always frees the index AND releases one permit; there is
+    // no deferred "leak debt" to settle.
     private readonly List<PooledSender> _retired = new();
-
-    // Permits owed to retired (leaked) slots. Retiring a slot removes one unit of capacity so the
-    // semaphore never advertises more in-use slots than the bitmap can allocate. A discarded sender held
-    // a permit (paid down when its Dispose/return path releases); a reaped sender held none, so the debt is
-    // settled by draining an available permit now or at the next release. Reclaiming a slot reverses one
-    // removal: it cancels a still-pending debt, or releases the permit back when the debt was already
-    // settled physically.
-    private int _leakDebt;
 
     /// <summary>Production constructor: pool sizes come from <paramref name="poolConfig" />, senders are
     ///     built from <paramref name="confStr" />. <paramref name="forceWsAsyncConnect" /> is set by the
@@ -115,7 +124,14 @@ internal sealed class SenderPool
 
         _storeAndForward = poolConfig.IsWebSocket() && !string.IsNullOrEmpty(poolConfig.sf_dir);
         _slotBaseId = poolConfig.sender_id;
-        _slotInUse = _storeAndForward ? new bool[_max] : Array.Empty<bool>();
+        if (_storeAndForward)
+        {
+            // Push high-to-low so the first pops hand out 0, 1, 2... — fresh pools fill from index 0.
+            for (var i = _max - 1; i >= 0; i--)
+            {
+                _freeSlots.Push(i);
+            }
+        }
 
         try
         {
@@ -137,7 +153,7 @@ internal sealed class SenderPool
         {
             lock (_gate)
             {
-                return _available.Count;
+                return _idle.Count;
             }
         }
     }
@@ -173,7 +189,7 @@ internal sealed class SenderPool
         {
             lock (_gate)
             {
-                return _leakedSlots;
+                return _retired.Count;
             }
         }
     }
@@ -212,7 +228,11 @@ internal sealed class SenderPool
             foreach (var ps in created)
             {
                 _all.Add(ps);
-                _available.Push(ps);
+                _idle.Add(ps);
+                if (ps.CreatedAtUtc < _idleOldestCreatedUtc)
+                {
+                    _idleOldestCreatedUtc = ps.CreatedAtUtc;
+                }
             }
         }
     }
@@ -434,15 +454,18 @@ internal sealed class SenderPool
                 throw Closed();
             }
 
-            if (_available.Count > 0)
+            if (_idle.Count > 0)
             {
-                return _available.Pop();
+                var ps = _idle[^1];
+                _idle.RemoveAt(_idle.Count - 1);
+                return ps;
             }
 
             slotIndex = AllocateSlotIndex();
             if (_storeAndForward && slotIndex < 0)
             {
-                // Defence in depth: with correct leak accounting a held permit always implies a free
+                // Defence in depth: every retire/reap withholds its permit physically (reap skips when it
+                // can't — see TryWithholdPermit), so a held permit always implies an idle sender or a free
                 // index. Surface the documented exhaustion error rather than a factory failure.
                 ReleaseCapacity();
                 throw Exhausted();
@@ -540,7 +563,12 @@ internal sealed class SenderPool
             }
 
             ps.IdleSinceUtc = DateTime.UtcNow;
-            _available.Push(ps);
+            _idle.Add(ps);
+            if (ps.CreatedAtUtc < _idleOldestCreatedUtc)
+            {
+                _idleOldestCreatedUtc = ps.CreatedAtUtc;
+            }
+
             return false;
         }
     }
@@ -586,115 +614,171 @@ internal sealed class SenderPool
         FinishDiscard(ps);
     }
 
-    // A discarded sender held a capacity permit. If its slot lock dropped, free the index. Otherwise
-    // retire the index — RetireSlotIndex records the leak debt, and the ReleaseCapacity below pays it
-    // down (the permit stays out of circulation) so effective max shrinks by one. Mirrors the Java
-    // pool's leaked-slot accounting. The shrink is reversible: the housekeeper re-tests retired slots
-    // and reclaims the index + permit once the (possibly deferred) lock release lands.
+    // A discarded sender held a capacity permit. If its slot lock dropped, free the index and release
+    // the permit. Otherwise retire the index and keep the permit withheld — simply by not releasing it —
+    // so effective max shrinks by one. Mirrors the Java pool's leaked-slot accounting. The shrink is
+    // reversible: the housekeeper re-tests retired slots and reclaims the index + permit once the
+    // (possibly deferred) lock release lands.
     private void FinishDiscard(PooledSender ps)
     {
-        lock (_gate)
+        if (SettleAfterDispose(ps))
         {
-            if (ps.SlotIndex < 0 || ps.IsInnerSlotLockReleased)
-            {
-                FreeSlotIndex(ps.SlotIndex);
-            }
-            else
-            {
-                RetireSlotIndex(ps);
-            }
+            ReleaseCapacity();
         }
-
-        ReleaseCapacity();
     }
 
-    /// <summary>Reaps idle / over-age senders down to <c>min</c>. Driven by the housekeeper.</summary>
+    /// <summary>Reaps idle / over-age senders down to <c>min</c>. Driven by the housekeeper. The idle
+    ///     deque is sorted by idle time, so the idle sweep only inspects the cold end and stops at the
+    ///     first entry inside its timeout — O(reaped), not O(idle). max_lifetime is age-ordered, not
+    ///     idle-ordered, so it runs as a separate walk gated on <c>_idleOldestCreatedUtc</c>, which
+    ///     fires only when some parked entry has actually crossed the lifetime.</summary>
     internal void ReapIdle()
     {
-        if (IsClosed)
-        {
-            return;
-        }
-
         var now = DateTime.UtcNow;
-        List<PooledSender>? toDispose = null;
+        ReapOverAge(now);
 
+        // Bound the sweep to the entries present at its start: an un-drained cold entry is re-parked at
+        // the hot end below, and without the bound a deque full of un-drained entries would be revisited
+        // forever. Entries returned mid-sweep are fresh and land at the hot end — next sweep's problem.
+        int budget;
         lock (_gate)
         {
-            if (_closed)
+            budget = _closed ? 0 : _idle.Count;
+        }
+
+        while (budget-- > 0)
+        {
+            PooledSender victim;
+            lock (_gate)
+            {
+                if (_closed || _idle.Count == 0)
+                {
+                    return;
+                }
+
+                var ps = _idle[0];
+                // The cold end is the longest-idle entry: if it is inside its timeout, everything
+                // behind it is too. The min floor is global, so it ends the sweep as well.
+                if (now - ps.IdleSinceUtc < _idleTimeout || _all.Count <= _min)
+                {
+                    return;
+                }
+
+                // Don't reap until every in-flight frame is acked. Reaping a WS sender whose ring still
+                // holds un-acked data would, in RAM mode, free that data with no delivery and no error
+                // (the pool-wide Flush can't cover an already-reaped sender). Re-park it at the hot end
+                // with a fresh IdleSinceUtc so the idle clock effectively restarts (and the reap timer
+                // starts at full-drain); a wedged sender that never drains simply lives until the pool
+                // is closed (its data is retained, not silently dropped). No-op for HTTP/TCP, which
+                // deliver synchronously.
+                if (!ps.IsInnerFullyDrained)
+                {
+                    _idle.RemoveAt(0);
+                    ps.IdleSinceUtc = now;
+                    _idle.Add(ps);
+                    continue;
+                }
+
+                // Withhold one capacity permit for the whole dispose window — atomically, BEFORE the
+                // sender leaves the pool. An idle sender holds no permit (its unit of capacity sits
+                // free in the semaphore), so taking it here guarantees the semaphore never advertises
+                // capacity whose slot index is still locked mid-dispose — the spurious-PoolExhausted
+                // race. If a mid-borrow thread already drained the last free permit, stop the sweep and
+                // leave the deque untouched: that borrower is about to reuse this very sender, and with
+                // zero free permits every other idle entry is equally spoken for. IdleSinceUtc is not
+                // refreshed, so a skipped sender stays reap-eligible next sweep.
+                if (!TryWithholdPermit())
+                {
+                    return;
+                }
+
+                _idle.RemoveAt(0);
+                _all.Remove(ps);
+                victim = ps;
+            }
+
+            DisposeAndSettle(victim);
+        }
+    }
+
+    // max_lifetime pass. The deque is IdleSinceUtc-ordered, so an entry that crosses max_lifetime while
+    // parked can hide behind younger-created but colder entries where the cold-end sweep never sees it.
+    // Gated on the conservative _idleOldestCreatedUtc bound and retightens it while walking, so the
+    // walk only runs when some parked entry has actually crossed — or while an over-age entry survives
+    // it (un-drained, min floor, withhold loss) and must be re-checked next sweep.
+    private void ReapOverAge(DateTime now)
+    {
+        List<PooledSender>? victims = null;
+        lock (_gate)
+        {
+            if (_closed || now - _idleOldestCreatedUtc < _maxLifetime)
             {
                 return;
             }
 
-            var idle = _available.ToArray();
-            _available.Clear();
-            foreach (var ps in idle)
+            var oldestKept = DateTime.MaxValue;
+            var reapable = true;
+            for (var i = 0; i < _idle.Count;)
             {
-                // Don't start the idle/age clock until every in-flight frame is acked. Reaping a WS
-                // sender whose ring still holds un-acked data would, in RAM mode, free that data with no
-                // delivery and no error (the pool-wide Flush can't cover an already-reaped sender). Keep
-                // refreshing IdleSinceUtc so the idle timer effectively starts at full-drain; a wedged
-                // sender that never drains simply lives until the pool is closed (its data is retained,
-                // not silently dropped). No-op for HTTP/TCP, which deliver synchronously.
-                if (!ps.IsInnerFullyDrained)
+                var ps = _idle[i];
+                if (reapable && now - ps.CreatedAtUtc >= _maxLifetime && ps.IsInnerFullyDrained)
                 {
-                    ps.IdleSinceUtc = now;
-                    _available.Push(ps);
-                    continue;
+                    if (_all.Count <= _min || !TryWithholdPermit())
+                    {
+                        // Floor reached / a mid-borrow thread owns the free permits: stop reaping but
+                        // keep walking to retighten the bound (survivors keep it low, so we re-check).
+                        reapable = false;
+                    }
+                    else
+                    {
+                        _idle.RemoveAt(i);
+                        _all.Remove(ps);
+                        (victims ??= new List<PooledSender>()).Add(ps);
+                        continue;
+                    }
                 }
 
-                var overIdle = now - ps.IdleSinceUtc >= _idleTimeout;
-                var overAge = now - ps.CreatedAtUtc >= _maxLifetime;
-                if ((overIdle || overAge) && _all.Count > _min)
+                if (ps.CreatedAtUtc < oldestKept)
                 {
-                    _all.Remove(ps);
-                    // SF: retire the slot up front — before releasing the lock and starting the (slow WS+SF)
-                    // dispose — so the index stays reserved AND a matching capacity permit is withheld for
-                    // the whole dispose window. A reaped sender holds no permit, so without this the
-                    // semaphore would advertise a free permit whose slot index is still locked (freed only
-                    // once DisposeInner releases the flock), letting a concurrent Borrow take the permit,
-                    // find no free index, and throw a spurious PoolExhausted. The post-dispose pass below
-                    // reclaims the index + permit once the lock actually releases. No-op for non-SF senders.
-                    RetireSlotIndex(ps);
-                    (toDispose ??= new List<PooledSender>()).Add(ps);
+                    oldestKept = ps.CreatedAtUtc;
                 }
-                else
-                {
-                    _available.Push(ps);
-                }
+
+                i++;
             }
+
+            _idleOldestCreatedUtc = oldestKept;
         }
 
-        if (toDispose is null)
+        if (victims is null)
         {
             return;
         }
 
-        foreach (var ps in toDispose)
+        foreach (var ps in victims)
         {
-            try
-            {
-                ps.DisposeInner();
-            }
-            catch
-            {
-                // best effort; reaping must never throw
-            }
+            DisposeAndSettle(ps);
+        }
+    }
 
-            // Reclaim the slot retired above now that dispose has run — but only if the lock actually
-            // released; a new sender must never open a slot directory whose flock is still held. If a
-            // deferred teardown is still holding it, leave the entry retired for the housekeeper's
-            // ReclaimRetiredSlots to pick up when the lock release finally lands.
-            var releaseCount = 0;
-            lock (_gate)
-            {
-                if (ps.SlotIndex < 0 || ps.IsInnerSlotLockReleased)
-                {
-                    ReclaimRetiredLocked(ps, ref releaseCount);
-                }
-            }
+    // Disposes a reaped sender outside the pool lock, then frees the slot and returns the withheld
+    // permit — but only if the lock actually released; a new sender must never open a slot directory
+    // whose flock is still held. If a deferred teardown is still holding it, SettleAfterDispose parks
+    // the entry on _retired (permit still withheld) for ReclaimRetiredSlots to settle when the release
+    // finally lands.
+    private void DisposeAndSettle(PooledSender ps)
+    {
+        try
+        {
+            ps.DisposeInner();
+        }
+        catch
+        {
+            // best effort; reaping must never throw
+        }
 
-            ReleaseReclaimedPermits(releaseCount);
+        if (SettleAfterDispose(ps))
+        {
+            ReleaseCapacity();
         }
     }
 
@@ -724,7 +808,9 @@ internal sealed class SenderPool
                 var ps = _retired[i];
                 if (ps.IsInnerSlotLockReleased)
                 {
-                    ReclaimRetiredLocked(ps, ref releaseCount);
+                    _retired.RemoveAt(i);
+                    FreeSlotIndex(ps.SlotIndex);
+                    releaseCount++;
                 }
             }
         }
@@ -802,9 +888,9 @@ internal sealed class SenderPool
             // GiveBackOrTakeOwnership / DiscardBroken), so each inner is torn down by exactly one party.
             // Callers wanting a hard "all I/O has stopped" guarantee must return every borrowed sender
             // before closing the handle.
-            idle = new List<PooledSender>(_available);
+            idle = new List<PooledSender>(_idle);
             _all.Clear();
-            _available.Clear();
+            _idle.Clear();
             // Drop references to retired-but-unreclaimed senders; their OS locks release independently
             // (deferred continuation / process exit) and the pool no longer needs to track them.
             _retired.Clear();
@@ -881,7 +967,9 @@ internal sealed class SenderPool
         options.OrphanExcludeManagedCount = managedCount;
     }
 
-    // Lowest-free index in [0, max). Caller holds _gate (or is the single-threaded pre-warm path).
+    // Next free index in [0, max), LIFO: the most recently freed index is reused first, keeping the
+    // on-disk working set of slot directories compact. Caller holds _gate (or is the single-threaded
+    // pre-warm path).
     private int AllocateSlotIndex()
     {
         if (!_storeAndForward)
@@ -889,16 +977,7 @@ internal sealed class SenderPool
             return -1;
         }
 
-        for (var i = 0; i < _slotInUse.Length; i++)
-        {
-            if (!_slotInUse[i])
-            {
-                _slotInUse[i] = true;
-                return i;
-            }
-        }
-
-        return -1;
+        return _freeSlots.Count > 0 ? _freeSlots.Pop() : -1;
     }
 
     private void FreeSlotIndex(int idx)
@@ -908,76 +987,44 @@ internal sealed class SenderPool
             return;
         }
 
-        _slotInUse[idx] = false;
+        _freeSlots.Push(idx);
     }
 
-    // Reserve this slot index while its flock may still be held: keep the bitmap bit set so the index is not
-    // reused, remove one unit of capacity so the semaphore stays in lock-step with the allocatable-index
-    // count, and remember the sender so a later pass reclaims the index + permit once the (possibly
-    // deferred) lock release lands. Called both by DiscardBroken after a failed sender's dispose and by
-    // ReapIdle up front — before dispose — to hold the slot across the whole dispose window. Caller holds
-    // _gate.
-    private void RetireSlotIndex(PooledSender ps)
+    // Non-blocking permit withhold used by the reap path: a reaped idle sender holds no permit, so the
+    // reaper takes one out of the free pool before removing the sender, keeping the semaphore in
+    // lock-step with allocatable slots for the whole dispose window. Returns false when no free permit
+    // exists (a mid-borrow thread drained it) — the caller must then skip the reap. Caller holds _gate;
+    // Wait(0) never blocks so holding the lock is safe.
+    private bool TryWithholdPermit()
     {
-        if (!_storeAndForward || ps.SlotIndex < 0)
+        try
         {
-            return;
+            return _capacity.Wait(0);
         }
-
-        _leakedSlots++;
-        _leakDebt++;
-        SettleLeakDebtLocked();
-        _retired.Add(ps);
-        // _slotInUse[idx] stays true: the directory / flock may still be held.
-    }
-
-    // Reclaims one retired slot: frees its index and reverses the one capacity unit its retirement removed —
-    // cancelling a still-pending leak debt, or (when the debt was already settled by draining a physical
-    // permit) scheduling that permit for release via releaseCount. No-op if ps is not currently retired
-    // (already reclaimed, or non-SF). Caller holds _gate; the accumulated releaseCount is released outside
-    // the lock (see ReleaseReclaimedPermits).
-    private void ReclaimRetiredLocked(PooledSender ps, ref int releaseCount)
-    {
-        if (!_retired.Remove(ps))
+        catch (ObjectDisposedException)
         {
-            return;
-        }
-
-        FreeSlotIndex(ps.SlotIndex);
-        _leakedSlots--;
-        if (_leakDebt > 0)
-        {
-            _leakDebt--;
-        }
-        else
-        {
-            releaseCount++;
+            return false;
         }
     }
 
-    // Drain available permits to pay outstanding leak debt. Non-blocking; whatever can't be paid now
-    // (permits currently in use) is paid by ReleaseCapacity when those permits come back. Caller holds
-    // _gate; Wait(0) never blocks so holding the lock is safe.
-    private void SettleLeakDebtLocked()
+    // Post-dispose slot settlement shared by the discard and reap paths — both arrive holding exactly
+    // one withheld capacity permit for ps. Returns true (caller releases the permit) when the slot lock
+    // actually dropped and the index was freed; returns false after parking the entry on _retired with
+    // the permit still withheld, for ReclaimRetiredSlots to settle once the deferred teardown finally
+    // releases the lock. A new sender must never open a slot directory whose flock is still held.
+    private bool SettleAfterDispose(PooledSender ps)
     {
-        while (_leakDebt > 0)
+        lock (_gate)
         {
-            bool drained;
-            try
+            if (!_closed && ps.SlotIndex >= 0 && !ps.IsInnerSlotLockReleased)
             {
-                drained = _capacity.Wait(0);
-            }
-            catch (ObjectDisposedException)
-            {
-                return;
+                _retired.Add(ps);
+                // The index stays off _freeSlots: the directory / flock may still be held.
+                return false;
             }
 
-            if (!drained)
-            {
-                break;
-            }
-
-            _leakDebt--;
+            FreeSlotIndex(ps.SlotIndex);
+            return true;
         }
     }
 
@@ -1004,17 +1051,6 @@ internal sealed class SenderPool
 
     private void ReleaseCapacity()
     {
-        // A returning permit first pays any outstanding leak debt — keeping it out of circulation so a
-        // retired slot's lost capacity stays lost — before being released back to borrowers.
-        lock (_gate)
-        {
-            if (_leakDebt > 0)
-            {
-                _leakDebt--;
-                return;
-            }
-        }
-
         try
         {
             _capacity.Release();

@@ -32,9 +32,9 @@ namespace net_questdb_client_tests.Pooling;
 
 /// <summary>
 ///     Store-and-forward (ws + sf_dir) concurrency stress for the slot-index machinery —
-///     <c>AllocateSlotIndex</c> / <c>FreeSlotIndex</c> / <c>RetireSlotIndex</c> /
-///     <c>SettleLeakDebtLocked</c> / <c>ReclaimRetiredSlots</c> and the leak-debt branch of
-///     <c>ReleaseCapacity</c>. That code is the most race-prone in the pool, yet the rest of the pool's
+///     <c>AllocateSlotIndex</c> / <c>FreeSlotIndex</c> / <c>TryWithholdPermit</c> /
+///     <c>SettleAfterDispose</c> / <c>ReclaimRetiredSlots</c> and the permit-withholding contract they
+///     share. That code is the most race-prone in the pool, yet the rest of the pool's
 ///     multi-threaded coverage runs only against HTTP pools, which carry no slot machinery at all
 ///     (<see cref="net_questdb_client_tests.Pooling.PoolSlotTests" /> exercises these paths only
 ///     single-threaded). These tests drive the same paths under contention and assert the two
@@ -47,7 +47,7 @@ public class SfPoolConcurrencyTests
     private const int Max = 8;
 
     // SF pool over the fake-sender seam: ws + sf_dir flips the pool into store-and-forward mode (slot
-    // indices, leak debt) without touching a socket or the filesystem. `ownerByIndex[i]` is the fake
+    // indices, retire/reclaim) without touching a socket or the filesystem. `ownerByIndex[i]` is the fake
     // currently backing slot i — written by the factory at creation; since a slot index is held
     // continuously by one PooledSender entry until that entry is discarded/reaped, a borrower can map its
     // slot index back to its inner fake (to drive retire) with no race.
@@ -99,7 +99,7 @@ public class SfPoolConcurrencyTests
     public void SfConcurrentCleanChurnNeverDuplicatesLiveSlotIndex()
     {
         // Pure borrow/return churn (no breaks) hammering AllocateSlotIndex during pool growth and
-        // FreeSlotIndex is never hit on a clean return, but the bitmap scan/realloc under TakeOrCreate is.
+        // FreeSlotIndex is never hit on a clean return, but the free-index stack under TakeOrCreate is.
         // Two concurrently-borrowed senders sharing an index would be a correctness bug.
         var pool = MakeSfPool("sender_pool_min=0;sender_pool_max=8;acquire_timeout_ms=5000;", out _, out _);
         var liveSlot = new int[Max];
@@ -145,13 +145,13 @@ public class SfPoolConcurrencyTests
     [Test]
     public void SfConcurrentRetireAndReclaimKeepsCapacityAccountingConsistent()
     {
-        // The core race: workers retire slots (discard with the slot lock still held -> RetireSlotIndex /
-        // SettleLeakDebtLocked, shrinking effective capacity) while a housekeeper thread releases those
-        // locks and reclaims the indices (ReclaimRetiredSlots, restoring capacity). Retire and reclaim
-        // mutate _retired / _leakedSlots / _leakDebt and drain/release the capacity semaphore from
+        // The core race: workers retire slots (discard with the slot lock still held -> SettleAfterDispose
+        // parks the entry on _retired with its permit withheld, shrinking effective capacity) while a
+        // housekeeper thread releases those locks and reclaims the indices (ReclaimRetiredSlots, restoring
+        // capacity). Retire and reclaim mutate _retired and withhold/release the capacity semaphore from
         // different threads continuously. The invariant: once everything quiesces and all retired slots
-        // are reclaimed, effective capacity is back to exactly Max — leak debt nets to zero, no permit is
-        // lost or double-released.
+        // are reclaimed, effective capacity is back to exactly Max — every withheld permit is released
+        // exactly once, none lost or double-released.
         var pool = MakeSfPool(
             "sender_pool_min=0;sender_pool_max=8;acquire_timeout_ms=200;idle_timeout_ms=1;",
             out var created, out var ownerByIndex);
@@ -274,7 +274,7 @@ public class SfPoolConcurrencyTests
     public void SfConcurrentBorrowDiscardReapAndCloseStayConsistent()
     {
         // Close racing the full SF slot storm: borrows, retire-discards, reaping and reclaiming all in
-        // flight when the handle closes. Close clears _retired while RetireSlotIndex appends to it, and
+        // flight when the handle closes. Close clears _retired while SettleAfterDispose appends to it, and
         // disposes the capacity semaphore under returning permits. Must never corrupt the live-slot set,
         // never surface an unexpected exception, and stay idempotent.
         var pool = MakeSfPool(

@@ -27,6 +27,7 @@ using System.Collections.Concurrent;
 using NUnit.Framework;
 using QuestDB.Enums;
 using QuestDB.Pooling;
+using QuestDB.Qwp.Query;
 using QuestDB.Senders;
 using QuestDB.Utils;
 
@@ -55,7 +56,9 @@ public class QueryHandleTests
     {
         using var h = MakeHandle("query_pool_min=1;query_pool_max=1;", out var created);
 
-        await h.NewQuery().Sql("select 1").Handler(new NoopQueryHandler()).ExecuteAsync();
+        var reader = await h.NewQuery().Sql("select 1").ExecuteReaderAsync();
+        Assert.That(await reader.ReadBatchAsync(), Is.False);
+        await reader.DisposeAsync();
 
         var c = created.Single();
         Assert.Multiple(() =>
@@ -68,11 +71,12 @@ public class QueryHandleTests
     }
 
     [Test]
-    public async Task ExecuteSqlAsyncIsEquivalentToNewQuery()
+    public async Task HandleExecuteReaderAsyncIsEquivalentToNewQuery()
     {
         using var h = MakeHandle("query_pool_min=1;query_pool_max=1;", out var created);
 
-        await h.ExecuteSqlAsync("select 2", new NoopQueryHandler());
+        var reader = await h.ExecuteReaderAsync("select 2");
+        await reader.DisposeAsync();
 
         Assert.That(created.Single().LastSql, Is.EqualTo("select 2"));
     }
@@ -83,7 +87,7 @@ public class QueryHandleTests
         using var h = MakeHandle("query_pool_min=0;query_pool_max=1;", out _);
 
         var ex = Assert.ThrowsAsync<IngressError>(async () =>
-            await h.NewQuery().Handler(new NoopQueryHandler()).ExecuteAsync());
+            await h.NewQuery().ExecuteReaderAsync());
         Assert.Multiple(() =>
         {
             Assert.That(ex!.code, Is.EqualTo(ErrorCode.InvalidApiCall));
@@ -92,34 +96,17 @@ public class QueryHandleTests
     }
 
     [Test]
-    public void MissingHandlerThrows()
-    {
-        using var h = MakeHandle("query_pool_min=0;query_pool_max=1;", out _);
-
-        var ex = Assert.ThrowsAsync<IngressError>(async () =>
-            await h.NewQuery().Sql("x").ExecuteAsync());
-        Assert.Multiple(() =>
-        {
-            Assert.That(ex!.code, Is.EqualTo(ErrorCode.InvalidApiCall));
-            Assert.That(ex.Message, Does.Contain("handler is required"));
-        });
-    }
-
-    [Test]
     public async Task SingleFlightOverlapThrows()
     {
-        using var h = MakeHandle("query_pool_min=1;query_pool_max=1;", out var created);
-        var fake = created.Single();
-        fake.Gate = new TaskCompletionSource<bool>();
+        using var h = MakeHandle("query_pool_min=1;query_pool_max=1;", out _);
 
-        var q = h.NewQuery().Sql("x").Handler(new NoopQueryHandler());
-        var inFlight = q.ExecuteAsync();
+        var q = h.NewQuery().Sql("x");
+        var reader = await q.ExecuteReaderAsync(); // reader open → single-flight slot held
 
-        var ex = Assert.ThrowsAsync<IngressError>(async () => await q.ExecuteAsync());
+        var ex = Assert.ThrowsAsync<IngressError>(async () => await q.ExecuteReaderAsync());
         Assert.That(ex!.code, Is.EqualTo(ErrorCode.InvalidApiCall));
 
-        fake.Gate.SetResult(true);
-        await inFlight;
+        await reader.DisposeAsync();
     }
 
     [Test]
@@ -128,9 +115,10 @@ public class QueryHandleTests
         using var h = MakeHandle("query_pool_min=1;query_pool_max=2;", out var created);
         var first = created.Single();
         first.ThrowOnExecute = true;
+        first.TerminalOrDisposed = true; // a submit that fails on the wire leaves the client terminal
 
         var ex = Assert.ThrowsAsync<IngressError>(async () =>
-            await h.NewQuery().Sql("x").Handler(new NoopQueryHandler()).ExecuteAsync());
+            await h.NewQuery().Sql("x").ExecuteReaderAsync());
         Assert.That(ex!.code, Is.EqualTo(ErrorCode.SocketError));
 
         Assert.Multiple(() =>
@@ -139,7 +127,8 @@ public class QueryHandleTests
             Assert.That(h.TotalQueryClientCount, Is.EqualTo(0));
         });
 
-        await h.NewQuery().Sql("y").Handler(new NoopQueryHandler()).ExecuteAsync();
+        var reader = await h.NewQuery().Sql("y").ExecuteReaderAsync();
+        await reader.DisposeAsync();
         Assert.That(created, Has.Count.EqualTo(2), "next borrow creates a fresh client");
     }
 
@@ -149,9 +138,10 @@ public class QueryHandleTests
         using var h = MakeHandle("query_pool_min=1;query_pool_max=2;", out var created);
         var first = created.Single();
         first.CancelOnExecute = true;
+        first.TerminalOrDisposed = true; // a hard CT cancel tears the connection down → terminal
 
         Assert.ThrowsAsync<OperationCanceledException>(async () =>
-            await h.NewQuery().Sql("x").Handler(new NoopQueryHandler()).ExecuteAsync());
+            await h.NewQuery().Sql("x").ExecuteReaderAsync());
 
         Assert.Multiple(() =>
         {
@@ -167,11 +157,13 @@ public class QueryHandleTests
         var fake = created.Single();
         fake.Gate = new TaskCompletionSource<bool>();
 
-        var q = h.NewQuery().Sql("x").Handler(new NoopQueryHandler());
-        var inFlight = q.ExecuteAsync();
-        q.Cancel();                 // cooperative: posts a CANCEL frame
-        fake.Gate.SetResult(true);  // query then completes normally
-        await inFlight;
+        var q = h.NewQuery().Sql("x");
+        var reader = await q.ExecuteReaderAsync();      // in flight; rid set
+        var read = reader.ReadBatchAsync().AsTask();    // parks on the gate
+        q.Cancel();                                     // cooperative: posts a CANCEL frame
+        fake.Gate.SetResult(true);                      // query then completes normally
+        Assert.That(await read, Is.False);
+        await reader.DisposeAsync();
 
         Assert.Multiple(() =>
         {
@@ -186,22 +178,19 @@ public class QueryHandleTests
     {
         // Pool size 1: q2 re-borrows the exact same inner client q1 just returned. A late Cancel() on the
         // already-completed q1 must not forward to that re-borrowed client and abort q2's in-flight query.
-        // Guards the lease null-out in Query.ExecuteAsync's finally.
+        // Guards the lease null-out on the reader-dispose path.
         using var h = MakeHandle("query_pool_min=1;query_pool_max=1;", out var created);
         var fake = created.Single();
 
-        var q1 = h.NewQuery().Sql("a").Handler(new NoopQueryHandler());
-        await q1.ExecuteAsync(); // completes cleanly; client re-pooled, q1's lease nulled
+        var q1 = h.NewQuery().Sql("a");
+        var r1 = await q1.ExecuteReaderAsync();
+        Assert.That(await r1.ReadBatchAsync(), Is.False);
+        await r1.DisposeAsync(); // completes cleanly; client re-pooled, q1's lease nulled
 
         fake.Gate = new TaskCompletionSource<bool>();
-        var q2 = h.NewQuery().Sql("b").Handler(new NoopQueryHandler());
-        var t2 = q2.ExecuteAsync(); // re-borrows the same inner; parks in flight on the gate
-
-        var sw = System.Diagnostics.Stopwatch.StartNew();
-        while (Volatile.Read(ref fake.ExecuteCount) < 2 && sw.ElapsedMilliseconds < 2000)
-        {
-            await Task.Delay(5);
-        }
+        var q2 = h.NewQuery().Sql("b");
+        var r2 = await q2.ExecuteReaderAsync(); // re-borrows the same inner
+        var read2 = r2.ReadBatchAsync().AsTask(); // parks in flight on the gate
 
         Assert.That(fake.ExecuteCount, Is.EqualTo(2), "q2 re-borrowed the same client and is in flight");
 
@@ -211,7 +200,8 @@ public class QueryHandleTests
             "a cancel on a completed query must not reach the re-borrowed client running q2");
 
         fake.Gate.SetResult(true);
-        await t2;
+        Assert.That(await read2, Is.False);
+        await r2.DisposeAsync();
 
         Assert.That(fake.CancelCount, Is.EqualTo(0), "q2 completed without a stray cancel");
     }
@@ -228,25 +218,22 @@ public class QueryHandleTests
         fake.Gate = new TaskCompletionSource<bool>();
         fake.CancelGate = new TaskCompletionSource<bool>();
 
-        var q1 = h.NewQuery().Sql("a").Handler(new NoopQueryHandler());
-        var t1 = q1.ExecuteAsync(); // in flight, parked on the gate; fake rid 1
+        var q1 = h.NewQuery().Sql("a");
+        var r1 = await q1.ExecuteReaderAsync();   // fake rid 1
+        var read1 = r1.ReadBatchAsync().AsTask(); // in flight, parked on the gate
 
         var cancelDispatch = Task.Run(q1.Cancel); // resolves rid 1, then parks on CancelGate
         var resolvedRid = await fake.CancelRequestEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
         Assert.That(resolvedRid, Is.EqualTo(1), "cancel resolved q1's own request id");
 
-        fake.Gate.SetResult(true); // q1 completes and its client is returned to the pool
-        await t1;
+        fake.Gate.SetResult(true); // q1's read completes
+        Assert.That(await read1, Is.False);
+        await r1.DisposeAsync();   // its client is returned to the pool
 
         fake.Gate = new TaskCompletionSource<bool>();
-        var q2 = h.NewQuery().Sql("b").Handler(new NoopQueryHandler());
-        var t2 = q2.ExecuteAsync(); // re-borrows the same inner client; fake rid 2
-
-        var sw = System.Diagnostics.Stopwatch.StartNew();
-        while (Volatile.Read(ref fake.ExecuteCount) < 2 && sw.ElapsedMilliseconds < 2000)
-        {
-            await Task.Delay(5);
-        }
+        var q2 = h.NewQuery().Sql("b");
+        var r2 = await q2.ExecuteReaderAsync();   // re-borrows the same inner client; fake rid 2
+        var read2 = r2.ReadBatchAsync().AsTask();
 
         Assert.That(fake.ExecuteCount, Is.EqualTo(2), "q2 re-borrowed the same client and is in flight");
 
@@ -257,7 +244,8 @@ public class QueryHandleTests
             "a cancel resolved against q1 must not cancel q2 on the re-borrowed client");
 
         fake.Gate.SetResult(true);
-        await t2;
+        Assert.That(await read2, Is.False);
+        await r2.DisposeAsync();
 
         Assert.That(fake.CancelCount, Is.EqualTo(0), "q2 completed without a stray cancel");
     }
@@ -280,21 +268,23 @@ public class QueryHandleTests
                 return new ValueTask<IQwpQueryClient>(c);
             });
 
-        var tasks = new List<Task>();
+        var readers = new List<IQwpQueryReader>();
+        var reads = new List<Task>();
         for (var i = 0; i < 3; i++)
         {
-            tasks.Add(h.NewQuery().Sql("q").Handler(new NoopQueryHandler()).ExecuteAsync());
-        }
-
-        var sw = System.Diagnostics.Stopwatch.StartNew();
-        while (bag.Count < 3 && sw.ElapsedMilliseconds < 2000)
-        {
-            await Task.Delay(5);
+            var reader = await h.NewQuery().Sql("q").ExecuteReaderAsync();
+            readers.Add(reader);
+            reads.Add(reader.ReadBatchAsync().AsTask()); // parks on the shared gate, staying in flight
         }
 
         Assert.That(h.TotalQueryClientCount, Is.EqualTo(3), "three concurrent queries borrowed three distinct clients");
+
         gate.SetResult(true);
-        await Task.WhenAll(tasks);
+        await Task.WhenAll(reads);
+        foreach (var reader in readers)
+        {
+            await reader.DisposeAsync();
+        }
     }
 
     [Test]
@@ -304,7 +294,7 @@ public class QueryHandleTests
         h.Dispose();
 
         var ex = Assert.ThrowsAsync<IngressError>(async () =>
-            await h.NewQuery().Sql("x").Handler(new NoopQueryHandler()).ExecuteAsync());
+            await h.NewQuery().Sql("x").ExecuteReaderAsync());
         Assert.That(ex!.code, Is.EqualTo(ErrorCode.InvalidApiCall));
     }
 
@@ -315,18 +305,21 @@ public class QueryHandleTests
         var fake = created.Single();
         fake.Gate = new TaskCompletionSource<bool>();
 
-        var q1 = h.NewQuery().Sql("a").Handler(new NoopQueryHandler());
-        var t1 = q1.ExecuteAsync(); // holds the only client (gated)
+        var q1 = h.NewQuery().Sql("a");
+        var r1 = await q1.ExecuteReaderAsync();   // holds the only client
+        var read1 = r1.ReadBatchAsync().AsTask(); // parks (gated), keeping the client leased
 
-        var q2 = h.NewQuery().Sql("b").Handler(new NoopQueryHandler());
-        var ex = Assert.ThrowsAsync<IngressError>(async () => await q2.ExecuteAsync());
+        var q2 = h.NewQuery().Sql("b");
+        var ex = Assert.ThrowsAsync<IngressError>(async () => await q2.ExecuteReaderAsync());
         Assert.That(ex!.code, Is.EqualTo(ErrorCode.PoolExhausted));
 
         fake.Gate.SetResult(true);
-        await t1;
+        Assert.That(await read1, Is.False);
+        await r1.DisposeAsync();
 
         // q2 is not poisoned by the earlier exhaustion: a retry succeeds.
-        await q2.ExecuteAsync();
+        var r2 = await q2.ExecuteReaderAsync();
+        await r2.DisposeAsync();
         Assert.That(fake.LastSql, Is.EqualTo("b"));
     }
 }

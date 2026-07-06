@@ -24,7 +24,8 @@
 
 using QuestDB.Senders;
 #if NET7_0_OR_GREATER
-using QwpColumnBatchHandler = QuestDB.Qwp.Query.QwpColumnBatchHandler;
+using QwpBindSetter = QuestDB.Qwp.Query.QwpBindSetter;
+using IQwpQueryReader = QuestDB.Qwp.Query.IQwpQueryReader;
 #endif
 
 namespace QuestDB;
@@ -110,9 +111,9 @@ public interface IQuestDBClient : IDisposable, IAsyncDisposable
 
     /// <summary>
     ///     Allocates a fresh <see cref="Query" /> bound to this handle's query-client pool. Configure it
-    ///     with <c>Sql</c> / <c>Binds</c> / <c>Handler</c>, then <c>ExecuteAsync</c>. Each execution
-    ///     borrows a pooled query client for the duration of one query and returns it automatically —
-    ///     there is no explicit borrow/release for queries (unlike senders).
+    ///     with <c>Sql</c> / <c>Binds</c>, then <c>ExecuteReaderAsync</c>. Each execution borrows a
+    ///     pooled query client for the lifetime of the returned reader and returns it on the reader's
+    ///     dispose — there is no explicit borrow/release for queries (unlike senders).
     ///     <para />
     ///     Allocate a fresh <c>NewQuery()</c> per query when running queries concurrently; a single
     ///     <see cref="Query" /> allows only one in-flight execution.
@@ -124,11 +125,16 @@ public interface IQuestDBClient : IDisposable, IAsyncDisposable
     Query NewQuery();
 
     /// <summary>
-    ///     Convenience for a bind-less query: equivalent to
-    ///     <c>NewQuery().Sql(sql).Handler(handler).ExecuteAsync(ct)</c>. Borrows a pooled query client,
-    ///     runs the query, and returns the client (or discards it on a hard cancel / transport failure).
+    ///     Submits the query and returns a pull cursor over its result stream; equivalent to
+    ///     <c>NewQuery().Sql(sql).ExecuteReaderAsync(ct)</c>. The reader owns a borrowed pooled
+    ///     query client for its whole lifetime: <b>dispose it</b> (<c>await using</c>) to end the
+    ///     query and return the client. An open reader holds one of the pool's
+    ///     <c>query_pool_max</c> permits.
     /// </summary>
-    Task ExecuteSqlAsync(string sql, QwpColumnBatchHandler handler, CancellationToken ct = default);
+    ValueTask<IQwpQueryReader> ExecuteReaderAsync(string sql, CancellationToken ct = default);
+
+    /// <inheritdoc cref="ExecuteReaderAsync(string, CancellationToken)" />
+    ValueTask<IQwpQueryReader> ExecuteReaderAsync(string sql, QwpBindSetter binds, CancellationToken ct = default);
 #endif
 
     /// <summary>

@@ -1351,8 +1351,10 @@ public record SenderOptions
     }
 
     /// <summary>
-    ///     Idle duration after which the housekeeper reaps a pooled sender (never below
-    ///     <see cref="sender_pool_min" />). Default 60s.
+    ///     Idle duration after which the housekeeper reaps an <b>excess</b> pooled sender (or query
+    ///     client) — one above <see cref="sender_pool_min" /> / <see cref="query_pool_min" />. The
+    ///     instances kept at the pool minimum are held warm regardless of idle time and are never
+    ///     idle-reaped. Default 60s.
     /// </summary>
     [JsonIgnore]
     public TimeSpan idle_timeout_ms
@@ -1362,8 +1364,14 @@ public record SenderOptions
     }
 
     /// <summary>
-    ///     Maximum age after which the housekeeper recycles a pooled sender (never below
-    ///     <see cref="sender_pool_min" />). Default 30min.
+    ///     Maximum age after which the housekeeper reaps an <b>excess</b> pooled sender (or query
+    ///     client) — one above <see cref="sender_pool_min" /> / <see cref="query_pool_min" />. Reaping
+    ///     only removes; it does not recreate, so the instances kept at the pool minimum are <b>not</b>
+    ///     proactively rotated when they cross this age — they live until they fail (a dead
+    ///     <c>ws</c>/<c>wss</c> sender self-reconnects; a terminally-failed sender or query client is
+    ///     replaced on the next borrow). A pool pinned at its minimum (e.g. <see cref="sender_pool_min" />
+    ///     1 under low concurrency) therefore keeps its base connection for the process lifetime; cycle
+    ///     the <see cref="QuestDBClient" /> handle to force rotation. Default 30min.
     /// </summary>
     [JsonIgnore]
     public TimeSpan max_lifetime_ms
@@ -1414,6 +1422,18 @@ public record SenderOptions
 
     /// <summary>True when <c>query_pool_max</c> appeared explicitly in this connect string.</summary>
     internal bool IsQueryPoolMaxExplicit => IsKeyExplicit(nameof(query_pool_max));
+
+    /// <summary>True when <c>acquire_timeout_ms</c> appeared explicitly in this connect string.</summary>
+    internal bool IsAcquireTimeoutExplicit => IsKeyExplicit(nameof(acquire_timeout_ms));
+
+    /// <summary>True when <c>idle_timeout_ms</c> appeared explicitly in this connect string.</summary>
+    internal bool IsIdleTimeoutExplicit => IsKeyExplicit(nameof(idle_timeout_ms));
+
+    /// <summary>True when <c>max_lifetime_ms</c> appeared explicitly in this connect string.</summary>
+    internal bool IsMaxLifetimeExplicit => IsKeyExplicit(nameof(max_lifetime_ms));
+
+    /// <summary>True when <c>housekeeper_interval_ms</c> appeared explicitly in this connect string.</summary>
+    internal bool IsHousekeeperIntervalExplicit => IsKeyExplicit(nameof(housekeeper_interval_ms));
 
     /// <summary>
     ///     Set by the QuestDBClient pool on each per-slot sender: the orphan scanner skips slot dirs

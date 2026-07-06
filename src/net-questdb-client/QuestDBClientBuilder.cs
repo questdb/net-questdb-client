@@ -136,14 +136,24 @@ public sealed class QuestDBClientBuilder
         return this;
     }
 
-    /// <summary>Idle duration before the housekeeper reaps a sender.</summary>
+    /// <summary>
+    ///     Idle duration after which the housekeeper reaps <b>excess</b> senders — those above the pool
+    ///     minimum (<see cref="SenderPoolMin" />). The minimum warm senders are kept regardless of how
+    ///     long they sit idle; they are never idle-reaped.
+    /// </summary>
     public QuestDBClientBuilder IdleTimeout(TimeSpan timeout)
     {
         _idleTimeout = timeout;
         return this;
     }
 
-    /// <summary>Maximum age before the housekeeper recycles a sender.</summary>
+    /// <summary>
+    ///     Maximum age after which the housekeeper reaps <b>excess</b> senders — those above the pool
+    ///     minimum (<see cref="SenderPoolMin" />). Reaping only removes; it does not recreate, so the
+    ///     minimum warm senders are <b>not</b> rotated when they cross this age — they live until they
+    ///     fail (a failed one is replaced on the next borrow). To force rotation of the base senders,
+    ///     cycle the <see cref="IQuestDBClient" /> handle.
+    /// </summary>
     public QuestDBClientBuilder MaxLifetime(TimeSpan lifetime)
     {
         _maxLifetime = lifetime;
@@ -241,10 +251,10 @@ public sealed class QuestDBClientBuilder
             queryConfStr = _confStr;
         }
 
-        // Query-pool sizing precedence: explicit builder call > query-config value > ingest-config
-        // value > default. poolConfig (parsed from the ingest string) already carries the ingest value,
-        // so a query-config key overwrites it only when carried explicitly — a bare query config must
-        // not stomp explicit ingest-string sizing with defaults.
+        // Query-pool sizing and shared timing precedence: explicit builder call > query-config value >
+        // ingest-config value > default. poolConfig (parsed from the ingest string) already carries the
+        // ingest value, so a query-config key overwrites it only when carried explicitly — a bare query
+        // config must not stomp explicit ingest-string sizing/timing with defaults.
         if (queryConfStr is not null && !ReferenceEquals(queryConfStr, _confStr))
         {
             var queryOpts = new SenderOptions(queryConfStr);
@@ -257,6 +267,31 @@ public sealed class QuestDBClientBuilder
             if (queryOpts.IsQueryPoolMaxExplicit)
             {
                 poolConfig.query_pool_max = queryOpts.query_pool_max;
+            }
+
+            // Shared timing knobs (acquire/idle/lifetime/housekeeper) drive BOTH pools through the
+            // single poolConfig, so a value carried only by the separate query config must fold in here
+            // rather than be silently dropped. Same precedence as sizing — builder call (applied above)
+            // > query config > ingest config > default — achieved by merging only when the builder left
+            // the knob unset. Each value was already range-validated in queryOpts' constructor.
+            if (!_acquireTimeout.HasValue && queryOpts.IsAcquireTimeoutExplicit)
+            {
+                poolConfig.acquire_timeout_ms = queryOpts.acquire_timeout_ms;
+            }
+
+            if (!_idleTimeout.HasValue && queryOpts.IsIdleTimeoutExplicit)
+            {
+                poolConfig.idle_timeout_ms = queryOpts.idle_timeout_ms;
+            }
+
+            if (!_maxLifetime.HasValue && queryOpts.IsMaxLifetimeExplicit)
+            {
+                poolConfig.max_lifetime_ms = queryOpts.max_lifetime_ms;
+            }
+
+            if (!_housekeeperInterval.HasValue && queryOpts.IsHousekeeperIntervalExplicit)
+            {
+                poolConfig.housekeeper_interval_ms = queryOpts.housekeeper_interval_ms;
             }
 
             configLazy = configLazy || queryOpts.lazy_connect;

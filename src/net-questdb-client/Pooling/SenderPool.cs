@@ -488,25 +488,36 @@ internal sealed class SenderPool
             throw;
         }
 
+        bool closedRace;
         lock (_gate)
         {
-            if (_closed)
+            closedRace = _closed;
+            if (closedRace)
             {
                 FreeSlotIndex(slotIndex);
-                try
-                {
-                    created.DisposeInner();
-                }
-                catch
-                {
-                    // best effort
-                }
+            }
+            else
+            {
+                _all.Add(created);
+            }
+        }
 
-                ReleaseCapacity();
-                throw Closed();
+        if (closedRace)
+        {
+            // Dispose outside _gate: DisposeInner can block up to the engine's ~5s pump-join budget,
+            // and holding the pool lock across it stalls every other pool op. The pool is closed, so
+            // the freed slot index is never reallocated. Matches DisposeAndSettle.
+            try
+            {
+                created.DisposeInner();
+            }
+            catch
+            {
+                // best effort
             }
 
-            _all.Add(created);
+            ReleaseCapacity();
+            throw Closed();
         }
 
         return created;

@@ -33,8 +33,8 @@ namespace net_questdb_client_tests.Pooling;
 
 /// <summary>
 ///     A no-op <see cref="IQwpQueryClient" /> used to unit-test the query pool without a live server.
-///     Tracks execute / dispose / cancel counts and can simulate failure, hard cancellation, a sticky
-///     terminal state, or a blocking in-flight query (via <see cref="Gate" />).
+///     Tracks execution / dispose / cancel counts and can simulate a submit failure, hard
+///     cancellation, a sticky terminal state, or a blocking in-flight read (via <see cref="Gate" />).
 /// </summary>
 internal sealed class FakeQueryClient : IQwpQueryClient, IPooledQueryClientInner
 {
@@ -47,7 +47,7 @@ internal sealed class FakeQueryClient : IQwpQueryClient, IPooledQueryClientInner
     public bool CancelOnExecute;
     public bool TerminalOrDisposed;
 
-    // When set, an in-flight ExecuteAsync parks on this until the test completes it.
+    // When set, an in-flight ReadBatchAsync parks on this until the test completes it.
     public TaskCompletionSource<bool>? Gate;
 
     // When set, CancelRequest signals CancelRequestEntered (with the rid it was called with) and
@@ -69,17 +69,6 @@ internal sealed class FakeQueryClient : IQwpQueryClient, IPooledQueryClientInner
     public bool WasLastCloseTimedOut => false;
 
     public bool IsTerminalOrDisposed => TerminalOrDisposed || Disposed;
-
-    public void Execute(string sql, QwpColumnBatchHandler handler) => RunSync(sql);
-
-    public void Execute(string sql, QwpBindSetter binds, QwpColumnBatchHandler handler) => RunSync(sql);
-
-    public Task ExecuteAsync(string sql, QwpColumnBatchHandler handler, CancellationToken cancellationToken = default) =>
-        RunAsync(sql, cancellationToken);
-
-    public Task ExecuteAsync(string sql, QwpBindSetter binds, QwpColumnBatchHandler handler,
-        CancellationToken cancellationToken = default) =>
-        RunAsync(sql, cancellationToken);
 
     public void Cancel() => Interlocked.Increment(ref CancelCount);
 
@@ -103,7 +92,16 @@ internal sealed class FakeQueryClient : IQwpQueryClient, IPooledQueryClientInner
         return ValueTask.CompletedTask;
     }
 
-    private void RunSync(string sql)
+    public Task<IQwpQueryReader> ExecuteReaderAsync(string sql, CancellationToken cancellationToken = default) =>
+        StartReaderAsync(sql, cancellationToken);
+
+    public Task<IQwpQueryReader> ExecuteReaderAsync(string sql, QwpBindSetter binds,
+        CancellationToken cancellationToken = default) =>
+        StartReaderAsync(sql, cancellationToken);
+
+    // Mirrors the real client: submit failures throw here; the query stays "in flight" (rid set)
+    // until the reader is disposed. The fake stream is always empty (first read returns false).
+    private Task<IQwpQueryReader> StartReaderAsync(string sql, CancellationToken ct)
     {
         Interlocked.Increment(ref ExecuteCount);
         LastSql = sql;
@@ -120,43 +118,59 @@ internal sealed class FakeQueryClient : IQwpQueryClient, IPooledQueryClientInner
                 throw new IngressError(ErrorCode.SocketError, "fake execute failure");
             }
         }
-        finally
+        catch
         {
             Interlocked.Exchange(ref _currentRid, -1);
+            throw;
         }
+
+        return Task.FromResult<IQwpQueryReader>(new FakeQueryReader(this, ct));
     }
 
-    private async Task RunAsync(string sql, CancellationToken ct)
+    private sealed class FakeQueryReader : IQwpQueryReader
     {
-        Interlocked.Increment(ref ExecuteCount);
-        LastSql = sql;
-        Interlocked.Exchange(ref _currentRid, Interlocked.Increment(ref _nextRid));
-        try
+        private readonly FakeQueryClient _owner;
+        private readonly CancellationToken _ct;
+
+        internal FakeQueryReader(FakeQueryClient owner, CancellationToken ct)
         {
-            if (Gate is not null)
+            _owner = owner;
+            _ct = ct;
+        }
+
+        public QwpColumnBatch Current => throw new InvalidOperationException("fake reader has no batches");
+        public long TotalRows => 0;
+        public long RowsAffected => 0;
+        public QwpOpType OpType => QwpOpType.None;
+        public bool WasCancelled => false;
+        public bool FailoverReset => false;
+        public QwpServerInfo? ServerInfo => null;
+
+        public async ValueTask<bool> ReadBatchAsync(CancellationToken ct = default)
+        {
+            if (_owner.Gate is not null)
             {
-                await Gate.Task.WaitAsync(ct).ConfigureAwait(false);
+                await _owner.Gate.Task.WaitAsync(ct).ConfigureAwait(false);
             }
 
-            if (CancelOnExecute)
-            {
-                throw new OperationCanceledException();
-            }
+            _ct.ThrowIfCancellationRequested();
+            ct.ThrowIfCancellationRequested();
+            return false;
+        }
 
-            if (ThrowOnExecute)
-            {
-                throw new IngressError(ErrorCode.SocketError, "fake execute failure");
-            }
-        }
-        finally
+        public bool ReadBatch(CancellationToken ct = default) =>
+            Task.Run(() => ReadBatchAsync(ct).AsTask()).GetAwaiter().GetResult();
+
+        public void Cancel() => _owner.Cancel();
+
+        public ValueTask DisposeAsync()
         {
-            Interlocked.Exchange(ref _currentRid, -1);
+            Interlocked.Exchange(ref _owner._currentRid, -1);
+            return ValueTask.CompletedTask;
         }
+
+        public void Dispose() => DisposeAsync().GetAwaiter().GetResult();
     }
 }
 
-/// <summary>Minimal <see cref="QwpColumnBatchHandler" /> for tests; all callbacks are inherited no-ops.</summary>
-internal sealed class NoopQueryHandler : QwpColumnBatchHandler
-{
-}
 #endif

@@ -233,11 +233,10 @@ public class QuestDbWebSocketIntegrationTests
         await VerifyTableRowCountAsync("test_ws_egress_rt", expected: 1);
 
         using var client = QueryClient.New($"ws::addr={endpoint};");
-        var handler = new SingleRowRecordingHandler();
-        client.Execute("select sym, s, i, l, d, b from test_ws_egress_rt", handler);
+        await using var reader = await client.ExecuteReaderAsync("select sym, s, i, l, d, b from test_ws_egress_rt");
 
-        Assert.That(handler.Ended, Is.True);
-        var batch = handler.Batch ?? throw new InvalidOperationException("batch missing");
+        Assert.That(await reader.ReadBatchAsync(), Is.True, "expected a result batch");
+        var batch = reader.Current;
         Assert.That(batch.RowCount, Is.EqualTo(1));
         Assert.That(batch.GetSymbol(0, 0), Is.EqualTo("beta"));
         Assert.That(batch.GetString(1, 0), Is.EqualTo("round-trip"));
@@ -245,6 +244,7 @@ public class QuestDbWebSocketIntegrationTests
         Assert.That(batch.GetLongValue(3, 0), Is.EqualTo(-123_456_789L));
         Assert.That(batch.GetDoubleValue(4, 0), Is.EqualTo(-2.5).Within(1e-12));
         Assert.That(batch.GetBoolValue(5, 0), Is.False);
+        Assert.That(await reader.ReadBatchAsync(), Is.False, "stream must end after the single batch");
     }
 
     [Test]
@@ -640,17 +640,6 @@ public class QuestDbWebSocketIntegrationTests
             result.Add(cols);
         }
         return result;
-    }
-
-    private sealed class SingleRowRecordingHandler : QwpColumnBatchHandler
-    {
-        public QwpColumnBatch? Batch { get; private set; }
-        public bool Ended { get; private set; }
-
-        public override void OnBatch(QwpColumnBatch batch) => Batch = batch;
-        public override void OnEnd(long totalRows) => Ended = true;
-        public override void OnError(QwpStatusCode status, string message) =>
-            Assert.Fail($"unexpected egress error: status={status}, msg={message}");
     }
 
     private async Task VerifyTableHasDataAsync(string tableName)

@@ -32,8 +32,8 @@ namespace QuestDB.Qwp.Query;
 
 /// <summary>
 ///     Column-major view over a single decoded RESULT_BATCH. The instance — and every span
-///     it returns — is reused across batches: do not store a reference past the
-///     <c>onBatch</c> handler invocation, and copy any string / array data you need to keep.
+///     it returns — is reused across batches: do not store a reference past the next
+///     <c>ReadBatchAsync</c> call, and copy any string / array data you need to keep.
 /// </summary>
 public sealed class QwpColumnBatch
 {
@@ -332,7 +332,7 @@ public sealed class QwpColumnBatch
     /// <summary>IPv4 address as a packed int (4 bytes little-endian on the wire).</summary>
     public int GetIPv4Value(int col, int row) => GetIntValue(col, row);
 
-    /// <summary>Returns the raw bytes of a BINARY value. Span is valid for the duration of the handler.</summary>
+    /// <summary>Returns the raw bytes of a BINARY value. Span is valid only until the next batch is read.</summary>
     public ReadOnlySpan<byte> GetBinarySpan(int col, int row)
     {
         var c = Col(col);
@@ -350,7 +350,7 @@ public sealed class QwpColumnBatch
         return c.StringHeap.AsSpan(start, end - start);
     }
 
-    /// <summary>Returns the UTF-8 bytes of a VARCHAR / SYMBOL value. Span is valid for the duration of the handler.</summary>
+    /// <summary>Returns the UTF-8 bytes of a VARCHAR / SYMBOL value. Span is valid only until the next batch is read.</summary>
     public ReadOnlySpan<byte> GetStringSpan(int col, int row)
     {
         var c = Col(col);
@@ -385,7 +385,7 @@ public sealed class QwpColumnBatch
         {
             // Best-effort renderer: decode VARCHAR/SYMBOL value bytes with the replacement fallback
             // (U+FFFD) rather than QwpConstants.StrictUtf8, so an invalid-UTF-8 server value renders
-            // a lossy string instead of throwing a raw DecoderFallbackException out of OnBatch.
+            // a lossy string instead of throwing a raw DecoderFallbackException at the consumer.
             // StrictUtf8 stays scoped to wire identifiers; callers needing the raw bytes use GetStringSpan.
             QwpTypeCode.Varchar or QwpTypeCode.Symbol => Encoding.UTF8.GetString(GetStringSpan(col, row)),
             QwpTypeCode.Boolean => GetBoolValue(col, row).ToString(),
@@ -434,7 +434,7 @@ public sealed class QwpColumnBatch
     }
 
     /// <summary>
-    /// Returns the DOUBLE_ARRAY element bytes as a span over the column scratch; valid only for the duration of the handler.
+    /// Returns the DOUBLE_ARRAY element bytes as a span over the column scratch; valid only until the next batch is read.
     /// <para><b>Alignment:</b> the underlying byte offset is not guaranteed to be aligned to <c>sizeof(double)</c>.
     /// Indexing the span (<c>span[i]</c>) works on x86_64 and ARM64 (unaligned loads are single-cycle) but is undefined
     /// behaviour on strict-alignment targets. For portable bulk consumption copy via <c>span.ToArray()</c> or read with
@@ -450,7 +450,7 @@ public sealed class QwpColumnBatch
     }
 
     /// <summary>
-    /// Returns the LONG_ARRAY element bytes as a span over the column scratch; valid only for the duration of the handler.
+    /// Returns the LONG_ARRAY element bytes as a span over the column scratch; valid only until the next batch is read.
     /// <para><b>Alignment:</b> same caveat as <see cref="GetDoubleArraySpan"/> — the span start may not be aligned to
     /// <c>sizeof(long)</c>; safe on x86_64 / ARM64, UB on strict-alignment targets. Use <c>span.ToArray()</c> or
     /// <c>BinaryPrimitives.ReadInt64LittleEndian</c> for portable reads.</para>

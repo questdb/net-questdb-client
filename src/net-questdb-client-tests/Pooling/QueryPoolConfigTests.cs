@@ -217,5 +217,65 @@ public class QueryPoolConfigTests
             .BuildPoolConfig(out _, out _));
         Assert.That(ex!.code, Is.EqualTo(ErrorCode.ConfigError));
     }
+
+    // ---- shared timing-knob precedence with a separate query config. acquire/idle/lifetime/housekeeper
+    // drive BOTH pools through the single poolConfig, so a value carried only by the query config must
+    // fold in (builder call > query config > ingest config > default), not be silently dropped ----
+
+    [Test]
+    public void SeparateQueryConfigTimingKnobsAreHonored()
+    {
+        // The finding's exact scenario: the timing knobs live only in the query config and must reach
+        // the shared poolConfig instead of falling back to the ingest defaults (5000 / 60000 / ...).
+        var cfg = QuestDBClient.Builder()
+            .IngestConfig("http::addr=ingest:9000;")
+            .QueryConfig("wss::addr=query:9000;acquire_timeout_ms=200;idle_timeout_ms=1000;" +
+                         "max_lifetime_ms=1234;housekeeper_interval_ms=300;")
+            .BuildPoolConfig(out _, out _);
+        Assert.Multiple(() =>
+        {
+            Assert.That(cfg.acquire_timeout_ms, Is.EqualTo(TimeSpan.FromMilliseconds(200)));
+            Assert.That(cfg.idle_timeout_ms, Is.EqualTo(TimeSpan.FromMilliseconds(1000)));
+            Assert.That(cfg.max_lifetime_ms, Is.EqualTo(TimeSpan.FromMilliseconds(1234)));
+            Assert.That(cfg.housekeeper_interval_ms, Is.EqualTo(TimeSpan.FromMilliseconds(300)));
+        });
+    }
+
+    [Test]
+    public void SeparateQueryConfigTimingWinsOverIngestPerKey()
+    {
+        var cfg = QuestDBClient.Builder()
+            .IngestConfig("ws::addr=ingest:9000;acquire_timeout_ms=5000;idle_timeout_ms=60000;")
+            .QueryConfig("wss::addr=query:9000;acquire_timeout_ms=200;")
+            .BuildPoolConfig(out _, out _);
+        Assert.Multiple(() =>
+        {
+            Assert.That(cfg.acquire_timeout_ms, Is.EqualTo(TimeSpan.FromMilliseconds(200)),
+                "carried by the query config wins");
+            Assert.That(cfg.idle_timeout_ms, Is.EqualTo(TimeSpan.FromMilliseconds(60000)),
+                "not carried by the query config survives from ingest");
+        });
+    }
+
+    [Test]
+    public void SeparateQueryConfigWithoutTimingKeepsIngestTiming()
+    {
+        var cfg = QuestDBClient.Builder()
+            .IngestConfig("ws::addr=ingest:9000;acquire_timeout_ms=250;")
+            .QueryConfig("wss::addr=query:9000;")
+            .BuildPoolConfig(out _, out _);
+        Assert.That(cfg.acquire_timeout_ms, Is.EqualTo(TimeSpan.FromMilliseconds(250)));
+    }
+
+    [Test]
+    public void BuilderTimingWinsOverQueryConfig()
+    {
+        var cfg = QuestDBClient.Builder()
+            .IngestConfig("ws::addr=ingest:9000;")
+            .QueryConfig("wss::addr=query:9000;acquire_timeout_ms=200;")
+            .AcquireTimeout(TimeSpan.FromMilliseconds(777))
+            .BuildPoolConfig(out _, out _);
+        Assert.That(cfg.acquire_timeout_ms, Is.EqualTo(TimeSpan.FromMilliseconds(777)));
+    }
 #endif
 }

@@ -119,4 +119,10 @@ public enum ErrorCode
     ///     <c>sender_pool_max</c> was in use and none freed within <c>acquire_timeout_ms</c>.
     /// </summary>
     PoolExhausted,
+
+    /// <summary>
+    ///     The server terminated an egress (QWP query) request with a <c>QUERY_ERROR</c> frame.
+    ///     Carried by <c>QwpQueryException</c>, which adds the QWP status code.
+    /// </summary>
+    ServerQueryError,
 }

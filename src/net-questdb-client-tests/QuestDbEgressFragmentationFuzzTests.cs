@@ -155,11 +155,35 @@ public class QuestDbEgressFragmentationFuzzTests
     private static string EgressConn(QuestDbManager srv, string extra = "")
         => $"ws::addr={srv.GetWebSocketEndpoint()};path={QwpConstants.ReadPath};target=any;{extra}";
 
+    // Drives the pull cursor, summing column 0 across every batch. An unexpected QUERY_ERROR
+    // surfaces as a thrown QwpQueryException, failing the test just as the old error path did.
     private static (int RowCount, long IdSum) SumId(IQwpQueryClient client, string sql)
     {
-        var handler = new SumIdHandler();
-        client.Execute(sql, handler);
-        return (handler.RowCount, handler.IdSum);
+        var rowCount = 0;
+        var idSum = 0L;
+        var reader = client.ExecuteReaderAsync(sql).GetAwaiter().GetResult();
+        try
+        {
+            while (reader.ReadBatch())
+            {
+                var batch = reader.Current;
+                for (var r = 0; r < batch.RowCount; r++)
+                {
+                    if (!batch.IsNull(0, r))
+                    {
+                        idSum = unchecked(idSum + batch.GetLongValue(0, r));
+                    }
+                }
+
+                rowCount += batch.RowCount;
+            }
+        }
+        finally
+        {
+            reader.Dispose();
+        }
+
+        return (rowCount, idSum);
     }
 
     private static long ExpectedSum(int n) => (long)n * (n + 1) / 2;
@@ -243,26 +267,6 @@ public class QuestDbEgressFragmentationFuzzTests
         Assert.Fail($"{table} did not reach {expected} rows within 90s; last count={last}");
     }
 
-    private sealed class SumIdHandler : QwpColumnBatchHandler
-    {
-        public int RowCount { get; private set; }
-        public long IdSum { get; private set; }
-
-        public override void OnBatch(QwpColumnBatch batch)
-        {
-            for (var r = 0; r < batch.RowCount; r++)
-            {
-                if (!batch.IsNull(0, r))
-                {
-                    IdSum = unchecked(IdSum + batch.GetLongValue(0, r));
-                }
-            }
-            RowCount += batch.RowCount;
-        }
-
-        public override void OnError(QwpStatusCode status, string message)
-            => Assert.Fail($"unexpected egress error: status={status}, msg={message}");
-    }
 }
 
 #endif

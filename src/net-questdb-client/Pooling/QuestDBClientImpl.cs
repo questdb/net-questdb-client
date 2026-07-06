@@ -26,7 +26,8 @@ using QuestDB.Enums;
 using QuestDB.Senders;
 using QuestDB.Utils;
 #if NET7_0_OR_GREATER
-using QwpColumnBatchHandler = QuestDB.Qwp.Query.QwpColumnBatchHandler;
+using QwpBindSetter = QuestDB.Qwp.Query.QwpBindSetter;
+using IQwpQueryReader = QuestDB.Qwp.Query.IQwpQueryReader;
 #endif
 
 namespace QuestDB.Pooling;
@@ -203,9 +204,14 @@ internal sealed class QuestDBClientImpl : IQuestDBClient
         return new Query(RequireQueryPool());
     }
 
-    public Task ExecuteSqlAsync(string sql, QwpColumnBatchHandler handler, CancellationToken ct = default)
+    public ValueTask<IQwpQueryReader> ExecuteReaderAsync(string sql, CancellationToken ct = default)
     {
-        return NewQuery().Sql(sql).Handler(handler).ExecuteAsync(ct);
+        return NewQuery().Sql(sql).ExecuteReaderAsync(ct);
+    }
+
+    public ValueTask<IQwpQueryReader> ExecuteReaderAsync(string sql, QwpBindSetter binds, CancellationToken ct = default)
+    {
+        return NewQuery().Sql(sql).Binds(binds).ExecuteReaderAsync(ct);
     }
 
     private QueryClientPool RequireQueryPool()

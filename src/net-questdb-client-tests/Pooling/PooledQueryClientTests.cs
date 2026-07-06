@@ -86,13 +86,14 @@ public class PooledQueryClientTests
     }
 
     [Test]
-    public void DelegationForwardsToInner()
+    public async Task DelegationForwardsToInner()
     {
         var pool = MakePool("query_pool_min=1;query_pool_max=1;", out var created);
         try
         {
             var c = pool.Borrow();
-            c.Execute("select 1", new NoopQueryHandler());
+            var reader = await c.ExecuteReaderAsync("select 1");
+            await reader.DisposeAsync();
             c.Cancel();
 
             var inner = created.Single();

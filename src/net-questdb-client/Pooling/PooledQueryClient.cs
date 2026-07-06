@@ -34,7 +34,7 @@ namespace QuestDB.Pooling;
 ///     <para />
 ///     Unlike a borrowed ingest sender (<see cref="BorrowedSender" />) there is no flush on return
 ///     (queries are request/response), and — because the query client is never handed to the user (the
-///     <see cref="Query" /> runner borrows and returns it internally per execute) — there is no
+///     <see cref="Query" /> runner borrows it and returns it when the reader is disposed) — there is no
 ///     use-after-return hazard to guard, so the entry is reused directly rather than behind a per-borrow
 ///     handle. <see cref="Dispose" /> / <see cref="DisposeAsync" /> route the client back to the pool: a clean
 ///     borrow re-pools it (<see cref="QueryClientPool.GiveBack" />); a borrow that failed
@@ -55,7 +55,7 @@ internal sealed class PooledQueryClient : IQwpQueryClient
     // dispose the same delegate twice.
     private int _innerDisposed;
 
-    // Set by the query runner when an Execute throws / cancels, so the dispose path discards instead
+    // Set by the query runner when an execution throws / hard-cancels, so the dispose path discards instead
     // of re-pooling. Read on the return path.
     private volatile bool _broken;
 
@@ -76,7 +76,7 @@ internal sealed class PooledQueryClient : IQwpQueryClient
     /// <summary>The wrapped client, exposed to the pool for teardown.</summary>
     internal IQwpQueryClient Inner => _delegate;
 
-    // Belt-and-braces: re-pool only when the inner client is still reusable. A clean Execute leaves it
+    // Belt-and-braces: re-pool only when the inner client is still reusable. A clean query leaves it
     // reusable, but a future non-throwing terminal path must not silently re-pool a dead client.
     private bool IsInnerTerminalOrDisposed =>
         _delegate is IPooledQueryClientInner s && s.IsTerminalOrDisposed;
@@ -164,17 +164,12 @@ internal sealed class PooledQueryClient : IQwpQueryClient
     public string? NegotiatedCompression => _delegate.NegotiatedCompression;
     public bool WasLastCloseTimedOut => _delegate.WasLastCloseTimedOut;
 
-    public void Execute(string sql, QwpColumnBatchHandler handler) => _delegate.Execute(sql, handler);
+    public Task<IQwpQueryReader> ExecuteReaderAsync(string sql, CancellationToken cancellationToken = default) =>
+        _delegate.ExecuteReaderAsync(sql, cancellationToken);
 
-    public void Execute(string sql, QwpBindSetter binds, QwpColumnBatchHandler handler) =>
-        _delegate.Execute(sql, binds, handler);
-
-    public Task ExecuteAsync(string sql, QwpColumnBatchHandler handler, CancellationToken cancellationToken = default) =>
-        _delegate.ExecuteAsync(sql, handler, cancellationToken);
-
-    public Task ExecuteAsync(string sql, QwpBindSetter binds, QwpColumnBatchHandler handler,
+    public Task<IQwpQueryReader> ExecuteReaderAsync(string sql, QwpBindSetter binds,
         CancellationToken cancellationToken = default) =>
-        _delegate.ExecuteAsync(sql, binds, handler, cancellationToken);
+        _delegate.ExecuteReaderAsync(sql, binds, cancellationToken);
 
     public void Cancel() => _delegate.Cancel();
 }

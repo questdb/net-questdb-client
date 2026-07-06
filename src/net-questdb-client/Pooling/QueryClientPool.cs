@@ -295,24 +295,31 @@ internal sealed class QueryClientPool
             throw;
         }
 
+        bool closedRace;
         lock (_gate)
         {
-            if (_closed)
+            closedRace = _closed;
+            if (!closedRace)
             {
-                try
-                {
-                    created.DisposeInner();
-                }
-                catch
-                {
-                    // best effort
-                }
+                _all.Add(created);
+            }
+        }
 
-                ReleaseCapacity();
-                throw Closed();
+        if (closedRace)
+        {
+            // Dispose outside _gate: DisposeInner can block on the client's teardown, and holding the
+            // pool lock across it stalls every other pool op. Matches the sender pool's close-race path.
+            try
+            {
+                created.DisposeInner();
+            }
+            catch
+            {
+                // best effort
             }
 
-            _all.Add(created);
+            ReleaseCapacity();
+            throw Closed();
         }
 
         created.MarkBorrowed();

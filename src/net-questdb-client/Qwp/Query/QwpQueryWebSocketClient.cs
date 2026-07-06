@@ -65,11 +65,36 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient, QuestDB.Pooling
     private int _disposed;
     private int _terminal;
     private long _cancelTargetRid = -1;
-    // Either flag suppresses MarkTerminal in finally: cleanly = wire-side terminator or user-cancelled;
-    // drainOk = user callback threw but the connection is still recoverable.
+    // Either flag suppresses MarkTerminal in EndReaderAsync's finally: cleanly = wire-side
+    // terminator or user-cancelled; drainOk = reader abandoned mid-stream but the drain reached
+    // a terminator, so the connection is still recoverable.
     private bool _executeFinishedCleanly;
-    private bool _drainOkAfterHandlerThrow;
+    private bool _drainOkAfterAbandon;
     private int _lastCloseTimedOut;
+
+    // ---- per-query pull-cursor state ----
+    // Single-flight (_executeLock) means at most one query spans StartQueryAsync → EndReaderAsync,
+    // so the query's cursor state lives here as instance fields between pulls.
+    private long _activeRid = -1;
+    private bool _activeQueryDone;
+    private int _consecutiveNonProgress;
+    private int _readerActive;
+    private string? _activeSql;
+    private int _activeSqlByteCount;
+    private ReadOnlyMemory<byte> _activeBindBlob;
+    private int _activeBindCount;
+    private int _failoverAttempt;
+    private QwpReconnectPolicy? _failoverBackoff;
+    private long _failoverDeadline;
+    private bool _failoverResetPending;
+    private long _totalRows;
+    private long _rowsAffected;
+    private QwpOpType _opType;
+    private bool _wasCancelled;
+    // Credit for the batch handed out by the previous pull is deferred until the consumer comes
+    // back for the next one, so the server's flow-control window tracks actual consumption.
+    private long _deferredCreditRid = -1;
+    private long _deferredCreditBytes;
 
     private QwpQueryWebSocketClient(QueryOptions options)
     {
@@ -108,26 +133,27 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient, QuestDB.Pooling
 
     public bool WasLastCloseTimedOut => Volatile.Read(ref _lastCloseTimedOut) != 0;
 
-    public void Execute(string sql, QwpColumnBatchHandler handler) =>
-        Task.Run(() => ExecuteCoreAsync(sql, binds: null, handler, CancellationToken.None))
-            .GetAwaiter().GetResult();
+    public async Task<IQwpQueryReader> ExecuteReaderAsync(string sql, CancellationToken cancellationToken = default)
+    {
+        await StartQueryAsync(sql, binds: null, cancellationToken).ConfigureAwait(false);
+        return new QwpQueryReader(this);
+    }
 
-    public void Execute(string sql, QwpBindSetter binds, QwpColumnBatchHandler handler) =>
-        Task.Run(() => ExecuteCoreAsync(sql, binds, handler, CancellationToken.None))
-            .GetAwaiter().GetResult();
+    public async Task<IQwpQueryReader> ExecuteReaderAsync(string sql, QwpBindSetter binds,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(binds);
+        await StartQueryAsync(sql, binds, cancellationToken).ConfigureAwait(false);
+        return new QwpQueryReader(this);
+    }
 
-    public Task ExecuteAsync(string sql, QwpColumnBatchHandler handler, CancellationToken ct = default) =>
-        ExecuteCoreAsync(sql, binds: null, handler, ct);
-
-    public Task ExecuteAsync(string sql, QwpBindSetter binds, QwpColumnBatchHandler handler,
-        CancellationToken cancellationToken = default) =>
-        ExecuteCoreAsync(sql, binds, handler, cancellationToken);
-
-    private async Task ExecuteCoreAsync(
-        string sql, QwpBindSetter? binds, QwpColumnBatchHandler handler, CancellationToken ct)
+    // Front half of a query: validates, takes the single-flight _executeLock (held until
+    // EndReaderAsync — a caller that never disposes its reader wedges this client's single-flight;
+    // QueryClientPool.Close's CancelInner is the shutdown escape hatch), and sends QUERY_REQUEST
+    // with the same failover retry the read path uses. Does not read any result frame.
+    internal async Task StartQueryAsync(string sql, QwpBindSetter? binds, CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(sql);
-        ArgumentNullException.ThrowIfNull(handler);
         ThrowIfDisposed();
         ThrowIfTerminal();
 
@@ -154,91 +180,379 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient, QuestDB.Pooling
                 "Execute is in flight; one query at a time per client");
         }
 
-        _executeFinishedCleanly = false;
-        _drainOkAfterHandlerThrow = false;
-        _hostTracker.BeginRound(forgetClassifications: false);
-        var requestId = Interlocked.Increment(ref _nextRequestId);
-        Interlocked.Exchange(ref _currentRequestId, requestId);
         try
         {
-            var attempt = 0;
-            var backoffPolicy = new QwpReconnectPolicy(
+            _executeFinishedCleanly = false;
+            _drainOkAfterAbandon = false;
+            _hostTracker.BeginRound(forgetClassifications: false);
+            var requestId = Interlocked.Increment(ref _nextRequestId);
+            Interlocked.Exchange(ref _currentRequestId, requestId);
+            _activeRid = requestId;
+            _activeQueryDone = false;
+            _consecutiveNonProgress = 0;
+            _activeSql = sql;
+            _activeSqlByteCount = sqlByteCount;
+            _activeBindBlob = bindBlob;
+            _activeBindCount = bindCount;
+            _failoverAttempt = 0;
+            _failoverBackoff = new QwpReconnectPolicy(
                 _options.failover_backoff_initial_ms,
                 _options.failover_backoff_max_ms,
                 _options.failover_max_duration_ms > TimeSpan.Zero
                     ? _options.failover_max_duration_ms
                     : _options.failover_backoff_max_ms,
                 QwpReconnectPolicy.FullJitter);
-            var failoverDeadline = _options.failover_max_duration_ms > TimeSpan.Zero
+            _failoverDeadline = _options.failover_max_duration_ms > TimeSpan.Zero
                 ? Environment.TickCount64 + (long)_options.failover_max_duration_ms.TotalMilliseconds
                 : long.MaxValue;
+            _failoverResetPending = false;
+            _totalRows = 0;
+            _rowsAffected = 0;
+            _opType = QwpOpType.None;
+            _wasCancelled = false;
+            _deferredCreditRid = -1;
+            _deferredCreditBytes = 0;
+
             while (true)
             {
-                _pendingCreditBytes = 0;
-                _expectedBatchSeq = 0;
-                // The schema rides only batch_seq == 0; invalidate any schema left over from the
-                // prior query so a continuation batch can't bind rows to a stale schema.
-                _decoder.ResetQuerySchema();
                 try
                 {
-                    await SendQueryRequestAsync(requestId, sql, sqlByteCount, _options.initial_credit, bindBlob, bindCount, ct)
-                        .ConfigureAwait(false);
-                    await DriveQueryLoopAsync(handler, ct).ConfigureAwait(false);
-                    _executeFinishedCleanly = true;
-                    return;
+                    await SendActiveQueryRequestAsync(ct).ConfigureAwait(false);
+                    break;
                 }
                 catch (OperationCanceledException) when (ct.IsCancellationRequested)
                 {
-                    // ClientWebSocket.ReceiveAsync aborts the socket before throwing on token-cancel,
-                    // so SendCancel is not deliverable. The connection is unrecoverable; finally
-                    // MarkTerminal()s and the caller must build a fresh client. Use Cancel() for
-                    // graceful cancellation that gives the server a CANCEL frame.
                     throw;
                 }
-                catch (Exception ex) when (
-                    _options.failover
-                    && attempt + 1 < _options.failover_max_attempts
-                    && Environment.TickCount64 < failoverDeadline
-                    && IsTransportError(ex)
-                    && !ct.IsCancellationRequested
-                    && Interlocked.Read(ref _cancelTargetRid) != requestId
-                    && Volatile.Read(ref _disposed) == 0)
+                catch (Exception ex) when (ShouldFailover(ex, ct))
                 {
-                    if (_activeAddressIndex >= 0) _hostTracker.RecordMidStreamFailure(_activeAddressIndex);
-                    var sleep = backoffPolicy.ComputeBackoff(attempt);
-                    var remainingMs = failoverDeadline - Environment.TickCount64;
-                    if (remainingMs <= 0) throw;
-                    if (sleep.TotalMilliseconds > remainingMs)
-                        sleep = TimeSpan.FromMilliseconds(remainingMs);
-                    await Task.Delay(sleep, ct).ConfigureAwait(false);
-                    if (Interlocked.Read(ref _cancelTargetRid) == requestId)
-                    {
-                        throw new OperationCanceledException("query cancelled during failover");
-                    }
-                    attempt++;
-                    await ReconnectAsync(attempt, ct).ConfigureAwait(false);
-                    if (Interlocked.Read(ref _cancelTargetRid) == requestId)
-                    {
-                        throw new OperationCanceledException("query cancelled during failover");
-                    }
-                    // An OnFailoverReset throw is terminal: the query was abandoned by the reconnect,
-                    // so leave _drainOkAfterHandlerThrow false and let the finally MarkTerminal().
-                    handler.OnFailoverReset(ServerInfo);
+                    await BackoffAndReconnectAsync(ex, ct).ConfigureAwait(false);
                 }
+            }
+
+            Volatile.Write(ref _readerActive, 1);
+        }
+        catch
+        {
+            // No reader will ever exist for this query, so run EndReaderAsync's bookkeeping here:
+            // nothing finished cleanly, so the client goes terminal and the lock is handed back.
+            MarkTerminal();
+            Interlocked.Exchange(ref _currentRequestId, -1);
+            if (Volatile.Read(ref _disposed) != 0) DisposeDecompressor();
+            _executeLock.Release();
+            throw;
+        }
+    }
+
+    // (Re-)sends QUERY_REQUEST for the active query, resetting the per-attempt stream state at
+    // the top of each failover round. If a cooperative cancel landed while the wire was down,
+    // re-issue it on the fresh connection so the server still terminates the replayed query with
+    // STATUS_CANCELLED instead of silently dropping the user's cancel.
+    private async Task SendActiveQueryRequestAsync(CancellationToken ct)
+    {
+        _pendingCreditBytes = 0;
+        _expectedBatchSeq = 0;
+        // Fresh connection, fresh non-progress budget: stale-rid floods from the previous
+        // connection must not push a healthy replay over the cap.
+        _consecutiveNonProgress = 0;
+        _deferredCreditRid = -1;
+        _deferredCreditBytes = 0;
+        // The schema rides only batch_seq == 0; invalidate any schema left over from the prior
+        // query (or the pre-reconnect stream) so a continuation batch can't bind rows to a stale schema.
+        _decoder.ResetQuerySchema();
+        await SendQueryRequestAsync(_activeRid, _activeSql!, _activeSqlByteCount, _options.initial_credit,
+                _activeBindBlob, _activeBindCount, ct)
+            .ConfigureAwait(false);
+        if (Interlocked.Read(ref _cancelTargetRid) == _activeRid)
+        {
+            try
+            {
+                await SendCancelAsync(_activeRid, ct).ConfigureAwait(false);
+            }
+            catch
+            {
+                // Best-effort, like every other cancel dispatch.
+            }
+        }
+    }
+
+    private bool ShouldFailover(Exception ex, CancellationToken ct)
+    {
+        return _options.failover
+               && _failoverAttempt + 1 < _options.failover_max_attempts
+               && Environment.TickCount64 < _failoverDeadline
+               && IsTransportError(ex)
+               && !ct.IsCancellationRequested
+               && Interlocked.Read(ref _cancelTargetRid) != _activeRid
+               && Volatile.Read(ref _disposed) == 0;
+    }
+
+    private async Task BackoffAndReconnectAsync(Exception original, CancellationToken ct)
+    {
+        if (_activeAddressIndex >= 0) _hostTracker.RecordMidStreamFailure(_activeAddressIndex);
+        var sleep = _failoverBackoff!.ComputeBackoff(_failoverAttempt);
+        var remainingMs = _failoverDeadline - Environment.TickCount64;
+        if (remainingMs <= 0)
+        {
+            System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(original).Throw();
+        }
+
+        if (sleep.TotalMilliseconds > remainingMs)
+        {
+            sleep = TimeSpan.FromMilliseconds(remainingMs);
+        }
+
+        await Task.Delay(sleep, ct).ConfigureAwait(false);
+        _failoverAttempt++;
+        await ReconnectAsync(_failoverAttempt, ct).ConfigureAwait(false);
+        // Rows already handed out replay from the top on the new connection.
+        _failoverResetPending = true;
+    }
+
+    /// <summary>
+    ///     One resumable step of the query cursor: reads frames inline (no background pump) until
+    ///     one either yields an in-order RESULT_BATCH (<c>true</c>; the batch is in <see cref="CurrentBatch" />
+    ///     until the next call) or terminates the query (<c>false</c> for RESULT_END / EXEC_DONE /
+    ///     cancelled; throws <see cref="QwpQueryException" /> for QUERY_ERROR). Transparent failover
+    ///     happens inside; any throw that is not a clean wire terminator marks the client terminal.
+    /// </summary>
+    internal async ValueTask<bool> PullNextBatchAsync(CancellationToken ct)
+    {
+        if (Volatile.Read(ref _readerActive) == 0)
+        {
+            throw new IngressError(ErrorCode.InvalidApiCall,
+                "no query in flight; the reader has ended");
+        }
+
+        if (_activeQueryDone) return false;
+        ThrowIfTerminal();
+
+        try
+        {
+            var needResend = false;
+            while (true)
+            {
+                try
+                {
+                    if (needResend)
+                    {
+                        await SendActiveQueryRequestAsync(ct).ConfigureAwait(false);
+                        needResend = false;
+                    }
+
+                    if (_deferredCreditRid >= 0)
+                    {
+                        // Credit owed for the batch returned by the previous pull. Runs before the
+                        // next ReadFrameAsync overwrites _receiveBuffer (_creditFrameBuf is
+                        // separate, so the previously returned batch's spans are not clobbered).
+                        // Inside the failover try: a send failure retries like any transport error,
+                        // and the post-reconnect re-send clears the now-moot memo.
+                        var creditRid = _deferredCreditRid;
+                        var creditBytes = _deferredCreditBytes;
+                        _deferredCreditRid = -1;
+                        _deferredCreditBytes = 0;
+                        _pendingCreditBytes += creditBytes;
+                        var threshold = Math.Max(1L, _options.initial_credit / 2);
+                        if (_pendingCreditBytes >= threshold)
+                        {
+                            var toReturn = _pendingCreditBytes;
+                            _pendingCreditBytes = 0;
+                            await SendCreditAsync(creditRid, toReturn, ct).ConfigureAwait(false);
+                        }
+                    }
+
+                    var (kind, payload, headerFlags) = await ReadFrameAsync(ct).ConfigureAwait(false);
+                    switch (kind)
+                    {
+                        case QwpEgressMsgKind.ResultBatch:
+                            var batchBytes = payload.Length;
+                            var decoded = MaybeDecompressResultBatch(payload, headerFlags);
+                            try
+                            {
+                                _decoder.Decode(decoded.Span, headerFlags, _batch);
+                            }
+                            catch (QwpDecodeException ex)
+                            {
+                                throw new IngressError(ErrorCode.ProtocolViolation, ex.Message, ex);
+                            }
+                            var batchRid = _batch.RequestId;
+                            if (batchRid != _activeRid)
+                            {
+                                // Return credit for a stale request_id directly so the server's
+                                // per-request window for that id is not leaked.
+                                if (_options.initial_credit > 0)
+                                {
+                                    await SendCreditAsync(batchRid, batchBytes + QwpConstants.HeaderSize, ct)
+                                        .ConfigureAwait(false);
+                                }
+                                ThrowIfNonProgressExceeded(++_consecutiveNonProgress, _activeRid);
+                                continue;
+                            }
+                            if (_batch.BatchSeq != _expectedBatchSeq)
+                            {
+                                throw new IngressError(ErrorCode.ProtocolViolation,
+                                    $"out-of-order RESULT_BATCH for request_id={batchRid}: expected batch_seq={_expectedBatchSeq}, got {_batch.BatchSeq}");
+                            }
+                            _consecutiveNonProgress = 0;
+                            _expectedBatchSeq++;
+                            if (_options.initial_credit > 0)
+                            {
+                                _deferredCreditRid = batchRid;
+                                _deferredCreditBytes = batchBytes + QwpConstants.HeaderSize;
+                            }
+                            return true;
+
+                        case QwpEgressMsgKind.ResultEnd:
+                            var (endRid, endTotal) = DecodeResultEnd(payload);
+                            if (endRid != _activeRid)
+                            {
+                                ThrowIfNonProgressExceeded(++_consecutiveNonProgress, _activeRid);
+                                continue;
+                            }
+                            _executeFinishedCleanly = true;
+                            _activeQueryDone = true;
+                            _totalRows = endTotal;
+                            return false;
+
+                        case QwpEgressMsgKind.ExecDone:
+                            var (execRid, opType, rowsAffected) = DecodeExecDone(payload);
+                            if (execRid != _activeRid)
+                            {
+                                ThrowIfNonProgressExceeded(++_consecutiveNonProgress, _activeRid);
+                                continue;
+                            }
+                            _executeFinishedCleanly = true;
+                            _activeQueryDone = true;
+                            _opType = (QwpOpType)opType;
+                            _rowsAffected = rowsAffected;
+                            return false;
+
+                        case QwpEgressMsgKind.QueryError:
+                            var (errRid, status, message) = DecodeQueryError(payload);
+                            if (errRid != _activeRid && errRid != QwpConstants.RequestIdWildcard)
+                            {
+                                ThrowIfNonProgressExceeded(++_consecutiveNonProgress, _activeRid);
+                                continue;
+                            }
+                            if (errRid == QwpConstants.RequestIdWildcard)
+                            {
+                                Interlocked.Exchange(ref _transport, null)?.Dispose();
+                                MarkTerminal();
+                                throw new QwpQueryException((QwpStatusCode)status, message);
+                            }
+                            if (status == QwpConstants.StatusCancelled)
+                            {
+                                // Cooperative Cancel(): a clean wire-side terminator, not a failure —
+                                // the reader reports WasCancelled and the client stays reusable.
+                                _executeFinishedCleanly = true;
+                                _activeQueryDone = true;
+                                _wasCancelled = true;
+                                return false;
+                            }
+                            // The stream is at a terminator, so the client stays reusable even
+                            // though the query itself failed.
+                            _executeFinishedCleanly = true;
+                            _activeQueryDone = true;
+                            throw new QwpQueryException((QwpStatusCode)status, message);
+
+                        case QwpEgressMsgKind.CacheReset:
+                            DecodeCacheReset(payload);
+                            ThrowIfNonProgressExceeded(++_consecutiveNonProgress, _activeRid);
+                            continue;
+
+                        case QwpEgressMsgKind.ServerInfo:
+                            throw new IngressError(ErrorCode.ProtocolViolation,
+                                "unexpected SERVER_INFO mid-query");
+
+                        default:
+                            throw new IngressError(ErrorCode.ProtocolViolation,
+                                $"unknown egress frame 0x{(byte)kind:X2}");
+                    }
+                }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested)
+                {
+                    throw;
+                }
+                catch (Exception ex) when (ShouldFailover(ex, ct))
+                {
+                    await BackoffAndReconnectAsync(ex, ct).ConfigureAwait(false);
+                    needResend = true;
+                }
+            }
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            // ClientWebSocket.ReceiveAsync aborts the socket before throwing on token-cancel, so
+            // SendCancel is not deliverable. The connection is unrecoverable; the caller must build
+            // a fresh client. Use Cancel() for graceful cancellation that gives the server a
+            // CANCEL frame.
+            MarkTerminal();
+            throw;
+        }
+        catch
+        {
+            // A clean-terminator throw (QwpQueryException with _executeFinishedCleanly set) leaves
+            // the client reusable; everything else is transport/protocol damage mid-stream.
+            if (!_executeFinishedCleanly) MarkTerminal();
+            throw;
+        }
+    }
+
+    /// <summary>
+    ///     Ends the reader's query: drains an abandoned-but-healthy stream to its terminator
+    ///     (cancel + drain ⇒ re-poolable) and hands the single-flight lock back. Idempotent.
+    /// </summary>
+    internal async ValueTask EndReaderAsync()
+    {
+        if (Interlocked.Exchange(ref _readerActive, 0) == 0) return;
+        try
+        {
+            if (!_executeFinishedCleanly
+                && Volatile.Read(ref _terminal) == 0
+                && Volatile.Read(ref _disposed) == 0
+                && _transport is not null)
+            {
+                _drainOkAfterAbandon = await CancelAndDrainAsync(_activeRid).ConfigureAwait(false);
             }
         }
         finally
         {
-            if (!_executeFinishedCleanly && !_drainOkAfterHandlerThrow) MarkTerminal();
+            if (!_executeFinishedCleanly && !_drainOkAfterAbandon) MarkTerminal();
             Interlocked.Exchange(ref _currentRequestId, -1);
             // The decompressor is reused across queries, so reclaim it only on the disposal path:
-            // when Dispose() races an in-flight Execute it can't take _executeLock and skips
+            // when Dispose() races an in-flight query it can't take _executeLock and skips
             // DisposeDecompressor, so this query — its last user — frees the native context as it
             // exits. Done under _executeLock (like the Dispose paths) so disposal stays serialised
             // with the decode loop's use of the decompressor. Idempotent via Interlocked.Exchange.
             if (Volatile.Read(ref _disposed) != 0) DisposeDecompressor();
             _executeLock.Release();
         }
+    }
+
+    // ---- pull-cursor accessors for QwpQueryReader ----
+
+    internal long ActiveRequestId => _activeRid;
+
+    // Cancel scoped to one request id: stale callers (a disposed reader's late timeout thread)
+    // target their own finished query, which SendCancelAsync's rid guard turns into a no-op,
+    // instead of aliasing whatever query is in flight now.
+    internal void CancelQuery(long requestId)
+    {
+        if (requestId < 0) return;
+        CancelCore(requestId);
+    }
+
+    internal QwpColumnBatch CurrentBatch => _batch;
+    internal long ReaderTotalRows => _totalRows;
+    internal long ReaderRowsAffected => _rowsAffected;
+    internal QwpOpType ReaderOpType => _opType;
+    internal bool ReaderWasCancelled => _wasCancelled;
+
+    internal bool ConsumeFailoverReset()
+    {
+        var pending = _failoverResetPending;
+        _failoverResetPending = false;
+        return pending;
     }
 
     private static bool IsTransportError(Exception ex)
@@ -270,7 +584,7 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient, QuestDB.Pooling
             ServerInfo = info;
             _connState.ResetSymbolDict();
             // No schema reset needed here: the per-query schema lives on the decoder and is
-            // invalidated by the next Execute() call's ResetQuerySchema().
+            // invalidated by the next query's ResetQuerySchema().
             return;
         }
 
@@ -660,128 +974,9 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient, QuestDB.Pooling
     }
 
     // Bounds a server that floods stale-request / CACHE_RESET frames so a sync Execute
-    // (CancellationToken.None) cannot hang forever; reset on every active-request frame.
+    // (CancellationToken.None) cannot hang forever; reset on every active-request frame. The
+    // counter is a field so the cap spans skipped frames that cross PullNextBatchAsync calls.
     private const int MaxConsecutiveNonProgressFrames = 1024;
-
-    private async Task DriveQueryLoopAsync(QwpColumnBatchHandler handler, CancellationToken ct)
-    {
-        var activeRid = Volatile.Read(ref _currentRequestId);
-        var consecutiveNonProgress = 0;
-        while (true)
-        {
-            var (kind, payload, headerFlags) = await ReadFrameAsync(ct).ConfigureAwait(false);
-            switch (kind)
-            {
-                case QwpEgressMsgKind.ResultBatch:
-                    var batchBytes = payload.Length;
-                    var decoded = MaybeDecompressResultBatch(payload, headerFlags);
-                    try
-                    {
-                        _decoder.Decode(decoded.Span, headerFlags, _batch);
-                    }
-                    catch (QwpDecodeException ex)
-                    {
-                        throw new IngressError(ErrorCode.ProtocolViolation, ex.Message, ex);
-                    }
-                    var batchRid = _batch.RequestId;
-                    if (batchRid != activeRid)
-                    {
-                        // Return credit for a stale request_id directly so the server's
-                        // per-request window for that id is not leaked.
-                        if (_options.initial_credit > 0)
-                        {
-                            await SendCreditAsync(batchRid, batchBytes + QwpConstants.HeaderSize, ct)
-                                .ConfigureAwait(false);
-                        }
-                        ThrowIfNonProgressExceeded(++consecutiveNonProgress, activeRid);
-                        continue;
-                    }
-                    if (_batch.BatchSeq != _expectedBatchSeq)
-                    {
-                        throw new IngressError(ErrorCode.ProtocolViolation,
-                            $"out-of-order RESULT_BATCH for request_id={batchRid}: expected batch_seq={_expectedBatchSeq}, got {_batch.BatchSeq}");
-                    }
-                    consecutiveNonProgress = 0;
-                    _expectedBatchSeq++;
-                    try
-                    {
-                        handler.OnBatch(_batch);
-                    }
-                    catch
-                    {
-                        _drainOkAfterHandlerThrow = await CancelAndDrainAsync(batchRid)
-                            .ConfigureAwait(false);
-                        throw;
-                    }
-                    if (_options.initial_credit > 0)
-                    {
-                        _pendingCreditBytes += batchBytes + QwpConstants.HeaderSize;
-                        var threshold = Math.Max(1L, _options.initial_credit / 2);
-                        if (_pendingCreditBytes >= threshold)
-                        {
-                            var toReturn = _pendingCreditBytes;
-                            _pendingCreditBytes = 0;
-                            await SendCreditAsync(batchRid, toReturn, ct).ConfigureAwait(false);
-                        }
-                    }
-                    break;
-
-                case QwpEgressMsgKind.ResultEnd:
-                    var (endRid, endTotal) = DecodeResultEnd(payload);
-                    if (endRid != activeRid)
-                    {
-                        ThrowIfNonProgressExceeded(++consecutiveNonProgress, activeRid);
-                        continue;
-                    }
-                    _executeFinishedCleanly = true;
-                    handler.OnEnd(endTotal);
-                    return;
-
-                case QwpEgressMsgKind.ExecDone:
-                    var (execRid, opType, rowsAffected) = DecodeExecDone(payload);
-                    if (execRid != activeRid)
-                    {
-                        ThrowIfNonProgressExceeded(++consecutiveNonProgress, activeRid);
-                        continue;
-                    }
-                    _executeFinishedCleanly = true;
-                    handler.OnExecDone((QwpOpType)opType, rowsAffected);
-                    return;
-
-                case QwpEgressMsgKind.QueryError:
-                    var (errRid, status, message) = DecodeQueryError(payload);
-                    if (errRid != activeRid && errRid != QwpConstants.RequestIdWildcard)
-                    {
-                        ThrowIfNonProgressExceeded(++consecutiveNonProgress, activeRid);
-                        continue;
-                    }
-                    if (errRid == QwpConstants.RequestIdWildcard)
-                    {
-                        Interlocked.Exchange(ref _transport, null)?.Dispose();
-                        MarkTerminal();
-                    }
-                    else
-                    {
-                        _executeFinishedCleanly = true;
-                    }
-                    handler.OnError((QwpStatusCode)status, message);
-                    return;
-
-                case QwpEgressMsgKind.CacheReset:
-                    DecodeCacheReset(payload);
-                    ThrowIfNonProgressExceeded(++consecutiveNonProgress, activeRid);
-                    break;
-
-                case QwpEgressMsgKind.ServerInfo:
-                    throw new IngressError(ErrorCode.ProtocolViolation,
-                        "unexpected SERVER_INFO mid-query");
-
-                default:
-                    throw new IngressError(ErrorCode.ProtocolViolation,
-                        $"unknown egress frame 0x{(byte)kind:X2}");
-            }
-        }
-    }
 
     private static void ThrowIfNonProgressExceeded(int consecutiveNonProgress, long activeRid)
     {
@@ -1018,13 +1213,23 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient, QuestDB.Pooling
 
             if (kind == QwpEgressMsgKind.CacheReset)
             {
-                DecodeCacheReset(payload);
+                // Malformed frame: fail the drain, don't let the decode throw escape a
+                // dispose-path caller (it would mask the exception that started the drain).
+                try
+                {
+                    DecodeCacheReset(payload);
+                }
+                catch
+                {
+                    return false;
+                }
                 continue;
             }
 
             if (kind == QwpEgressMsgKind.ResultBatch)
             {
-                // Fully decode so dict/schema cursors stay in sync with the server; skip OnBatch.
+                // Fully decode so dict/schema cursors stay in sync with the server; the rows are
+                // discarded, never surfaced.
                 try
                 {
                     var decoded = MaybeDecompressResultBatch(payload, headerFlags);

@@ -21,7 +21,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **WS / WSS (QWP) — egress** — read-side WebSocket (`/read/v1`) that
   streams query results as binary `RESULT_BATCH` frames. Surfaced through
   a separate `QueryClient.New(...)` factory (not `Sender.New`) returning
-  `IQwpQueryClient`. Distinct connect-string parser (`QueryOptions`) with
+  `IQwpQueryClient`. Results are consumed through the `DbDataReader`-style
+  pull cursor from `ExecuteReaderAsync` (`IQwpQueryReader`).
+  Distinct connect-string parser (`QueryOptions`) with
   egress-specific keys: `target=any|primary|replica`,
   `compression=auto|raw|zstd`, `failover_*`, `initial_credit`. Decoder
   pools per-column scratches across batches; bind-parameter wire format
@@ -198,16 +200,44 @@ own framing, codecs, and server handshake. Everything QWP lives in
     12-byte QWP1 header (asymmetric framing: server→client wraps the
     header, client→server is payload-only with `msg_kind` at byte 0).
     `AuthError` is immediately terminal — no failover retry.
+    Internally a resumable **pull driver** (`StartQueryAsync` →
+    `PullNextBatchAsync` → `EndReaderAsync`): the single-flight
+    `_executeLock` is held from start until the reader ends, reads are
+    inline (no background pump), and transparent failover +
+    QUERY_REQUEST re-send live inside `PullNextBatchAsync`. A
+    cooperative cancel that lands during a failover window is
+    re-issued on the new connection after the re-send, so it still
+    terminates via `STATUS_CANCELLED` instead of being dropped (or —
+    as before the pull refactor — aborting the client terminally).
+  - `IQwpQueryReader.cs` / `QwpQueryReader.cs` — the egress
+    consumption surface: a `DbDataReader`-style pull cursor
+    from `ExecuteReaderAsync(sql[, binds])`. `ReadBatchAsync` yields
+    `Current` (a `QwpColumnBatch` valid only until the next read);
+    after `false`: `TotalRows` / `RowsAffected` / `OpType` /
+    `WasCancelled` (stats stay readable after dispose — they freeze at
+    the query's final values). `FailoverReset` is true on the read
+    that resumed after a transparent reconnect (prior rows void,
+    stream replays from the top). QUERY_ERROR throws
+    `QwpQueryException` (status + server message); a
+    non-connection-scoped query error ends at a clean frame boundary
+    so the client stays reusable. Cooperative `Cancel()` — scoped to
+    the reader's own request id, no-op after dispose — ends with a
+    clean `false` + `WasCancelled`; a hard `CancellationToken` cancel
+    is terminal. Disposing the reader ends the query — an abandoned
+    mid-stream reader is cancel+drained to its terminator — and
+    releases the single-flight lock, so **always dispose**
+    (`await using`). Credit for a delivered batch is **deferred** to
+    the next `ReadBatchAsync`, so server flow-control tracks actual
+    consumer progress (backpressure on slow consumers).
   - `QwpResultBatchDecoder.cs` — decodes `RESULT_BATCH` payloads
     column-major. Per-column scratches (`ValueBytes`, `StringHeap`,
     `NonNullIndex`, `StringOffsets`) survive `ColumnView.Reset()` and
     grow-and-reuse across batches. ColumnView slots themselves reuse
     via `ConfigureColumn` / `TrimToColumnCount`, so a fresh batch on
     the same schema does not churn schema metadata.
-  - `QwpColumnBatch.cs` / `QwpColumnBatchHandler.cs` — column-major
-    view + abstract handler the user implements. Span-returning
-    accessors (`GetStringSpan`) are valid only for the duration of
-    `OnBatch`.
+  - `QwpColumnBatch.cs` — column-major view over one decoded batch,
+    reused across reads. Span-returning accessors (`GetStringSpan`)
+    are valid only until the next `ReadBatchAsync`.
   - `QwpBindValues.cs` / `QwpBindSetter.cs` — typed bind-parameter
     builder. 18 wire types, ascending-index validation, decimal scale
     + geohash precision range checks. Wire-format byte layout pinned
@@ -419,7 +449,16 @@ surface.
   can cross it while parked), so it runs as a separate walk gated on
   `_idleOldestCreatedUtc`, a conservative lower bound over parked
   entries' creation times that only fires when something actually
-  crossed the lifetime.
+  crossed the lifetime. Reaping is **removal-only** — it never recreates,
+  so both `idle_timeout` and `max_lifetime` act **only on excess** (above
+  `min`): the `min` warm connections are never idle-reaped or age-rotated.
+  They live until they fail (a dead ws sender self-reconnects; a
+  terminally-failed sender/query client is discarded on return and
+  recreated on the next borrow), so a pool pinned at `min` (e.g.
+  `sender_pool_min=1` under low concurrency) keeps its base connection for
+  the process lifetime — cycle the `QuestDBClient` handle to force
+  rotation. The same floor applies to the shared knobs for the query pool
+  (`QueryClientPool.ReapIdle`).
   `BorrowSender` blocks up to `acquire_timeout_ms` then throws
   `IngressError(ErrorCode.PoolExhausted)`. Reaping is **gated on full
   drain**: an idle ws sender whose cursor-engine ring still holds
@@ -453,20 +492,33 @@ surface.
   `query_pool_min > 0` (connect string or `QueryPoolMin(...)` builder call, tracked
   across ingest + separate-query configs). Mirrors java-questdb-client `lazy_connect`.
 - **Query pooling (net7.0+)**: `IQuestDBClient.NewQuery()` returns a fresh
-  `Query` builder (`Sql`/`Binds`/`Handler` then `ExecuteAsync`/`Execute`);
-  `ExecuteSqlAsync(sql, handler, ct)` is the convenience shortcut. There is
+  `Query` builder (`Sql`/`Binds` then `ExecuteReaderAsync` returning an
+  `IQwpQueryReader`); `ExecuteReaderAsync(sql[, binds], ct)` is the
+  handle-level convenience shortcut. There is
   **no** public borrow/release for queries — the client lease is implicit per
-  `ExecuteAsync` and self-returns in a `finally` (Java `newQuery()`/
-  `executeSql()` parity; Java's thread-local `query()` is **not** ported). The
-  `Task` returned by `ExecuteAsync` replaces Java's `Completion`. A clean return
-  re-pools the client (`GiveBack`); any throw — transport/protocol or a hard
-  `CancellationToken` cancel (which is permanently terminal) — discards it
+  execution and returns when the reader is disposed (Java `newQuery()`
+  parity; Java's thread-local `query()` is **not** ported). A clean end
+  re-pools the client (`GiveBack`); a transport/protocol throw or a hard
+  `CancellationToken` cancel (which is permanently terminal) discards it
   (`MarkBroken` → `DiscardBroken`), since the egress client's terminal state is
-  sticky with no reset. `Query.Cancel()` is the **cooperative** path (forwards to
+  sticky with no reset. **Exception:** a `QwpQueryException` (query-level
+  QUERY_ERROR) ends at a clean frame boundary, so the client is re-pooled, not
+  discarded. `Query.Cancel()` is the **cooperative** path (forwards to
   the in-flight client's `Cancel()`; the query ends normally and the client is
   re-pooled). `PooledQueryClient` also checks an internal `IPooledQueryClientInner.
   IsTerminalOrDisposed` seam (implemented by `QwpQueryWebSocketClient`) before
-  re-pooling. The query pool is the **stripped sibling** of `SenderPool` — no
+  re-pooling. **Pooled readers extend the lease to the reader lifetime**: the
+  `PooledQueryReader` returned by `Query.ExecuteReaderAsync` owns the borrowed
+  client and its `_capacity` permit until it is disposed — `query_pool_max`
+  (default 4) concurrent *open readers* exhaust the pool, and the next borrow
+  blocks `acquire_timeout_ms` then throws `IngressError(PoolExhausted)`.
+  Disposing the reader drains an abandoned stream to its terminator, returns the
+  client (re-pool or discard via the same rules as above), and re-arms the
+  `Query`'s single-flight slot; `ReapIdle` never touches an in-use client, so
+  nothing is torn down under an open reader. A cooperative cancel landing during
+  a failover window is re-issued on the new connection, so it ends via
+  `STATUS_CANCELLED` (`WasCancelled`) and re-pools — pinned by
+  `QwpQueryReaderPoolTests.CancelDuringFailoverWindow_ClientIsRepooled`. The query pool is the **stripped sibling** of `SenderPool` — no
   SF/slot/leak-debt machinery (read side has no store-and-forward) and no
   AsyncLocal pin. Query-pool config: `query_pool_min` (1), `query_pool_max` (4)
   on `SenderOptions` (`[JsonIgnore]`, in `QwpConnectStringKeys.Shared` so both
@@ -546,7 +598,11 @@ surface.
     `QwpResultBatchDecoderTests`, `QwpBindValuesTests`,
     `QwpRoleFilterTests`, `QwpQueryClientEndToEndTests`).
     `QwpBindValuesVectorsTests` pins the bind-payload byte layout
-    per wire type.
+    per wire type. `QwpQueryReaderTests` / `QwpQueryReaderPoolTests`
+    cover the pull cursor: multi-batch reads, deferred credit timing,
+    cancel semantics (cooperative vs hard-CT, incl. the
+    cancel-during-failover regression), drain-on-dispose, and
+    reader-holds-permit pooling.
   - `Utils/QwpTlsAuthTests.cs` — auth / TLS helper unit tests shared
     by ingest and egress.
 - Integration tests — the three suites plus the integration fuzz suites
@@ -566,6 +622,14 @@ surface.
   - `QuestDbQueryIntegrationTests.cs` — egress integration. `OneTimeSetUp`
     drops + re-seeds fixture tables so runs are idempotent against a
     long-lived master instance.
+  - `QuestDbDockerQueryTests.cs` — egress query tests against QuestDB in
+    **Docker** (single-batch, multi-batch via `max_batch_rows`, and
+    multi-column typed round-trips over `long_sequence`). Opt-in:
+    `QDB_DOCKER_TESTS=on` (or `QDB_DOCKER_IMAGE=...`); self-skips
+    otherwise so the CI filter legs stay green. Defaults to
+    `questdb/questdb:nightly` because `/read/v1` is master-only;
+    container lifecycle is driven through the `docker` CLI on an
+    ephemeral loopback port, no Testcontainers dependency.
   - `QuestDbWebSocketIngestFuzzTests.cs` + `QuestDbEgress{,Bind,Alter,Fragmentation}FuzzTests.cs`
     — QWP ingress/egress fuzz suites (ports of the Rust client's fuzz tests).
     Offline egress fuzz that needs no server lives in
@@ -585,10 +649,12 @@ surface.
   shape compares against its own HTTP baseline. `BenchQueryWs` uses
   the same grouping (Narrow / Wide × 10k / 100k / 1M rows) and an
   HTTP `/exec` baseline that parses `dataset[][]` so both methods do
-  equivalent extraction work; it declares its own job via
-  `[Config(typeof(QueryThroughputConfig))]` (20 iter × 5 warmup).
-  Senders / clients live in `[GlobalSetup]` so per-invocation cost
-  is the wire path, not handshake / mmap / engine spin-up.
+  equivalent extraction work — the `Ws_*` methods drive the pull
+  cursor with a per-cell checksum over the typed accessors. It
+  declares its own job via `[Config(typeof(QueryThroughputConfig))]`
+  (20 iter × 5 warmup). Senders / clients live in `[GlobalSetup]` so
+  per-invocation cost is the wire path, not handshake / mmap /
+  engine spin-up.
 
 ## Conventions
 

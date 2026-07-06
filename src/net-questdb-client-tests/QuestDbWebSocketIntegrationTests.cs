@@ -479,15 +479,27 @@ public class QuestDbWebSocketIntegrationTests
             SenderErrorCategory.WriteError));
     }
 
+    // QuestDB batches ingress ACKs (server-side QwpIngressUpgradeProcessor.ACK_BATCH_SIZE): a
+    // cumulative ACK is only emitted once this many messages have accumulated, and any trailing
+    // partial batch stays un-ACKed until commit. So a deferred-visibility test must ship a whole
+    // multiple of the batch size and wait for the last full-batch boundary — the highest FSN
+    // guaranteed to be ACKed (provably appended server-side) while the rows are still uncommitted.
+    private const int ServerAckBatchSize = 8;
+
+    private static long LastGuaranteedAckedFsn(int deferredFrames) =>
+        deferredFrames / ServerAckBatchSize * ServerAckBatchSize - 1;
+
     [Test]
     public async Task Transaction_DeferredRowsInvisibleUntilCommit()
     {
         await DropTableAsync("test_ws_txn_visibility");
         var endpoint = _questDb!.GetWebSocketEndpoint();
-        const int rows = 20;
+        const int deferredFrames = ServerAckBatchSize; // one full ACK batch → whole staged batch is ACKed pre-commit
+        const int rowsPerFrame = 3;
+        const int rows = deferredFrames * rowsPerFrame;
 
         using var sender = Sender.New(
-            $"ws::addr={endpoint};transaction=on;auto_flush_rows={rows};auto_flush_interval=off;auto_flush_bytes=off;");
+            $"ws::addr={endpoint};transaction=on;auto_flush_rows={rowsPerFrame};auto_flush_interval=off;auto_flush_bytes=off;");
         var qwp = (IQwpWebSocketSender)sender;
 
         var ts = new DateTime(2026, 6, 1, 0, 0, 0, DateTimeKind.Utc);
@@ -496,11 +508,11 @@ public class QuestDbWebSocketIntegrationTests
             sender.Table("test_ws_txn_visibility").Column("v", (long)i).At(ts.AddSeconds(i));
         }
 
-        // The final At() hit auto_flush_rows, shipping a single deferred frame (FSN 0). Wait for the
-        // server to ack it, so the rows are provably appended-but-uncommitted before we assert
-        // invisibility (otherwise count==0 could just mean "not yet sent").
-        Assert.That(await qwp.AwaitAckedFsnAsync(0, TimeSpan.FromSeconds(15)), Is.True,
-            "deferred frame was not acknowledged by the server");
+        // Each rowsPerFrame rows auto-flushed a deferred frame. Wait for the last full-batch boundary to
+        // be acked, so the rows are provably appended-but-uncommitted before we assert invisibility
+        // (otherwise count==0 could just mean "not yet sent").
+        Assert.That(await qwp.AwaitAckedFsnAsync(LastGuaranteedAckedFsn(deferredFrames), TimeSpan.FromSeconds(15)), Is.True,
+            "deferred frames were not acknowledged by the server");
 
         // Give any (incorrect) immediate commit + WAL apply time to surface before asserting.
         await Task.Delay(750);
@@ -535,8 +547,10 @@ public class QuestDbWebSocketIntegrationTests
             sender.Table("test_ws_txn_large").Symbol("g", "g" + (i % 8)).Column("v", (long)i).At(ts.AddMilliseconds(i));
         }
 
-        // rows/autoFlushRows deferred frames shipped; wait for the last (FSN = count-1) to ack.
-        Assert.That(await qwp.AwaitAckedFsnAsync(rows / autoFlushRows - 1, TimeSpan.FromSeconds(30)), Is.True);
+        // rows/autoFlushRows deferred frames shipped; wait for the last full ACK-batch boundary (a
+        // trailing partial batch is not ACKed until commit).
+        const int deferredFrames = rows / autoFlushRows;
+        Assert.That(await qwp.AwaitAckedFsnAsync(LastGuaranteedAckedFsn(deferredFrames), TimeSpan.FromSeconds(30)), Is.True);
         await Task.Delay(750);
         if (await CountRowsAsync("test_ws_txn_large") != 0)
         {

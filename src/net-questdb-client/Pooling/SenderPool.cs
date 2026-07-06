@@ -411,6 +411,13 @@ internal sealed class SenderPool
         {
             throw;
         }
+        catch (ObjectDisposedException)
+        {
+            // The housekeeper reaped this sender between the snapshot and here. Reaping is drain-gated
+            // (IsInnerFullyDrained), so a disposed inner provably owed no data — count it as drained
+            // rather than letting the race flip the whole barrier to a spurious not-drained.
+            return true;
+        }
         catch
         {
             return false;
@@ -426,6 +433,11 @@ internal sealed class SenderPool
         catch (OperationCanceledException)
         {
             throw;
+        }
+        catch (ObjectDisposedException)
+        {
+            // See DrainOneAsync: reaped-during-drain ⇒ was fully drained ⇒ count as drained.
+            return true;
         }
         catch
         {

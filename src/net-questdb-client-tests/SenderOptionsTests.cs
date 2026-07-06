@@ -1423,4 +1423,15 @@ public class SenderOptionsTests
             () => new SenderOptions($"{scheme}::{addr};{kv};"),
             $"key `{kv.Split('=')[0]}` must be accepted on {scheme} scheme");
     }
+
+    [TestCase("ws", "[::1]:9000", "ws://[::1]:9000/write/v4")]
+    [TestCase("ws", "[::1]", "ws://[::1]:9000/write/v4")]
+    [TestCase("wss", "[2001:db8::1]:8443", "wss://[2001:db8::1]:8443/write/v4")]
+    [TestCase("ws", "127.0.0.1:9000", "ws://127.0.0.1:9000/write/v4")]
+    public void BuildUri_Ipv6LiteralAddress_KeepsBrackets(string scheme, string addr, string expected)
+    {
+        var options = new SenderOptions($"{scheme}::addr={addr};");
+        var uri = options.BuildUri(0, "/write/v4");
+        Assert.That(uri.AbsoluteUri, Is.EqualTo(expected));
+    }
 }

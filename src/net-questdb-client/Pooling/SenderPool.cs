@@ -852,17 +852,18 @@ internal sealed class SenderPool
             return;
         }
 
-        foreach (var ps in snapshot)
+        // Dispose concurrently: a wedged WS sender's DisposeInner can block up to the cursor engine's
+        // ~5s pump-join budget, so a sequential loop would stall the caller for up to N×5s. Task.Run
+        // bounds close latency to the slowest single dispose, mirroring Flush. DisposeInnerQuietly
+        // swallows, so the tasks never fault and WaitAll never throws.
+        var tasks = new Task[snapshot.Count];
+        for (var i = 0; i < snapshot.Count; i++)
         {
-            try
-            {
-                ps.DisposeInner();
-            }
-            catch
-            {
-                // best effort
-            }
+            var ps = snapshot[i];
+            tasks[i] = Task.Run(() => DisposeInnerQuietly(ps));
         }
+
+        Task.WaitAll(tasks);
 
         DisposePrimitives();
     }
@@ -876,19 +877,40 @@ internal sealed class SenderPool
             return;
         }
 
+        // Dispose concurrently — see Close for why sequential teardown can stall on a wedged WS sender.
+        var tasks = new List<Task>(snapshot.Count);
         foreach (var ps in snapshot)
         {
-            try
-            {
-                await ps.DisposeInnerAsync().ConfigureAwait(false);
-            }
-            catch
-            {
-                // best effort
-            }
+            tasks.Add(DisposeInnerQuietlyAsync(ps));
         }
 
+        await Task.WhenAll(tasks).ConfigureAwait(false);
+
         DisposePrimitives();
+    }
+
+    private static void DisposeInnerQuietly(PooledSender ps)
+    {
+        try
+        {
+            ps.DisposeInner();
+        }
+        catch
+        {
+            // best effort
+        }
+    }
+
+    private static async Task DisposeInnerQuietlyAsync(PooledSender ps)
+    {
+        try
+        {
+            await ps.DisposeInnerAsync().ConfigureAwait(false);
+        }
+        catch
+        {
+            // best effort
+        }
     }
 
     // ---- internals ----

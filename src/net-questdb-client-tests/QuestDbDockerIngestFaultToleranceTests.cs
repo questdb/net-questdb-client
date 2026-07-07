@@ -45,18 +45,15 @@ namespace net_questdb_client_tests;
 ///     absorbed by the poll).
 ///
 ///     These are the OSS-single-node scenarios from the PR #60 (§6 Invariant-B / §7 NACK-v2) gap
-///     analysis. Tests that exercise behaviour already shipped run live; tests that depend on the
-///     not-yet-ported Invariant-B / NACK-v2 semantics call <see cref="Assert.Ignore(string)" /> at
-///     the top of an otherwise-complete body — delete the Ignore when the feature lands. The three
-///     cluster-role scenarios (mid-stream demotion, all-replica window, durable-ack gap) are NOT
-///     here: they require the enterprise e2e harness, not single-node Docker.
+///     analysis, covering the now-implemented Invariant-B / NACK-v2 behaviour end-to-end against a
+///     master (nightly) node. The three cluster-role scenarios (mid-stream demotion, all-replica
+///     window, durable-ack gap) are NOT here: they require the enterprise e2e harness, not
+///     single-node Docker.
 /// </summary>
 [TestFixture]
 public class QuestDbDockerIngestFaultToleranceTests
 {
     private const string DefaultImage = "questdb/questdb:nightly";
-    private const string PendingInvariantB = "pending Invariant-B port (SF never terminates on a connection error)";
-    private const string PendingNackV2 = "pending NACK-policy-v2 port (no silent drop / terminal reclassification)";
 
     private string? _containerName;
     private int _httpPort;
@@ -152,24 +149,36 @@ public class QuestDbDockerIngestFaultToleranceTests
     // Runnable today — behaviour already shipped
     // ------------------------------------------------------------------
 
-    // Scenario: a transient mid-stream outage (shorter than the reconnect budget) reconnects and
-    // replays the un-acked frames — every row lands exactly once, no duplication.
+    // Scenario: a transient mid-stream outage reconnects and replays the un-acked frames — every row
+    // lands exactly once, no duplication. Uses the pooled facade so Send() is a non-draining
+    // flush-to-ring (a standalone Send() drains and would block while the wire is down); delivery is
+    // confirmed via the pool-wide Flush after recovery.
     [Test]
     public async Task TransientOutage_ReconnectReplays_NoDuplicateRows()
     {
         var table = NewTable();
-        await using var sender = Sender.New(WsConn("sf_dir=" + NewSfDir() + ";reconnect_max_duration_millis=60000;"));
+        await using var client = QuestDBClient.Connect(
+            WsConn("sf_dir=" + NewSfDir() + ";reconnect_max_duration_millis=60000;sender_pool_min=1;query_pool_min=0;"));
 
-        await AppendRowsAsync(sender, table, 0, 200);
-        await sender.SendAsync();
+        using (var s = client.BorrowSender())
+        {
+            await AppendRowsAsync(s, table, 0, 200);
+            await s.SendAsync();
+        }
+
+        Assert.That(await client.FlushAsync(TimeSpan.FromSeconds(30)), Is.True);
 
         await PauseAsync();
-        await AppendRowsAsync(sender, table, 200, 200); // buffered into SF while the wire is down
-        await sender.SendAsync();
+        using (var s = client.BorrowSender())
+        {
+            await AppendRowsAsync(s, table, 200, 200); // flush-to-ring while the wire is down (non-blocking)
+            await s.SendAsync();
+        }
+
         await Task.Delay(500);
         await UnpauseAsync();
 
-        Assert.That(await sender.FlushAsync(TimeSpan.FromSeconds(30)), Is.True, "sender must drain after recovery");
+        Assert.That(await client.FlushAsync(TimeSpan.FromSeconds(30)), Is.True, "pool must drain after recovery");
         Assert.That(await WaitForCountAsync(table, 400, TimeSpan.FromSeconds(60)), Is.EqualTo(400),
             "all rows land exactly once — replay must not duplicate the acked prefix");
     }
@@ -182,14 +191,18 @@ public class QuestDbDockerIngestFaultToleranceTests
         var table = NewTable();
         await PauseAsync();
 
-        await using (var sender = Sender.New(WsConn("lazy_connect=on;sf_dir=" + NewSfDir() + ";")))
+        // lazy_connect (facade key): async ingest connect + query pool defers, so Build does not block.
+        await using var client = QuestDBClient.Connect(
+            WsConn("lazy_connect=on;sf_dir=" + NewSfDir() + ";sender_pool_min=1;"));
+
+        using (var s = client.BorrowSender())
         {
-            await AppendRowsAsync(sender, table, 0, 100); // must not block or throw while the server is down
-            await sender.SendAsync();
-            await UnpauseAsync();
-            Assert.That(await sender.FlushAsync(TimeSpan.FromSeconds(30)), Is.True);
+            await AppendRowsAsync(s, table, 0, 100); // buffers to the ring while the server is down
+            await s.SendAsync();
         }
 
+        await UnpauseAsync();
+        Assert.That(await client.FlushAsync(TimeSpan.FromSeconds(30)), Is.True);
         Assert.That(await WaitForCountAsync(table, 100, TimeSpan.FromSeconds(60)), Is.EqualTo(100));
     }
 
@@ -223,21 +236,29 @@ public class QuestDbDockerIngestFaultToleranceTests
     [Test]
     public async Task LongOutage_SenderRetriesForever_DeliversOnRecovery()
     {
-        Assert.Ignore(PendingInvariantB);
-
         var table = NewTable();
-        await using var sender = Sender.New(WsConn("sf_dir=" + NewSfDir() + ";reconnect_max_duration_millis=1000;"));
+        await using var client = QuestDBClient.Connect(
+            WsConn("sf_dir=" + NewSfDir() + ";reconnect_max_duration_millis=1000;sender_pool_min=1;query_pool_min=0;"));
 
-        await AppendRowsAsync(sender, table, 0, 100);
-        await sender.SendAsync();
+        using (var s = client.BorrowSender())
+        {
+            await AppendRowsAsync(s, table, 0, 100);
+            await s.SendAsync();
+        }
+
+        Assert.That(await client.FlushAsync(TimeSpan.FromSeconds(30)), Is.True);
 
         await PauseAsync();
-        await AppendRowsAsync(sender, table, 100, 100);
-        await sender.SendAsync();
+        using (var s = client.BorrowSender())
+        {
+            await AppendRowsAsync(s, table, 100, 100);
+            await s.SendAsync();
+        }
+
         await Task.Delay(3000); // well past reconnect_max_duration_millis — old behaviour would go terminal here
         await UnpauseAsync();
 
-        Assert.That(await sender.FlushAsync(TimeSpan.FromSeconds(30)), Is.True,
+        Assert.That(await client.FlushAsync(TimeSpan.FromSeconds(30)), Is.True,
             "an SF sender must never terminalise on a connection error, however long the outage");
         Assert.That(await WaitForCountAsync(table, 200, TimeSpan.FromSeconds(60)), Is.EqualTo(200));
     }
@@ -247,23 +268,32 @@ public class QuestDbDockerIngestFaultToleranceTests
     [Test]
     public async Task SchemaMismatch_HaltsLoudly_NotSilentlyDropped()
     {
-        Assert.Ignore(PendingNackV2);
-
         var table = NewTable();
-        await using var sender = Sender.New(WsConn("sf_dir=" + NewSfDir() + ";"));
 
-        // Establish the column type as LONG.
-        await AppendRowsAsync(sender, table, 0, 1);
-        await sender.SendAsync();
+        // Establish the column type as LONG on one connection.
+        await using (var seed = Sender.New(WsConn("sf_dir=" + NewSfDir() + ";")))
+        {
+            await AppendRowsAsync(seed, table, 0, 1);
+            await seed.SendAsync();
+            await seed.FlushAsync(TimeSpan.FromSeconds(30));
+        }
+
         Assert.That(await WaitForCountAsync(table, 1, TimeSpan.FromSeconds(30)), Is.EqualTo(1));
 
-        // Now write the same column as a conflicting type -> server rejects with SCHEMA_MISMATCH.
+        // A FRESH sender has an empty schema cache, so the conflicting type is not caught client-side —
+        // it reaches the server, which rejects it with SCHEMA_MISMATCH → the sender halts loudly.
+        await using var sender = Sender.New(WsConn("sf_dir=" + NewSfDir() + ";"));
         sender.Table(table).Column("v", "not-a-long").At(DateTime.UtcNow);
-        Assert.ThrowsAsync<IngressError>(async () =>
+        // CatchAsync (not ThrowsAsync) — the terminal surfaces as LineSenderServerException, an
+        // IngressError subclass carrying the server's SCHEMA_MISMATCH category.
+        var ex = Assert.CatchAsync<IngressError>(async () =>
         {
             await sender.SendAsync();
-            await sender.FlushAsync(TimeSpan.FromSeconds(10));
+            await sender.FlushAsync(TimeSpan.FromSeconds(15));
         }, "SCHEMA_MISMATCH must surface as a loud terminal, not a silent drop");
+        Assert.That(ex, Is.InstanceOf<LineSenderServerException>());
+        Assert.That(((LineSenderServerException)ex!).Error.Category,
+            Is.EqualTo(QuestDB.Enums.SenderErrorCategory.SchemaMismatch));
     }
 
     // Scenario: SF store exhaustion (tiny cap, server down) surfaces to the producer as append
@@ -271,20 +301,22 @@ public class QuestDbDockerIngestFaultToleranceTests
     [Test]
     public async Task SfExhaustion_SurfacesAsAppendBackpressure_NotTerminal()
     {
-        Assert.Ignore(PendingInvariantB);
-
         var table = NewTable();
-        await using var sender = Sender.New(WsConn(
-            "sf_dir=" + NewSfDir() + ";sf_max_total_bytes=1048576;sf_append_deadline_millis=2000;"));
+        // sf_max_total_bytes must be >= 2 * sf_max_bytes (room for a hot spare). Pooled Send is a
+        // non-draining flush-to-ring, so the tiny store fills and surfaces append backpressure.
+        await using var client = QuestDBClient.Connect(WsConn(
+            "sf_dir=" + NewSfDir() + ";sf_max_bytes=524288;sf_max_total_bytes=1048576;" +
+            "sf_append_deadline_millis=2000;sender_pool_min=1;query_pool_min=0;"));
 
         await PauseAsync();
         // Keep appending with nowhere to drain until the tiny SF cap is hit and the deadline trips.
         Assert.ThrowsAsync<IngressError>(async () =>
         {
+            using var s = client.BorrowSender();
             for (var i = 0; i < 1_000_000; i++)
             {
-                await AppendRowsAsync(sender, table, i, 1);
-                await sender.SendAsync();
+                await AppendRowsAsync(s, table, i, 1);
+                await s.SendAsync();
             }
         }, "a full SF store must throw append backpressure, not silently drop or die terminally");
     }
@@ -294,15 +326,13 @@ public class QuestDbDockerIngestFaultToleranceTests
     [Test]
     public async Task Drainer_DownServerSlot_RetriesAndDeliversOnRecovery()
     {
-        Assert.Ignore(PendingInvariantB);
-
         var table = NewTable();
         var sfDir = NewSfDir();
 
         // First handle: buffer rows into SF, then drop it while the server is down so the slot is
         // left with pending segments (a stranded, adoptable orphan).
         await PauseAsync();
-        await using (var db = QuestDBClient.Connect(WsConn($"sf_dir={sfDir};drain_orphans=on;sender_pool_min=1;")))
+        await using (var db = QuestDBClient.Connect(WsConn($"sf_dir={sfDir};drain_orphans=on;sender_pool_min=1;lazy_connect=on;")))
         {
             var s = db.BorrowSender();
             await AppendRowsAsync(s, table, 0, 100);
@@ -313,7 +343,7 @@ public class QuestDbDockerIngestFaultToleranceTests
         await UnpauseAsync();
 
         // A fresh handle over the same sf_dir must adopt and drain the stranded slot, not quarantine it.
-        await using (var db = QuestDBClient.Connect(WsConn($"sf_dir={sfDir};drain_orphans=on;sender_pool_min=1;")))
+        await using (var db = QuestDBClient.Connect(WsConn($"sf_dir={sfDir};drain_orphans=on;sender_pool_min=1;lazy_connect=on;")))
         {
             Assert.That(await db.FlushAsync(TimeSpan.FromSeconds(30)), Is.True);
         }

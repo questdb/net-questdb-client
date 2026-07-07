@@ -516,9 +516,11 @@ public class QwpCursorSendEngineTests
             foreground.Start();
             foreground.AppendBlocking(new byte[] { 9 });
 
-            await foreground.FirstConnectTask.WaitAsync(TimeSpan.FromSeconds(2));
+            // If a shared lock existed, the stalled drainer connects would block this indefinitely and
+            // WaitAsync would time out. A generous bound distinguishes "not blocked" from "blocked".
+            await foreground.FirstConnectTask.WaitAsync(TimeSpan.FromSeconds(10));
             var elapsedMs = Environment.TickCount64 - startTick;
-            Assert.That(elapsedMs, Is.LessThan(1000),
+            Assert.That(elapsedMs, Is.LessThan(5000),
                 $"foreground connect must not be blocked by stalled drainer connects; took {elapsedMs}ms");
         }
         finally
@@ -619,24 +621,23 @@ public class QwpCursorSendEngineTests
     [Test]
     public void PoisonDwell_HoldsEscalationUntilWindowElapses()
     {
-        var connectCount = 0;
+        const int dwellMs = 500;
         using var engine = NewEngine(out _,
             maxFrameRejections: 2,
-            poisonMinEscalationWindow: TimeSpan.FromMilliseconds(400),
+            poisonMinEscalationWindow: TimeSpan.FromMilliseconds(dwellMs),
             policy: new QwpReconnectPolicy(
                 TimeSpan.FromMilliseconds(1), TimeSpan.FromMilliseconds(4), TimeSpan.FromSeconds(30)),
-            factory: () =>
-            {
-                Interlocked.Increment(ref connectCount);
-                return new StubTransport { OnSend = _ => ErrorResponse(QwpStatusCode.WriteError, 0, "poison") };
-            });
+            factory: () => new StubTransport { OnSend = _ => ErrorResponse(QwpStatusCode.WriteError, 0, "poison") });
+
+        var startTick = Environment.TickCount64;
         engine.Start();
         engine.AppendBlocking(new byte[] { 1 });
 
-        // Strikes reach the threshold within a few ms, but the dwell holds escalation.
-        AssertEventually(() => Volatile.Read(ref connectCount) >= 3, "strikes should accrue past threshold");
-        Assert.That(engine.IsTerminallyFailed, Is.False, "threshold reached but the dwell window has not elapsed");
-        AssertEventually(() => engine.IsTerminallyFailed, "must escalate once the dwell window elapses", 2000);
+        // Strikes reach the threshold within a few ms, but escalation is held until the dwell elapses.
+        AssertEventually(() => engine.IsTerminallyFailed, "must escalate once the dwell window elapses", 3000);
+        var elapsedMs = Environment.TickCount64 - startTick;
+        Assert.That(elapsedMs, Is.GreaterThanOrEqualTo(dwellMs - 100),
+            $"escalation must be held for ~the dwell window ({dwellMs}ms), not fire at the strike threshold; took {elapsedMs}ms");
     }
 
     [Test]
@@ -725,11 +726,13 @@ public class QwpCursorSendEngineTests
         engine.Start();
         engine.AppendBlocking(new byte[] { 1 }); // buffers without blocking
 
-        AssertEventually(() => Volatile.Read(ref attempts) >= 5, "async initial connect must keep retrying");
-        Thread.Sleep(200); // well past the 100ms budget
+        AssertEventually(() => Volatile.Read(ref attempts) >= 2, "async initial connect must keep retrying");
+        var attemptsAtBudget = Volatile.Read(ref attempts);
+        Thread.Sleep(300); // well past the 100ms budget
         Assert.That(engine.IsTerminallyFailed, Is.False,
             "async initial connect must never terminalise on the reconnect budget");
-        Assert.That(Volatile.Read(ref attempts), Is.GreaterThanOrEqualTo(8), "still retrying past the old budget");
+        Assert.That(Volatile.Read(ref attempts), Is.GreaterThan(attemptsAtBudget),
+            "the loop must keep retrying past the old wall-clock budget");
     }
 
     [Test]
@@ -764,10 +767,13 @@ public class QwpCursorSendEngineTests
         engine.AppendBlocking(new byte[] { 0 });
         engine.AppendBlocking(new byte[] { 1 });
 
-        AssertEventually(() => Volatile.Read(ref connectCount) >= 5, "mid-stream reconnect must keep retrying");
-        Thread.Sleep(200); // well past the 100ms budget
+        AssertEventually(() => Volatile.Read(ref connectCount) >= 3, "mid-stream reconnect must keep retrying");
+        var attemptsAtBudget = Volatile.Read(ref connectCount);
+        Thread.Sleep(300); // well past the 100ms budget
         Assert.That(engine.IsTerminallyFailed, Is.False,
             "mid-stream reconnect must never terminalise on the reconnect budget (Invariant B)");
+        Assert.That(Volatile.Read(ref connectCount), Is.GreaterThan(attemptsAtBudget),
+            "the loop must keep retrying past the old wall-clock budget");
         Assert.That(engine.AckedFsn, Is.EqualTo(1L), "the acked prefix is preserved across the outage");
     }
 

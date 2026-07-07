@@ -113,4 +113,16 @@ public enum ErrorCode
     ///     grow unbounded waiting for ack frames that will never arrive.
     /// </summary>
     DurableAckNotSupported,
+
+    /// <summary>
+    ///     A <c>QuestDBClient</c> sender pool was exhausted: every sender up to
+    ///     <c>sender_pool_max</c> was in use and none freed within <c>acquire_timeout_ms</c>.
+    /// </summary>
+    PoolExhausted,
+
+    /// <summary>
+    ///     The server terminated an egress (QWP query) request with a <c>QUERY_ERROR</c> frame.
+    ///     Carried by <c>QwpQueryException</c>, which adds the QWP status code.
+    /// </summary>
+    ServerQueryError,
 }

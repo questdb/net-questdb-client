@@ -78,8 +78,22 @@ This is equivalent to a config string of:
 using var sender = Sender.New("http:addr=localhost:9000;auto_flush=on;auto_flush_rows=75000;auto_flush_interval=1000;");
 ```
 
-A final flush or send should always be used, as auto flush is not guaranteed to send all pending data before
-the sender is disposed.
+You must call `Send()` / `SendAsync()` explicitly before disposing — **`Dispose` no longer sends**. It is
+pure resource release: any buffered-but-unsent rows are discarded and it never throws. Auto-flush is also not
+guaranteed to have sent all pending rows by the time you dispose.
+
+Delivery semantics of `Send()`/`SendAsync()`:
+
+- **HTTP** — synchronous; returns once the server has committed the batch.
+- **Standalone `ws`/`wss`** — **drains**: flushes and blocks until the server acknowledges (bounded by
+  `close_flush_timeout_millis`, throwing on timeout), so `Send()` before `Dispose` reliably delivers.
+- **Pooled `ws`/`wss`** (from `IQuestDBClient.BorrowSender`) — hands the frame to the ring and returns
+  immediately; the pooled connection ships it asynchronously. Confirm delivery with the pool-wide
+  `IQuestDBClient.Flush(timeout)` once your producers have returned their senders.
+
+For an explicit bounded, bool-returning drain on any sender use `Flush(timeout)` / `FlushAsync(timeout)`;
+for the whole pool use `IQuestDBClient.Flush(timeout)`. The identical `Send()`-before-dispose code works for
+both standalone and pooled senders — only the fast bulk path differs (auto-flush + a final `Flush`).
 
 #### Flush every 1000 rows or every 1 second
 
@@ -269,9 +283,9 @@ The config string format is:
 ```
 
 | Name                     | Default                    | Description                                                                                                                                                                                                                   |
-| ------------------------ | -------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `protocol` (schema)      | `http`                     | The transport protocol to use. Options are http(s)/tcp(s)/ws(s). `ws::` / `wss::` requires .NET 7+.                                                                                                                            |
-| `addr`                   | `localhost:9000`           | The {host}:{port} pair denoting the QuestDB server. Default port 9000 for HTTP and ws/wss, 9009 for TCP.                                                                                                                       |
+| ------------------------ | -------------------------- |-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `protocol` (schema)      | `http`                     | The transport protocol to use. Options are http(s)/tcp(s)/ws(s). `ws::` / `wss::` requires .NET 7+.                                                                                                                           |
+| `addr`                   | `localhost:9000`           | The {host}:{port} pair denoting the QuestDB server. Default port 9000 for HTTP and ws/wss, 9009 for TCP.                                                                                                                      |
 | `auto_flush`             | `on`                       | Enables or disables auto-flushing functionality. By default, the buffer will be flushed every 75,000 rows, or every 1000ms, whichever comes first.                                                                            |
 | `auto_flush_rows`        | `75000 (HTTP)` `600 (TCP)` | The row count after which the buffer will be flushed. Effectively a batch size.                                                                                                                                               |
 | `auto_flush_bytes`       | `Int.MaxValue`             | The byte buffer length which when exceeded, will trigger a flush.                                                                                                                                                             |
@@ -281,10 +295,10 @@ The config string format is:
 | `username`               |                            | The username for authentication. Used for Basic Authentication and TCP JWK Authentication.                                                                                                                                    |
 | `password`               |                            | The password for authentication. Used for Basic Authentication.                                                                                                                                                               |
 | `token`                  |                            | The token for authentication. Used for Token Authentication and TCP JWK Authentication.                                                                                                                                       |
-| `tls_verify`             | `on`                       | Denotes whether TLS certificates should or should not be verified. Options are on/unsafe_off.                                                                                                                                  |
+| `tls_verify`             | `on`                       | Denotes whether TLS certificates should or should not be verified. Options are on/unsafe_off.                                                                                                                                 |
 | `tls_roots`              |                            | Used to specify the filepath for a custom .pem certificate.                                                                                                                                                                   |
 | `tls_roots_password`     |                            | Used to specify the filepath for the private key/password corresponding to the `tls_roots` certificate.                                                                                                                       |
-| `auth_timeout`           | `15000`                    | The time period to wait for authenticating requests, in milliseconds.                                                                                                                                                         |
+| `connect_timeout`        | `15000`                    | Total time, in milliseconds, allowed to establish a connection across all layers — TCP socket connect, TLS handshake, WebSocket upgrade, and (on TCP) the ECDSA auth exchange. The attempt is aborted if exceeded. Applies to every transport.                  |
 | `request_timeout`        | `30000`                    | Base timeout for HTTP requests before any additional time is added.                                                                                                                                                           |
 | `request_min_throughput` | `102400`                   | Expected minimum throughput of requests in bytes per second. Used to add additional time to `request_timeout` to prevent large requests timing out prematurely.                                                               |
 | `retry_timeout`          | `10000`                    | The time period during which retries will be attempted, in milliseconds.                                                                                                                                                      |
@@ -306,7 +320,7 @@ The config string format is:
 | `reconnect_max_backoff_millis`    | `5000`       | Cap on per-attempt backoff.                                                                              |
 | `reconnect_max_duration_millis`   | `300000`     | Total per-outage budget; sender becomes terminal if exceeded.                                            |
 | `initial_connect_retry`           | `off`        | `on` makes the first connect honour the same backoff loop. Default is "fail fast on first connect".      |
-| `close_flush_timeout_millis`      | `60000`      | Max wait at `Dispose` for the SF engine to drain (matches Java). `0` or `-1` for fast close.             |
+| `close_flush_timeout_millis`      | `60000`      | Drain timeout for a standalone `Send()` and the no-arg `Flush()` / `FlushAsync()`. **`Dispose` does not drain.** |
 | `drain_orphans`                   | `off`        | `on` adopts unlocked sibling slots on startup and drains them in the background.                         |
 | `max_background_drainers`         | `4`          | Cap on concurrent orphan-drain workers.                                                                  |
 

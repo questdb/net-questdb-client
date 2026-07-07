@@ -302,13 +302,6 @@ internal abstract class AbstractSender : ISender
         => AppendIlpDecimalScaled(name, value, scale, QwpConstants.MaxDecimal256Scale, "Decimal256");
 
     /// <inheritdoc />
-    public ISender ColumnDecimal64(ReadOnlySpan<char> name, long unscaledValue, byte scale)
-    {
-        ValidateDecimalScale(scale, QwpConstants.MaxDecimal64Scale, "Decimal64");
-        return AppendIlpDecimalFromMantissa(name, new BigInteger(unscaledValue), scale);
-    }
-
-    /// <inheritdoc />
     public ISender ColumnDecimal128(ReadOnlySpan<char> name, long lo, long hi, byte scale)
     {
         ValidateDecimalScale(scale, QwpConstants.MaxDecimal128Scale, "Decimal128");

@@ -186,17 +186,16 @@ public class QuestDbEgressFuzzTests
         var plan = PlanQuery(rng, table, colCount, rowCount, iter);
         var expectedRows = plan.LastRowId - plan.FirstRowId + 1;
 
-        var handler = new HashCollectingHandler(picked, plan.ProjMap);
-        client.Execute(plan.Sql, handler);
+        var rows = CollectRows(client, plan.Sql, picked, plan.ProjMap);
 
-        Assert.That(handler.Rows.Count, Is.EqualTo(expectedRows),
+        Assert.That(rows.Count, Is.EqualTo(expectedRows),
             $"iter={iter} shape={plan.Shape} row_count drift");
 
-        for (var outRow = 0; outRow < handler.Rows.Count; outRow++)
+        for (var outRow = 0; outRow < rows.Count; outRow++)
         {
             var id = plan.Descending ? plan.LastRowId - outRow : plan.FirstRowId + outRow;
             var inputRow = id - 1;
-            var cells = handler.Rows[outRow];
+            var cells = rows[outRow];
             for (var outC = 0; outC < plan.ProjMap.Length; outC++)
             {
                 var inC = plan.ProjMap[outC];
@@ -631,36 +630,38 @@ public class QuestDbEgressFuzzTests
 
     private readonly record struct CellResult(bool IsNull, long Hash);
 
-    private sealed class HashCollectingHandler : QwpColumnBatchHandler
+    // Drives the pull cursor, hashing every projected cell per row (an unexpected QUERY_ERROR
+    // surfaces as a thrown QwpQueryException, failing the test just as the old error path did).
+    private static List<CellResult[]> CollectRows(
+        IQwpQueryClient client, string sql, ColumnGenerator[] picked, int[] projMap)
     {
-        private readonly ColumnGenerator[] _picked;
-        private readonly int[] _projMap;
-
-        public HashCollectingHandler(ColumnGenerator[] picked, int[] projMap)
+        var rows = new List<CellResult[]>();
+        var reader = client.ExecuteReaderAsync(sql).GetAwaiter().GetResult();
+        try
         {
-            _picked = picked;
-            _projMap = projMap;
-        }
-
-        public List<CellResult[]> Rows { get; } = new();
-
-        public override void OnBatch(QwpColumnBatch batch)
-        {
-            for (var r = 0; r < batch.RowCount; r++)
+            while (reader.ReadBatch())
             {
-                var cells = new CellResult[_projMap.Length];
-                for (var outC = 0; outC < _projMap.Length; outC++)
+                var batch = reader.Current;
+                for (var r = 0; r < batch.RowCount; r++)
                 {
-                    var isNull = batch.IsNull(outC, r);
-                    var hash = isNull ? 0L : _picked[_projMap[outC]].ObservedHash(batch, outC, r);
-                    cells[outC] = new CellResult(isNull, hash);
+                    var cells = new CellResult[projMap.Length];
+                    for (var outC = 0; outC < projMap.Length; outC++)
+                    {
+                        var isNull = batch.IsNull(outC, r);
+                        var hash = isNull ? 0L : picked[projMap[outC]].ObservedHash(batch, outC, r);
+                        cells[outC] = new CellResult(isNull, hash);
+                    }
+
+                    rows.Add(cells);
                 }
-                Rows.Add(cells);
             }
         }
+        finally
+        {
+            reader.Dispose();
+        }
 
-        public override void OnError(QwpStatusCode status, string message)
-            => Assert.Fail($"unexpected egress error: status={status}, msg={message}");
+        return rows;
     }
 
     public sealed class SplitMix64

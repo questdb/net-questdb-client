@@ -76,6 +76,37 @@ public class QueryOptionsTests
     }
 
     [Test]
+    public void ConnectTimeout_Default_InheritsAuthTimeoutMs()
+    {
+        var o = new QueryOptions("ws::addr=h:9000;");
+        Assert.That(o.connect_timeout, Is.Null);
+        Assert.That(o.EffectiveConnectTimeout, Is.EqualTo(o.auth_timeout_ms));
+    }
+
+    [Test]
+    public void Parse_ConnectTimeout_OverridesAuthTimeoutMs()
+    {
+        var o = new QueryOptions("ws::addr=h:9000;auth_timeout_ms=4000;connect_timeout=2000;");
+        Assert.That(o.connect_timeout!.Value, Is.EqualTo(TimeSpan.FromMilliseconds(2000)));
+        Assert.That(o.EffectiveConnectTimeout, Is.EqualTo(TimeSpan.FromMilliseconds(2000)));
+    }
+
+    [Test]
+    public void ConnectTimeout_Unset_InheritsExplicitAuthTimeoutMs()
+    {
+        var o = new QueryOptions("ws::addr=h:9000;auth_timeout_ms=4000;");
+        Assert.That(o.EffectiveConnectTimeout, Is.EqualTo(TimeSpan.FromMilliseconds(4000)));
+    }
+
+    [Test]
+    public void ConnectTimeout_NonPositive_Rejected()
+    {
+        var o = new QueryOptions { addr = "h:9000", connect_timeout = TimeSpan.Zero };
+        var ex = Assert.Throws<IngressError>(() => o.EnsureValid());
+        StringAssert.Contains("connect_timeout", ex!.Message);
+    }
+
+    [Test]
     public void Parse_MinimalWs_AssignsAddr()
     {
         var o = new QueryOptions("ws::addr=db.internal:9000;");
@@ -109,6 +140,19 @@ public class QueryOptionsTests
     {
         var o = new QueryOptions("wss::addr=secure.host:443;");
         Assert.That(o.protocol, Is.EqualTo(ProtocolType.wss));
+    }
+
+    // The ingest parser (SenderOptions) and QuestDBClientBuilder.IsWebSocketScheme both accept
+    // the scheme case-insensitively; the egress parser must match so an uppercased ws::/wss::
+    // string that builds a query pool doesn't get rejected at query time.
+    [TestCase("WS::addr=h:9000;", ProtocolType.ws)]
+    [TestCase("Ws::addr=h:9000;", ProtocolType.ws)]
+    [TestCase("WSS::addr=h:443;", ProtocolType.wss)]
+    [TestCase("Wss::addr=h:443;", ProtocolType.wss)]
+    public void Parse_SchemeIsCaseInsensitive(string connStr, ProtocolType expected)
+    {
+        var o = new QueryOptions(connStr);
+        Assert.That(o.protocol, Is.EqualTo(expected));
     }
 
     [Test]
@@ -339,6 +383,8 @@ public class QueryOptionsTests
     [TestCase(1)]
     [TestCase(5)]
     [TestCase(9)]
+    [TestCase(10)]
+    [TestCase(22)]
     public void Parse_CompressionLevelInRange_Accepted(int level)
     {
         Assert.DoesNotThrow(() => new QueryOptions(

@@ -150,7 +150,8 @@ internal class HttpSender : AbstractSender
             }
         }
 
-        handler.ConnectTimeout  = Options.auth_timeout;
+        // Bounds socket connect + TLS handshake (the connect_timeout budget; see EffectiveConnectTimeout).
+        handler.ConnectTimeout  = Options.EffectiveConnectTimeout;
         handler.PreAuthenticate = true;
         return handler;
     }

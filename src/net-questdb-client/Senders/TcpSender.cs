@@ -25,6 +25,7 @@
 // ReSharper disable CommentTypo
 
 using System.Buffers.Text;
+using System.Linq;
 using System.Net.Security;
 using System.Net.Sockets;
 using System.Security.Cryptography.X509Certificates;
@@ -84,9 +85,30 @@ internal sealed class TcpSender : AbstractSender
         var socket = new Socket(AddressFamily.InterNetwork, SocketType.Stream, System.Net.Sockets.ProtocolType.Tcp);
         NetworkStream? networkStream = null;
         SslStream? sslStream = null;
+        // Single deadline spanning socket connect + TLS handshake + ECDSA auth — the total connection
+        // budget. Disarmed (no token) if misconfigured to a non-positive / out-of-range value.
+        var connectBudget = Options.EffectiveConnectTimeout;
+        CancellationTokenSource? connectCts =
+            connectBudget > TimeSpan.Zero && connectBudget.TotalMilliseconds <= int.MaxValue
+                ? new CancellationTokenSource(connectBudget)
+                : null;
+        var connectToken = connectCts?.Token ?? CancellationToken.None;
         try
         {
-            socket.ConnectAsync(Options.Host, Options.Port).Wait();
+            try
+            {
+                // .Wait() (not GetResult) preserves the released AggregateException-wrapped contract for
+                // ordinary connect failures (e.g. connection refused). Only the connect_timeout case is
+                // unwrapped into a clear IngressError.
+                socket.ConnectAsync(Options.Host, Options.Port, connectToken).AsTask().Wait();
+            }
+            catch (AggregateException ae) when (connectCts is { IsCancellationRequested: true }
+                                                && ae.InnerExceptions.Any(e => e is OperationCanceledException))
+            {
+                throw new IngressError(ErrorCode.SocketError,
+                    $"connect to {Options.Host}:{Options.Port} exceeded connect_timeout={connectBudget.TotalMilliseconds}ms");
+            }
+
             networkStream = new NetworkStream(socket, Options.own_socket);
             Stream dataStream = networkStream;
 
@@ -106,7 +128,16 @@ internal sealed class TcpSender : AbstractSender
                     sslOptions.ClientCertificates.Add(Options.client_cert);
                 }
 
-                sslStream.AuthenticateAsClient(sslOptions);
+                try
+                {
+                    sslStream.AuthenticateAsClientAsync(sslOptions, connectToken).GetAwaiter().GetResult();
+                }
+                catch (OperationCanceledException) when (connectCts is { IsCancellationRequested: true })
+                {
+                    throw new IngressError(ErrorCode.TlsError,
+                        $"TLS handshake with {Options.Host}:{Options.Port} exceeded connect_timeout={connectBudget.TotalMilliseconds}ms");
+                }
+
                 if (!sslStream.IsEncrypted)
                 {
                     throw new IngressError(ErrorCode.TlsError, "Could not establish encrypted connection.");
@@ -119,7 +150,9 @@ internal sealed class TcpSender : AbstractSender
             _dataStream = dataStream;
             if (!string.IsNullOrEmpty(Options.token))
             {
-                var authTimeout = new CancellationTokenSource();
+                // The ECDSA exchange is bounded by both the auth-timeout setting and the remaining
+                // connect budget, whichever fires first.
+                using var authTimeout = CancellationTokenSource.CreateLinkedTokenSource(connectToken);
                 authTimeout.CancelAfter(Options.auth_timeout);
                 _signatureGenerator = Secp256r1SignatureGenerator.Instance.Value;
                 AuthenticateAsync(authTimeout.Token).AsTask().Wait(authTimeout.Token);
@@ -131,6 +164,10 @@ internal sealed class TcpSender : AbstractSender
             networkStream?.Dispose();
             sslStream?.Dispose();
             throw;
+        }
+        finally
+        {
+            connectCts?.Dispose();
         }
     }
 

@@ -59,6 +59,9 @@ await sender.Table("trades")
     .Column("amount", 0.001)
     .AtAsync(DateTime.UtcNow);
 
+// A standalone wss:: Send drains — it flushes the buffered rows AND blocks until the server acknowledges
+// them — so "Send before dispose" reliably delivers even though Dispose does not wait. (Use Flush(timeout)
+// for a bounded, bool-returning drain.)
 await sender.SendAsync();
 
 // Per-table durable / committed seqTxn watermarks are exposed via IQwpWebSocketSender. They

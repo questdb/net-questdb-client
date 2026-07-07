@@ -54,7 +54,6 @@ public class BenchQueryLatencyWs
     private string _endpoint = null!;
     private HttpClient _http = null!;
     private IQwpQueryClient _ws = null!;
-    private RowCountHandler _handler = null!;
 
     [GlobalSetup]
     public async Task Setup()
@@ -65,7 +64,6 @@ public class BenchQueryLatencyWs
 
         _http = new HttpClient { Timeout = TimeSpan.FromMinutes(1) };
         _ws = QueryClient.New($"ws::addr={_endpoint};");
-        _handler = new RowCountHandler();
 
         await ExecAsync($"DROP TABLE IF EXISTS {LatencyTable}");
         await ExecAsync($"CREATE TABLE {LatencyTable} (id LONG, ts TIMESTAMP) TIMESTAMP(ts) PARTITION BY DAY WAL");
@@ -73,8 +71,8 @@ public class BenchQueryLatencyWs
         await WaitForSeedRowAsync();
 
         // Prime codec state + schema registry so the measurement window isn't paying first-query cost.
-        _ws.Execute($"SELECT id FROM {LatencyTable}", _handler);
-        _ws.Execute("SELECT x FROM long_sequence(10) WHERE x = $1", b => b.SetLong(0, 1), _handler);
+        await WsCountRowsAsync($"SELECT id FROM {LatencyTable}");
+        await WsCountRowsAsync("SELECT x FROM long_sequence(10) WHERE x = $1", b => b.SetLong(0, 1));
     }
 
     [GlobalCleanup]
@@ -89,12 +87,7 @@ public class BenchQueryLatencyWs
     public async Task<long> Http_SelectSingleRow() => await HttpExecAsync($"SELECT id FROM {LatencyTable}");
 
     [Benchmark, BenchmarkCategory("SingleRow")]
-    public int Ws_SelectSingleRow()
-    {
-        _handler.Reset();
-        _ws.Execute($"SELECT id FROM {LatencyTable}", _handler);
-        return _handler.TotalRows;
-    }
+    public async Task<int> Ws_SelectSingleRow() => await WsCountRowsAsync($"SELECT id FROM {LatencyTable}");
 
     [Benchmark(Baseline = true), BenchmarkCategory("Bind")]
     public async Task<long> Http_SelectWhereBind()
@@ -104,12 +97,23 @@ public class BenchQueryLatencyWs
     }
 
     [Benchmark, BenchmarkCategory("Bind")]
-    public int Ws_SelectWhereBind()
+    public async Task<int> Ws_SelectWhereBind()
     {
         var x = Random.Shared.NextInt64(1, 11);
-        _handler.Reset();
-        _ws.Execute("SELECT x FROM long_sequence(10) WHERE x = $1", b => b.SetLong(0, x), _handler);
-        return _handler.TotalRows;
+        return await WsCountRowsAsync("SELECT x FROM long_sequence(10) WHERE x = $1", b => b.SetLong(0, x));
+    }
+
+    private async Task<int> WsCountRowsAsync(string sql, QwpBindSetter? binds = null)
+    {
+        await using var reader = binds is null
+            ? await _ws.ExecuteReaderAsync(sql)
+            : await _ws.ExecuteReaderAsync(sql, binds);
+        var rows = 0;
+        while (await reader.ReadBatchAsync())
+        {
+            rows += reader.Current.RowCount;
+        }
+        return rows;
     }
 
     private async Task<long> HttpExecAsync(string sql)
@@ -147,15 +151,6 @@ public class BenchQueryLatencyWs
         }
 
         throw new TimeoutException($"table {LatencyTable} did not receive its seed row within the setup window");
-    }
-
-    private sealed class RowCountHandler : QwpColumnBatchHandler
-    {
-        public int TotalRows;
-
-        public void Reset() => TotalRows = 0;
-
-        public override void OnBatch(QwpColumnBatch batch) => TotalRows += batch.RowCount;
     }
 }
 

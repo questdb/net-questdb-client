@@ -713,7 +713,7 @@ public class QwpResultBatchDecoderTests
     {
         // The decoder copies VARCHAR/SYMBOL heap bytes verbatim, so GetString is the first UTF-8
         // decode point. A server value with invalid UTF-8 (a lone 0xFF) must render lossily via the
-        // replacement fallback, not throw a raw DecoderFallbackException out of OnBatch.
+        // replacement fallback, not throw a raw DecoderFallbackException when the consumer reads it.
         // VARCHAR and BINARY share the offsets+heap wire layout, so a Varchar schema column paired
         // with BinaryColumnData injects arbitrary heap bytes a string[] builder cannot represent.
         var schema = new ResultSchema

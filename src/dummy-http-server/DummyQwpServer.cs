@@ -67,7 +67,7 @@ public sealed class DummyQwpServer : IAsyncDisposable
             {
                 webHost.UseKestrel(kestrel =>
                 {
-                    kestrel.Listen(IPAddress.Loopback, 0, listen =>
+                    kestrel.Listen(IPAddress.Loopback, _options.Port, listen =>
                     {
                         listen.Protocols = HttpProtocols.Http1;
                         if (_options.TlsCertificate is not null)
@@ -332,6 +332,13 @@ public sealed class DummyQwpServerOptions
 {
     /// <summary>HTTP path to bind. Defaults to <c>/write/v4</c>.</summary>
     public string Path { get; init; } = "/write/v4";
+
+    /// <summary>
+    ///     Loopback TCP port to bind. Defaults to <c>0</c> (a random ephemeral port). Set a fixed port
+    ///     when a test must know the address before the server starts (client-before-server) or must
+    ///     restart the server on the same address (server-restart-mid-stream).
+    /// </summary>
+    public int Port { get; init; }
 
     /// <summary>Value to return in the <c>X-QWP-Version</c> response header. Set to <c>null</c> to omit.</summary>
     public string? NegotiatedVersion { get; init; } = "1";

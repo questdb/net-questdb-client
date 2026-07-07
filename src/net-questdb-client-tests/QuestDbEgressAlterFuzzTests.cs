@@ -298,48 +298,52 @@ public class QuestDbEgressAlterFuzzTests
     private static List<object?[]> Query(IQwpQueryClient client, string sql)
         => Query(client, sql, out _);
 
+    // Drives the pull cursor to completion, materialising every row as boxed cells. An unexpected
+    // QUERY_ERROR surfaces as a thrown QwpQueryException, failing the test just as the old error
+    // path did.
     private static List<object?[]> Query(IQwpQueryClient client, string sql, out int columnCount)
     {
-        var handler = new CollectingHandler();
-        client.Execute(sql, handler);
-        columnCount = handler.ColumnCount;
-        return handler.Rows;
-    }
-
-    private sealed class CollectingHandler : QwpColumnBatchHandler
-    {
-        public List<object?[]> Rows { get; } = new();
-        public int ColumnCount { get; private set; }
-
-        public override void OnBatch(QwpColumnBatch batch)
+        var rows = new List<object?[]>();
+        var cols = 0;
+        var reader = client.ExecuteReaderAsync(sql).GetAwaiter().GetResult();
+        try
         {
-            ColumnCount = batch.ColumnCount;
-            for (var r = 0; r < batch.RowCount; r++)
+            while (reader.ReadBatch())
             {
-                var row = new object?[batch.ColumnCount];
-                for (var c = 0; c < batch.ColumnCount; c++)
+                var batch = reader.Current;
+                cols = batch.ColumnCount;
+                for (var r = 0; r < batch.RowCount; r++)
                 {
-                    row[c] = batch.IsNull(c, r) ? null : ExtractCell(batch, c, r);
+                    var row = new object?[batch.ColumnCount];
+                    for (var c = 0; c < batch.ColumnCount; c++)
+                    {
+                        row[c] = batch.IsNull(c, r) ? null : ExtractCell(batch, c, r);
+                    }
+
+                    rows.Add(row);
                 }
-                Rows.Add(row);
             }
         }
-
-        public override void OnError(QwpStatusCode status, string message)
-            => Assert.Fail($"unexpected egress error: status={status}, msg={message}");
-
-        private static object ExtractCell(QwpColumnBatch batch, int c, int r) => batch.GetColumnWireType(c) switch
+        finally
         {
-            QwpTypeCode.Long => batch.GetLongValue(c, r),
-            QwpTypeCode.Int => batch.GetIntValue(c, r),
-            QwpTypeCode.Double => batch.GetDoubleValue(c, r),
-            QwpTypeCode.Timestamp => batch.GetTimestampValue(c, r),
-            QwpTypeCode.TimestampNanos => batch.GetTimestampValue(c, r),
-            QwpTypeCode.Symbol => batch.GetSymbol(c, r) ?? string.Empty,
-            QwpTypeCode.Boolean => batch.GetBoolValue(c, r),
-            _ => batch.GetString(c, r) ?? string.Empty,
-        };
+            reader.Dispose();
+        }
+
+        columnCount = cols;
+        return rows;
     }
+
+    private static object ExtractCell(QwpColumnBatch batch, int c, int r) => batch.GetColumnWireType(c) switch
+    {
+        QwpTypeCode.Long => batch.GetLongValue(c, r),
+        QwpTypeCode.Int => batch.GetIntValue(c, r),
+        QwpTypeCode.Double => batch.GetDoubleValue(c, r),
+        QwpTypeCode.Timestamp => batch.GetTimestampValue(c, r),
+        QwpTypeCode.TimestampNanos => batch.GetTimestampValue(c, r),
+        QwpTypeCode.Symbol => batch.GetSymbol(c, r) ?? string.Empty,
+        QwpTypeCode.Boolean => batch.GetBoolValue(c, r),
+        _ => batch.GetString(c, r) ?? string.Empty,
+    };
 
     private static async Task ExecAsync(string httpEndpoint, string sql)
     {

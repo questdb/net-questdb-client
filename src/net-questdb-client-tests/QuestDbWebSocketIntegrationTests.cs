@@ -233,11 +233,10 @@ public class QuestDbWebSocketIntegrationTests
         await VerifyTableRowCountAsync("test_ws_egress_rt", expected: 1);
 
         using var client = QueryClient.New($"ws::addr={endpoint};");
-        var handler = new SingleRowRecordingHandler();
-        client.Execute("select sym, s, i, l, d, b from test_ws_egress_rt", handler);
+        await using var reader = await client.ExecuteReaderAsync("select sym, s, i, l, d, b from test_ws_egress_rt");
 
-        Assert.That(handler.Ended, Is.True);
-        var batch = handler.Batch ?? throw new InvalidOperationException("batch missing");
+        Assert.That(await reader.ReadBatchAsync(), Is.True, "expected a result batch");
+        var batch = reader.Current;
         Assert.That(batch.RowCount, Is.EqualTo(1));
         Assert.That(batch.GetSymbol(0, 0), Is.EqualTo("beta"));
         Assert.That(batch.GetString(1, 0), Is.EqualTo("round-trip"));
@@ -245,6 +244,7 @@ public class QuestDbWebSocketIntegrationTests
         Assert.That(batch.GetLongValue(3, 0), Is.EqualTo(-123_456_789L));
         Assert.That(batch.GetDoubleValue(4, 0), Is.EqualTo(-2.5).Within(1e-12));
         Assert.That(batch.GetBoolValue(5, 0), Is.False);
+        Assert.That(await reader.ReadBatchAsync(), Is.False, "stream must end after the single batch");
     }
 
     [Test]
@@ -253,6 +253,7 @@ public class QuestDbWebSocketIntegrationTests
         await DropTableAsync("test_ws_restart");
         var endpoint = _questDb!.GetWebSocketEndpoint();
         var sfRoot = Path.Combine(Path.GetTempPath(), "qdb-int-restart-" + Guid.NewGuid().ToString("N"));
+        Task? restart = null;
         try
         {
             using (var sender = Sender.New(
@@ -267,22 +268,36 @@ public class QuestDbWebSocketIntegrationTests
                 {
                     sender.Table("test_ws_restart").Column("v", (long)i).At(DateTime.UtcNow);
                 }
-                await sender.SendAsync();
 
-                await _questDb.StartAsync();
-
-                var qwp = (IQwpWebSocketSender)sender;
-                for (var i = 0; i < 200; i++)
+                // SendAsync drains: it flushes the buffered rows into the store-and-forward ring and
+                // then blocks until the server ACKs them. With the DB down that ACK can only arrive
+                // once the SF engine reconnects, so the DB must come back *while* SendAsync is
+                // awaiting — bring it up concurrently, within the reconnect budget, and let the
+                // engine replay the buffered rows across the restart. (Restarting only *after*
+                // awaiting SendAsync would deadlock: the send can never complete against a dead DB.)
+                restart = Task.Run(async () =>
                 {
-                    try { await qwp.PingAsync(); break; }
-                    catch { await Task.Delay(100); }
-                }
+                    await Task.Delay(1000);
+                    await _questDb.StartAsync();
+                });
+                await sender.SendAsync();
+                await restart;
             }
 
             await VerifyTableRowCountAsync("test_ws_restart", expected: 30, maxAttempts: 150);
         }
         finally
         {
+            // The shared fixture DB must be left running for the remaining tests in this fixture,
+            // regardless of how this test exited (StartAsync is a no-op when it is already up).
+            // Without this, a failure here strands the DB down and cascades into every subsequent
+            // WebSocket test as "connection refused".
+            if (restart is not null)
+            {
+                try { await restart; } catch { /* surfaced by the await/assert above */ }
+            }
+            await _questDb!.StartAsync();
+
             if (Directory.Exists(sfRoot))
             {
                 try { Directory.Delete(sfRoot, recursive: true); } catch { }
@@ -464,16 +479,24 @@ public class QuestDbWebSocketIntegrationTests
             SenderErrorCategory.WriteError));
     }
 
+    // The server withholds ACKs for deferred (FLAG_DEFER_COMMIT) frames until the group-closing commit
+    // frame — a cumulative OK ack mid-group would let a store-and-forward client trim rows the server can
+    // still roll back (QwpIngressUpgradeProcessor). So there is no client-observable pre-commit ack for
+    // staged rows; the cursor pump ships them asynchronously, and we give it a settle window before
+    // asserting invisibility. count>0 there is treated as inconclusive (not every server build honours the
+    // defer flag). The strong, ack-backed guarantee is the post-commit count.
+    private static readonly TimeSpan DeferredDeliverySettle = TimeSpan.FromSeconds(2);
+
     [Test]
     public async Task Transaction_DeferredRowsInvisibleUntilCommit()
     {
         await DropTableAsync("test_ws_txn_visibility");
         var endpoint = _questDb!.GetWebSocketEndpoint();
-        const int rows = 20;
+        const int rowsPerFrame = 3;
+        const int rows = 24; // 8 deferred auto-flush frames
 
         using var sender = Sender.New(
-            $"ws::addr={endpoint};transaction=on;auto_flush_rows={rows};auto_flush_interval=off;auto_flush_bytes=off;");
-        var qwp = (IQwpWebSocketSender)sender;
+            $"ws::addr={endpoint};transaction=on;auto_flush_rows={rowsPerFrame};auto_flush_interval=off;auto_flush_bytes=off;");
 
         var ts = new DateTime(2026, 6, 1, 0, 0, 0, DateTimeKind.Utc);
         for (var i = 0; i < rows; i++)
@@ -481,14 +504,9 @@ public class QuestDbWebSocketIntegrationTests
             sender.Table("test_ws_txn_visibility").Column("v", (long)i).At(ts.AddSeconds(i));
         }
 
-        // The final At() hit auto_flush_rows, shipping a single deferred frame (FSN 0). Wait for the
-        // server to ack it, so the rows are provably appended-but-uncommitted before we assert
-        // invisibility (otherwise count==0 could just mean "not yet sent").
-        Assert.That(await qwp.AwaitAckedFsnAsync(0, TimeSpan.FromSeconds(15)), Is.True,
-            "deferred frame was not acknowledged by the server");
-
-        // Give any (incorrect) immediate commit + WAL apply time to surface before asserting.
-        await Task.Delay(750);
+        // Rows were auto-flushed as deferred frames. Let the pump ship them + any (incorrect) immediate
+        // commit + WAL apply surface, then assert they are still invisible before we commit.
+        await Task.Delay(DeferredDeliverySettle);
         if (await CountRowsAsync("test_ws_txn_visibility") != 0)
         {
             Assert.Inconclusive(
@@ -512,7 +530,6 @@ public class QuestDbWebSocketIntegrationTests
         using var sender = Sender.New(
             $"ws::addr={endpoint};transaction=on;auto_flush_rows={autoFlushRows};"
             + "auto_flush_interval=off;auto_flush_bytes=off;");
-        var qwp = (IQwpWebSocketSender)sender;
 
         var ts = new DateTime(2026, 6, 2, 0, 0, 0, DateTimeKind.Utc);
         for (var i = 0; i < rows; i++)
@@ -520,9 +537,9 @@ public class QuestDbWebSocketIntegrationTests
             sender.Table("test_ws_txn_large").Symbol("g", "g" + (i % 8)).Column("v", (long)i).At(ts.AddMilliseconds(i));
         }
 
-        // rows/autoFlushRows deferred frames shipped; wait for the last (FSN = count-1) to ack.
-        Assert.That(await qwp.AwaitAckedFsnAsync(rows / autoFlushRows - 1, TimeSpan.FromSeconds(30)), Is.True);
-        await Task.Delay(750);
+        // rows/autoFlushRows deferred frames shipped. Let the pump ship them + WAL apply surface, then
+        // assert none are visible before commit (see DeferredDeliverySettle).
+        await Task.Delay(DeferredDeliverySettle);
         if (await CountRowsAsync("test_ws_txn_large") != 0)
         {
             Assert.Inconclusive("server does not honour FLAG_DEFER_COMMIT; skipping");
@@ -625,17 +642,6 @@ public class QuestDbWebSocketIntegrationTests
             result.Add(cols);
         }
         return result;
-    }
-
-    private sealed class SingleRowRecordingHandler : QwpColumnBatchHandler
-    {
-        public QwpColumnBatch? Batch { get; private set; }
-        public bool Ended { get; private set; }
-
-        public override void OnBatch(QwpColumnBatch batch) => Batch = batch;
-        public override void OnEnd(long totalRows) => Ended = true;
-        public override void OnError(QwpStatusCode status, string message) =>
-            Assert.Fail($"unexpected egress error: status={status}, msg={message}");
     }
 
     private async Task VerifyTableHasDataAsync(string tableName)

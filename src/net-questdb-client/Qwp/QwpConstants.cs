@@ -185,9 +185,14 @@ internal static class QwpConstants
     public const int MaxConnSymbolDictEntries = 8 * 1024 * 1024;
     public const int MaxConnSymbolDictHeapBytes = 256 * 1024 * 1024;
 
-    /// <summary>Inclusive zstd compression level range. Server clamps anything higher to 9 silently.</summary>
+    /// <summary>
+    ///     Inclusive zstd compression level range accepted in the connect string. zstd defines levels
+    ///     1–22; the QuestDB server clamps anything above 9 to 9 silently. We accept the full 1–22 (like
+    ///     the Java/Go/Rust clients) and pass the value through unchanged in the accept-encoding header,
+    ///     so a single connect string stays portable across clients and the server does the clamping.
+    /// </summary>
     public const int ZstdLevelMin = 1;
-    public const int ZstdLevelMax = 9;
+    public const int ZstdLevelMax = 22;
 
     /// <summary>Egress upgrade headers.</summary>
     public const string HeaderAcceptEncoding = "X-QWP-Accept-Encoding";

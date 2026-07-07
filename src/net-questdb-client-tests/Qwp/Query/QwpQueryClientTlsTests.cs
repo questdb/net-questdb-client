@@ -67,14 +67,15 @@ public class QwpQueryClientTlsTests
         });
         await server.StartAsync();
 
-        using var client = QueryClient.New(
+        await using var client = await QueryClient.NewAsync(
             $"wss::addr={server.Uri.Authority};path={QwpConstants.ReadPath};tls_verify=unsafe_off;");
-        var handler = new RecordingHandler();
-        client.Execute("SELECT 42", handler);
+        await using var reader = await client.ExecuteReaderAsync("SELECT 42");
 
-        Assert.That(handler.Batches.Count, Is.EqualTo(1));
-        Assert.That(handler.Batches[0].LongValues, Is.EqualTo(new[] { 42L }));
-        Assert.That(handler.Ended, Is.True);
+        Assert.That(await reader.ReadBatchAsync(), Is.True);
+        Assert.That(reader.Current.RowCount, Is.EqualTo(1));
+        Assert.That(reader.Current.GetLongValue(0, 0), Is.EqualTo(42L));
+        Assert.That(await reader.ReadBatchAsync(), Is.False);
+        Assert.That(reader.TotalRows, Is.EqualTo(1L));
     }
 
     [Test]
@@ -119,37 +120,6 @@ public class QwpQueryClientTlsTests
         var bytes = new byte[8];
         BinaryPrimitives.WriteInt64LittleEndian(bytes, value);
         return bytes;
-    }
-
-    private sealed class RecordingHandler : QwpColumnBatchHandler
-    {
-        public sealed record CapturedBatch(int RowCount, long[] LongValues);
-
-        public List<CapturedBatch> Batches { get; } = new();
-        public bool Ended { get; private set; }
-
-        public override void OnBatch(QwpColumnBatch batch)
-        {
-            var rows = new long[batch.RowCount];
-            if (batch.ColumnCount > 0 && batch.GetColumnWireType(0) == QwpTypeCode.Long)
-            {
-                for (var r = 0; r < batch.RowCount; r++) rows[r] = batch.GetLongValue(0, r);
-            }
-            Batches.Add(new CapturedBatch(batch.RowCount, rows));
-        }
-
-        public override void OnEnd(long totalRows)
-        {
-            Ended = true;
-        }
-
-        public override void OnError(QwpStatusCode status, string message)
-        {
-        }
-
-        public override void OnExecDone(QwpOpType opType, long rowsAffected)
-        {
-        }
     }
 }
 

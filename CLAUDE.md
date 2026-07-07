@@ -21,7 +21,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **WS / WSS (QWP) — egress** — read-side WebSocket (`/read/v1`) that
   streams query results as binary `RESULT_BATCH` frames. Surfaced through
   a separate `QueryClient.New(...)` factory (not `Sender.New`) returning
-  `IQwpQueryClient`. Distinct connect-string parser (`QueryOptions`) with
+  `IQwpQueryClient`. Results are consumed through the `DbDataReader`-style
+  pull cursor from `ExecuteReaderAsync` (`IQwpQueryReader`).
+  Distinct connect-string parser (`QueryOptions`) with
   egress-specific keys: `target=any|primary|replica`,
   `compression=auto|raw|zstd`, `failover_*`, `initial_credit`. Decoder
   pools per-column scratches across batches; bind-parameter wire format
@@ -198,16 +200,44 @@ own framing, codecs, and server handshake. Everything QWP lives in
     12-byte QWP1 header (asymmetric framing: server→client wraps the
     header, client→server is payload-only with `msg_kind` at byte 0).
     `AuthError` is immediately terminal — no failover retry.
+    Internally a resumable **pull driver** (`StartQueryAsync` →
+    `PullNextBatchAsync` → `EndReaderAsync`): the single-flight
+    `_executeLock` is held from start until the reader ends, reads are
+    inline (no background pump), and transparent failover +
+    QUERY_REQUEST re-send live inside `PullNextBatchAsync`. A
+    cooperative cancel that lands during a failover window is
+    re-issued on the new connection after the re-send, so it still
+    terminates via `STATUS_CANCELLED` instead of being dropped (or —
+    as before the pull refactor — aborting the client terminally).
+  - `IQwpQueryReader.cs` / `QwpQueryReader.cs` — the egress
+    consumption surface: a `DbDataReader`-style pull cursor
+    from `ExecuteReaderAsync(sql[, binds])`. `ReadBatchAsync` yields
+    `Current` (a `QwpColumnBatch` valid only until the next read);
+    after `false`: `TotalRows` / `RowsAffected` / `OpType` /
+    `WasCancelled` (stats stay readable after dispose — they freeze at
+    the query's final values). `FailoverReset` is true on the read
+    that resumed after a transparent reconnect (prior rows void,
+    stream replays from the top). QUERY_ERROR throws
+    `QwpQueryException` (status + server message); a
+    non-connection-scoped query error ends at a clean frame boundary
+    so the client stays reusable. Cooperative `Cancel()` — scoped to
+    the reader's own request id, no-op after dispose — ends with a
+    clean `false` + `WasCancelled`; a hard `CancellationToken` cancel
+    is terminal. Disposing the reader ends the query — an abandoned
+    mid-stream reader is cancel+drained to its terminator — and
+    releases the single-flight lock, so **always dispose**
+    (`await using`). Credit for a delivered batch is **deferred** to
+    the next `ReadBatchAsync`, so server flow-control tracks actual
+    consumer progress (backpressure on slow consumers).
   - `QwpResultBatchDecoder.cs` — decodes `RESULT_BATCH` payloads
     column-major. Per-column scratches (`ValueBytes`, `StringHeap`,
     `NonNullIndex`, `StringOffsets`) survive `ColumnView.Reset()` and
     grow-and-reuse across batches. ColumnView slots themselves reuse
     via `ConfigureColumn` / `TrimToColumnCount`, so a fresh batch on
     the same schema does not churn schema metadata.
-  - `QwpColumnBatch.cs` / `QwpColumnBatchHandler.cs` — column-major
-    view + abstract handler the user implements. Span-returning
-    accessors (`GetStringSpan`) are valid only for the duration of
-    `OnBatch`.
+  - `QwpColumnBatch.cs` — column-major view over one decoded batch,
+    reused across reads. Span-returning accessors (`GetStringSpan`)
+    are valid only until the next `ReadBatchAsync`.
   - `QwpBindValues.cs` / `QwpBindSetter.cs` — typed bind-parameter
     builder. 18 wire types, ascending-index validation, decimal scale
     + geohash precision range checks. Wire-format byte layout pinned
@@ -330,6 +360,12 @@ behaviours:
   via `ValidateWebSocketKeys` (string-ctor path) or
   `ValidateWebSocketKeysAgainstDefaults` (programmatic-init path,
   default-comparison heuristic).
+- `transaction=on` (WS-only): connection-scoped transactional mode —
+  auto-flush stages rows with `FLAG_DEFER_COMMIT`, `Send()`/`Commit()`
+  commits, and the server drops staged rows on connection close.
+  **Mutually exclusive with `sf_dir`** (`ConfigError`): SF replays
+  persisted frames across connections, which would re-stage and later
+  publish uncommitted (possibly abandoned) transactional rows.
 - `auto_flush=off` zeros `auto_flush_rows` / `auto_flush_bytes` /
   `auto_flush_interval` to `-1`. WS-specific defaults
   (`auto_flush_rows=1000`, `auto_flush_bytes=8 MiB`, `auto_flush_interval=100ms`)
@@ -351,12 +387,184 @@ behaviours:
 
 ### Connection pooling
 
-HTTP is thread-safe at the underlying `HttpClient` level; the Sender
-itself is **not** thread-safe — one Sender per producer thread, or wrap
-your own pool. There is no in-tree `LineSenderPool`; the HTTP transport
-already shares `HttpClient`s under the hood via `IHttpClientFactory`
-semantics in `HttpSender`. WS / SF manage their own concurrency model
-(in-flight window, slot lock) and explicitly reject pooling.
+A single `ISender` (or `IQwpQueryClient`) is **not** thread-safe — one per
+producer thread. For multi-threaded producers there is now an in-tree pool,
+`QuestDBClient` (mirrors the Java client's `QuestDB` handle), which pools
+**both** ingest senders and (net7.0+) egress query clients. Files live in
+`Pooling/` (public `QuestDBClient`/`IQuestDBClient`/`QuestDBClientBuilder` in
+namespace `QuestDB`; internal `SenderPool`/`PooledSender`/`BorrowedSender`/`QueryClientPool`/
+`PooledQueryClient`/`PoolHousekeeper`/`QuestDBClientImpl` in `QuestDB.Pooling`).
+The public `Query` builder (namespace `QuestDB`, `Query.cs`) is the query-side
+surface.
+
+- **Entry points** mirror `Sender`/`ISender`: `QuestDBClient.Connect(confStr)`
+  or `QuestDBClient.Builder()…Build()` returns `IQuestDBClient`. Construct
+  once, share across threads. For distinct ingest/query endpoints use
+  `QuestDBClient.Connect(ingestConfStr, queryConfStr)` or
+  `Builder().IngestConfig(...).QueryConfig(...)` (Java `connect(ingest, query)`
+  parity); a single `ws`/`wss` `FromConfig` string serves both pools.
+- **Borrow / return**: `BorrowSender()` (+ `BorrowSenderAsync`) returns an
+  `ISender` that is a fresh per-borrow `BorrowedSender` handle wrapping a
+  reusable `PooledSender` pool entry. **Dispose does not send** — it is pure
+  resource release: it discards any buffered-but-unsent rows (`Clear`),
+  **returns the entry to the pool** (it does NOT close the underlying sender),
+  and **never throws**. Call `Send()`/`SendAsync()` to hand rows to the
+  transport, and `Flush(timeout)`/`FlushAsync(timeout)` (drain = send + await
+  ACK) for delivery confirmation, **before** disposing; a sender whose buffer
+  can't be cleared (terminally failed) is discarded instead of re-pooled, as is
+  a transactional (`transaction=on`) ws sender still owing a commit for
+  auto-flushed rows staged server-side under `FLAG_DEFER_COMMIT` (the
+  `IPooledTransactionalSender` seam) — QWP has no rollback, so re-pooling the
+  live connection would let the next borrower's first commit publish the
+  abandoned rows; discarding closes the connection, which drops them. This is
+  airtight only because `transaction=on` + `sf_dir` is rejected at config
+  validation — SF replay would otherwise resurrect the discarded borrower's
+  deferred frames into the successor slot's connection.
+  **Pooled WS `Send()` is fast flush-to-ring** (the pool sets
+  `SenderOptions.SendAwaitsAck=false`): the pooled connection ships async after
+  return and delivery is confirmed via the pool-wide `Flush` below — unlike a
+  **standalone** WS `Send()`, which drains (`SendAwaitsAck=true` default) so
+  `Send()`-before-`Dispose` delivers on its own. The
+  handle is **use-after-return safe**: once disposed every ingest member throws
+  `ObjectDisposedException` (so a stale reference can't alias the entry a later
+  borrower now holds), and a second dispose is a tolerated no-op. There is no
+  context-affine / pinned-sender API — borrow per unit of work and dispose to
+  return (a single `ISender` is not thread-safe, so never share a borrowed one
+  across threads).
+- **Pool-wide drain**: `IQuestDBClient.Flush(timeout)` / `FlushAsync(timeout)`
+  (→ `SenderPool.Flush`) fans `ISender.Flush` across every pooled sender — the
+  quiescence barrier for "confirm everything landed, then mark done". Call it
+  after all borrowed senders are returned; it does not synchronise against a
+  concurrent borrow. Returns `true` only if every sender drained within the
+  timeout. `close_flush_timeout_millis` is the default timeout for the no-arg
+  `Flush()` overloads (it no longer governs Dispose, which does not drain).
+- **Sizing**: elastic between `sender_pool_min` and `sender_pool_max`,
+  bounded by a `SemaphoreSlim` capacity gate (counts in-use senders;
+  creation happens outside the lock). Idle senders sit in an
+  idle-time-sorted deque: borrowers pop/push the hot end (LIFO reuse, so
+  the excess goes genuinely cold and shrinks toward `min`), and the
+  housekeeper's `ReapIdle` sweeps from the cold end, stopping at the
+  first entry inside its timeout — O(reaped), not O(idle). `max_lifetime`
+  follows `CreatedAtUtc` (which the deque is NOT sorted by — an entry
+  can cross it while parked), so it runs as a separate walk gated on
+  `_idleOldestCreatedUtc`, a conservative lower bound over parked
+  entries' creation times that only fires when something actually
+  crossed the lifetime. Reaping is **removal-only** — it never recreates,
+  so both `idle_timeout` and `max_lifetime` act **only on excess** (above
+  `min`): the `min` warm connections are never idle-reaped or age-rotated.
+  They live until they fail (a dead ws sender self-reconnects; a
+  terminally-failed sender/query client is discarded on return and
+  recreated on the next borrow), so a pool pinned at `min` (e.g.
+  `sender_pool_min=1` under low concurrency) keeps its base connection for
+  the process lifetime — cycle the `QuestDBClient` handle to force
+  rotation. The same floor applies to the shared knobs for the query pool
+  (`QueryClientPool.ReapIdle`).
+  `BorrowSender` blocks up to `acquire_timeout_ms` then throws
+  `IngressError(ErrorCode.PoolExhausted)`. Reaping is **gated on full
+  drain**: an idle ws sender whose cursor-engine ring still holds
+  un-acked frames is skipped by both the idle and max-lifetime paths
+  (the idle sweep re-parks it at the hot end with a refreshed
+  `IdleSinceUtc`, so the idle clock effectively restarts at full-drain;
+  the age walk just leaves it for the next sweep), because tearing it down
+  would, in RAM mode, free the ring and silently drop those frames — the
+  pool-wide `Flush` can't cover an already-reaped sender. Surfaced via the net-agnostic `IPooledDrainAwareSender.IsFullyDrained`
+  seam (implemented by `QwpWebSocketSender` → `QwpCursorSendEngine.IsFullyDrained`;
+  HTTP/TCP deliver synchronously and are always drained). There is **no
+  bound**: a permanently wedged sender that never drains lives until the
+  pool is closed (data retained, not silently dropped) — consistent with
+  the "Flush before close" contract, since Dispose does not drain.
+- **Config keys** (all-protocol, on `SenderOptions`, `[JsonIgnore]`d out of
+  `ToString` so a plain sender round-trips byte-identically): `sender_pool_min`
+  (1), `sender_pool_max` (4), `acquire_timeout_ms` (5000), `idle_timeout_ms`
+  (60000), `max_lifetime_ms` (1800000), `housekeeper_interval_ms` (5000),
+  `lazy_connect` (off). Validated by `SenderOptions.ValidatePoolOptions()`.
+- **Tolerant startup (`lazy_connect=on`)**: a facade-only pool key (also
+  `QuestDBClientBuilder.LazyConnect()`) — in `QwpConnectStringKeys.Shared`, so a
+  plain `Sender` parses and ignores it on every scheme. It lets
+  `QuestDBClient` build while the server is down: the `ws`/`wss` ingest side
+  connects asynchronously (buffering writes) and the read pool defaults
+  `query_pool_min=0` so nothing connects eagerly — the read pool stays
+  **enabled** and a query connects lazily on first `NewQuery`. `QuestDBClientBuilder.Build`
+  reads it (`ResolveLazyConnect`), injects `initial_connect_retry=async` for the
+  pooled ws senders (via `SenderPool`'s `forceWsAsyncConnect`) when unset, and
+  rejects a conflicting blocking-startup knob up front (`IngressError`/`ConfigError`):
+  an explicit `initial_connect_retry` other than `async`, or an explicit
+  `query_pool_min > 0` (connect string or `QueryPoolMin(...)` builder call, tracked
+  across ingest + separate-query configs). Mirrors java-questdb-client `lazy_connect`.
+- **Query pooling (net7.0+)**: `IQuestDBClient.NewQuery()` returns a fresh
+  `Query` builder (`Sql`/`Binds` then `ExecuteReaderAsync` returning an
+  `IQwpQueryReader`); `ExecuteReaderAsync(sql[, binds], ct)` is the
+  handle-level convenience shortcut. There is
+  **no** public borrow/release for queries — the client lease is implicit per
+  execution and returns when the reader is disposed (Java `newQuery()`
+  parity; Java's thread-local `query()` is **not** ported). A clean end
+  re-pools the client (`GiveBack`); a transport/protocol throw or a hard
+  `CancellationToken` cancel (which is permanently terminal) discards it
+  (`MarkBroken` → `DiscardBroken`), since the egress client's terminal state is
+  sticky with no reset. **Exception:** a `QwpQueryException` (query-level
+  QUERY_ERROR) ends at a clean frame boundary, so the client is re-pooled, not
+  discarded. `Query.Cancel()` is the **cooperative** path (forwards to
+  the in-flight client's `Cancel()`; the query ends normally and the client is
+  re-pooled). `PooledQueryClient` also checks an internal `IPooledQueryClientInner.
+  IsTerminalOrDisposed` seam (implemented by `QwpQueryWebSocketClient`) before
+  re-pooling. **Pooled readers extend the lease to the reader lifetime**: the
+  `PooledQueryReader` returned by `Query.ExecuteReaderAsync` owns the borrowed
+  client and its `_capacity` permit until it is disposed — `query_pool_max`
+  (default 4) concurrent *open readers* exhaust the pool, and the next borrow
+  blocks `acquire_timeout_ms` then throws `IngressError(PoolExhausted)`.
+  Disposing the reader drains an abandoned stream to its terminator, returns the
+  client (re-pool or discard via the same rules as above), and re-arms the
+  `Query`'s single-flight slot; `ReapIdle` never touches an in-use client, so
+  nothing is torn down under an open reader. A cooperative cancel landing during
+  a failover window is re-issued on the new connection, so it ends via
+  `STATUS_CANCELLED` (`WasCancelled`) and re-pools — pinned by
+  `QwpQueryReaderPoolTests.CancelDuringFailoverWindow_ClientIsRepooled`. The query pool is the **stripped sibling** of `SenderPool` — no
+  SF/slot/leak-debt machinery (read side has no store-and-forward) and no
+  AsyncLocal pin. Query-pool config: `query_pool_min` (1), `query_pool_max` (4)
+  on `SenderOptions` (`[JsonIgnore]`, in `QwpConnectStringKeys.Shared` so both
+  `SenderOptions` and `QueryOptions` accept them), validated by the separate
+  `ValidateQueryPoolOptions()` (kept out of `EnsureValid` so a plain `Sender`
+  stays lenient); the acquire/idle/lifetime/housekeeper knobs are **shared** with
+  the sender pool, and one `PoolHousekeeper` sweeps both. The query pool is built
+  only when a `ws`/`wss` query config is present (single `ws` string, explicit
+  `QueryConfig`, or `Connect(ingest, query)`); an `http`/`tcp` ingest handle with
+  no query config throws `IngressError(ConfigError)` on `NewQuery`. All query
+  members are gated `#if NET7_0_OR_GREATER` (so `IQuestDBClient` differs by TFM);
+  net6.0 keeps the sender-only surface.
+- **Store-and-forward**: when pooling `ws::`+`sf_dir`, each pooled sender
+  gets a distinct slot identity `sender_id = <base>-<index>` (via
+  `SenderPool.ApplySlotIdentity`) so siblings never collide on a slot
+  directory / flock. Free indices live in a LIFO stack (most recently freed
+  reused first, keeping the on-disk slot-directory working set compact). A
+  discarded/reaped sender's index is freed only after
+  `IPooledSlotSender.IsSlotLockReleased` confirms the lock dropped (a
+  net-agnostic seam implemented by `QwpWebSocketSender`, backed by
+  `QwpSlotLock.IsReleased`); otherwise it is **retired** (`_retired`) and one
+  capacity permit stays physically withheld on its behalf, shrinking effective
+  `max` (a discarded sender's own permit is simply not released; the reaper
+  competes through the same gate as borrowers — it takes a free permit up
+  front via `TryWithholdPermit` and **stops the sweep** when a mid-borrow
+  thread already drained the last one — that borrower reuses the idle
+  sender instead, so a legitimate borrow never sees a spurious `PoolExhausted`).
+  This shrink is **not permanent**: when a wedged/deferred engine teardown
+  (`QwpCursorSendEngine.Dispose` defers `ReleaseSharedResources` past its 5 s
+  pump-join budget) leaves the lock still held at dispose time, the housekeeper's
+  `ReclaimRetiredSlots` re-tests `IsInnerSlotLockReleased` each sweep — once it
+  flips true the index is freed and the withheld permit released
+  (`_capacity.Release()`). So `LeakedSlotCount` (= `_retired.Count`) is a live
+  gauge of currently-retired slots, not a monotonic counter. Pooled
+  senders pass their managed family to `QwpOrphanScanner.ClaimOrphans(...,
+  managedBase, managedCount)` so orphan adoption skips live/future siblings
+  but still drains true out-of-family orphans (when `drain_orphans=on`).
+  In-range stranded slots recover lazily — a pooled sender replays its own
+  slot's segments on open (`QwpSegmentRing.Open`) when the index is
+  (re)allocated. **Known limitation:** unlike the Java pool, there is no
+  proactive housekeeper-driven two-pass startup drain of in-range slots
+  that are not currently allocated (e.g. a pool that permanently shrank);
+  their data stays on disk until a future run reallocates the index.
+- HTTP still shares `HttpClient`s under the hood per address inside
+  `HttpSender`; the pool is layered above the `ISender` seam and is
+  protocol-agnostic.
 
 ### Value types
 
@@ -390,7 +598,11 @@ semantics in `HttpSender`. WS / SF manage their own concurrency model
     `QwpResultBatchDecoderTests`, `QwpBindValuesTests`,
     `QwpRoleFilterTests`, `QwpQueryClientEndToEndTests`).
     `QwpBindValuesVectorsTests` pins the bind-payload byte layout
-    per wire type.
+    per wire type. `QwpQueryReaderTests` / `QwpQueryReaderPoolTests`
+    cover the pull cursor: multi-batch reads, deferred credit timing,
+    cancel semantics (cooperative vs hard-CT, incl. the
+    cancel-during-failover regression), drain-on-dispose, and
+    reader-holds-permit pooling.
   - `Utils/QwpTlsAuthTests.cs` — auth / TLS helper unit tests shared
     by ingest and egress.
 - Integration tests — the three suites plus the integration fuzz suites
@@ -410,6 +622,14 @@ semantics in `HttpSender`. WS / SF manage their own concurrency model
   - `QuestDbQueryIntegrationTests.cs` — egress integration. `OneTimeSetUp`
     drops + re-seeds fixture tables so runs are idempotent against a
     long-lived master instance.
+  - `QuestDbDockerQueryTests.cs` — egress query tests against QuestDB in
+    **Docker** (single-batch, multi-batch via `max_batch_rows`, and
+    multi-column typed round-trips over `long_sequence`). Opt-in:
+    `QDB_DOCKER_TESTS=on` (or `QDB_DOCKER_IMAGE=...`); self-skips
+    otherwise so the CI filter legs stay green. Defaults to
+    `questdb/questdb:nightly` because `/read/v1` is master-only;
+    container lifecycle is driven through the `docker` CLI on an
+    ephemeral loopback port, no Testcontainers dependency.
   - `QuestDbWebSocketIngestFuzzTests.cs` + `QuestDbEgress{,Bind,Alter,Fragmentation}FuzzTests.cs`
     — QWP ingress/egress fuzz suites (ports of the Rust client's fuzz tests).
     Offline egress fuzz that needs no server lives in
@@ -429,10 +649,12 @@ semantics in `HttpSender`. WS / SF manage their own concurrency model
   shape compares against its own HTTP baseline. `BenchQueryWs` uses
   the same grouping (Narrow / Wide × 10k / 100k / 1M rows) and an
   HTTP `/exec` baseline that parses `dataset[][]` so both methods do
-  equivalent extraction work; it declares its own job via
-  `[Config(typeof(QueryThroughputConfig))]` (20 iter × 5 warmup).
-  Senders / clients live in `[GlobalSetup]` so per-invocation cost
-  is the wire path, not handshake / mmap / engine spin-up.
+  equivalent extraction work — the `Ws_*` methods drive the pull
+  cursor with a per-cell checksum over the typed accessors. It
+  declares its own job via `[Config(typeof(QueryThroughputConfig))]`
+  (20 iter × 5 warmup). Senders / clients live in `[GlobalSetup]` so
+  per-invocation cost is the wire path, not handshake / mmap /
+  engine spin-up.
 
 ## Conventions
 

@@ -29,12 +29,15 @@ public class QuestDbManager : IAsyncDisposable
     private readonly string? _liveHttp;
     private readonly string? _liveIlp;
     private readonly string _dataDir;
+    private readonly string _instanceId;
     private readonly string[] _extraConf;
     private readonly HttpClient _httpClient;
     private readonly StringBuilder _serverLog = new();
     private readonly object _logLock = new();
 
     private Process? _process;
+    private StreamWriter? _logWriter;
+    private string? _serverLogPath;
 
     /// <summary>Initializes a new instance of the QuestDbManager.</summary>
     /// <param name="port">ILP port (default: 9009).</param>
@@ -50,9 +53,10 @@ public class QuestDbManager : IAsyncDisposable
         _pgPort = FindFreeTcpPort();
         _liveHttp = NormalizeEndpoint(Environment.GetEnvironmentVariable("QDB_LIVE_HTTP"));
         _liveIlp = NormalizeEndpoint(Environment.GetEnvironmentVariable("QDB_LIVE_ILP"));
+        _instanceId = Guid.NewGuid().ToString("N").Substring(0, 8);
         _dataDir = Path.Combine(
             Path.GetTempPath(),
-            $"qdb-fixture-{httpPort}-{port}-{Guid.NewGuid().ToString("N").Substring(0, 8)}");
+            $"qdb-fixture-{httpPort}-{port}-{_instanceId}");
         _httpClient = new HttpClient { Timeout = TimeSpan.FromSeconds(5) };
     }
 
@@ -88,6 +92,7 @@ public class QuestDbManager : IAsyncDisposable
         var java = ResolveJava();
         var jar = ResolveQuestDbJar();
         EnsureDataDir();
+        EnsureLogWriter();
 
         var logDir = Path.Combine(_dataDir, "log");
         Directory.CreateDirectory(logDir);
@@ -116,6 +121,7 @@ public class QuestDbManager : IAsyncDisposable
         startInfo.ArgumentList.Add(_dataDir);
 
         Console.WriteLine($"Starting QuestDB: {java} (http={_httpPort}, ilp={_ilpPort}, data={_dataDir})");
+        AppendLog($"=== QuestDB start (http={_httpPort}, ilp={_ilpPort}, data={_dataDir}) ===");
 
         var process = new Process { StartInfo = startInfo, EnableRaisingEvents = true };
         process.OutputDataReceived += (_, e) => AppendLog(e.Data);
@@ -255,6 +261,14 @@ public class QuestDbManager : IAsyncDisposable
     {
         await StopAsync().ConfigureAwait(false);
         _httpClient.Dispose();
+
+        // Keep the server-log file (it lives under QDB_SERVER_LOG_DIR, separate from _dataDir) — CI
+        // publishes it on failure. Only the data dir below is deleted.
+        lock (_logLock)
+        {
+            _logWriter?.Dispose();
+            _logWriter = null;
+        }
 
         try
         {
@@ -420,11 +434,47 @@ public class QuestDbManager : IAsyncDisposable
         lock (_logLock)
         {
             _serverLog.AppendLine(line);
-            // Cap the buffer so a long-running fixture doesn't grow unbounded.
+            // Cap the in-memory buffer so a long-running fixture doesn't grow unbounded.
             if (_serverLog.Length > 256 * 1024)
             {
                 _serverLog.Remove(0, _serverLog.Length - 128 * 1024);
             }
+
+            // The file (when QDB_SERVER_LOG_DIR is set) keeps the full, uncapped log so CI can
+            // publish it on failure — the in-memory tail above is only for the startup-error message.
+            _logWriter?.WriteLine(line);
+        }
+    }
+
+    // Opens a full server-log file under QDB_SERVER_LOG_DIR when set (CI points this at the artifact
+    // staging dir so it survives DisposeAsync and gets published on failure). Local runs without the
+    // env var keep only the in-memory tail. Best-effort: a bad dir must never fail a test.
+    private void EnsureLogWriter()
+    {
+        if (_logWriter is not null)
+        {
+            return;
+        }
+
+        var dir = Environment.GetEnvironmentVariable("QDB_SERVER_LOG_DIR");
+        if (string.IsNullOrWhiteSpace(dir))
+        {
+            return;
+        }
+
+        try
+        {
+            dir = dir.Trim();
+            Directory.CreateDirectory(dir);
+            _serverLogPath = Path.Combine(dir, $"qdb-server-{_httpPort}-{_ilpPort}-{_instanceId}.log");
+            _logWriter = new StreamWriter(_serverLogPath, append: true) { AutoFlush = true };
+            Console.WriteLine($"QuestDB server log: {_serverLogPath}");
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Warning: could not open server log file under '{dir}': {ex.Message}");
+            _logWriter = null;
+            _serverLogPath = null;
         }
     }
 

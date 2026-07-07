@@ -65,7 +65,6 @@ public class BenchQueryWs
     private HttpClient _http = null!;
     private IQwpQueryClient _wsNarrow = null!;
     private IQwpQueryClient _wsWide = null!;
-    private CountingHandler _handler = null!;
 
     [Params(10_000, 100_000, 1_000_000, 10_000_000)]
     public int RowCount;
@@ -83,7 +82,6 @@ public class BenchQueryWs
         // (16384 rows) overflow the server's egress send buffer and abort the query, so cap the
         // per-batch row count for wide. Narrow rows are small enough to stay uncapped.
         _wsWide = QueryClient.New($"ws::addr={_endpoint};max_batch_rows=4096;");
-        _handler = new CountingHandler();
 
         await DropAsync(NarrowTable);
         await DropAsync(WideTable);
@@ -109,19 +107,70 @@ public class BenchQueryWs
     public async Task<long> Http_NarrowSelect() => await HttpSelectAsync(NarrowTable, NarrowColumns);
 
     [Benchmark, BenchmarkCategory("Narrow")]
-    public long Ws_NarrowSelect() => WsSelect(_wsNarrow, NarrowTable, NarrowColumns);
+    public async Task<long> Ws_NarrowSelect() => await WsSelectAsync(_wsNarrow, NarrowTable, NarrowColumns);
 
     [Benchmark(Baseline = true), BenchmarkCategory("Wide")]
     public async Task<long> Http_WideSelect() => await HttpSelectAsync(WideTable, WideColumns);
 
     [Benchmark, BenchmarkCategory("Wide")]
-    public long Ws_WideSelect() => WsSelect(_wsWide, WideTable, WideColumns);
+    public async Task<long> Ws_WideSelect() => await WsSelectAsync(_wsWide, WideTable, WideColumns);
 
-    private long WsSelect(IQwpQueryClient ws, string table, string columns)
+    private async Task<long> WsSelectAsync(IQwpQueryClient ws, string table, string columns)
     {
-        _handler.Reset();
-        ws.Execute($"SELECT {columns} FROM {table} LIMIT {RowCount}", _handler);
-        return _handler.TotalRows ^ _handler.Checksum;
+        long rows = 0;
+        long checksum = 0;
+        await using var reader = await ws.ExecuteReaderAsync($"SELECT {columns} FROM {table} LIMIT {RowCount}");
+        while (await reader.ReadBatchAsync())
+        {
+            var batch = reader.Current;
+            rows += batch.RowCount;
+            checksum ^= ChecksumBatch(batch);
+        }
+        return rows ^ checksum;
+    }
+
+    // Walk every column on every row through the typed accessors so the bench actually exercises
+    // the primitive read path, doing extraction work equivalent to the HTTP baseline's parse.
+    private static long ChecksumBatch(QwpColumnBatch batch)
+    {
+        var cols = batch.ColumnCount;
+        var rows = batch.RowCount;
+        long acc = 0;
+        for (var c = 0; c < cols; c++)
+        {
+            var t = batch.GetColumnWireType(c);
+            switch (t)
+            {
+                case QuestDB.Enums.QwpTypeCode.Long:
+                case QuestDB.Enums.QwpTypeCode.Date:
+                case QuestDB.Enums.QwpTypeCode.Timestamp:
+                case QuestDB.Enums.QwpTypeCode.TimestampNanos:
+                    for (var r = 0; r < rows; r++) acc ^= batch.GetLongValue(c, r);
+                    break;
+                case QuestDB.Enums.QwpTypeCode.Int:
+                case QuestDB.Enums.QwpTypeCode.IPv4:
+                    for (var r = 0; r < rows; r++) acc ^= batch.GetIntValue(c, r);
+                    break;
+                case QuestDB.Enums.QwpTypeCode.Double:
+                    for (var r = 0; r < rows; r++)
+                        acc ^= BitConverter.DoubleToInt64Bits(batch.GetDoubleValue(c, r));
+                    break;
+                case QuestDB.Enums.QwpTypeCode.Float:
+                    for (var r = 0; r < rows; r++)
+                        acc ^= BitConverter.SingleToInt32Bits(batch.GetFloatValue(c, r));
+                    break;
+                case QuestDB.Enums.QwpTypeCode.Boolean:
+                    for (var r = 0; r < rows; r++) acc ^= batch.GetBoolValue(c, r) ? 1 : 0;
+                    break;
+                case QuestDB.Enums.QwpTypeCode.Symbol:
+                    for (var r = 0; r < rows; r++) acc ^= batch.GetSymbolId(c, r);
+                    break;
+                case QuestDB.Enums.QwpTypeCode.Varchar:
+                    for (var r = 0; r < rows; r++) acc ^= batch.GetStringSpan(c, r).Length;
+                    break;
+            }
+        }
+        return acc;
     }
 
     private async Task<long> HttpSelectAsync(string table, string columns)
@@ -330,63 +379,6 @@ public class BenchQueryWs
         return long.TryParse(body.Substring(start, end - start), out count);
     }
 
-    private sealed class CountingHandler : QwpColumnBatchHandler
-    {
-        public int TotalRows;
-        public long Checksum;
-
-        public void Reset()
-        {
-            TotalRows = 0;
-            Checksum = 0;
-        }
-
-        public override void OnBatch(QwpColumnBatch batch)
-        {
-            TotalRows += batch.RowCount;
-            // Walk every column on every row through the typed accessors so the bench actually
-            // exercises the primitive read path. Earlier shape checked only column 0; in the
-            // narrow schema column 0 is a Symbol so the hot Long/Double accessor went uncalled.
-            var cols = batch.ColumnCount;
-            var rows = batch.RowCount;
-            long acc = 0;
-            for (var c = 0; c < cols; c++)
-            {
-                var t = batch.GetColumnWireType(c);
-                switch (t)
-                {
-                    case QuestDB.Enums.QwpTypeCode.Long:
-                    case QuestDB.Enums.QwpTypeCode.Date:
-                    case QuestDB.Enums.QwpTypeCode.Timestamp:
-                    case QuestDB.Enums.QwpTypeCode.TimestampNanos:
-                        for (var r = 0; r < rows; r++) acc ^= batch.GetLongValue(c, r);
-                        break;
-                    case QuestDB.Enums.QwpTypeCode.Int:
-                    case QuestDB.Enums.QwpTypeCode.IPv4:
-                        for (var r = 0; r < rows; r++) acc ^= batch.GetIntValue(c, r);
-                        break;
-                    case QuestDB.Enums.QwpTypeCode.Double:
-                        for (var r = 0; r < rows; r++)
-                            acc ^= BitConverter.DoubleToInt64Bits(batch.GetDoubleValue(c, r));
-                        break;
-                    case QuestDB.Enums.QwpTypeCode.Float:
-                        for (var r = 0; r < rows; r++)
-                            acc ^= BitConverter.SingleToInt32Bits(batch.GetFloatValue(c, r));
-                        break;
-                    case QuestDB.Enums.QwpTypeCode.Boolean:
-                        for (var r = 0; r < rows; r++) acc ^= batch.GetBoolValue(c, r) ? 1 : 0;
-                        break;
-                    case QuestDB.Enums.QwpTypeCode.Symbol:
-                        for (var r = 0; r < rows; r++) acc ^= batch.GetSymbolId(c, r);
-                        break;
-                    case QuestDB.Enums.QwpTypeCode.Varchar:
-                        for (var r = 0; r < rows; r++) acc ^= batch.GetStringSpan(c, r).Length;
-                        break;
-                }
-            }
-            Checksum ^= acc;
-        }
-    }
 }
 
 /// <summary>

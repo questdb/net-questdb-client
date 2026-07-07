@@ -51,7 +51,7 @@ public class QwpEgressFragmentationFuzzTests
         using var client = QueryClient.New(ConnString(server));
         for (var q = 0; q < 3; q++)
         {
-            var (n, sum) = RunAndSum(client);
+            var (n, sum) = await RunAndSumAsync(client);
             Assert.That(n, Is.EqualTo(rows), $"chunk={chunk} query={q} row_count drift");
             Assert.That(sum, Is.EqualTo(ExpectedSum(rows)), $"chunk={chunk} query={q} id_sum drift");
         }
@@ -64,7 +64,7 @@ public class QwpEgressFragmentationFuzzTests
         const int rows = 2000;
         await using var server = await StartMockAsync(rows, chunk);
         using var client = QueryClient.New(ConnString(server));
-        var (n, sum) = RunAndSum(client);
+        var (n, sum) = await RunAndSumAsync(client);
         Assert.That(n, Is.EqualTo(rows), $"chunk={chunk} row_count drift");
         Assert.That(sum, Is.EqualTo(ExpectedSum(rows)), $"chunk={chunk} id_sum drift");
     }
@@ -74,7 +74,7 @@ public class QwpEgressFragmentationFuzzTests
     {
         await using var server = await StartMockAsync(rows: 3, fragmentSize: 5);
         using var client = QueryClient.New(ConnString(server));
-        var (n, sum) = RunAndSum(client);
+        var (n, sum) = await RunAndSumAsync(client);
         Assert.That(n, Is.EqualTo(3), "chunk=5 row_count drift");
         Assert.That(sum, Is.EqualTo(ExpectedSum(3)), "chunk=5 id_sum drift");
     }
@@ -84,7 +84,7 @@ public class QwpEgressFragmentationFuzzTests
     {
         await using var server = await StartMockAsync(rows: 5, fragmentSize: 0);
         using var client = QueryClient.New(ConnString(server));
-        var (n, sum) = RunAndSum(client);
+        var (n, sum) = await RunAndSumAsync(client);
         Assert.That(n, Is.EqualTo(5));
         Assert.That(sum, Is.EqualTo(ExpectedSum(5)));
     }
@@ -120,11 +120,26 @@ public class QwpEgressFragmentationFuzzTests
         return server;
     }
 
-    private static (int RowCount, long IdSum) RunAndSum(IQwpQueryClient client)
+    private static async Task<(int RowCount, long IdSum)> RunAndSumAsync(IQwpQueryClient client)
     {
-        var handler = new SummingHandler();
-        client.Execute("select 1", handler);
-        return (handler.RowCount, handler.IdSum);
+        var rowCount = 0;
+        long idSum = 0;
+        await using var reader = await client.ExecuteReaderAsync("select 1");
+        while (await reader.ReadBatchAsync())
+        {
+            var batch = reader.Current;
+            if (batch.ColumnCount == 0 || batch.GetColumnWireType(0) != QwpTypeCode.Long)
+            {
+                throw new InvalidOperationException("expected a single LONG id column");
+            }
+
+            for (var r = 0; r < batch.RowCount; r++)
+            {
+                idSum += batch.GetLongValue(0, r);
+            }
+            rowCount += batch.RowCount;
+        }
+        return (rowCount, idSum);
     }
 
     private static byte[] BuildBatch(long requestId, int rowCount)
@@ -163,26 +178,6 @@ public class QwpEgressFragmentationFuzzTests
             z = (z ^ (z >> 27)) * 0x94D0_49BB_1331_11EBUL;
             z ^= z >> 31;
             return 1 + (int)(z % 500);
-        }
-    }
-
-    private sealed class SummingHandler : QwpColumnBatchHandler
-    {
-        public int RowCount { get; private set; }
-        public long IdSum { get; private set; }
-
-        public override void OnBatch(QwpColumnBatch batch)
-        {
-            if (batch.ColumnCount == 0 || batch.GetColumnWireType(0) != QwpTypeCode.Long)
-            {
-                throw new InvalidOperationException("expected a single LONG id column");
-            }
-
-            for (var r = 0; r < batch.RowCount; r++)
-            {
-                IdSum += batch.GetLongValue(0, r);
-            }
-            RowCount += batch.RowCount;
         }
     }
 }

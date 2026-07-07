@@ -33,6 +33,7 @@ using QuestDB;
 using QuestDB.Enums;
 using QuestDB.Qwp;
 using QuestDB.Qwp.Query;
+using QuestDB.Senders;
 using QuestDB.Utils;
 using dummy_http_server;
 
@@ -66,17 +67,16 @@ public class QwpQueryClientEndToEndTests
         await server.StartAsync();
 
         using var client = QueryClient.New(BuildConnString(server, "target=any;"));
-        var handler = new RecordingHandler();
-        client.Execute("SELECT 42", handler);
+        var r = await RunQueryAsync(client, "SELECT 42");
 
-        Assert.That(handler.Batches.Count, Is.EqualTo(1));
-        Assert.That(handler.Batches[0].LongValues, Is.EqualTo(new[] { 42L }));
-        Assert.That(handler.Ended, Is.True);
-        Assert.That(handler.TotalRows, Is.EqualTo(1L));
+        Assert.That(r.Batches.Count, Is.EqualTo(1));
+        Assert.That(r.Batches[0].LongValues, Is.EqualTo(new[] { 42L }));
+        Assert.That(r.Ended, Is.True);
+        Assert.That(r.TotalRows, Is.EqualTo(1L));
     }
 
     [Test]
-    public async Task ServerErrorFrame_TerminatesViaOnError()
+    public async Task ServerErrorFrame_ThrowsQwpQueryException()
     {
         var errFrame = QwpEgressFrameBuilder.BuildQueryError(1L, QwpConstants.StatusParseError, "bad SQL");
 
@@ -89,16 +89,15 @@ public class QwpQueryClientEndToEndTests
         await server.StartAsync();
 
         using var client = QueryClient.New(BuildConnString(server));
-        var handler = new RecordingHandler();
-        client.Execute("SELECT bogus", handler);
+        var r = await RunQueryAsync(client, "SELECT bogus");
 
-        Assert.That(handler.LastErrorStatus, Is.EqualTo(QwpConstants.StatusParseError));
-        Assert.That(handler.LastErrorMessage, Is.EqualTo("bad SQL"));
-        Assert.That(handler.Ended, Is.False);
+        Assert.That(r.ErrorStatus, Is.EqualTo(QwpStatusCode.ParseError));
+        Assert.That(r.ErrorMessage, Is.EqualTo("bad SQL"));
+        Assert.That(r.Ended, Is.False);
     }
 
     [Test]
-    public async Task ExecDoneFrame_DispatchesOnExecDone()
+    public async Task ExecDoneFrame_ReportsOpTypeAndRowsAffected()
     {
         var doneFrame = QwpEgressFrameBuilder.BuildExecDone(1L, opType: 7, rowsAffected: 99L);
 
@@ -111,11 +110,10 @@ public class QwpQueryClientEndToEndTests
         await server.StartAsync();
 
         using var client = QueryClient.New(BuildConnString(server));
-        var handler = new RecordingHandler();
-        client.Execute("INSERT INTO t VALUES(1)", handler);
+        var r = await RunQueryAsync(client, "INSERT INTO t VALUES(1)");
 
-        Assert.That(handler.LastExecOpType, Is.EqualTo((byte)7));
-        Assert.That(handler.LastExecRowsAffected, Is.EqualTo(99L));
+        Assert.That((byte)r.OpType, Is.EqualTo((byte)7));
+        Assert.That(r.RowsAffected, Is.EqualTo(99L));
     }
 
     [Test]
@@ -152,9 +150,8 @@ public class QwpQueryClientEndToEndTests
         Assert.That(client.ServerInfo.ClusterId, Is.EqualTo("qdb-prod"));
         Assert.That(client.ServerInfo.NodeId, Is.EqualTo("node-1"));
 
-        var handler = new RecordingHandler();
-        client.Execute("SELECT 1", handler);
-        Assert.That(handler.Ended, Is.True);
+        var r = await RunQueryAsync(client, "SELECT 1");
+        Assert.That(r.Ended, Is.True);
     }
 
     [Test]
@@ -326,7 +323,7 @@ public class QwpQueryClientEndToEndTests
 
         using var client = QueryClient.New(BuildConnString(server, "target=any;"));
         Assert.That(client.ServerInfo, Is.Not.Null);
-        client.Execute("SELECT 1", new RecordingHandler());
+        await RunQueryAsync(client, "SELECT 1");
     }
 
     [Test]
@@ -368,11 +365,11 @@ public class QwpQueryClientEndToEndTests
         await server.StartAsync();
 
         using var client = QueryClient.New(BuildConnString(server));
-        client.Execute("SELECT $1, $2", b =>
+        await RunQueryAsync(client, "SELECT $1, $2", b =>
         {
             b.SetLong(0, 100L);
             b.SetVarchar(1, "abc");
-        }, new RecordingHandler());
+        });
 
         Assert.That(server.ReceivedFrames.Count, Is.EqualTo(1));
         var requestFrame = server.ReceivedFrames.First();
@@ -393,7 +390,7 @@ public class QwpQueryClientEndToEndTests
         await server.StartAsync();
 
         using var client = QueryClient.New(BuildConnString(server, "client_id=tester/9.9;compression=zstd;compression_level=5;"));
-        client.Execute("SELECT 1", new RecordingHandler());
+        await RunQueryAsync(client, "SELECT 1");
 
         Assert.That(server.LastUpgradeHeaders, Is.Not.Null);
         Assert.That(server.LastUpgradeHeaders![QwpConstants.HeaderClientId], Is.EqualTo("tester/9.9"));
@@ -414,7 +411,7 @@ public class QwpQueryClientEndToEndTests
         await server.StartAsync();
 
         using var client = QueryClient.New(BuildConnString(server, "compression=auto;compression_level=3;"));
-        client.Execute("SELECT 1", new RecordingHandler());
+        await RunQueryAsync(client, "SELECT 1");
 
         Assert.That(server.LastUpgradeHeaders![QwpConstants.HeaderAcceptEncoding], Is.EqualTo("zstd;level=3,raw"));
     }
@@ -431,7 +428,7 @@ public class QwpQueryClientEndToEndTests
         await server.StartAsync();
 
         using var client = QueryClient.New(BuildConnString(server, "username=alice;password=p4ss;"));
-        client.Execute("SELECT 1", new RecordingHandler());
+        await RunQueryAsync(client, "SELECT 1");
 
         var expected = "Basic " + Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes("alice:p4ss"));
         Assert.That(server.LastUpgradeHeaders!["Authorization"], Is.EqualTo(expected));
@@ -449,7 +446,7 @@ public class QwpQueryClientEndToEndTests
         await server.StartAsync();
 
         using var client = QueryClient.New(BuildConnString(server, "token=abc.def;"));
-        client.Execute("SELECT 1", new RecordingHandler());
+        await RunQueryAsync(client, "SELECT 1");
 
         Assert.That(server.LastUpgradeHeaders!["Authorization"], Is.EqualTo("Bearer abc.def"));
     }
@@ -466,7 +463,7 @@ public class QwpQueryClientEndToEndTests
         await server.StartAsync();
 
         using var client = QueryClient.New(BuildConnString(server, "max_batch_rows=512;"));
-        client.Execute("SELECT 1", new RecordingHandler());
+        await RunQueryAsync(client, "SELECT 1");
 
         Assert.That(server.LastUpgradeHeaders![QwpConstants.HeaderMaxBatchRows], Is.EqualTo("512"));
     }
@@ -497,7 +494,7 @@ public class QwpQueryClientEndToEndTests
             }))
             .ToArray();
 
-        Assert.DoesNotThrow(() => client.Execute("SELECT 1", new RecordingHandler()));
+        Assert.DoesNotThrowAsync(async () => await RunQueryAsync(client, "SELECT 1"));
         await Task.WhenAll(cancellations);
     }
 
@@ -519,17 +516,17 @@ public class QwpQueryClientEndToEndTests
         await server.StartAsync();
 
         await using var client = await QueryClient.NewAsync(BuildConnString(server));
-        var handler = new RecordingHandler();
-        await client.ExecuteAsync("SELECT 7", handler);
+        var r = await RunQueryAsync(client, "SELECT 7");
 
-        Assert.That(handler.Ended, Is.True);
-        Assert.That(handler.Batches.Count, Is.EqualTo(1));
+        Assert.That(r.Ended, Is.True);
+        Assert.That(r.Batches.Count, Is.EqualTo(1));
     }
 
     [Test]
-    public async Task HandlerException_AbortsCurrentQuery_KeepsConnectionUsable()
+    public async Task AbandonMidStream_KeepsConnectionUsable()
     {
-        // Regression: handler throw aborts the query but the connection stays usable.
+        // Regression: abandoning a reader mid-stream (dispose after the first batch) drains to the
+        // terminator and leaves the connection usable for the next query.
         var schema = new ResultSchema { Columns = { new SchemaColumn("c", QwpTypeCode.Long) } };
         var batch1 = QwpEgressFrameBuilder.BuildResultBatch(
             1L, 0L, schema,
@@ -563,32 +560,17 @@ public class QwpQueryClientEndToEndTests
 
         using var client = QueryClient.New(BuildConnString(server));
 
-        var thrown = new InvalidOperationException("handler boom");
-        var throwing = new ThrowingHandler(thrown);
-        var caught = Assert.Throws<InvalidOperationException>(
-            () => client.Execute("SELECT 1", throwing));
-        Assert.That(caught, Is.SameAs(thrown));
-        Assert.That(throwing.BatchCount, Is.EqualTo(1));
+        // Read only the first of the two batches, then dispose the reader mid-stream.
+        await using (var reader = await client.ExecuteReaderAsync("SELECT 1"))
+        {
+            Assert.That(await reader.ReadBatchAsync(), Is.True);
+            Assert.That(reader.Current.GetLongValue(0, 0), Is.EqualTo(1L));
+        }
 
-        var ok = new RecordingHandler();
-        client.Execute("SELECT 99", ok);
+        var ok = await RunQueryAsync(client, "SELECT 99");
         Assert.That(ok.Ended, Is.True);
         Assert.That(ok.Batches.Count, Is.EqualTo(1));
         Assert.That(ok.Batches[0].LongValues, Is.EqualTo(new[] { 99L }));
-    }
-
-    private sealed class ThrowingHandler : QwpColumnBatchHandler
-    {
-        private readonly Exception _toThrow;
-        public int BatchCount;
-
-        public ThrowingHandler(Exception toThrow) => _toThrow = toThrow;
-
-        public override void OnBatch(QwpColumnBatch batch)
-        {
-            BatchCount++;
-            throw _toThrow;
-        }
     }
 
     [Test]
@@ -622,7 +604,7 @@ public class QwpQueryClientEndToEndTests
         await server.StartAsync();
 
         using var client = QueryClient.New(BuildConnString(server));
-        client.Execute("SELECT 0", new RecordingHandler());
+        await RunQueryAsync(client, "SELECT 0");
 
         var receivedList = server.ReceivedFrames.ToList();
         Assert.That(receivedList.Count, Is.EqualTo(1));
@@ -656,13 +638,61 @@ public class QwpQueryClientEndToEndTests
 
         using var client = QueryClient.New(BuildConnString(server));
         using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(300));
-        Assert.CatchAsync<OperationCanceledException>(async () =>
-            await client.ExecuteAsync("SELECT 1", new RecordingHandler(), cts.Token));
+        await using (var reader = await client.ExecuteReaderAsync("SELECT 1"))
+        {
+            Assert.That(await reader.ReadBatchAsync(), Is.True);
+            // The second read parks (server went silent); the hard token tears the socket down.
+            Assert.CatchAsync<OperationCanceledException>(async () => await reader.ReadBatchAsync(cts.Token));
+        }
 
-        var ex = Assert.Throws<IngressError>(() =>
-            client.Execute("SELECT 2", new RecordingHandler()));
+        var ex = Assert.ThrowsAsync<IngressError>(async () =>
+            await client.ExecuteReaderAsync("SELECT 2"));
         Assert.That(ex!.code, Is.EqualTo(ErrorCode.SocketError));
         Assert.That(ex.Message, Does.Contain("terminal"));
+    }
+
+    [Test]
+    public async Task StaleCancelRequest_DoesNotRegressTheCancelMarker()
+    {
+        // A pooled cancel resolved against an earlier query can dispatch late, after newer queries
+        // ran on the same client. CancelCore's marker must be monotonic: the stale rid must neither
+        // send a CANCEL nor overwrite a newer pending cancel's marker (which would erase that
+        // query's failover abort, checked by rid equality in ExecuteCoreAsync).
+        var schema = new ResultSchema { Columns = { new SchemaColumn("c", QwpTypeCode.Long) } };
+        await using var server = new DummyQwpServer(new DummyQwpServerOptions
+        {
+            Path = QwpConstants.ReadPath,
+            NegotiatedVersion = "1",
+            FrameHandlerMulti = frame =>
+            {
+                if (frame[0] != QwpConstants.MsgKindQueryRequest) return null;
+                var rid = BinaryPrimitives.ReadInt64LittleEndian(frame.AsSpan(1, 8));
+                return new[]
+                {
+                    QwpEgressFrameBuilder.BuildResultBatch(rid, 0L, schema,
+                        new ResultBatchData { RowCount = 1, Columns = { new FixedColumnData { DenseBytes = LongLe(1L) } } }),
+                    QwpEgressFrameBuilder.BuildResultEnd(rid, 0L, 1L),
+                };
+            },
+        });
+        await server.StartAsync();
+
+        using var client = QueryClient.New(BuildConnString(server));
+        var inner = (QwpQueryWebSocketClient)client;
+        var seam = (QuestDB.Pooling.IPooledQueryClientInner)client;
+
+        await RunQueryAsync(client, "SELECT 1"); // rid 1, completes
+        await RunQueryAsync(client, "SELECT 2"); // rid 2, completes
+
+        seam.CancelRequest(2);
+        Assert.That(inner.CancelTargetRid, Is.EqualTo(2L));
+
+        seam.CancelRequest(1); // stale cancel dispatched late — must not regress the marker
+        Assert.That(inner.CancelTargetRid, Is.EqualTo(2L), "a stale rid must never regress the cancel marker");
+
+        // The stale rids matched no in-flight query, so nothing was cancelled and the client is intact.
+        var r = await RunQueryAsync(client, "SELECT 3");
+        Assert.That(r.Ended, Is.True);
     }
 
     [Test]
@@ -678,7 +708,7 @@ public class QwpQueryClientEndToEndTests
 
         using var client = QueryClient.New(BuildConnString(server));
         var hugeSql = new string('x', QwpConstants.MaxSqlLengthBytes + 1);
-        var ex = Assert.Throws<IngressError>(() => client.Execute(hugeSql, new RecordingHandler()));
+        var ex = Assert.ThrowsAsync<IngressError>(async () => await client.ExecuteReaderAsync(hugeSql));
         Assert.That(ex!.code, Is.EqualTo(ErrorCode.InvalidApiCall));
     }
 
@@ -724,14 +754,12 @@ public class QwpQueryClientEndToEndTests
         await server.StartAsync();
 
         using var client = QueryClient.New(BuildConnString(server));
-        var h1 = new RecordingHandler();
-        client.Execute("SELECT 1", h1);
-        Assert.That(h1.Ended, Is.True);
+        var r1 = await RunQueryAsync(client, "SELECT 1");
+        Assert.That(r1.Ended, Is.True);
 
-        var h2 = new RecordingHandler();
-        client.Execute("SELECT 2", h2);
-        Assert.That(h2.Ended, Is.True);
-        Assert.That(h2.Batches.Count, Is.EqualTo(1));
+        var r2 = await RunQueryAsync(client, "SELECT 2");
+        Assert.That(r2.Ended, Is.True);
+        Assert.That(r2.Batches.Count, Is.EqualTo(1));
     }
 
     [Test]
@@ -761,7 +789,7 @@ public class QwpQueryClientEndToEndTests
         // initial_credit small enough that each batch crosses the half-threshold and triggers a CREDIT.
         var options = new QueryOptions(BuildConnString(server)) { initial_credit = 50 };
         using var client = QueryClient.New(options);
-        client.Execute("SELECT 1", new RecordingHandler());
+        await RunQueryAsync(client, "SELECT 1");
 
         var deadline = DateTime.UtcNow.AddSeconds(2);
         List<byte[]> creditFrames;
@@ -797,7 +825,7 @@ public class QwpQueryClientEndToEndTests
         await server.StartAsync();
 
         using var client = QueryClient.New(BuildConnString(server, "failover=off;"));
-        var ex = Assert.Throws<IngressError>(() => client.Execute("SELECT 1", new RecordingHandler()));
+        var ex = Assert.ThrowsAsync<IngressError>(async () => await RunQueryAsync(client, "SELECT 1"));
         Assert.That(ex!.code, Is.EqualTo(ErrorCode.ProtocolViolation));
         StringAssert.Contains("magic", ex.Message);
     }
@@ -822,7 +850,7 @@ public class QwpQueryClientEndToEndTests
         await server.StartAsync();
 
         using var client = QueryClient.New(BuildConnString(server, "failover=off;"));
-        var ex = Assert.Throws<IngressError>(() => client.Execute("SELECT 1", new RecordingHandler()));
+        var ex = Assert.ThrowsAsync<IngressError>(async () => await RunQueryAsync(client, "SELECT 1"));
         Assert.That(ex!.code, Is.EqualTo(ErrorCode.ProtocolViolation));
     }
 
@@ -845,7 +873,7 @@ public class QwpQueryClientEndToEndTests
         await server.StartAsync();
 
         using var client = QueryClient.New(BuildConnString(server, "failover=off;"));
-        var ex = Assert.Throws<IngressError>(() => client.Execute("SELECT 1", new RecordingHandler()));
+        var ex = Assert.ThrowsAsync<IngressError>(async () => await RunQueryAsync(client, "SELECT 1"));
         Assert.That(ex!.code, Is.EqualTo(ErrorCode.ProtocolViolation));
         StringAssert.Contains("unknown egress frame", ex.Message);
     }
@@ -875,16 +903,15 @@ public class QwpQueryClientEndToEndTests
         await server.StartAsync();
 
         using var client = QueryClient.New(BuildConnString(server, "compression=zstd;"));
-        var handler = new RecordingHandler();
-        client.Execute("SELECT v FROM t", handler);
+        var r = await RunQueryAsync(client, "SELECT v FROM t");
 
-        Assert.That(handler.Batches.Count, Is.EqualTo(1));
-        Assert.That(handler.Batches[0].LongValues, Is.EqualTo(new[] { 11L, 22L, 33L, 44L }));
-        Assert.That(handler.Ended, Is.True);
+        Assert.That(r.Batches.Count, Is.EqualTo(1));
+        Assert.That(r.Batches[0].LongValues, Is.EqualTo(new[] { 11L, 22L, 33L, 44L }));
+        Assert.That(r.Ended, Is.True);
     }
 
     [Test]
-    public async Task Failover_TransportFailsOnFirstEndpoint_RetriesNextAndFiresOnFailoverReset()
+    public async Task Failover_TransportFailsOnFirstEndpoint_RetriesNext_FlagsFailoverReset()
     {
         var schema = new ResultSchema { Columns = { new SchemaColumn("c", QwpTypeCode.Long) } };
         var data = new ResultBatchData { RowCount = 1, Columns = { new FixedColumnData { DenseBytes = LongLe(7L) } } };
@@ -922,18 +949,17 @@ public class QwpQueryClientEndToEndTests
                    "target=primary;failover=on;failover_max_attempts=4;" +
                    "failover_backoff_initial_ms=10;failover_backoff_max_ms=20;";
         using var client = QueryClient.New(conn);
-        var handler = new RecordingHandler();
-        client.Execute("SELECT 7", handler);
+        var r = await RunQueryAsync(client, "SELECT 7");
 
-        Assert.That(handler.FailoverResets.Count, Is.GreaterThanOrEqualTo(1));
-        Assert.That(handler.FailoverResets[^1]?.NodeId, Is.EqualTo("node-b"));
-        Assert.That(handler.Batches.Count, Is.EqualTo(1));
-        Assert.That(handler.Batches[0].LongValues, Is.EqualTo(new[] { 7L }));
-        Assert.That(handler.Ended, Is.True);
+        Assert.That(r.FailoverResets.Count, Is.GreaterThanOrEqualTo(1));
+        Assert.That(r.FailoverResets[^1]?.NodeId, Is.EqualTo("node-b"));
+        Assert.That(r.Batches.Count, Is.EqualTo(1));
+        Assert.That(r.Batches[0].LongValues, Is.EqualTo(new[] { 7L }));
+        Assert.That(r.Ended, Is.True);
     }
 
     [Test]
-    public async Task MidQueryCancel_ReturnsQueryErrorCancelled()
+    public async Task MidStreamCancel_ViaReaderCancel_EndsWithWasCancelled()
     {
         var schema = new ResultSchema { Columns = { new SchemaColumn("c", QwpTypeCode.Long) } };
         var batch1 = QwpEgressFrameBuilder.BuildResultBatch(
@@ -957,13 +983,13 @@ public class QwpQueryClientEndToEndTests
         await server.StartAsync();
 
         using var client = QueryClient.New(BuildConnString(server));
-        var handler = new RecordingHandler();
-        handler.OnBatchHook = _ => client.Cancel();
-        client.Execute("SELECT 1", handler);
+        // Cancel after the first batch; the server answers the CANCEL with a STATUS_CANCELLED
+        // terminator, which the reader surfaces as a clean end with WasCancelled set.
+        var r = await RunQueryAsync(client, "SELECT 1", perBatch: reader => reader.Cancel());
 
-        Assert.That(handler.Batches.Count, Is.EqualTo(1));
-        Assert.That(handler.LastErrorStatus, Is.EqualTo(QwpConstants.StatusCancelled));
-        Assert.That(handler.LastErrorMessage, Is.EqualTo("cancelled by client"));
+        Assert.That(r.Batches.Count, Is.EqualTo(1));
+        Assert.That(r.WasCancelled, Is.True);
+        Assert.That(r.Ended, Is.False);
     }
 
     // CacheReset_SchemaBitClearsRegistry_NextReferenceModeBatchFails — removed:
@@ -995,12 +1021,14 @@ public class QwpQueryClientEndToEndTests
         await server.StartAsync();
 
         using var client = QueryClient.New(BuildConnString(server));
-        var first = client.ExecuteAsync("SELECT 1", new RecordingHandler());
+        await using var first = await client.ExecuteReaderAsync("SELECT 1");
         await gate.Task;
 
-        var ex = Assert.Throws<IngressError>(() => client.Execute("SELECT 2", new RecordingHandler()));
+        // The first reader is still open, so a second query on the same client is rejected.
+        var ex = Assert.ThrowsAsync<IngressError>(async () => await client.ExecuteReaderAsync("SELECT 2"));
         Assert.That(ex!.code, Is.EqualTo(ErrorCode.InvalidApiCall));
-        await first;
+
+        while (await first.ReadBatchAsync()) { }
     }
 
     [Test]
@@ -1060,7 +1088,7 @@ public class QwpQueryClientEndToEndTests
                    "failover_backoff_initial_ms=10;failover_backoff_max_ms=20;";
         using var client = QueryClient.New(conn);
 
-        var ex = Assert.Catch<IngressError>(() => client.Execute("SELECT 1", new RecordingHandler()));
+        var ex = Assert.CatchAsync<IngressError>(async () => await RunQueryAsync(client, "SELECT 1"));
         Assert.That(ex!.code, Is.EqualTo(ErrorCode.AuthError));
     }
 
@@ -1101,10 +1129,9 @@ public class QwpQueryClientEndToEndTests
         using var client = QueryClient.New(conn);
         Assert.That(client.ServerInfo!.NodeId, Is.EqualTo("node-c"));
 
-        var handler = new RecordingHandler();
-        client.Execute("SELECT 99", handler);
-        Assert.That(handler.Batches[0].LongValues, Is.EqualTo(new[] { 99L }));
-        Assert.That(handler.Ended, Is.True);
+        var r = await RunQueryAsync(client, "SELECT 99");
+        Assert.That(r.Batches[0].LongValues, Is.EqualTo(new[] { 99L }));
+        Assert.That(r.Ended, Is.True);
     }
 
     [Test]
@@ -1140,7 +1167,7 @@ public class QwpQueryClientEndToEndTests
                    "failover_backoff_initial_ms=5;failover_backoff_max_ms=10;";
         using var client = QueryClient.New(conn);
 
-        var ex = Assert.Throws<IngressError>(() => client.Execute("SELECT 1", new RecordingHandler()));
+        var ex = Assert.ThrowsAsync<IngressError>(async () => await RunQueryAsync(client, "SELECT 1"));
         Assert.That(ex!.code, Is.EqualTo(ErrorCode.SocketError));
     }
 
@@ -1206,9 +1233,55 @@ public class QwpQueryClientEndToEndTests
             sw.Stop();
 
             Assert.That(ex!.code, Is.EqualTo(ErrorCode.SocketError));
-            StringAssert.Contains("auth_timeout", ex.Message);
+            // auth_timeout_ms is the legacy alias of connect_timeout on the egress path; the bound is
+            // surfaced under the canonical connect_timeout name.
+            StringAssert.Contains("connect_timeout", ex.Message);
             Assert.That(sw.ElapsedMilliseconds, Is.LessThan(3000),
-                "auth_timeout=300ms should bound connect well below OS-level TCP timeout");
+                "auth_timeout_ms=300ms should bound connect well below OS-level TCP timeout");
+        }
+        finally
+        {
+            acceptCts.Cancel();
+            listener.Stop();
+            foreach (var c in held) try { c.Close(); } catch { }
+        }
+    }
+
+    [Test]
+    public void ConnectTimeout_BoundsUpgradeToBlackholeHost()
+    {
+        // The TCP connect succeeds (listener accepts) but the WebSocket upgrade never completes, so
+        // connect_timeout must abort the attempt at the upgrade layer.
+        var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        var port = ((IPEndPoint)listener.LocalEndpoint).Port;
+        var held = new List<TcpClient>();
+        using var acceptCts = new CancellationTokenSource();
+        var acceptTask = Task.Run(async () =>
+        {
+            try
+            {
+                while (!acceptCts.IsCancellationRequested)
+                {
+                    var c = await listener.AcceptTcpClientAsync(acceptCts.Token);
+                    held.Add(c);
+                }
+            }
+            catch { }
+        });
+
+        try
+        {
+            var conn = $"ws::addr=127.0.0.1:{port};path={QwpConstants.ReadPath};" +
+                       "connect_timeout=300;failover=off;";
+            var sw = Stopwatch.StartNew();
+            var ex = Assert.Throws<IngressError>(() => QueryClient.New(conn));
+            sw.Stop();
+
+            Assert.That(ex!.code, Is.EqualTo(ErrorCode.SocketError));
+            StringAssert.Contains("connect_timeout", ex.Message);
+            Assert.That(sw.ElapsedMilliseconds, Is.LessThan(3000),
+                "connect_timeout=300ms should bound the upgrade well below OS-level TCP timeout");
         }
         finally
         {
@@ -1241,7 +1314,7 @@ public class QwpQueryClientEndToEndTests
         using var client = QueryClient.New(conn);
 
         var sw = Stopwatch.StartNew();
-        var ex = Assert.Throws<IngressError>(() => client.Execute("SELECT 1", new RecordingHandler()));
+        var ex = Assert.ThrowsAsync<IngressError>(async () => await RunQueryAsync(client, "SELECT 1"));
         sw.Stop();
 
         Assert.That(ex!.code, Is.EqualTo(ErrorCode.SocketError));
@@ -1299,16 +1372,14 @@ public class QwpQueryClientEndToEndTests
         Assert.That(client.ServerInfo!.NodeId, Is.EqualTo("node-a"));
         aConnections++;
 
-        var handler = new RecordingHandler();
-        client.Execute("SELECT 7", handler);
-        Assert.That(handler.Ended, Is.True);
-        Assert.That(handler.FailoverResets[^1]?.NodeId, Is.EqualTo("node-b"));
+        var r1 = await RunQueryAsync(client, "SELECT 7");
+        Assert.That(r1.Ended, Is.True);
+        Assert.That(r1.FailoverResets[^1]?.NodeId, Is.EqualTo("node-b"));
 
-        var handler2 = new RecordingHandler();
-        client.Execute("SELECT 7 again", handler2);
-        Assert.That(handler2.Ended, Is.True);
-        Assert.That(handler2.FailoverResets, Is.Empty,
-            "second Execute on the now-Healthy B should not reconnect — A was demoted by mid-stream failure");
+        var r2 = await RunQueryAsync(client, "SELECT 7 again");
+        Assert.That(r2.Ended, Is.True);
+        Assert.That(r2.FailoverResets, Is.Empty,
+            "second query on the now-Healthy B should not reconnect — A was demoted by mid-stream failure");
         Assert.That(bConnections, Is.GreaterThanOrEqualTo(2));
     }
 
@@ -1334,7 +1405,7 @@ public class QwpQueryClientEndToEndTests
         await server.StartAsync();
 
         using var client = QueryClient.New(BuildConnString(server, "compression=zstd;failover=off;"));
-        var ex = Assert.Throws<IngressError>(() => client.Execute("SELECT 1", new RecordingHandler()));
+        var ex = Assert.ThrowsAsync<IngressError>(async () => await RunQueryAsync(client, "SELECT 1"));
         Assert.That(ex!.code, Is.EqualTo(ErrorCode.ProtocolViolation));
         StringAssert.Contains("missing prelude", ex.Message);
     }
@@ -1366,7 +1437,7 @@ public class QwpQueryClientEndToEndTests
         await server.StartAsync();
 
         using var client = QueryClient.New(BuildConnString(server, "compression=zstd;failover=off;"));
-        var ex = Assert.Throws<IngressError>(() => client.Execute("SELECT 1", new RecordingHandler()));
+        var ex = Assert.ThrowsAsync<IngressError>(async () => await RunQueryAsync(client, "SELECT 1"));
         Assert.That(ex!.code, Is.EqualTo(ErrorCode.ProtocolViolation));
         StringAssert.Contains("empty compressed body", ex.Message);
     }
@@ -1396,7 +1467,7 @@ public class QwpQueryClientEndToEndTests
         await server.StartAsync();
 
         using var client = QueryClient.New(BuildConnString(server, "compression=zstd;failover=off;"));
-        var ex = Assert.Throws<IngressError>(() => client.Execute("SELECT 1", new RecordingHandler()));
+        var ex = Assert.ThrowsAsync<IngressError>(async () => await RunQueryAsync(client, "SELECT 1"));
         Assert.That(ex!.code, Is.EqualTo(ErrorCode.ProtocolViolation));
         StringAssert.Contains("exceeds", ex.Message);
     }
@@ -1428,7 +1499,7 @@ public class QwpQueryClientEndToEndTests
         await server.StartAsync();
 
         using var client = QueryClient.New(BuildConnString(server, "compression=zstd;failover=off;"));
-        Assert.Catch(() => client.Execute("SELECT 1", new RecordingHandler()));
+        Assert.CatchAsync(async () => await RunQueryAsync(client, "SELECT 1"));
     }
 
     [Test]
@@ -1453,13 +1524,12 @@ public class QwpQueryClientEndToEndTests
         await server.StartAsync();
 
         using var client = QueryClient.New(BuildConnString(server, "compression=zstd;"));
-        var handler = new RecordingHandler();
-        client.Execute("SELECT c", handler);
+        var r = await RunQueryAsync(client, "SELECT c");
 
-        Assert.That(handler.Batches.Count, Is.EqualTo(2));
-        Assert.That(handler.Batches[0].LongValues, Is.EqualTo(new[] { 11L }));
-        Assert.That(handler.Batches[1].LongValues, Is.EqualTo(new[] { 22L }));
-        Assert.That(handler.Ended, Is.True);
+        Assert.That(r.Batches.Count, Is.EqualTo(2));
+        Assert.That(r.Batches[0].LongValues, Is.EqualTo(new[] { 11L }));
+        Assert.That(r.Batches[1].LongValues, Is.EqualTo(new[] { 22L }));
+        Assert.That(r.Ended, Is.True);
     }
 
     private static byte[] BuildZstdBatchPayloadCompressing(byte[] body)
@@ -1505,7 +1575,7 @@ public class QwpQueryClientEndToEndTests
         await server.StartAsync();
 
         using var client = QueryClient.New(BuildConnString(server, "failover=off;"));
-        var ex = Assert.Throws<IngressError>(() => client.Execute("SELECT c", new RecordingHandler()));
+        var ex = Assert.ThrowsAsync<IngressError>(async () => await RunQueryAsync(client, "SELECT c"));
         Assert.That(ex!.Message, Does.Contain("out-of-order"));
         Assert.That(ex.Message, Does.Contain("expected batch_seq=1"));
     }
@@ -1533,7 +1603,7 @@ public class QwpQueryClientEndToEndTests
         await server.StartAsync();
 
         using var client = QueryClient.New(BuildConnString(server, "failover=off;"));
-        var ex = Assert.Throws<IngressError>(() => client.Execute("SELECT c", new RecordingHandler()));
+        var ex = Assert.ThrowsAsync<IngressError>(async () => await RunQueryAsync(client, "SELECT c"));
         Assert.That(ex!.Message, Does.Contain("arrived before the schema-bearing batch_seq=0"));
     }
 
@@ -1572,7 +1642,7 @@ public class QwpQueryClientEndToEndTests
             "failover_backoff_initial_ms=10;failover_backoff_max_ms=20;");
         using var client = QueryClient.New(conn);
 
-        var ex = Assert.Throws<IngressError>(() => client.Execute("SELECT 1", new RecordingHandler()));
+        var ex = Assert.ThrowsAsync<IngressError>(async () => await RunQueryAsync(client, "SELECT 1"));
         Assert.That(ex!.code, Is.EqualTo(ErrorCode.ProtocolViolation));
         Assert.That(server.UpgradeCount, Is.EqualTo(1),
             "corrupt-frame ProtocolViolation is terminal — failover must not reconnect");
@@ -1604,7 +1674,7 @@ public class QwpQueryClientEndToEndTests
             "failover_backoff_initial_ms=10;failover_backoff_max_ms=20;");
         using var client = QueryClient.New(conn);
 
-        var ex = Assert.Throws<IngressError>(() => client.Execute("SELECT 1", new RecordingHandler()));
+        var ex = Assert.ThrowsAsync<IngressError>(async () => await RunQueryAsync(client, "SELECT 1"));
         Assert.That(ex!.code, Is.EqualTo(ErrorCode.ProtocolViolation));
         Assert.That(server.UpgradeCount, Is.EqualTo(1),
             "corrupt-frame ProtocolViolation is terminal — failover must not reconnect");
@@ -1633,14 +1703,14 @@ public class QwpQueryClientEndToEndTests
             "failover_backoff_initial_ms=10;failover_backoff_max_ms=20;");
         using var client = QueryClient.New(conn);
 
-        var ex = Assert.Throws<IngressError>(() => client.Execute("INSERT INTO t VALUES(1)", new RecordingHandler()));
+        var ex = Assert.ThrowsAsync<IngressError>(async () => await RunQueryAsync(client, "INSERT INTO t VALUES(1)"));
         Assert.That(ex!.code, Is.EqualTo(ErrorCode.ProtocolViolation));
         Assert.That(server.UpgradeCount, Is.EqualTo(1),
             "corrupt-frame ProtocolViolation is terminal — failover must not reconnect");
     }
 
     [Test]
-    public async Task HandlerThrowOnExecDone_DoesNotMarkClientTerminal()
+    public async Task ExecDone_BackToBackQueries_ClientStaysUsable()
     {
         var done1 = QwpEgressFrameBuilder.BuildExecDone(1L, opType: 1, rowsAffected: 5L);
         var done2 = QwpEgressFrameBuilder.BuildExecDone(2L, opType: 1, rowsAffected: 5L);
@@ -1661,17 +1731,15 @@ public class QwpQueryClientEndToEndTests
 
         using var client = QueryClient.New(BuildConnString(server));
 
-        var throwing = new RecordingHandler();
-        throwing.OnExecDoneHook = () => throw new InvalidOperationException("exec handler boom");
-        Assert.Throws<InvalidOperationException>(() => client.Execute("INSERT ...", throwing));
+        var r1 = await RunQueryAsync(client, "INSERT ...");
+        Assert.That(r1.RowsAffected, Is.EqualTo(5L));
 
-        var second = new RecordingHandler();
-        Assert.DoesNotThrow(() => client.Execute("INSERT ...", second));
-        Assert.That(second.LastExecRowsAffected, Is.EqualTo(5L));
+        var r2 = await RunQueryAsync(client, "INSERT ...");
+        Assert.That(r2.RowsAffected, Is.EqualTo(5L));
     }
 
     [Test]
-    public async Task HandlerThrowOnEnd_DoesNotMarkClientTerminal()
+    public async Task ResultEnd_BackToBackQueries_ClientStaysUsable()
     {
         var schema = new ResultSchema
         {
@@ -1703,15 +1771,14 @@ public class QwpQueryClientEndToEndTests
 
         using var client = QueryClient.New(BuildConnString(server));
 
-        var throwing = new RecordingHandler();
-        throwing.OnEndHook = () => throw new InvalidOperationException("handler boom");
-        Assert.Throws<InvalidOperationException>(() => client.Execute("SELECT c", throwing));
+        var r1 = await RunQueryAsync(client, "SELECT c");
+        Assert.That(r1.Ended, Is.True);
+        Assert.That(r1.TotalRows, Is.EqualTo(1L));
 
-        // Connection is wire-side healthy: subsequent Execute should succeed.
-        var second = new RecordingHandler();
-        Assert.DoesNotThrow(() => client.Execute("SELECT c", second));
-        Assert.That(second.Ended, Is.True);
-        Assert.That(second.TotalRows, Is.EqualTo(1L));
+        // Connection is wire-side healthy: a subsequent query should succeed.
+        var r2 = await RunQueryAsync(client, "SELECT c");
+        Assert.That(r2.Ended, Is.True);
+        Assert.That(r2.TotalRows, Is.EqualTo(1L));
     }
 
     private static string BuildConnString(DummyQwpServer server, string extra = "")
@@ -1737,57 +1804,68 @@ public class QwpQueryClientEndToEndTests
         return bytes;
     }
 
-    private sealed class RecordingHandler : QwpColumnBatchHandler
+    // Drives one query through the pull reader and collects the result facts each test asserts on,
+    // so a test body reads like `var r = await RunQueryAsync(client, sql)` followed by its checks.
+    // A QUERY_ERROR surfaces as a caught QwpQueryException recorded in ErrorStatus/ErrorMessage; a
+    // cooperative cancel ends cleanly with WasCancelled set. Any other exception (IngressError /
+    // OperationCanceledException) propagates to the caller unchanged.
+    private sealed class QueryResult
     {
         public sealed record CapturedBatch(long RequestId, long BatchSeq, int RowCount, long[] LongValues);
 
         public List<CapturedBatch> Batches { get; } = new();
-        public bool Ended { get; private set; }
-        public long TotalRows { get; private set; }
-        public byte LastErrorStatus { get; private set; }
-        public string LastErrorMessage { get; private set; } = string.Empty;
-        public byte LastExecOpType { get; private set; }
-        public long LastExecRowsAffected { get; private set; }
+        public bool Ended { get; set; }
+        public long TotalRows { get; set; }
+        public QwpOpType OpType { get; set; } = QwpOpType.None;
+        public long RowsAffected { get; set; }
+        public bool WasCancelled { get; set; }
+        public QwpStatusCode? ErrorStatus { get; set; }
+        public string? ErrorMessage { get; set; }
         public List<QwpServerInfo?> FailoverResets { get; } = new();
-        public Action<QwpColumnBatch>? OnBatchHook { get; set; }
-        public Action? OnEndHook { get; set; }
-        public Action? OnExecDoneHook { get; set; }
+        public QwpServerInfo? LastServerInfo { get; set; }
+    }
 
-        public override void OnBatch(QwpColumnBatch batch)
+    private static async Task<QueryResult> RunQueryAsync(
+        IQwpQueryClient client, string sql, QwpBindSetter? binds = null,
+        Action<IQwpQueryReader>? perBatch = null)
+    {
+        var result = new QueryResult();
+        await using var reader = binds is null
+            ? await client.ExecuteReaderAsync(sql)
+            : await client.ExecuteReaderAsync(sql, binds);
+        try
         {
-            var rows = new long[batch.RowCount];
-            if (batch.ColumnCount > 0 && batch.GetColumnWireType(0) == QwpTypeCode.Long)
+            while (await reader.ReadBatchAsync())
             {
-                for (var r = 0; r < batch.RowCount; r++) rows[r] = batch.GetLongValue(0, r);
+                if (reader.FailoverReset) result.FailoverResets.Add(reader.ServerInfo);
+                var batch = reader.Current;
+                var rows = new long[batch.RowCount];
+                if (batch.ColumnCount > 0 && batch.GetColumnWireType(0) == QwpTypeCode.Long)
+                {
+                    for (var r = 0; r < batch.RowCount; r++) rows[r] = batch.GetLongValue(0, r);
+                }
+                result.Batches.Add(new QueryResult.CapturedBatch(
+                    batch.RequestId, batch.BatchSeq, batch.RowCount, rows));
+                perBatch?.Invoke(reader);
             }
-            Batches.Add(new CapturedBatch(batch.RequestId, batch.BatchSeq, batch.RowCount, rows));
-            OnBatchHook?.Invoke(batch);
+        }
+        catch (QwpQueryException ex)
+        {
+            if (reader.FailoverReset) result.FailoverResets.Add(reader.ServerInfo);
+            result.ErrorStatus = ex.Status;
+            result.ErrorMessage = ex.ServerMessage;
+            result.LastServerInfo = reader.ServerInfo;
+            return result;
         }
 
-        public override void OnEnd(long totalRows)
-        {
-            Ended = true;
-            TotalRows = totalRows;
-            OnEndHook?.Invoke();
-        }
-
-        public override void OnError(QwpStatusCode status, string message)
-        {
-            LastErrorStatus = (byte)status;
-            LastErrorMessage = message;
-        }
-
-        public override void OnExecDone(QwpOpType opType, long rowsAffected)
-        {
-            LastExecOpType = (byte)opType;
-            LastExecRowsAffected = rowsAffected;
-            OnExecDoneHook?.Invoke();
-        }
-
-        public override void OnFailoverReset(QwpServerInfo? newNode)
-        {
-            FailoverResets.Add(newNode);
-        }
+        if (reader.FailoverReset) result.FailoverResets.Add(reader.ServerInfo);
+        result.WasCancelled = reader.WasCancelled;
+        result.TotalRows = reader.TotalRows;
+        result.OpType = reader.OpType;
+        result.RowsAffected = reader.RowsAffected;
+        result.LastServerInfo = reader.ServerInfo;
+        result.Ended = !reader.WasCancelled && reader.OpType == QwpOpType.None;
+        return result;
     }
 }
 

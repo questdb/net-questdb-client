@@ -23,7 +23,6 @@
  ******************************************************************************/
 
 using QuestDB;
-using QuestDB.Enums;
 using QuestDB.Qwp.Query;
 using System;
 using System.Threading.Tasks;
@@ -52,56 +51,65 @@ switch (example)
 
 static async Task RunBasic(string connStr)
 {
-    using var client = QueryClient.New(connStr);
-    var handler = new PrintingHandler();
-    await client.ExecuteAsync("SELECT 1 AS one, 'hello' AS greeting", handler);
+    await using var client = await QueryClient.NewAsync(connStr);
+    await using var reader = await client.ExecuteReaderAsync("SELECT 1 AS one, 'hello' AS greeting");
+    while (await reader.ReadBatchAsync())
+    {
+        PrintBatch(reader.Current);
+    }
+    Console.WriteLine($"-- end (totalRows={reader.TotalRows}) --");
 }
 
 static async Task RunWithBinds(string connStr)
 {
-    using var client = QueryClient.New(connStr);
-    var handler = new PrintingHandler();
+    await using var client = await QueryClient.NewAsync(connStr);
     QwpBindSetter binds = b =>
     {
         b.SetLong(0, 42L);
         b.SetVarchar(1, "hello");
     };
-    await client.ExecuteAsync("SELECT $1 AS num, $2 AS s", binds, handler);
+    await using var reader = await client.ExecuteReaderAsync("SELECT $1 AS num, $2 AS s", binds);
+    while (await reader.ReadBatchAsync())
+    {
+        PrintBatch(reader.Current);
+    }
+    Console.WriteLine($"-- end (totalRows={reader.TotalRows}) --");
 }
 
 static async Task RunErrorHandling(string connStr)
 {
-    using var client = QueryClient.New(connStr);
-    var handler = new PrintingHandler();
-    await client.ExecuteAsync("SELECT * FROM no_such_table_does_it", handler);
-}
-
-internal sealed class PrintingHandler : QwpColumnBatchHandler
-{
-    public override void OnBatch(QwpColumnBatch batch)
+    await using var client = await QueryClient.NewAsync(connStr);
+    try
     {
-        Console.WriteLine($"-- batch_seq={batch.BatchSeq} rows={batch.RowCount} cols={batch.ColumnCount} --");
-        for (var c = 0; c < batch.ColumnCount; c++)
+        await using var reader = await client.ExecuteReaderAsync("SELECT * FROM no_such_table_does_it");
+        while (await reader.ReadBatchAsync())
         {
-            Console.Write($"{batch.GetColumnName(c)}({batch.GetColumnWireType(c)})\t");
-        }
-        Console.WriteLine();
-        for (var r = 0; r < batch.RowCount; r++)
-        {
-            for (var c = 0; c < batch.ColumnCount; c++)
-            {
-                Console.Write(batch.IsNull(c, r) ? "<null>" : batch.GetString(c, r) ?? "<null>");
-                Console.Write('\t');
-            }
-            Console.WriteLine();
+            PrintBatch(reader.Current);
         }
     }
+    catch (QwpQueryException ex)
+    {
+        // A query-level error ends at a clean frame boundary; the client stays usable.
+        Console.Error.WriteLine($"-- error {ex.Status} (0x{(byte)ex.Status:X2}): {ex.ServerMessage} --");
+    }
+}
 
-    public override void OnEnd(long totalRows) => Console.WriteLine($"-- end (totalRows={totalRows}) --");
-    public override void OnError(QwpStatusCode status, string message) =>
-        Console.Error.WriteLine($"-- error {status} (0x{(byte)status:X2}): {message} --");
-    public override void OnExecDone(QwpOpType opType, long rowsAffected) =>
-        Console.WriteLine($"-- exec_done op={opType} rows={rowsAffected} --");
-    public override void OnFailoverReset(QwpServerInfo? newNode) =>
-        Console.WriteLine($"-- failover reset (new node: {newNode?.NodeId ?? "<unknown>"}) --");
+static void PrintBatch(QwpColumnBatch batch)
+{
+    Console.WriteLine($"-- batch_seq={batch.BatchSeq} rows={batch.RowCount} cols={batch.ColumnCount} --");
+    for (var c = 0; c < batch.ColumnCount; c++)
+    {
+        Console.Write($"{batch.GetColumnName(c)}({batch.GetColumnWireType(c)})\t");
+    }
+    Console.WriteLine();
+    for (var r = 0; r < batch.RowCount; r++)
+    {
+        for (var c = 0; c < batch.ColumnCount; c++)
+        {
+            // Values (and spans) are only valid until the next ReadBatchAsync; printing copies them.
+            Console.Write(batch.IsNull(c, r) ? "<null>" : batch.GetString(c, r) ?? "<null>");
+            Console.Write('\t');
+        }
+        Console.WriteLine();
+    }
 }

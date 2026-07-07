@@ -523,16 +523,6 @@ internal sealed class QwpColumn
         AppendDecimalAtSize(QwpTypeCode.Decimal256, value, QwpConstants.Decimal256SizeBytes);
     }
 
-    public void AppendDecimal64(long unscaledValue, byte scale)
-    {
-        ValidateDecimalScale(scale, QwpConstants.MaxDecimal64Scale, "Decimal64");
-        AppendDecimalFromMantissa(
-            QwpTypeCode.Decimal64,
-            new BigInteger(unscaledValue),
-            scale,
-            QwpConstants.Decimal64SizeBytes);
-    }
-
     public void AppendDecimal128(long lo, long hi, byte scale)
     {
         ValidateDecimalScale(scale, QwpConstants.MaxDecimal128Scale, "Decimal128");
@@ -587,9 +577,6 @@ internal sealed class QwpColumn
         // Fast path: no rescale needed — either this is the first non-null write (which locks the
         // column scale to this value's scale) or the value's scale already matches the locked scale.
         // Serialise the 96-bit mantissa straight into FixedData as fixed-width two's-complement.
-        // BigInteger is a struct, but the slow path still allocates on the heap per value: its uint[]
-        // backing store (whenever the magnitude is past int range) plus the byte[] that ToByteArray
-        // returns. A scale mismatch falls back to that BigInteger rescale arithmetic below.
         if (!DecimalScaleSet || scale == DecimalScale)
         {
             AssertOrSetType(code);
@@ -602,12 +589,8 @@ internal sealed class QwpColumn
             return;
         }
 
-        var mantissa = (new BigInteger((uint)bits[2]) << 64)
-            | (new BigInteger((uint)bits[1]) << 32)
-            | new BigInteger((uint)bits[0]);
-        if (negative) mantissa = -mantissa;
-
-        AppendDecimalFromMantissa(code, mantissa, scale, sizeBytes);
+        // Scale mismatch: rescale this BCL decimal to the locked column scale (see AppendDecimalRescaled).
+        AppendDecimalRescaled(code, value, sizeBytes);
     }
 
     // Writes a 96-bit magnitude (three little-endian 32-bit words) with the given sign into FixedData
@@ -730,6 +713,68 @@ internal sealed class QwpColumn
         AdvanceNonNull();
     }
 
+    // System.Decimal tops out at a 96-bit mantissa / scale 28, so a BCL decimal whose locked column
+    // scale is within that range is rescaled entirely in decimal arithmetic — GC-free, no hand-rolled
+    // integer math — and serialised via the existing 96-bit two's-complement writer. It defers to the
+    // BigInteger path only when decimal can't hold the result at the target scale (a locked scale > 28,
+    // or a magnitude that needs the full 128-/256-bit field). The raw-limb long… APIs always use that
+    // path; for a BCL decimal it is the rare overflow tail.
+    private const int MaxBclDecimalScale = 28;
+
+    private void AppendDecimalRescaled(QwpTypeCode code, decimal value, int sizeBytes)
+    {
+        var targetScale = DecimalScale;
+        Span<int> bits = stackalloc int[4];
+        decimal.GetBits(value, bits);
+        var sourceScale = (byte)((bits[3] >> 16) & 0xFF);
+        var negative = (bits[3] & unchecked((int)0x80000000)) != 0;
+
+        if (targetScale <= MaxBclDecimalScale
+            && TryRescaleDecimal(value, sourceScale, targetScale, out var scaled))
+        {
+            AssertOrSetType(code);
+            Span<int> scaledBits = stackalloc int[4];
+            decimal.GetBits(scaled, scaledBits);
+            var scaledNeg = (scaledBits[3] & unchecked((int)0x80000000)) != 0;
+            AppendDecimal96TwosComplement(
+                (uint)scaledBits[0], (uint)scaledBits[1], (uint)scaledBits[2], scaledNeg, sizeBytes);
+            return;
+        }
+
+        var mantissa = (new BigInteger((uint)bits[2]) << 64)
+            | (new BigInteger((uint)bits[1]) << 32)
+            | new BigInteger((uint)bits[0]);
+        if (negative) mantissa = -mantissa;
+        AppendDecimalFromMantissa(code, mantissa, sourceScale, sizeBytes);
+    }
+
+    // Re-expresses `value` at exactly `targetScale` using System.Decimal arithmetic. Up-scaling pads the
+    // mantissa by adding a zero at the target scale (decimal addition raises the result to the larger
+    // operand scale); down-scaling first rounds and only succeeds when no digit is lost. Returns false —
+    // so the caller falls back to BigInteger — when decimal can't hold the result at that scale, which it
+    // signals by leaving the result scale short of targetScale (it silently keeps a lower scale rather
+    // than overflow the 96-bit mantissa).
+    private static bool TryRescaleDecimal(decimal value, byte sourceScale, byte targetScale, out decimal scaled)
+    {
+        var aligned = value;
+        if (sourceScale > targetScale)
+        {
+            var rounded = Math.Round(value, targetScale, MidpointRounding.ToEven);
+            if (rounded != value)
+            {
+                scaled = default;
+                return false;
+            }
+
+            aligned = rounded;
+        }
+
+        scaled = aligned + new decimal(0, 0, 0, false, targetScale);
+        Span<int> bits = stackalloc int[4];
+        decimal.GetBits(scaled, bits);
+        return ((bits[3] >> 16) & 0xFF) == targetScale;
+    }
+
     /// <summary>Appends a DECIMAL64 value coerced to an explicit scale (see <see cref="AppendDecimalScaled" />).</summary>
     public void AppendDecimal64(decimal value, byte scale)
         => AppendDecimalScaled(QwpTypeCode.Decimal64, value, scale, QwpConstants.Decimal64SizeBytes);
@@ -791,12 +836,7 @@ internal sealed class QwpColumn
             return;
         }
 
-        var mantissa = (new BigInteger((uint)bits[2]) << 64)
-            | (new BigInteger((uint)bits[1]) << 32)
-            | new BigInteger((uint)bits[0]);
-        if (negative) mantissa = -mantissa;
-        mantissa *= BigInteger.Pow(10, targetScale - rScale);
-        WriteFixedDecimalMantissa(mantissa, targetScale, sizeBytes);
+        AppendDecimalRescaled(code, rounded, sizeBytes);
     }
 
     /// <summary>Appends a BINARY value as length-prefixed opaque bytes (same wire layout as VARCHAR).</summary>

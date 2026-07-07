@@ -28,11 +28,12 @@ namespace QuestDB.Senders;
 
 /// <summary>
 ///     Public surface of the QWP egress query client. One instance owns one WebSocket; one
-///     in-flight query at a time per the Phase-1 server contract.
+///     in-flight query at a time per the Phase-1 server contract. Results are consumed through
+///     the pull cursor returned by <c>ExecuteReaderAsync</c>.
 /// </summary>
 /// <remarks>
 ///     <see cref="IDisposable.Dispose" /> may block the calling thread up to 5 seconds while the
-///     in-flight Execute drains; prefer <see cref="IAsyncDisposable.DisposeAsync" /> from async
+///     in-flight query winds down; prefer <see cref="IAsyncDisposable.DisposeAsync" /> from async
 ///     contexts (UI threads on WinForms / WPF / Avalonia in particular).
 ///     <para />
 ///     <b>Authentication errors are terminal</b>: a 401/403 from any failover candidate aborts
@@ -57,27 +58,23 @@ public interface IQwpQueryClient : IDisposable, IAsyncDisposable
 
     /// <summary>
     ///     <c>true</c> when the most recent <c>Dispose</c>/<c>DisposeAsync</c> hit its 5-second
-    ///     grace window before the in-flight Execute drained — the native zstd handle was released
+    ///     grace window before the in-flight query wound down — the native zstd handle was released
     ///     best-effort but the I/O loop may still be running.
     /// </summary>
     bool WasLastCloseTimedOut { get; }
 
+#if NET7_0_OR_GREATER
     /// <summary>
-    ///     Submits the SQL query and synchronously drives the handler until the server emits a
-    ///     terminator (RESULT_END, EXEC_DONE, or QUERY_ERROR). Throws on transport or protocol
-    ///     failure; query-level errors surface via <see cref="QwpColumnBatchHandler.OnError" />.
+    ///     Submits the SQL query and returns a pull cursor over its result stream. The reader must
+    ///     be disposed (<c>await using</c>): until then this client's single in-flight query slot
+    ///     stays occupied. See <see cref="IQwpQueryReader" /> for the batch/span lifetime contract.
     /// </summary>
-    void Execute(string sql, QwpColumnBatchHandler handler);
+    Task<IQwpQueryReader> ExecuteReaderAsync(string sql, CancellationToken cancellationToken = default);
 
-    /// <inheritdoc cref="Execute(string, QwpColumnBatchHandler)" />
-    void Execute(string sql, QwpBindSetter binds, QwpColumnBatchHandler handler);
-
-    /// <inheritdoc cref="Execute(string, QwpColumnBatchHandler)" />
-    Task ExecuteAsync(string sql, QwpColumnBatchHandler handler, CancellationToken cancellationToken = default);
-
-    /// <inheritdoc cref="Execute(string, QwpColumnBatchHandler)" />
-    Task ExecuteAsync(string sql, QwpBindSetter binds, QwpColumnBatchHandler handler,
+    /// <inheritdoc cref="ExecuteReaderAsync(string, CancellationToken)" />
+    Task<IQwpQueryReader> ExecuteReaderAsync(string sql, QwpBindSetter binds,
         CancellationToken cancellationToken = default);
+#endif
 
     /// <summary>
     ///     Posts a <c>CANCEL</c> frame for the in-flight query. Thread-safe. The query terminates
@@ -87,9 +84,9 @@ public interface IQwpQueryClient : IDisposable, IAsyncDisposable
     /// <remarks>
     ///     Cooperative cancel only: this method does not interrupt an in-progress
     ///     <see cref="System.Net.WebSockets.WebSocket.ReceiveAsync(System.ArraySegment{byte}, CancellationToken)" />.
-    ///     If the server hangs and never acknowledges, <c>ExecuteAsync</c> will not return. For a
-    ///     hard cancel that aborts the receive loop, pass a <see cref="CancellationToken" /> to
-    ///     <c>ExecuteAsync</c> and cancel that token instead.
+    ///     If the server hangs and never acknowledges, the next <c>ReadBatchAsync</c> will not
+    ///     return. For a hard cancel that aborts the receive loop, pass a
+    ///     <see cref="CancellationToken" /> to <c>ReadBatchAsync</c> and cancel that token instead.
     /// </remarks>
     void Cancel();
 }

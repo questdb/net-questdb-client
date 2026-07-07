@@ -101,18 +101,17 @@ public class QuestDbEgressFailoverTests
     ///     query against the healthy endpoint; the connect-time walk does not count as a failover.
     /// </summary>
     [Test]
-    public void InitialConnectWalksPastUnreachable()
+    public async Task InitialConnectWalksPastUnreachable()
     {
         var deadPort = ReserveClosedPort();
         var conf = $"ws::addr=127.0.0.1:{deadPort},127.0.0.1:{Server2HttpPort};";
 
-        var handler = new FailoverHandler();
         using var client = QueryClient.New(conf);
-        client.Execute("select 1", handler);
+        var (totalRows, failoverResets) = await RunFailoverQueryAsync(client, "select 1");
 
-        Assert.That(handler.FailoverResets, Is.EqualTo(0),
+        Assert.That(failoverResets, Is.EqualTo(0),
             "connect-time endpoint walk must not increment the failover counter");
-        Assert.That(handler.TotalRows, Is.EqualTo(1));
+        Assert.That(totalRows, Is.EqualTo(1));
     }
 
     /// <summary>
@@ -120,19 +119,19 @@ public class QuestDbEgressFailoverTests
     ///     The reader fails over to server #2, replays the query, and re-streams every row.
     /// </summary>
     [Test]
-    public void MidQueryFailover()
+    public async Task MidQueryFailover()
     {
         Assert.That(_server1!.IsRunning && _server2!.IsRunning, Is.True);
 
         var conf = $"ws::addr=127.0.0.1:{Server1HttpPort},127.0.0.1:{Server2HttpPort};";
-        var handler = new FailoverHandler(onFirstBatch: () => Kill(_server1));
 
         using var client = QueryClient.New(conf);
-        client.Execute($"SELECT * FROM {Table} ORDER BY val", handler);
+        var (totalRows, failoverResets) = await RunFailoverQueryAsync(
+            client, $"SELECT * FROM {Table} ORDER BY val", onFirstBatch: () => Kill(_server1));
 
-        Assert.That(handler.FailoverResets, Is.GreaterThanOrEqualTo(1),
+        Assert.That(failoverResets, Is.GreaterThanOrEqualTo(1),
             "no failover happened despite the mid-stream kill");
-        Assert.That(handler.TotalRows, Is.EqualTo(RowCount),
+        Assert.That(totalRows, Is.EqualTo(RowCount),
             "the replayed query against server #2 must deliver every row exactly once");
     }
 
@@ -148,16 +147,13 @@ public class QuestDbEgressFailoverTests
 
         var conf = $"ws::addr=127.0.0.1:{Server1HttpPort},127.0.0.1:{Server2HttpPort};" +
                    "failover_max_attempts=1;failover_backoff_initial_ms=1;failover_backoff_max_ms=2;";
-        var handler = new FailoverHandler(onFirstBatch: () =>
-        {
-            Kill(_server1);
-            Kill(_server2);
-        });
 
         using var client = QueryClient.New(conf);
-        Assert.Catch(() => client.Execute($"SELECT * FROM {Table} ORDER BY val", handler),
+        Assert.CatchAsync(async () => await RunFailoverQueryAsync(
+                client, $"SELECT * FROM {Table} ORDER BY val",
+                onFirstBatch: () => { Kill(_server1); Kill(_server2); }),
             "failover exhaustion must throw, not hang or crash");
-        Assert.Catch(() => client.Execute("select 1", new FailoverHandler()),
+        Assert.CatchAsync(async () => await RunFailoverQueryAsync(client, "select 1"),
             "a poisoned reader must keep surfacing a clean error");
     }
 
@@ -172,12 +168,12 @@ public class QuestDbEgressFailoverTests
 
         var conf = $"ws::addr=127.0.0.1:{Server1HttpPort};" +
                    "failover_max_attempts=2;failover_backoff_initial_ms=1;failover_backoff_max_ms=2;";
-        var handler = new FailoverHandler(onFirstBatch: () => Kill(_server1));
 
         using var client = QueryClient.New(conf);
-        Assert.Catch(() => client.Execute($"SELECT * FROM {Table} ORDER BY val", handler),
+        Assert.CatchAsync(async () => await RunFailoverQueryAsync(
+                client, $"SELECT * FROM {Table} ORDER BY val", onFirstBatch: () => Kill(_server1)),
             "single-endpoint exhaustion must throw, not retry indefinitely");
-        Assert.Catch(() => client.Execute("select 1", new FailoverHandler()),
+        Assert.CatchAsync(async () => await RunFailoverQueryAsync(client, "select 1"),
             "a poisoned reader must keep surfacing a clean error");
     }
 
@@ -266,34 +262,36 @@ public class QuestDbEgressFailoverTests
         return port;
     }
 
-    private sealed class FailoverHandler : QwpColumnBatchHandler
+    // Drives the pull cursor, counting rows and transparent-failover resets. A read that resumes
+    // after a failover reconnect flags <c>FailoverReset</c>: the stream replays from batch 0 on the
+    // new endpoint, so the pre-failover row count is discarded. <paramref name="onFirstBatch" />
+    // fires exactly once, on the very first batch, to kill a server mid-stream.
+    private static async Task<(long TotalRows, int FailoverResets)> RunFailoverQueryAsync(
+        IQwpQueryClient client, string sql, Action? onFirstBatch = null)
     {
-        private readonly Action? _onFirstBatch;
-        private bool _firstBatchSeen;
+        long totalRows = 0;
+        var failoverResets = 0;
+        var firstBatchSeen = false;
 
-        public FailoverHandler(Action? onFirstBatch = null) => _onFirstBatch = onFirstBatch;
-
-        public long TotalRows { get; private set; }
-
-        public int FailoverResets { get; private set; }
-
-        public override void OnBatch(QwpColumnBatch batch)
+        await using var reader = await client.ExecuteReaderAsync(sql);
+        while (await reader.ReadBatchAsync())
         {
-            if (!_firstBatchSeen)
+            if (reader.FailoverReset)
             {
-                _firstBatchSeen = true;
-                _onFirstBatch?.Invoke();
+                failoverResets++;
+                totalRows = 0;
             }
 
-            TotalRows += batch.RowCount;
+            if (!firstBatchSeen)
+            {
+                firstBatchSeen = true;
+                onFirstBatch?.Invoke();
+            }
+
+            totalRows += reader.Current.RowCount;
         }
 
-        public override void OnFailoverReset(QwpServerInfo? newNode)
-        {
-            FailoverResets++;
-            // The query replays from batch 0 on the new endpoint; drop rows counted pre-failover.
-            TotalRows = 0;
-        }
+        return (totalRows, failoverResets);
     }
 }
 

@@ -175,7 +175,8 @@ public class QwpWebSocketSenderTests
             var qwp = (IQwpWebSocketSender)sender;
 
             sender.Table("t").Column("v", 1L).At(DateTime.UtcNow);
-            sender.Send();
+            // Standalone Send drains, so the server's error-ack surfaces right here and turns it terminal.
+            Assert.Catch<IngressError>(() => sender.Send());
             Assert.CatchAsync<IngressError>(async () => await qwp.PingAsync());
 
             Assert.Catch<IngressError>(() => sender.Table("t").Column("v", 2L).At(DateTime.UtcNow));
@@ -396,12 +397,14 @@ public class QwpWebSocketSenderTests
     }
 
     [Test]
-    public async Task DisposeAsync_FlushesAndCleansUp()
+    public async Task DisposeAsync_CleansUpAndBlocksReuse()
     {
         await using var server = StartServerWithOkAcks();
         var sender = NewSender(server, "auto_flush=off;");
         sender.Table("t").Column("v", 1L).At(DateTime.UtcNow);
-        sender.Send();
+        // Flush (drain) — not just Send — so the frame is guaranteed delivered before teardown; Dispose
+        // does not drain.
+        Assert.That(await sender.FlushAsync(TimeSpan.FromSeconds(5)), Is.True);
 
         await ((IAsyncDisposable)sender).DisposeAsync();
 
@@ -411,7 +414,7 @@ public class QwpWebSocketSenderTests
     }
 
     [Test]
-    public async Task DisposeAsync_OnTerminalSender_RethrowsLatchedError()
+    public async Task DisposeAsync_OnTerminalSender_DoesNotThrow()
     {
         await using var server = new DummyQwpServer(new DummyQwpServerOptions
         {
@@ -420,17 +423,16 @@ public class QwpWebSocketSenderTests
         await server.StartAsync();
 
         var sender = NewSender(server, "auto_flush=off;on_server_error=halt;");
-        var qwp = (IQwpWebSocketSender)sender;
         sender.Table("t").Column("v", 1L).At(DateTime.UtcNow);
-        sender.Send();
-        Assert.CatchAsync<IngressError>(async () => await qwp.PingAsync());
+        // Standalone Send drains → the server's error-ack surfaces here and turns the sender terminal.
+        Assert.Catch<IngressError>(() => sender.Send());
 
-        Assert.ThrowsAsync<LineSenderServerException>(
-            async () => await ((IAsyncDisposable)sender).DisposeAsync());
+        // Dispose is pure resource release and must never throw, even on a terminal sender.
+        Assert.DoesNotThrowAsync(async () => await ((IAsyncDisposable)sender).DisposeAsync());
     }
 
     [Test]
-    public async Task SendAsync_CompletesFastWhileServerStalls()
+    public async Task SendAsync_Standalone_DrainsUntilAcked()
     {
         using var ackGate = new SemaphoreSlim(0, int.MaxValue);
         await using var server = new DummyQwpServer(new DummyQwpServerOptions
@@ -446,10 +448,14 @@ public class QwpWebSocketSenderTests
         using var sender = NewSender(server, "auto_flush=off;");
         sender.Table("t").Column("v", 1L).At(DateTime.UtcNow);
 
-        // Cursor engine path: SendAsync returns once the frame is in the ring, regardless of ACK.
-        await sender.SendAsync().WaitAsync(TimeSpan.FromSeconds(5));
+        // A standalone Send drains: it must NOT complete until the server ACKs (server is parked on ackGate).
+        var send = sender.SendAsync();
+        await Task.Delay(150);
+        Assert.That(send.IsCompleted, Is.False, "standalone Send drains — pending until the server ACKs");
 
         ackGate.Release(8);
+        await send.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.That(send.IsCompletedSuccessfully, Is.True);
     }
 
     [Test]
@@ -549,27 +555,40 @@ public class QwpWebSocketSenderTests
         try
         {
             sender.Table("t").Column("v", 1L).At(DateTime.UtcNow);
-            sender.Send();
+
+            // Standalone Send drains, so the protocol-violation close may surface at this first Send
+            // (it races the OK-ack), or on a later Send once the close reaches the engine. Handle both.
+            IngressError? caught = null;
+            try
+            {
+                sender.Send();
+            }
+            catch (IngressError ex)
+            {
+                caught = ex;
+            }
 
             await WaitFor(() => server.ReceivedFrames.Count >= 1);
 
-            // Once the protocol-violation close hits the engine, the next API call must surface a
-            // terminal IngressError carrying ProtocolViolation — without sitting in reconnect.
-            IngressError? caught = null;
-            await WaitFor(() =>
+            // Once the protocol-violation close hits the engine, an API call must surface a terminal
+            // IngressError carrying ProtocolViolation — without sitting in reconnect.
+            if (caught is null)
             {
-                try
+                await WaitFor(() =>
                 {
-                    sender.Table("t").Column("v", 2L).At(DateTime.UtcNow);
-                    sender.Send();
-                    return false;
-                }
-                catch (IngressError ex)
-                {
-                    caught = ex;
-                    return true;
-                }
-            }, timeoutMs: 5000);
+                    try
+                    {
+                        sender.Table("t").Column("v", 2L).At(DateTime.UtcNow);
+                        sender.Send();
+                        return false;
+                    }
+                    catch (IngressError ex)
+                    {
+                        caught = ex;
+                        return true;
+                    }
+                }, timeoutMs: 5000);
+            }
 
             Assert.That(caught, Is.Not.Null);
             var rootCode = caught!.code is ErrorCode.ProtocolViolation
@@ -724,19 +743,43 @@ public class QwpWebSocketSenderTests
     }
 
     [Test]
-    public async Task Transaction_Dispose_CommitsDeferredRows()
+    public async Task Transaction_Send_CommitsDeferredRows()
     {
         await using var server = StartServerWithOkAcks();
-        await using (var sender = NewSender(server,
-            "transaction=on;auto_flush_rows=1;auto_flush_interval=off;auto_flush_bytes=off;close_flush_timeout_millis=2000;"))
-        {
-            sender.Table("t").Column("v", 1L).At(TxnTs); // auto-flush row=1 → deferred frame
-            await WaitFor(() => server.ReceivedFrames.Count >= 1);
-        }
+        using var sender = NewSender(server,
+            "transaction=on;auto_flush_rows=1;auto_flush_interval=off;auto_flush_bytes=off;");
+        sender.Table("t").Column("v", 1L).At(TxnTs); // auto-flush row=1 → deferred frame
+        await WaitFor(() => server.ReceivedFrames.Count >= 1);
 
-        // dispose must emit a committing frame for the deferred rows
+        // explicit Send commits the deferred rows (Dispose no longer flushes)
+        sender.Send();
+
         await WaitFor(() => server.ReceivedFrames.Count >= 2);
         Assert.That(IsDeferred(server.ReceivedFrames.Last()), Is.False);
+    }
+
+    [Test]
+    public async Task Transaction_HasUncommittedDeferredRows_TracksOwedCommit()
+    {
+        await using var server = StartServerWithOkAcks();
+        using var sender = NewSender(server,
+            "transaction=on;auto_flush_rows=1;auto_flush_interval=off;auto_flush_bytes=off;");
+        // The pool reads this seam on return to decide re-pool vs discard; pin its transitions here.
+        QuestDB.Pooling.IPooledTransactionalSender seam = sender;
+
+        Assert.That(seam.HasUncommittedDeferredRows, Is.False, "no commit owed before any flush");
+
+        sender.Table("t").Column("v", 1L).At(TxnTs); // auto-flush row=1 → deferred frame
+        await WaitFor(() => server.ReceivedFrames.Count >= 1);
+        Assert.That(seam.HasUncommittedDeferredRows, Is.True, "deferred auto-flush leaves a commit owed");
+
+        // Clear() resets local buffers only — the staged rows remain on the server, commit still owed.
+        sender.Clear();
+        Assert.That(seam.HasUncommittedDeferredRows, Is.True, "Clear() cannot un-stage shipped rows");
+
+        sender.Commit();
+        await WaitFor(() => server.ReceivedFrames.Count >= 2);
+        Assert.That(seam.HasUncommittedDeferredRows, Is.False, "explicit commit settles the owed commit");
     }
 
     [Test]
@@ -824,14 +867,16 @@ public class QwpWebSocketSenderTests
             },
         });
         await server.StartAsync();
-        // close_flush_timeout_millis=0: durable-ack deliberately lags OK-ack here, so a close drain would time out.
-        using var sender = NewSender(server, "auto_flush=off;request_durable_ack=on;close_flush_timeout_millis=0;");
+        // Auto-flush (not a draining Send): this test's durable watermarks (100/101) are deliberately
+        // below the committed ones (200/201) to prove separate tracking, so a standalone Send would drain
+        // forever waiting for a durability that never covers the frame. Auto-flush ships to the ring
+        // without waiting; the watermarks are then observed via WaitFor as the async acks arrive.
+        using var sender = NewSender(server,
+            "auto_flush=on;auto_flush_rows=1;auto_flush_interval=off;auto_flush_bytes=off;request_durable_ack=on;");
 
         var ws = (IQwpWebSocketSender)sender;
-        sender.Table("trades").Column("v", 1L).At(DateTime.UtcNow);
-        sender.Send();
-        sender.Table("trades").Column("v", 2L).At(DateTime.UtcNow);
-        sender.Send();
+        sender.Table("trades").Column("v", 1L).At(DateTime.UtcNow); // auto-flush → batch seq 0
+        sender.Table("trades").Column("v", 2L).At(DateTime.UtcNow); // auto-flush → batch seq 1
 
         await WaitFor(() => ws.GetHighestAckedSeqTxn("trades") == 201L
                             && ws.GetHighestDurableSeqTxn("trades") == 101L);
@@ -931,7 +976,8 @@ public class QwpWebSocketSenderTests
             sender.Send(); // first batch — OK
 
             sender.Table("t").Column("v", 2L).At(DateTime.UtcNow);
-            sender.Send();
+            // Standalone Send drains → the second batch's error-ack surfaces here and turns it terminal.
+            Assert.Catch<IngressError>(() => sender.Send());
             Assert.CatchAsync<IngressError>(async () => await qwp.PingAsync());
         }
         finally
@@ -1088,34 +1134,53 @@ public class QwpWebSocketSenderTests
     }
 
     [Test]
-    public async Task Dispose_Sf_ZeroCloseFlushTimeout_StillPersistsBufferedRowsToDisk()
+    public async Task Sf_Flush_PersistsRowsToDisk_DisposeDiscardsUnsent()
     {
-        // close_flush_timeout_millis=0 means "don't wait for acks", not "discard the buffer". In SF
-        // mode the close-time encode-to-ring is a local disk append (durability), not a network wait,
-        // so buffered-but-unsent rows must still be persisted to the segment ring on dispose.
-        // FrameHandler => null: the server never acks, so the persisted frame is never trimmed off disk.
+        // Dispose no longer encodes buffered rows to the ring: a flush (here auto-flush) is the path to
+        // the on-disk SF ring, and un-sent rows are discarded on dispose. FrameHandler => null: the server
+        // never acks, so a persisted frame is never trimmed off disk (and a draining Send would block, so
+        // part (a) uses auto-flush, which writes to the ring without waiting for an ACK).
         await using var server = new DummyQwpServer(new DummyQwpServerOptions { FrameHandler = _ => null });
         await server.StartAsync();
-        var sfRoot = Path.Combine(Path.GetTempPath(), "qwp-sf-closeflush0-" + Guid.NewGuid().ToString("N"));
+
+        // (a) A flushed row is persisted to the segment ring.
+        var sentRoot = Path.Combine(Path.GetTempPath(), "qwp-sf-sent-" + Guid.NewGuid().ToString("N"));
         try
         {
             using (var sender = NewSender(server,
-                       $"auto_flush=off;sf_dir={sfRoot};sender_id=svc-a;sf_max_bytes=4096;close_flush_timeout_millis=0;"))
+                       $"auto_flush=on;auto_flush_rows=1;auto_flush_interval=off;auto_flush_bytes=off;" +
+                       $"sf_dir={sentRoot};sender_id=svc-a;sf_max_bytes=4096;"))
             {
-                // Buffered only — auto_flush is off and Send() is never called, so the close-time encode
-                // is the row's only path to the on-disk ring.
-                sender.Table("trades")
-                    .Symbol("ticker", "ETH-USD")
-                    .Column("price", 2615.54)
-                    .At(new DateTime(2026, 4, 28, 12, 0, 0, DateTimeKind.Utc));
+                sender.Table("trades").Symbol("ticker", "ETH-USD").Column("price", 2615.54)
+                    .At(new DateTime(2026, 4, 28, 12, 0, 0, DateTimeKind.Utc)); // auto-flush → on-disk ring
             }
 
-            Assert.That(SegmentBytesOnDisk(sfRoot), Is.GreaterThan(0),
-                "SF segment ring must retain the buffered row after a zero close-flush-timeout dispose");
+            Assert.That(SegmentBytesOnDisk(sentRoot), Is.GreaterThan(0),
+                "a flushed row is persisted to the SF segment ring");
         }
         finally
         {
-            TryDeleteDirectory(sfRoot);
+            TryDeleteDirectory(sentRoot);
+        }
+
+        // (b) A buffered-only row (never Sent) is discarded on dispose — nothing reaches disk.
+        var unsentRoot = Path.Combine(Path.GetTempPath(), "qwp-sf-unsent-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            using (var sender = NewSender(server,
+                       $"auto_flush=off;sf_dir={unsentRoot};sender_id=svc-b;sf_max_bytes=4096;"))
+            {
+                sender.Table("trades").Symbol("ticker", "ETH-USD").Column("price", 2615.54)
+                    .At(new DateTime(2026, 4, 28, 12, 0, 0, DateTimeKind.Utc));
+                // no Send() — Dispose discards the buffered row
+            }
+
+            Assert.That(SegmentBytesOnDisk(unsentRoot), Is.EqualTo(0),
+                "Dispose discards un-sent rows — nothing is persisted to the ring");
+        }
+        finally
+        {
+            TryDeleteDirectory(unsentRoot);
         }
     }
 
@@ -1301,8 +1366,13 @@ public class QwpWebSocketSenderTests
         var ws = (IQwpWebSocketSender)sender;
 
         sender.Table("t");
-        ws.ColumnDecimal64("p", unscaledValue: 1234567890123L, scale: 4);
+        ws.ColumnDecimal64("p", 123456789.0123m, scale: 4);
         sender.At(DateTime.UtcNow);
+        
+        sender.Table("t");
+        ws.ColumnDecimal64("p", 123456789.01m, scale: 4);
+        sender.At(DateTime.UtcNow);
+        
         await sender.SendAsync();
         await ws.PingAsync();
 
@@ -1312,7 +1382,7 @@ public class QwpWebSocketSenderTests
         // After type code: TS col def (nameLen=0, type 0x10), then user col data: null flag + scale + 8-byte LE.
         var scaleOffset = typeCodeOffset + 1 + 2 + 1;
         Assert.That(payload[scaleOffset], Is.EqualTo((byte)4), "scale prefix");
-        Assert.That(System.Buffers.Binary.BinaryPrimitives.ReadInt64LittleEndian(payload.Slice(scaleOffset + 1, 8)),
+        Assert.That(BinaryPrimitives.ReadInt64LittleEndian(payload.Slice(scaleOffset + 1, 8)),
             Is.EqualTo(1234567890123L));
     }
 
@@ -1827,11 +1897,9 @@ public class QwpWebSocketSenderTests
         var sender = NewSender(server, "auto_flush=off;on_server_error=halt;");
         try
         {
-            var qwp = (IQwpWebSocketSender)sender;
-
             sender.Table("t").Column("v", 1L).At(DateTime.UtcNow);
-            sender.Send();
-            try { await qwp.PingAsync(); } catch { /* expected terminal */ }
+            // Standalone Send drains → the error-ack surfaces here and turns the sender terminal.
+            try { sender.Send(); } catch { /* expected terminal */ }
 
             Assert.Throws<IngressError>(() => sender.Truncate());
             Assert.Throws<IngressError>(() => sender.CancelRow());

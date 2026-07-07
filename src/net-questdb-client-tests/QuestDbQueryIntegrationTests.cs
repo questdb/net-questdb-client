@@ -30,13 +30,15 @@ using QuestDB;
 using QuestDB.Enums;
 using QuestDB.Qwp;
 using QuestDB.Qwp.Query;
+using QuestDB.Senders;
 
 namespace net_questdb_client_tests;
 
 /// <summary>
 ///     Integration tests against a QuestDB build that ships the <c>/read/v1</c> egress endpoint
-///     (not in any released image yet). Point <c>QUESTDB_IMAGE</c> at any branch image that has it,
-///     e.g. <c>QUESTDB_IMAGE=questdb/questdb:&lt;branch&gt; dotnet test --filter QuestDbQueryIntegrationTests</c>.
+///     (master only). Point <c>QUESTDB_REPO</c> at a built master repo (or <c>QUESTDB_JAR</c> at a
+///     built jar), e.g. <c>QUESTDB_REPO=/path/to/questdb dotnet test --filter QuestDbQueryIntegrationTests</c>;
+///     for a Docker-based run see <see cref="QuestDbDockerQueryTests" />.
 /// </summary>
 [TestFixture]
 public class QuestDbQueryIntegrationTests
@@ -78,55 +80,48 @@ public class QuestDbQueryIntegrationTests
     }
 
     [Test]
-    public void SelectConstant_RoundTrips()
+    public async Task SelectConstant_RoundTrips()
     {
         using var client = QueryClient.New($"ws::addr={_questDb!.GetWebSocketEndpoint()};");
-        var handler = new RecordingHandler();
-        client.Execute("SELECT 42 AS answer", handler);
+        var cap = await RunQueryAsync(client, "SELECT 42 AS answer");
 
-        Assert.That(handler.Ended, Is.True);
-        Assert.That(handler.LastBatch, Is.Not.Null);
-        Assert.That(handler.LastBatch!.RowCount, Is.EqualTo(1));
-        Assert.That(handler.LastBatch.ColumnCount, Is.EqualTo(1));
-        Assert.That(handler.LastBatch.GetColumnWireType(0), Is.EqualTo(QwpTypeCode.Int));
-        Assert.That(handler.LastBatch.GetIntValue(0, 0), Is.EqualTo(42));
+        Assert.That(cap.Ended, Is.True);
+        Assert.That(cap.BatchCount, Is.GreaterThan(0));
+        Assert.That(cap.TotalRowCount, Is.EqualTo(1));
+        Assert.That(cap.ColumnCount, Is.EqualTo(1));
+        Assert.That(cap.ColumnTypes[0], Is.EqualTo(QwpTypeCode.Int));
+        Assert.That((int)cap.Rows[0][0]!, Is.EqualTo(42));
     }
 
     [Test]
-    public void SelectFromSeededTable_ReturnsAllRows()
+    public async Task SelectFromSeededTable_ReturnsAllRows()
     {
         using var client = QueryClient.New($"ws::addr={_questDb!.GetWebSocketEndpoint()};");
-        var handler = new RecordingHandler();
-        client.Execute("SELECT id, value FROM qwp_egress_int_test ORDER BY id", handler);
+        var cap = await RunQueryAsync(client, "SELECT id, value FROM qwp_egress_int_test ORDER BY id");
 
-        Assert.That(handler.Ended, Is.True);
-        Assert.That(handler.TotalRowCount, Is.EqualTo(5));
-        var ids = handler.AllLongs(colIndex: 0);
-        Assert.That(ids, Is.EqualTo(new[] { 1L, 2L, 3L, 4L, 5L }));
+        Assert.That(cap.Ended, Is.True);
+        Assert.That(cap.TotalRowCount, Is.EqualTo(5));
+        Assert.That(cap.LongColumn(0), Is.EqualTo(new[] { 1L, 2L, 3L, 4L, 5L }));
     }
 
     [Test]
-    public void Bind_ParameterFiltersTable()
+    public async Task Bind_ParameterFiltersTable()
     {
         using var client = QueryClient.New($"ws::addr={_questDb!.GetWebSocketEndpoint()};");
-        var handler = new RecordingHandler();
-        client.Execute(
-            "SELECT id FROM qwp_egress_int_test WHERE id = $1",
-            b => b.SetLong(0, 3L),
-            handler);
+        var cap = await RunQueryAsync(
+            client, "SELECT id FROM qwp_egress_int_test WHERE id = $1", b => b.SetLong(0, 3L));
 
-        Assert.That(handler.TotalRowCount, Is.EqualTo(1));
-        Assert.That(handler.AllLongs(colIndex: 0), Is.EqualTo(new[] { 3L }));
+        Assert.That(cap.TotalRowCount, Is.EqualTo(1));
+        Assert.That(cap.LongColumn(0), Is.EqualTo(new[] { 3L }));
     }
 
     [Test]
-    public void DdlStatement_TerminatesViaOnExecDone()
+    public async Task DdlStatement_TerminatesWithExecDone()
     {
         using var client = QueryClient.New($"ws::addr={_questDb!.GetWebSocketEndpoint()};");
-        var handler = new RecordingHandler();
-        client.Execute("CREATE TABLE qwp_egress_ddl_smoke (a LONG)", handler);
+        var cap = await RunQueryAsync(client, "CREATE TABLE qwp_egress_ddl_smoke (a LONG)");
 
-        Assert.That(handler.ExecDoneObserved, Is.True,
+        Assert.That(cap.ExecDoneObserved, Is.True,
             "DDL must terminate with EXEC_DONE rather than RESULT_END");
     }
 
@@ -139,14 +134,13 @@ public class QuestDbQueryIntegrationTests
     }
 
     [Test]
-    public void BadSql_SurfacesQueryErrorViaHandler()
+    public async Task BadSql_SurfacesQueryError()
     {
         using var client = QueryClient.New($"ws::addr={_questDb!.GetWebSocketEndpoint()};");
-        var handler = new RecordingHandler();
-        client.Execute("SELECT * FROM no_such_table_does_not_exist", handler);
+        var cap = await RunQueryAsync(client, "SELECT * FROM no_such_table_does_not_exist");
 
-        Assert.That(handler.LastErrorStatus, Is.GreaterThan((byte)0));
-        Assert.That(handler.Ended, Is.False);
+        Assert.That(cap.ErrorStatus, Is.GreaterThan((byte)0));
+        Assert.That(cap.Ended, Is.False);
     }
 
     [Test]
@@ -159,14 +153,13 @@ public class QuestDbQueryIntegrationTests
         {
             initial_credit = 4096,
         });
-        var handler = new RecordingHandler();
-        client.Execute($"SELECT id FROM {table} ORDER BY id", handler);
+        var cap = await RunQueryAsync(client, $"SELECT id FROM {table} ORDER BY id");
 
-        Assert.That(handler.Ended, Is.True);
-        Assert.That(handler.TotalRowCount, Is.EqualTo(25_000));
-        Assert.That(handler.BatchCount, Is.GreaterThan(1));
+        Assert.That(cap.Ended, Is.True);
+        Assert.That(cap.TotalRowCount, Is.EqualTo(25_000));
+        Assert.That(cap.BatchCount, Is.GreaterThan(1));
 
-        var ids = handler.AllLongs(colIndex: 0);
+        var ids = cap.LongColumn(0);
         Assert.That(ids.Length, Is.EqualTo(25_000));
         Assert.That(ids[0], Is.EqualTo(1L));
         Assert.That(ids[^1], Is.EqualTo(25_000L));
@@ -221,39 +214,108 @@ public class QuestDbQueryIntegrationTests
                 .At(DateTime.UtcNow);
         }
         await sender.SendAsync();
+
+        // ILP SendAsync returns once the rows are durably in the WAL, but the WAL applies to the
+        // table asynchronously. Block setup until all five rows are queryable so no test can race
+        // the apply — otherwise the first reader of this table (Bind_ParameterFiltersTable, which
+        // runs before SelectFromSeededTable alphabetically) intermittently sees zero rows.
+        await WaitForSeededRowsAsync("qwp_egress_int_test", expected: 5);
     }
 
-    private sealed class RecordingHandler : QwpColumnBatchHandler
+    private async Task WaitForSeededRowsAsync(string table, long expected)
     {
-        private readonly List<long[]> _columnLongs = new();
-        public QwpColumnBatch? LastBatch { get; private set; }
-        public int TotalRowCount { get; private set; }
-        public int BatchCount { get; private set; }
-        public bool Ended { get; private set; }
-        public bool ExecDoneObserved { get; private set; }
-        public byte LastErrorStatus { get; private set; }
-
-        public override void OnBatch(QwpColumnBatch batch)
+        using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
+        var endpoint = _questDb!.GetHttpEndpoint();
+        for (var attempt = 0; attempt < 120; attempt++)
         {
-            LastBatch = batch;
-            BatchCount++;
-            TotalRowCount += batch.RowCount;
-            if (batch.ColumnCount > 0 && batch.GetColumnWireType(0) is QwpTypeCode.Long)
+            using var resp = await http.GetAsync(
+                $"http://{endpoint}/exec?query={Uri.EscapeDataString($"SELECT count(*) FROM {table}")}");
+            if (resp.IsSuccessStatusCode)
             {
-                var longs = new long[batch.RowCount];
-                for (var r = 0; r < batch.RowCount; r++) longs[r] = batch.GetLongValue(0, r);
-                _columnLongs.Add(longs);
+                var body = await resp.Content.ReadAsStringAsync();
+                using var json = JsonDocument.Parse(body);
+                if (json.RootElement.TryGetProperty("dataset", out var ds)
+                    && ds.GetArrayLength() > 0 && ds[0].GetArrayLength() > 0
+                    && ds[0][0].GetInt64() >= expected)
+                {
+                    return;
+                }
             }
+            await Task.Delay(250);
         }
+        Assert.Fail($"Seed of {expected} rows into {table} did not become queryable");
+    }
 
-        public override void OnEnd(long totalRows) => Ended = true;
-        public override void OnExecDone(QwpOpType opType, long rowsAffected) => ExecDoneObserved = true;
-        public override void OnError(QwpStatusCode status, string message) => LastErrorStatus = (byte)status;
-
-        public long[] AllLongs(int colIndex)
+    // Drives the pull cursor to completion, snapshotting each batch (spans are only valid until the
+    // next read) so tests can assert against the captured shape after the stream ends.
+    private static async Task<Capture> RunQueryAsync(
+        IQwpQueryClient client, string sql, QwpBindSetter? binds = null)
+    {
+        var cap = new Capture();
+        await using var reader = binds is null
+            ? await client.ExecuteReaderAsync(sql)
+            : await client.ExecuteReaderAsync(sql, binds);
+        try
         {
-            return _columnLongs.SelectMany(x => x).ToArray();
+            while (await reader.ReadBatchAsync())
+            {
+                var b = reader.Current;
+                cap.BatchCount++;
+                if (cap.BatchCount == 1)
+                {
+                    cap.ColumnCount = b.ColumnCount;
+                    cap.ColumnTypes = new QwpTypeCode[b.ColumnCount];
+                    for (var c = 0; c < b.ColumnCount; c++) cap.ColumnTypes[c] = b.GetColumnWireType(c);
+                }
+
+                cap.TotalRowCount += b.RowCount;
+                for (var r = 0; r < b.RowCount; r++)
+                {
+                    var row = new object?[b.ColumnCount];
+                    for (var c = 0; c < b.ColumnCount; c++)
+                    {
+                        row[c] = b.IsNull(c, r) ? null : ExtractCell(b, c, r);
+                    }
+
+                    cap.Rows.Add(row);
+                }
+            }
+
+            cap.ExecDoneObserved = reader.OpType != QwpOpType.None;
+            cap.Ended = !cap.ExecDoneObserved && !reader.WasCancelled;
         }
+        catch (QwpQueryException ex)
+        {
+            cap.ErrorStatus = (byte)ex.Status;
+        }
+
+        return cap;
+    }
+
+    private static object ExtractCell(QwpColumnBatch b, int c, int r) => b.GetColumnWireType(c) switch
+    {
+        QwpTypeCode.Long or QwpTypeCode.Date or QwpTypeCode.Timestamp or QwpTypeCode.TimestampNanos
+            => b.GetLongValue(c, r),
+        QwpTypeCode.Int or QwpTypeCode.IPv4 => b.GetIntValue(c, r),
+        QwpTypeCode.Double => b.GetDoubleValue(c, r),
+        QwpTypeCode.Float => b.GetFloatValue(c, r),
+        QwpTypeCode.Boolean => b.GetBoolValue(c, r),
+        QwpTypeCode.Symbol => b.GetSymbol(c, r) ?? string.Empty,
+        _ => b.GetString(c, r) ?? string.Empty,
+    };
+
+    private sealed class Capture
+    {
+        public int ColumnCount;
+        public QwpTypeCode[] ColumnTypes = Array.Empty<QwpTypeCode>();
+        public int TotalRowCount;
+        public int BatchCount;
+        public bool Ended;
+        public bool ExecDoneObserved;
+        public byte ErrorStatus;
+        public readonly List<object?[]> Rows = new();
+
+        public long[] LongColumn(int col) => Rows.Select(r => Convert.ToInt64(r[col])).ToArray();
     }
 }
 

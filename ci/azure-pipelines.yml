@@ -206,6 +206,8 @@ steps:
     publishTestResults: true
   env:
     QUESTDB_REPO: $(QUESTDB_REPO)
+    # QuestDbManager tees each launched server's full stdout/stderr here; published on failure below.
+    QDB_SERVER_LOG_DIR: $(Build.ArtifactStagingDirectory)/ServerLogs
   condition: eq(variables['osName'], 'Linux')
 
 - task: DotNetCoreCLI@2
@@ -224,6 +226,21 @@ steps:
     projects: 'src/net-questdb-client-tests/net-questdb-client-tests.csproj'
     arguments: '--configuration $(buildConfiguration) --framework net10.0 --no-build --verbosity normal --logger trx --blame-hang --blame-hang-timeout 600s --blame-hang-dump-type mini --filter "FullyQualifiedName!~QuestDbIntegrationTests&FullyQualifiedName!~QuestDbWebSocketIntegrationTests&FullyQualifiedName!~QuestDbQueryIntegrationTests"'
     publishTestResults: true
+
+# Publish the QuestDB server logs captured by QuestDbManager when the integration leg fails, so an
+# integration failure can be diagnosed without re-running (mkdir guard keeps publish from erroring
+# when a failure happened before any server launched).
+- bash: mkdir -p "$(Build.ArtifactStagingDirectory)/ServerLogs"
+  displayName: 'Ensure server-log dir ($(osName))'
+  condition: and(failed(), eq(variables['osName'], 'Linux'))
+
+- task: PublishPipelineArtifact@1
+  displayName: 'Publish QuestDB server logs on failure ($(osName))'
+  condition: and(failed(), eq(variables['osName'], 'Linux'))
+  inputs:
+    targetPath: '$(Build.ArtifactStagingDirectory)/ServerLogs'
+    artifact: 'ServerLogs-$(osName)-$(Build.BuildId)'
+    publishLocation: 'pipeline'
 
 - task: CopyFiles@2
   displayName: 'Stage hang dumps + trx ($(osName))'

@@ -74,34 +74,34 @@ public class QuestDbEgressBindFuzzTests
         => QueryClient.New($"ws::addr={_questDb!.GetWebSocketEndpoint()};path={QwpConstants.ReadPath};target=any;");
 
     [Test]
-    public void FuzzDoubleBinds()
+    public async Task FuzzDoubleBinds()
     {
         var rng = new SplitMix64(SeedFor(nameof(FuzzDoubleBinds)));
         using var client = NewClient();
         for (var iter = 0; iter < IterationsPerTest; iter++)
         {
             var v = PickSpecialOrRandomDouble(rng);
-            var handler = new SingleBatchHandler();
-            client.Execute("SELECT $1::DOUBLE AS d FROM long_sequence(1)",
-                b => b.SetDouble(0, v), handler);
-
-            if (double.IsNaN(v))
-            {
-                var nanOrNull = handler.Batch!.IsNull(0, 0) || double.IsNaN(handler.Batch.GetDoubleValue(0, 0));
-                Assert.That(nanOrNull, Is.True,
-                    $"iter {iter}: NaN bind must round-trip as null or NaN (QuestDB DOUBLE null is NaN)");
-            }
-            else
-            {
-                var got = handler.Batch!.GetDoubleValue(0, 0);
-                Assert.That(BitConverter.DoubleToInt64Bits(got),
-                    Is.EqualTo(BitConverter.DoubleToInt64Bits(v)), $"iter {iter}: double bit-mismatch");
-            }
+            await WithFirstBatchAsync(client, "SELECT $1::DOUBLE AS d FROM long_sequence(1)",
+                b => b.SetDouble(0, v), batch =>
+                {
+                    if (double.IsNaN(v))
+                    {
+                        var nanOrNull = batch.IsNull(0, 0) || double.IsNaN(batch.GetDoubleValue(0, 0));
+                        Assert.That(nanOrNull, Is.True,
+                            $"iter {iter}: NaN bind must round-trip as null or NaN (QuestDB DOUBLE null is NaN)");
+                    }
+                    else
+                    {
+                        var got = batch.GetDoubleValue(0, 0);
+                        Assert.That(BitConverter.DoubleToInt64Bits(got),
+                            Is.EqualTo(BitConverter.DoubleToInt64Bits(v)), $"iter {iter}: double bit-mismatch");
+                    }
+                });
         }
     }
 
     [Test]
-    public void FuzzIntegralBindsProjection()
+    public async Task FuzzIntegralBindsProjection()
     {
         var rng = new SplitMix64(SeedFor(nameof(FuzzIntegralBindsProjection)));
         using var client = NewClient();
@@ -113,8 +113,7 @@ public class QuestDbEgressBindFuzzTests
             var byteVal = unchecked((byte)rng.NextI32());
             var boolVal = rng.NextBool();
 
-            var handler = new SingleBatchHandler();
-            client.Execute(
+            await WithFirstBatchAsync(client,
                 "SELECT $1::LONG AS l, $2::INT AS i, $3::SHORT AS s, " +
                 "$4::BYTE AS b, $5::BOOLEAN AS x FROM long_sequence(1)",
                 binds => binds
@@ -123,14 +122,14 @@ public class QuestDbEgressBindFuzzTests
                     .SetShort(2, shortVal)
                     .SetByte(3, byteVal)
                     .SetBoolean(4, boolVal),
-                handler);
-
-            var batch = handler.Batch!;
-            Assert.That(batch.GetLongValue(0, 0), Is.EqualTo(longVal), $"iter {iter}: long");
-            Assert.That(batch.GetIntValue(1, 0), Is.EqualTo(intVal), $"iter {iter}: int");
-            Assert.That(batch.GetShortValue(2, 0), Is.EqualTo(shortVal), $"iter {iter}: short");
-            Assert.That(batch.GetByteValue(3, 0), Is.EqualTo(byteVal), $"iter {iter}: byte");
-            Assert.That(batch.GetBoolValue(4, 0), Is.EqualTo(boolVal), $"iter {iter}: bool");
+                batch =>
+                {
+                    Assert.That(batch.GetLongValue(0, 0), Is.EqualTo(longVal), $"iter {iter}: long");
+                    Assert.That(batch.GetIntValue(1, 0), Is.EqualTo(intVal), $"iter {iter}: int");
+                    Assert.That(batch.GetShortValue(2, 0), Is.EqualTo(shortVal), $"iter {iter}: short");
+                    Assert.That(batch.GetByteValue(3, 0), Is.EqualTo(byteVal), $"iter {iter}: byte");
+                    Assert.That(batch.GetBoolValue(4, 0), Is.EqualTo(boolVal), $"iter {iter}: bool");
+                });
         }
     }
 
@@ -158,19 +157,19 @@ public class QuestDbEgressBindFuzzTests
         for (var iter = 0; iter < 50; iter++)
         {
             var target = (int)rng.GenRangeU32(100);
-            var handler = new SingleBatchHandler();
-            client.Execute(sql, b => b.SetInt(0, target), handler);
-
-            Assert.That(handler.Batch!.RowCount, Is.EqualTo(1), $"iter {iter}: row_count");
-            Assert.That(handler.Batch.GetLongValue(0, 0), Is.EqualTo((long)target * 7),
-                $"iter {iter}: target={target}");
+            await WithFirstBatchAsync(client, sql, b => b.SetInt(0, target), batch =>
+            {
+                Assert.That(batch.RowCount, Is.EqualTo(1), $"iter {iter}: row_count");
+                Assert.That(batch.GetLongValue(0, 0), Is.EqualTo((long)target * 7),
+                    $"iter {iter}: target={target}");
+            });
         }
 
         await ExecAsync(http, $"drop table \"{table}\"");
     }
 
     [Test]
-    public void FuzzUuidBinds()
+    public async Task FuzzUuidBinds()
     {
         var rng = new SplitMix64(SeedFor(nameof(FuzzUuidBinds)));
         using var client = NewClient();
@@ -178,12 +177,12 @@ public class QuestDbEgressBindFuzzTests
         {
             var lo = unchecked((long)rng.NextU64());
             var hi = unchecked((long)rng.NextU64());
-            var handler = new SingleBatchHandler();
-            client.Execute("SELECT $1::UUID AS u FROM long_sequence(1)",
-                b => b.SetUuid(0, lo, hi), handler);
-
-            Assert.That(handler.Batch!.GetUuidLo(0, 0), Is.EqualTo(lo), $"iter {iter}: uuid lo");
-            Assert.That(handler.Batch.GetUuidHi(0, 0), Is.EqualTo(hi), $"iter {iter}: uuid hi");
+            await WithFirstBatchAsync(client, "SELECT $1::UUID AS u FROM long_sequence(1)",
+                b => b.SetUuid(0, lo, hi), batch =>
+                {
+                    Assert.That(batch.GetUuidLo(0, 0), Is.EqualTo(lo), $"iter {iter}: uuid lo");
+                    Assert.That(batch.GetUuidHi(0, 0), Is.EqualTo(hi), $"iter {iter}: uuid hi");
+                });
         }
     }
 
@@ -285,14 +284,18 @@ public class QuestDbEgressBindFuzzTests
         }
     }
 
-    private sealed class SingleBatchHandler : QwpColumnBatchHandler
+    // Reads the query's first batch, runs the caller's assertions against it while its spans are
+    // still valid, then drains the rest of the stream. An unexpected QUERY_ERROR surfaces as a
+    // thrown QwpQueryException, failing the test.
+    private static async Task WithFirstBatchAsync(
+        IQwpQueryClient client, string sql, QwpBindSetter binds, Action<QwpColumnBatch> assert)
     {
-        public QwpColumnBatch? Batch { get; private set; }
-
-        public override void OnBatch(QwpColumnBatch batch) => Batch ??= batch;
-
-        public override void OnError(QwpStatusCode status, string message)
-            => Assert.Fail($"unexpected egress error: status={status}, msg={message}");
+        await using var reader = await client.ExecuteReaderAsync(sql, binds);
+        Assert.That(await reader.ReadBatchAsync(), Is.True, "expected at least one batch");
+        assert(reader.Current);
+        while (await reader.ReadBatchAsync())
+        {
+        }
     }
 
     private sealed class SplitMix64

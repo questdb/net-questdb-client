@@ -58,10 +58,8 @@ public class NackPolicyV2PendingTests
     // (Drainer_DownServer_NoQuarantine_SlotReadoptable, Drainer_PoisonFrame_HonorsMaxFrameRejections_
     // Quarantines) and the existing QwpBackgroundDrainerPoolTests quarantine-classification tests.
 
-    // ---- Connect-walk concurrency (Invariant-B keeps the I/O thread alive in more windows) ----
-
-    // Scenario: a foreground connect proceeds while N drainer connect walks run, with no
-    // shared-lock stall across network I/O.
-    [Test]
-    public void ConcurrentDrainerWalks_DoNotBlockForegroundConnect() => Assert.Ignore(Pending);
+    // NOTE: WP6 (connect-walk concurrency) — .NET already isolates each engine's host-health tracker
+    // and never holds a shared lock across ConnectAsync, so foreground and drainer connect walks run
+    // independently by construction. Verified by QwpCursorSendEngineTests.
+    // ConcurrentDrainerWalks_DoNotBlockForegroundConnect.
 }

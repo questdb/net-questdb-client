@@ -491,6 +491,43 @@ public class QwpCursorSendEngineTests
         Assert.That(engine.NextFsn, Is.EqualTo(1L));
     }
 
+    [Test]
+    public async Task ConcurrentDrainerWalks_DoNotBlockForegroundConnect()
+    {
+        // The foreground engine and each drainer engine own independent transports/trackers, and the
+        // reconnect loop never holds a shared lock across ConnectAsync. Stalled drainer connects must
+        // not delay the foreground engine's own connect.
+        using var drainerGate = new SemaphoreSlim(0);
+        var drainers = new List<QwpCursorSendEngine>();
+        try
+        {
+            for (var i = 0; i < 4; i++)
+            {
+                var d = NewEngine(out _, initialConnectMode: InitialConnectMode.async,
+                    factory: () => new StubTransport { OnConnect = ct => drainerGate.WaitAsync(ct) });
+                d.Start();
+                d.AppendBlocking(new byte[] { 1 });
+                drainers.Add(d);
+            }
+
+            using var foreground = NewEngine(out _, initialConnectMode: InitialConnectMode.async,
+                factory: () => new StubTransport());
+            var startTick = Environment.TickCount64;
+            foreground.Start();
+            foreground.AppendBlocking(new byte[] { 9 });
+
+            await foreground.FirstConnectTask.WaitAsync(TimeSpan.FromSeconds(2));
+            var elapsedMs = Environment.TickCount64 - startTick;
+            Assert.That(elapsedMs, Is.LessThan(1000),
+                $"foreground connect must not be blocked by stalled drainer connects; took {elapsedMs}ms");
+        }
+        finally
+        {
+            drainerGate.Release(100);
+            foreach (var d in drainers) d.Dispose();
+        }
+    }
+
     // ---- Poison-frame detector: consecutive same-head rejections/closes escalate to terminal ----
 
     [Test]

@@ -669,9 +669,101 @@ public class QwpCursorSendEngineTests
         Assert.That(engine.TerminalError, Is.InstanceOf<IngressError>());
     }
 
+    // ---- Invariant B: a store-and-forward sender never terminates on a connection error ----
+
     [Test]
-    public void ErrorHandler_FiresOnInitialConnectExhaustion()
+    public void AsyncInitialConnect_DeadEndpoint_RetriesForever_NoTerminal()
     {
+        var attempts = 0;
+        using var engine = NewEngine(out _,
+            initialConnectMode: InitialConnectMode.async,
+            // Short budget — async initial connect must ignore it and keep retrying.
+            policy: new QwpReconnectPolicy(
+                TimeSpan.FromMilliseconds(5), TimeSpan.FromMilliseconds(20), TimeSpan.FromMilliseconds(100)),
+            factory: () =>
+            {
+                Interlocked.Increment(ref attempts);
+                return new StubTransport { OnConnect = _ => throw new IngressError(ErrorCode.SocketError, "dead") };
+            });
+        engine.Start();
+        engine.AppendBlocking(new byte[] { 1 }); // buffers without blocking
+
+        AssertEventually(() => Volatile.Read(ref attempts) >= 5, "async initial connect must keep retrying");
+        Thread.Sleep(200); // well past the 100ms budget
+        Assert.That(engine.IsTerminallyFailed, Is.False,
+            "async initial connect must never terminalise on the reconnect budget");
+        Assert.That(Volatile.Read(ref attempts), Is.GreaterThanOrEqualTo(8), "still retrying past the old budget");
+    }
+
+    [Test]
+    public void MidStreamReconnect_NeverGivesUp_NoBudgetTerminal()
+    {
+        var connectCount = 0;
+        using var engine = NewEngine(out _,
+            policy: new QwpReconnectPolicy(
+                TimeSpan.FromMilliseconds(5), TimeSpan.FromMilliseconds(20), TimeSpan.FromMilliseconds(100)),
+            factory: () =>
+            {
+                var idx = Interlocked.Increment(ref connectCount);
+                if (idx == 1)
+                {
+                    var sent = 0;
+                    return new StubTransport
+                    {
+                        OnSend = _ =>
+                        {
+                            sent++;
+                            return sent == 1
+                                ? OkResponse(0)
+                                : throw new IngressError(ErrorCode.SocketError, "drop");
+                        }
+                    };
+                }
+
+                // Every later connection refuses — a permanent mid-stream outage.
+                return new StubTransport { OnConnect = _ => throw new IngressError(ErrorCode.SocketError, "outage") };
+            });
+        engine.Start();
+        engine.AppendBlocking(new byte[] { 0 });
+        engine.AppendBlocking(new byte[] { 1 });
+
+        AssertEventually(() => Volatile.Read(ref connectCount) >= 5, "mid-stream reconnect must keep retrying");
+        Thread.Sleep(200); // well past the 100ms budget
+        Assert.That(engine.IsTerminallyFailed, Is.False,
+            "mid-stream reconnect must never terminalise on the reconnect budget (Invariant B)");
+        Assert.That(engine.AckedFsn, Is.EqualTo(1L), "the acked prefix is preserved across the outage");
+    }
+
+    [Test]
+    public void SfExhaustion_SurfacesAsAppendBackpressure_NotTerminal()
+    {
+        using var engine = NewEngine(out _,
+            segmentCapacity: QwpMmapSegment.HeaderSize + 64,
+            maxTotalBytes: QwpMmapSegment.HeaderSize + 64,
+            appendDeadline: TimeSpan.FromMilliseconds(200),
+            initialConnectMode: InitialConnectMode.async,
+            factory: () => new StubTransport { OnConnect = _ => throw new IngressError(ErrorCode.SocketError, "down") });
+        engine.Start();
+
+        // The wire is down, so the tiny store fills and AppendBlocking eventually throws append
+        // backpressure — but the engine must stay non-terminal (it keeps retrying under Invariant B).
+        Assert.Throws<IngressError>(() =>
+        {
+            for (var i = 0; i < 200; i++)
+            {
+                engine.AppendBlocking(new byte[24]);
+            }
+        });
+        Assert.That(engine.IsTerminallyFailed, Is.False,
+            "SF exhaustion is producer backpressure, not a terminal sender");
+    }
+
+    [Test]
+    public void ErrorHandler_FiresOnSyncInitialConnectExhaustion()
+    {
+        // Only the blocking SYNC initial connect (initial_connect_retry=on) is bounded by the
+        // reconnect budget; its exhaustion is a genuine terminal that fires the error handler.
+        // (Async initial connect retries forever under Invariant B — see AsyncInitialConnect_* tests.)
         var policy = new QwpReconnectPolicy(
             TimeSpan.FromMilliseconds(20),
             TimeSpan.FromMilliseconds(40),
@@ -684,7 +776,7 @@ public class QwpCursorSendEngineTests
                 OnConnect = _ => throw new IngressError(ErrorCode.SocketError, "always refused")
             },
             policy: policy,
-            initialConnectMode: InitialConnectMode.async,
+            initialConnectMode: InitialConnectMode.on,
             errorHandler: e => { captured = e; fired.Set(); });
         engine.Start();
 

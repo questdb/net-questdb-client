@@ -48,27 +48,11 @@ public class NackPolicyV2PendingTests
     // QwpWebSocketTransportTests.ReceiveFrame_AnyClose_RaisesReconnectEligibleSocketError, and
     // QwpWebSocketSenderTests.ServerClosesWithAnyCode_IsReconnectEligible.
 
-    // ---- Invariant B: a store-and-forward sender never terminates on a connection error ----
-
-    // Scenario: an always-refusing transport keeps retrying past any old wall-clock budget
-    // and never sets terminal.
-    [Test]
-    public void MidStreamReconnect_NeverGivesUp_NoBudgetTerminal() => Assert.Ignore(Pending);
-
-    // Scenario: async initial connect against a permanently dead endpoint buffers writes and
-    // retries forever without terminalising.
-    [Test]
-    public void AsyncInitialConnect_DeadEndpoint_RetriesForever_NoTerminal() => Assert.Ignore(Pending);
-
-    // Scenario: reconnect_max_duration_millis bounds ONLY the blocking sync initial connect,
-    // not async/mid-stream reconnects.
-    [Test]
-    public void ReconnectMaxDuration_BoundsSyncInitialConnectOnly() => Assert.Ignore(Pending);
-
-    // Scenario: SF disk exhaustion surfaces to the producer as append backpressure
-    // (sf_append_deadline_millis) then throws — never as a terminal sender.
-    [Test]
-    public void SfExhaustion_SurfacesAsAppendBackpressure_NotTerminal() => Assert.Ignore(Pending);
+    // NOTE: WP3 (Invariant B — SF never terminates on a connection error) is implemented — see
+    // QwpCursorSendEngineTests (AsyncInitialConnect_DeadEndpoint_RetriesForever_NoTerminal,
+    // MidStreamReconnect_NeverGivesUp_NoBudgetTerminal, SfExhaustion_SurfacesAsAppendBackpressure_*,
+    // and the inverted AllHostsReplica_IsTransient_RetriesForever multi-host test). Only the
+    // blocking SYNC initial connect stays budget-bounded (ReconnectBudgetExhausted_Terminal).
 
     // ---- Drainers honour the same invariants ----
 

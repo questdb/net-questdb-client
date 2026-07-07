@@ -243,7 +243,11 @@ public class QwpCursorSendEngineMultiHostTests
 
         engine.Start();
         engine.AppendBlocking(new byte[] { 1 });
-        Assert.ThrowsAsync<IngressError>(async () => await engine.FlushAsync(TimeSpan.FromSeconds(2)));
+
+        // Invariant B: async initial connect against an all-replica window retries forever — the
+        // flush times out rather than surfacing a terminal, and the outage stays observable via
+        // per-sweep ALL_ENDPOINTS_UNREACHABLE events.
+        Assert.CatchAsync<TimeoutException>(async () => await engine.FlushAsync(TimeSpan.FromSeconds(1)));
 
         QuestDB.Senders.SenderConnectionEvent[] snapshot;
         lock (events) snapshot = events.ToArray();
@@ -251,13 +255,12 @@ public class QwpCursorSendEngineMultiHostTests
             e.Kind == QuestDB.Senders.SenderConnectionEventKind.AllEndpointsUnreachable);
         Assert.That(allUnreachableCount, Is.GreaterThanOrEqualTo(1),
             "every failed sweep must fire ALL_ENDPOINTS_UNREACHABLE at least once");
-        Assert.That(snapshot, Has.Some.Matches<QuestDB.Senders.SenderConnectionEvent>(
-            e => e.Kind == QuestDB.Senders.SenderConnectionEventKind.ReconnectBudgetExhausted),
-            "budget exhaustion must surface a terminal event");
+        Assert.That(engine.IsTerminallyFailed, Is.False,
+            "an all-replica window is transient — the engine must not terminalise (Invariant B)");
     }
 
     [Test]
-    public async Task AllHostsReplica_ExhaustsOutageBudgetThenTerminal()
+    public async Task AllHostsReplica_IsTransient_RetriesForever()
     {
         var hosts = new[] { "r1:9000", "r2:9000" };
         var tracker = new QwpHostHealthTracker(hosts);
@@ -279,8 +282,6 @@ public class QwpCursorSendEngineMultiHostTests
         var slotDir = Path.Combine(_root, "slot");
         var slotLock = QwpSlotLock.Acquire(slotDir);
         var ring = QwpSegmentRing.Open(slotDir, segmentCapacity: 4096);
-        // Tight budget; role-rejects must consume the wall-clock outage budget so a permanent
-        // REPLICA topology eventually surfaces as terminal rather than blocking forever.
         var policy = new QwpReconnectPolicy(
             TimeSpan.FromMilliseconds(5),
             TimeSpan.FromMilliseconds(20),
@@ -294,13 +295,15 @@ public class QwpCursorSendEngineMultiHostTests
         engine.Start();
         engine.AppendBlocking(new byte[] { 1 });
 
-        Assert.ThrowsAsync<IngressError>(async () =>
-            await engine.FlushAsync(TimeSpan.FromSeconds(2)));
+        // Invariant B: a permanent all-replica topology is transient — the engine keeps rotating
+        // through the hosts forever and never terminalises; the flush simply times out.
+        Assert.CatchAsync<TimeoutException>(async () =>
+            await engine.FlushAsync(TimeSpan.FromSeconds(1)));
 
         Assert.That(attempts, Is.GreaterThanOrEqualTo(hosts.Length),
-            "must rotate through every host at least once before giving up");
-        Assert.That(engine.IsTerminallyFailed, Is.True,
-            "role-rejects consume the outage budget; a permanent REPLICA topology must terminate");
+            "must rotate through every host while retrying");
+        Assert.That(engine.IsTerminallyFailed, Is.False,
+            "an all-replica window is transient — Invariant B: never terminalise on a connection error");
     }
 
     private sealed class MhStubTransport : IQwpCursorTransport

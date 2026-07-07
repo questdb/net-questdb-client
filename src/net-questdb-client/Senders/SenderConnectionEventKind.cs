@@ -56,9 +56,4 @@ public enum SenderConnectionEventKind
     ///     call surfaces an <see cref="QuestDB.Utils.IngressError" />.
     /// </summary>
     AuthFailed,
-
-    /// <summary>
-    ///     Terminal: the configured reconnect time budget was exhausted without a successful reconnect.
-    /// </summary>
-    ReconnectBudgetExhausted,
 }

@@ -730,12 +730,11 @@ internal sealed class QwpCursorSendEngine : IDisposable
                         cause: ex, endpoint: transport.Endpoint);
                     backoff.ResetAttempt();
                     backoff.OutageStartTickMs ??= Environment.TickCount64;
-                    var elapsed = TimeSpan.FromMilliseconds(
-                        Environment.TickCount64 - backoff.OutageStartTickMs.Value);
-                    if (elapsed >= _reconnectPolicy.MaxOutageDuration)
+
+                    // Invariant B: an all-replica / role-reject window is transient — retry forever.
+                    // Only the blocking SYNC initial connect is bounded by reconnect_max_duration_millis.
+                    if (RoleRejectBudgetExhausted(backoff))
                     {
-                        EmitConnectionEvent(QuestDB.Senders.SenderConnectionEventKind.ReconnectBudgetExhausted,
-                            cause: ex, endpoint: transport.Endpoint);
                         SetTerminal(ex);
                         return;
                     }
@@ -749,27 +748,21 @@ internal sealed class QwpCursorSendEngine : IDisposable
                         cause: ex, endpoint: transport.Endpoint);
                     Interlocked.Increment(ref _currentRoundSeq);
 
-                    var remaining = _reconnectPolicy.MaxOutageDuration - elapsed;
-                    var jittered = _reconnectPolicy.ComputeBackoff(0);
-                    var sleep = remaining < jittered ? remaining : jittered;
                     try
                     {
-                        await Task.Delay(sleep, ct).ConfigureAwait(false);
+                        await Task.Delay(_reconnectPolicy.ComputeBackoff(0), ct).ConfigureAwait(false);
                     }
                     catch (OperationCanceledException)
                     {
                         return;
                     }
 
-                    elapsed = TimeSpan.FromMilliseconds(
-                        Environment.TickCount64 - backoff.OutageStartTickMs.Value);
-                    if (elapsed >= _reconnectPolicy.MaxOutageDuration)
+                    if (RoleRejectBudgetExhausted(backoff))
                     {
-                        EmitConnectionEvent(QuestDB.Senders.SenderConnectionEventKind.ReconnectBudgetExhausted,
-                            cause: ex, endpoint: transport.Endpoint);
                         SetTerminal(ex);
                         return;
                     }
+
                     continue;
                 }
                 catch (Exception ex)
@@ -1263,21 +1256,51 @@ internal sealed class QwpCursorSendEngine : IDisposable
         }
     }
 
+    // Invariant B: once rows are accepted into store-and-forward, the background loop never gives up
+    // on a wall-clock budget. Only the blocking SYNC initial connect (initial_connect_retry=on) is
+    // bounded by reconnect_max_duration_millis so the constructor can fail loud; async initial connect
+    // and every mid-stream reconnect retry forever with capped exponential backoff + jitter.
+    private bool IsBlockingInitialConnect() => !_seenFirstConnect && _initialConnectMode == InitialConnectMode.on;
+
+    // Role-reject / all-replica window: bounded only during the blocking SYNC initial connect;
+    // otherwise Invariant B applies and the loop retries forever.
+    private bool RoleRejectBudgetExhausted(BackoffState state)
+    {
+        if (!IsBlockingInitialConnect())
+        {
+            return false;
+        }
+
+        state.OutageStartTickMs ??= Environment.TickCount64;
+        var elapsed = TimeSpan.FromMilliseconds(Environment.TickCount64 - state.OutageStartTickMs.Value);
+        return elapsed >= _reconnectPolicy.MaxOutageDuration;
+    }
+
     private async Task<bool> BackoffOrGiveUpAsync(Exception lastError, BackoffState state, CancellationToken ct)
     {
         state.OutageStartTickMs ??= Environment.TickCount64;
-        var elapsed = TimeSpan.FromMilliseconds(Environment.TickCount64 - state.OutageStartTickMs.Value);
-        var next = _reconnectPolicy.NextBackoffOrGiveUp(state.Attempt, elapsed);
-        if (next is null)
+
+        TimeSpan delay;
+        if (IsBlockingInitialConnect())
         {
-            EmitConnectionEvent(QuestDB.Senders.SenderConnectionEventKind.ReconnectBudgetExhausted, cause: lastError);
-            SetTerminal(lastError);
-            return false;
+            var elapsed = TimeSpan.FromMilliseconds(Environment.TickCount64 - state.OutageStartTickMs.Value);
+            var next = _reconnectPolicy.NextBackoffOrGiveUp(state.Attempt, elapsed);
+            if (next is null)
+            {
+                SetTerminal(lastError);
+                return false;
+            }
+
+            delay = next.Value;
+        }
+        else
+        {
+            delay = _reconnectPolicy.ComputeBackoff(state.Attempt);
         }
 
         try
         {
-            await Task.Delay(next.Value, ct).ConfigureAwait(false);
+            await Task.Delay(delay, ct).ConfigureAwait(false);
         }
         catch (OperationCanceledException)
         {

@@ -575,8 +575,11 @@ public class QwpWebSocketSenderTests
     }
 
     [Test]
-    public async Task ServerClosesAfterFirstFrame_ReconnectsThenTerminalAfterBudget()
+    public async Task ServerClosesAfterEachFrame_ReconnectsForever_StaysUsable()
     {
+        // The server acks each frame then closes the socket. Invariant B: the sender reconnects
+        // forever and never terminalises on the (now sync-initial-only) reconnect budget — sends
+        // keep working past what used to be a budget-exhaustion terminal.
         await using var server = new DummyQwpServer(new DummyQwpServerOptions
         {
             FrameHandler = _ => BuildOkAck(0),
@@ -592,21 +595,16 @@ public class QwpWebSocketSenderTests
         sender.Send();
 
         await WaitFor(() => server.ReceivedFrames.Count >= 1);
+        await Task.Delay(700); // well past reconnect_max_duration_millis (500ms)
 
-        // Server is gone after frame 1; sender retries through the reconnect budget then terminalises.
-        await WaitFor(() =>
+        // A later send still succeeds — the sender is not terminal and reconnected transparently.
+        Assert.DoesNotThrow(() =>
         {
-            try
-            {
-                sender.Table("t").Column("v", 2L).At(DateTime.UtcNow);
-                sender.Send();
-                return false;
-            }
-            catch (IngressError)
-            {
-                return true;
-            }
-        }, timeoutMs: 5000);
+            sender.Table("t").Column("v", 2L).At(DateTime.UtcNow);
+            sender.Send();
+        });
+        Assert.That(server.ReceivedFrames.Count, Is.GreaterThanOrEqualTo(2),
+            "the second frame is delivered after a reconnect — the sender never terminalised on the budget");
     }
 
     private static System.Security.Cryptography.X509Certificates.X509Certificate2 NewSelfSignedCertificate(string subject)

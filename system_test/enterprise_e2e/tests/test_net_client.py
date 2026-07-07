@@ -20,6 +20,8 @@ from lib.obj_store import ObjStore
 from lib.pg_query import wait_for_dense_sequence
 from lib.server import wait_port_free
 
+from .fake_upgrade_server import FakeUpgradeServer
+
 LOG = logging.getLogger(__name__)
 
 
@@ -199,3 +201,146 @@ def test_no_request_durable_ack_loses_rows(server_factory, net_sidecar,
     assert actual < row_count, (
         f"Expected data loss without durable-ack but got {actual}/{row_count} rows"
     )
+
+
+# ---------------------------------------------------------------------------
+# Write-side failover / role-negotiation scenarios, ported from the Java client
+# (java-questdb-client core/.../cutlass/qwp/client/WriteFailoverTest.java). The
+# reject cases drive a self-contained FakeUpgradeServer instead of a real node,
+# because the behaviour under test is entirely client-side connect-walk
+# classification of the /write/v4 upgrade response — no cluster required. The
+# positive walk-past case pairs a fake rejecting replica with a real primary.
+# ---------------------------------------------------------------------------
+
+def _reject_connect_string(*ports: int, blocking: bool = True, budget_ms: int = 1500) -> str:
+    """A ws:: connect string over the given loopback ports.
+
+    ``blocking`` selects ``initial_connect_retry=on`` so the SYNC initial connect
+    is budget-bounded and a role-reject sweep surfaces terminally (Invariant B
+    otherwise retries an all-replica window forever)."""
+    addr = ",".join(f"127.0.0.1:{p}" for p in ports)
+    parts = [f"ws::addr={addr}"]
+    if blocking:
+        parts.append("initial_connect_retry=on")
+        parts.append(f"reconnect_max_duration_millis={budget_ms}")
+    return ";".join(parts) + ";"
+
+
+@pytest.mark.net_client
+def test_single_replica_upgrade_is_role_terminal(net_sidecar) -> None:
+    """Port of testUpgradeException421CarriesRoleHeader: a single-replica
+    off-mode walk surfaces a role-reject terminal carrying the advertised role,
+    not a generic socket error."""
+    with FakeUpgradeServer(421, "Misdirected Request", role="REPLICA") as replica:
+        with pytest.raises(RuntimeError) as ei:
+            net_sidecar.connect(_reject_connect_string(replica.port))
+        assert replica.connections >= 1, "replica endpoint must be probed"
+    msg = str(ei.value)
+    assert "REPLICA" in msg and "role=" in msg, msg
+
+
+@pytest.mark.net_client
+def test_all_replicas_upgrade_is_role_terminal(net_sidecar) -> None:
+    """Port of testRoleMismatchExceptionWhenAllReplicas: every address is a
+    non-writable role (REPLICA + PRIMARY_CATCHUP); the blocking walk probes them
+    all, then surfaces a role-reject terminal (distinguishable from all-down)."""
+    with FakeUpgradeServer(421, "Misdirected Request", role="REPLICA") as r1, \
+            FakeUpgradeServer(421, "Misdirected Request", role="PRIMARY_CATCHUP") as r2:
+        with pytest.raises(RuntimeError) as ei:
+            net_sidecar.connect(_reject_connect_string(r1.port, r2.port))
+        assert r1.connections >= 1 and r2.connections >= 1, "both endpoints must be probed"
+    msg = str(ei.value)
+    assert "REPLICA" in msg or "PRIMARY_CATCHUP" in msg, msg
+
+
+@pytest.mark.net_client
+def test_mixed_sweep_role_reject_outranks_terminal_503(net_sidecar) -> None:
+    """Port of testMixedSweepRoleRejectOutranksLatchedTerminalUpgradeError:
+    a sweep of [replica, replica, 503] must classify the exhausted round by the
+    co-occurring role rejects (transient failover window), not the latched 503
+    terminal — otherwise a transient window becomes a dead sender."""
+    with FakeUpgradeServer(421, "Misdirected Request", role="REPLICA") as r1, \
+            FakeUpgradeServer(421, "Misdirected Request", role="REPLICA") as r2, \
+            FakeUpgradeServer(503, "Service Unavailable") as sick:
+        with pytest.raises(RuntimeError) as ei:
+            net_sidecar.connect(_reject_connect_string(r1.port, r2.port, sick.port))
+    msg = str(ei.value)
+    assert "REPLICA" in msg, f"role reject must outrank the 503 terminal: {msg}"
+
+
+@pytest.mark.net_client
+@pytest.mark.parametrize("status,reason", [(401, "Unauthorized"), (403, "Forbidden")])
+def test_auth_denied_upgrade_is_terminal(net_sidecar, status: int, reason: str) -> None:
+    """A writable node that denies the upgrade with 401/403 is an immediate
+    terminal (AuthError) in any connect mode — no retry, no role-reject
+    reclassification (handoff SECURITY_ERROR / ACL scenario, client side)."""
+    with FakeUpgradeServer(status, reason) as srv:
+        with pytest.raises(RuntimeError) as ei:
+            net_sidecar.connect(f"ws::addr=127.0.0.1:{srv.port};username=admin;password=quest;")
+        assert srv.connections == 1, "auth terminal must not retry the endpoint"
+    msg = str(ei.value)
+    assert "Auth" in msg and str(status) in msg, msg
+
+
+@pytest.mark.net_client
+def test_offmode_all_replica_window_retries_forever(net_sidecar) -> None:
+    """Invariant B: an all-replica window is transient, not terminal. With an
+    async (non-blocking) connect the sender keeps walking the replica forever —
+    reconnect attempts climb and nothing is ever delivered or latched terminal —
+    so a primary that later appears would be picked up (the delivery half of that
+    needs a real promotion and is exercised in the Enterprise cluster suite)."""
+    with FakeUpgradeServer(421, "Misdirected Request", role="REPLICA") as replica:
+        net_sidecar.connect(
+            f"ws::addr=127.0.0.1:{replica.port};initial_connect_retry=async;")
+        net_sidecar.send("net_invariant_b", count=5, start_index=0)
+
+        time.sleep(2.0)
+        s1 = net_sidecar.stats()
+        time.sleep(1.5)
+        s2 = net_sidecar.stats()
+
+    assert s1.reconn_attempts >= 1, f"expected reconnect attempts to accrue: {s1}"
+    assert s2.reconn_attempts > s1.reconn_attempts, (
+        f"all-replica window must keep retrying, not go terminal: {s1} -> {s2}")
+    assert s2.acked == -1, f"nothing must be delivered while no primary exists: {s2}"
+
+
+@pytest.mark.net_client
+def test_failover_past_replica_to_primary(server_factory, net_sidecar,
+                                          obj_store: ObjStore, scenario_dir: Path) -> None:
+    """Port of testFailoverPastReplicaToPrimary: the address list leads with a
+    rejecting replica and ends with a real primary. The off-mode walk rotates
+    past the 421 replica within the round and lands on the primary, so every row
+    is delivered."""
+    table = "net_walk_to_primary"
+    row_count = 30
+    sf_dir = scenario_dir / "sf"
+
+    primary = server_factory("p1")
+    ports = primary.start()
+
+    with FakeUpgradeServer(421, "Misdirected Request", role="REPLICA") as replica:
+        cfg = (f"ws::addr=127.0.0.1:{replica.port},127.0.0.1:{ports.http}"
+               f";user=admin;password=quest;sf_dir={sf_dir}"
+               f";reconnect_max_duration_millis=30000;close_flush_timeout_millis=5000;")
+        net_sidecar.connect(cfg)
+        net_sidecar.send(table, count=row_count, start_index=0)
+        net_sidecar.flush()
+        assert replica.connections >= 1, "the rejecting replica must be probed before the primary"
+
+    wait_for_dense_sequence(port=ports.pg, table=table,
+                            expected_count=row_count, timeout_s=60.0)
+
+
+# Intentionally NOT ported here:
+#   * Java testFailoverPromotedReplicaJoinsRotation / testStandaloneIsTreatedAsWritable
+#     and PrReviewRedTestsE2e C4 (terminal latched before handler) / C11 (post-halt
+#     flush throws typed) are pure client-behaviour cases already covered by the .NET
+#     unit suite (QwpRoleFilterTests, QwpCursorSendEngineMultiHostTests, and the WP1/WP5
+#     terminal-error tests). Re-driving them through the sidecar would be redundant.
+#   * The *delivery* half of the all-replica window (retry forever, then land every row
+#     once a node is promoted to PRIMARY) and graceful primary->replica demotion need a
+#     real role transition from server_factory; the durable-ack capability gap needs a
+#     primary without replication configured. Those depend on Enterprise fixture
+#     capabilities and belong in the cluster suite once the fixtures expose promotion /
+#     demotion / no-replication start modes.

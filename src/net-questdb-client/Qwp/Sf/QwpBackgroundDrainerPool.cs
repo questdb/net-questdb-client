@@ -22,6 +22,7 @@
  *
  ******************************************************************************/
 
+using QuestDB.Senders;
 using QuestDB.Utils;
 
 namespace QuestDB.Qwp.Sf;
@@ -62,6 +63,7 @@ internal sealed class QwpBackgroundDrainerPool : IDisposable
     private static readonly TimeSpan StopGraceWait = TimeSpan.FromMilliseconds(500);
 
     private readonly IQwpSlotDrainer _drainer;
+    private readonly IBackgroundDrainerListener? _listener;
     private readonly SemaphoreSlim _slots;
     private readonly object _trackingLock = new();
     private readonly List<Task> _runningTasks = new();
@@ -73,7 +75,8 @@ internal sealed class QwpBackgroundDrainerPool : IDisposable
     private readonly TimeSpan _shutdownWait;
     private bool _disposed;
 
-    public QwpBackgroundDrainerPool(int maxConcurrent, IQwpSlotDrainer drainer, TimeSpan? shutdownWait = null)
+    public QwpBackgroundDrainerPool(int maxConcurrent, IQwpSlotDrainer drainer, TimeSpan? shutdownWait = null,
+        IBackgroundDrainerListener? listener = null)
     {
         try
         {
@@ -83,6 +86,7 @@ internal sealed class QwpBackgroundDrainerPool : IDisposable
             }
 
             _drainer = drainer ?? throw new ArgumentNullException(nameof(drainer));
+            _listener = listener;
             _slots = new SemaphoreSlim(maxConcurrent, maxConcurrent);
             _shutdownWait = shutdownWait ?? GracefulDrainWait;
         }
@@ -240,10 +244,15 @@ internal sealed class QwpBackgroundDrainerPool : IDisposable
 
             try
             {
+                // Emit adoption on the worker thread (not the enqueuing producer thread), right before the
+                // drain starts, so a slot cancelled before it ever ran emits nothing at all.
+                Notify(BackgroundDrainerEventKind.SlotAdopted, slotLock.SlotDirectory, null);
                 await _drainer.DrainAsync(slotLock.SlotDirectory, cancellationToken).ConfigureAwait(false);
+                Notify(BackgroundDrainerEventKind.DrainCompleted, slotLock.SlotDirectory, null);
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
+                Notify(BackgroundDrainerEventKind.DrainCancelled, slotLock.SlotDirectory, null);
                 throw;
             }
             catch (ObjectDisposedException)
@@ -258,10 +267,12 @@ internal sealed class QwpBackgroundDrainerPool : IDisposable
                 System.Diagnostics.Trace.TraceWarning(
                     $"QWP orphan drain of `{slotLock.SlotDirectory}` did not complete (transient: " +
                     $"{ex.GetType().Name}); slot left for re-adoption.");
+                Notify(BackgroundDrainerEventKind.DrainRetrying, slotLock.SlotDirectory, ex);
             }
             catch (Exception ex)
             {
                 TryDropFailedSentinel(slotLock, ex);
+                Notify(BackgroundDrainerEventKind.DrainQuarantined, slotLock.SlotDirectory, ex);
             }
             finally
             {
@@ -284,6 +295,27 @@ internal sealed class QwpBackgroundDrainerPool : IDisposable
                 _liveLocks.Remove(slotLock);
             }
             slotLock.Dispose();
+        }
+    }
+
+    // Fires the observability listener inline on the drainer worker thread. Rare relative to the data
+    // path (one adoption + one outcome per slot at startup), so no dispatcher thread; a slow/throwing
+    // listener is contained here and must never fault the drain or leak out of RunDrainAsync.
+    private void Notify(BackgroundDrainerEventKind kind, string slotDirectory, Exception? cause)
+    {
+        var listener = _listener;
+        if (listener is null)
+        {
+            return;
+        }
+
+        try
+        {
+            listener.OnEvent(new BackgroundDrainerEvent(kind, slotDirectory, cause, DateTimeOffset.UtcNow));
+        }
+        catch (Exception t)
+        {
+            System.Diagnostics.Trace.TraceError($"IBackgroundDrainerListener.OnEvent threw: {t}");
         }
     }
 

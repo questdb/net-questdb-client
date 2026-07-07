@@ -234,7 +234,8 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender, IPooledSlotSende
                 // close_flush_timeout here, or a wedged drainer adds the full flush budget to Dispose().
                 pool = new QwpBackgroundDrainerPool(
                     options.max_background_drainers,
-                    drainer);
+                    drainer,
+                    listener: options.DrainerListener);
                 var orphans = QwpOrphanScanner.ClaimOrphans(
                     options.sf_dir!, options.sender_id,
                     options.OrphanExcludeManagedBase, options.OrphanExcludeManagedCount);

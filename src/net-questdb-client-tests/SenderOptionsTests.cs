@@ -851,6 +851,32 @@ public class SenderOptionsTests
     }
 
     [Test]
+    public void DrainerListener_WithSfDir_PassesValidation()
+    {
+        var opts = new SenderOptions { protocol = ProtocolType.ws, addr = "h:9000", sf_dir = "/tmp/qdb" };
+        opts.DrainerListener = new NoopDrainerListener();
+        Assert.DoesNotThrow(() => opts.EnsureValid());
+        Assert.That(opts.DrainerListener, Is.Not.Null);
+    }
+
+    [Test]
+    public void DrainerListener_OnHttpScheme_Rejected()
+    {
+        var opts = new SenderOptions { protocol = ProtocolType.http, addr = "h:9000" };
+        opts.DrainerListener = new NoopDrainerListener();
+        Assert.That(
+            () => opts.EnsureValid(),
+            Throws.TypeOf<IngressError>().With.Message.Contains("ws"));
+    }
+
+    private sealed class NoopDrainerListener : QuestDB.Senders.IBackgroundDrainerListener
+    {
+        public void OnEvent(QuestDB.Senders.BackgroundDrainerEvent evt)
+        {
+        }
+    }
+
+    [Test]
     public void ErrorPolicyResolver_WithoutSfDir_AcceptedAfterCursorEngineUnification()
     {
         var opts = new SenderOptions { protocol = ProtocolType.ws, addr = "h:9000" };

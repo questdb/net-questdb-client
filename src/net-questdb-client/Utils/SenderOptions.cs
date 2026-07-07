@@ -131,6 +131,7 @@ public record SenderOptions
     private int _maxFrameRejections = 4;
     private TimeSpan _poisonMinEscalationWindow = TimeSpan.FromMilliseconds(5000);
     private QuestDB.Senders.ISenderConnectionListener? _connectionListener;
+    private QuestDB.Senders.IBackgroundDrainerListener? _drainerListener;
     private SenderErrorPolicy? _onServerError;
     private SenderErrorPolicy? _onSchemaMismatchError;
     private SenderErrorPolicy? _onParseError;
@@ -163,6 +164,7 @@ public record SenderOptions
     private bool _maxFrameRejectionsUserSet;
     private bool _poisonMinEscalationWindowUserSet;
     private bool _connectionListenerUserSet;
+    private bool _drainerListenerUserSet;
     private bool _onServerErrorUserSet;
     private bool _onSchemaMismatchErrorUserSet;
     private bool _onParseErrorUserSet;
@@ -884,6 +886,7 @@ public record SenderOptions
         if (_maxFrameRejectionsUserSet) Throw(nameof(max_frame_rejections));
         if (_poisonMinEscalationWindowUserSet) Throw(nameof(poison_min_escalation_window_millis));
         if (_connectionListenerUserSet) Throw(nameof(ConnectionListener));
+        if (_drainerListenerUserSet) Throw(nameof(DrainerListener));
         if (_onServerErrorUserSet) Throw(nameof(on_server_error));
         if (_onSchemaMismatchErrorUserSet) Throw(nameof(on_schema_mismatch_error));
         if (_onParseErrorUserSet) Throw(nameof(on_parse_error));
@@ -1715,6 +1718,19 @@ public record SenderOptions
     {
         get => _connectionListener;
         set { _connectionListener = value; _connectionListenerUserSet = true; }
+    }
+
+    /// <summary>
+    ///     Programmatic-only registration of an <see cref="QuestDB.Senders.IBackgroundDrainerListener" />
+    ///     observing orphan slot adoption + drain outcomes (SF <c>drain_orphans=on</c>). Not a
+    ///     connect-string key (a callback can't be expressed in a string). WS-only; ignored on other
+    ///     transports.
+    /// </summary>
+    [JsonIgnore]
+    public QuestDB.Senders.IBackgroundDrainerListener? DrainerListener
+    {
+        get => _drainerListener;
+        set { _drainerListener = value; _drainerListenerUserSet = true; }
     }
 
     /// <summary>

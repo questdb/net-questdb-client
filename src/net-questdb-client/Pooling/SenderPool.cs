@@ -51,6 +51,7 @@ internal sealed class SenderPool
     private readonly string? _confStr;
     private readonly QuestDB.Utils.SenderErrorHandler? _errorHandler;
     private readonly QuestDB.Senders.ISenderConnectionListener? _connectionListener;
+    private readonly QuestDB.Senders.IBackgroundDrainerListener? _drainerListener;
     private readonly object _gate = new();
     private readonly TimeSpan _idleTimeout;
     private readonly TimeSpan _maxLifetime;
@@ -102,8 +103,9 @@ internal sealed class SenderPool
     ///     <c>lazy_connect</c> facade path so pooled ws senders connect asynchronously.</summary>
     internal SenderPool(SenderOptions poolConfig, string confStr, bool forceWsAsyncConnect = false,
         QuestDB.Utils.SenderErrorHandler? errorHandler = null,
-        QuestDB.Senders.ISenderConnectionListener? connectionListener = null)
-        : this(poolConfig, confStr, null, forceWsAsyncConnect, errorHandler, connectionListener)
+        QuestDB.Senders.ISenderConnectionListener? connectionListener = null,
+        QuestDB.Senders.IBackgroundDrainerListener? drainerListener = null)
+        : this(poolConfig, confStr, null, forceWsAsyncConnect, errorHandler, connectionListener, drainerListener)
     {
     }
 
@@ -112,7 +114,8 @@ internal sealed class SenderPool
     internal SenderPool(SenderOptions poolConfig, string? confStr, Func<int, ISender>? senderFactory,
         bool forceWsAsyncConnect = false,
         QuestDB.Utils.SenderErrorHandler? errorHandler = null,
-        QuestDB.Senders.ISenderConnectionListener? connectionListener = null)
+        QuestDB.Senders.ISenderConnectionListener? connectionListener = null,
+        QuestDB.Senders.IBackgroundDrainerListener? drainerListener = null)
     {
         // Re-validate: builder methods may have mutated min/max after the connect-string parse.
         poolConfig.ValidatePoolOptions();
@@ -128,6 +131,7 @@ internal sealed class SenderPool
         _forceWsAsyncConnect = forceWsAsyncConnect;
         _errorHandler = errorHandler;
         _connectionListener = connectionListener;
+        _drainerListener = drainerListener;
         _capacity = new SemaphoreSlim(_max, _max);
 
         _storeAndForward = poolConfig.IsWebSocket() && !string.IsNullOrEmpty(poolConfig.sf_dir);
@@ -1002,6 +1006,7 @@ internal sealed class SenderPool
         {
             if (_errorHandler is not null) options.error_handler = _errorHandler;
             if (_connectionListener is not null) options.ConnectionListener = _connectionListener;
+            if (_drainerListener is not null) options.DrainerListener = _drainerListener;
         }
 
         if (_storeAndForward)

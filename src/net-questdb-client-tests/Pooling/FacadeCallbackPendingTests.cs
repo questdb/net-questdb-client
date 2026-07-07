@@ -30,6 +30,7 @@ using NUnit.Framework;
 using QuestDB;
 using QuestDB.Enums;
 using QuestDB.Qwp;
+using QuestDB.Qwp.Sf;
 using QuestDB.Senders;
 using QuestDB.Utils;
 using dummy_http_server;
@@ -108,7 +109,67 @@ public class FacadeCallbackPendingTests
             $"every one of the {min} pooled senders must reach the shared connectionListener");
     }
 
+    // A facade drainerListener observes a pooled ws+sf sender adopting and draining a crashed sibling's
+    // orphan slot (drain_orphans=on): SlotAdopted then DrainCompleted must both reach the shared listener.
+    [Test]
+    public async Task FacadeDrainerListener_ReceivesDrainerEvents()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "qwp-facade-drain-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            // Seed an out-of-family orphan slot (not "default-{i}", the pool's managed family) with one
+            // un-acked frame left behind by a "crashed" sibling. Dispose the ring so the segment file is
+            // free for the orphan scanner to adopt.
+            var orphanSlot = Path.Combine(root, "crashed-sibling");
+            using (var ring = QwpSegmentRing.Open(orphanSlot, segmentCapacity: 4096))
+            {
+                Assert.That(ring.TryAppend(new byte[] { 1 }), Is.True);
+            }
+
+            await using var server = await StartAckingServerAsync();
+            var port = server.Uri.Port;
+
+            var listener = new RecordingDrainerListener();
+            await using var client = QuestDBClient.Builder()
+                .FromConfig(
+                    $"ws::addr=127.0.0.1:{port};sf_dir={root};drain_orphans=on;auto_flush=off;" +
+                    "sender_pool_min=1;sender_pool_max=1;query_pool_min=0;")
+                .DrainerListener(listener)
+                .Build();
+
+            await WaitFor(() => listener.Contains(BackgroundDrainerEventKind.DrainCompleted), 10000);
+
+            Assert.That(listener.Contains(BackgroundDrainerEventKind.SlotAdopted), Is.True,
+                "the facade drainerListener must observe the orphan slot being adopted");
+            Assert.That(listener.Contains(BackgroundDrainerEventKind.DrainCompleted), Is.True,
+                "the facade drainerListener must observe the orphan slot draining to completion");
+            Assert.That(listener.LastSlotDirectory, Does.EndWith("crashed-sibling"),
+                "the event must carry the adopted sibling's slot directory");
+            Assert.That(Directory.GetFiles(orphanSlot, "sf-*.sfa"), Is.Empty,
+                "the drained orphan's segment files must be unlinked");
+        }
+        finally
+        {
+            try { Directory.Delete(root, recursive: true); } catch { }
+        }
+    }
+
     // ---- helpers ----
+
+    private sealed class RecordingDrainerListener : IBackgroundDrainerListener
+    {
+        private readonly ConcurrentQueue<BackgroundDrainerEventKind> _kinds = new();
+        private volatile string? _lastSlotDirectory;
+        public string? LastSlotDirectory => _lastSlotDirectory;
+        public bool Contains(BackgroundDrainerEventKind kind) => _kinds.Contains(kind);
+
+        public void OnEvent(BackgroundDrainerEvent evt)
+        {
+            _lastSlotDirectory = evt.SlotDirectory;
+            _kinds.Enqueue(evt.Kind);
+        }
+    }
 
     private sealed class RecordingListener : ISenderConnectionListener
     {

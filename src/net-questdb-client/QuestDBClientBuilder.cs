@@ -44,6 +44,7 @@ public sealed class QuestDBClientBuilder
     private int? _poolMin;
     private QuestDB.Utils.SenderErrorHandler? _errorHandler;
     private QuestDB.Senders.ISenderConnectionListener? _connectionListener;
+    private QuestDB.Senders.IBackgroundDrainerListener? _drainerListener;
 #if NET7_0_OR_GREATER
     private string? _queryConfStr;
     private int? _queryPoolMax;
@@ -204,12 +205,23 @@ public sealed class QuestDBClientBuilder
         return this;
     }
 
+    /// <summary>
+    ///     Registers a background-drainer observability listener applied to every pooled <c>ws</c>/<c>wss</c>
+    ///     sender: it observes orphan slot adoption and drain outcomes when <c>drain_orphans=on</c> and
+    ///     <c>sf_dir</c> is set. Programmatic-only; ws-only (ignored for http/tcp handles).
+    /// </summary>
+    public QuestDBClientBuilder DrainerListener(QuestDB.Senders.IBackgroundDrainerListener listener)
+    {
+        _drainerListener = listener;
+        return this;
+    }
+
     /// <summary>Builds and pre-warms the pool.</summary>
     public IQuestDBClient Build()
     {
         var poolConfig = BuildPoolConfig(out var queryConfStr, out var forceWsAsyncConnect);
         return new QuestDBClientImpl(poolConfig, _confStr!, queryConfStr, forceWsAsyncConnect,
-            _errorHandler, _connectionListener);
+            _errorHandler, _connectionListener, _drainerListener);
     }
 
     // Assembles the effective pool config without constructing any pool — split out so tests can

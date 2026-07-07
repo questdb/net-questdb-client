@@ -54,17 +54,9 @@ public class NackPolicyV2PendingTests
     // and the inverted AllHostsReplica_IsTransient_RetriesForever multi-host test). Only the
     // blocking SYNC initial connect stays budget-bounded (ReconnectBudgetExhausted_Terminal).
 
-    // ---- Drainers honour the same invariants ----
-
-    // Scenario: a background drainer facing a permanently down server retries with backoff
-    // and never writes a quarantine sentinel.
-    [Test]
-    public void Drainer_DownServer_RetriesWithBackoff_NoQuarantine() => Assert.Ignore(Pending);
-
-    // Scenario: a drainer replaying a poison frame escalates on the same max_frame_rejections
-    // threshold as the foreground loop.
-    [Test]
-    public void Drainer_HonorsMaxFrameRejections() => Assert.Ignore(Pending);
+    // NOTE: WP4 (drainer parity) is implemented — see QwpBackgroundDrainerTests
+    // (Drainer_DownServer_NoQuarantine_SlotReadoptable, Drainer_PoisonFrame_HonorsMaxFrameRejections_
+    // Quarantines) and the existing QwpBackgroundDrainerPoolTests quarantine-classification tests.
 
     // ---- Connect-walk concurrency (Invariant-B keeps the I/O thread alive in more windows) ----
 

@@ -227,7 +227,9 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender, IPooledSlotSende
                     policy,
                     segmentCapacity: options.sf_max_bytes,
                     drainTimeout: options.reconnect_max_duration_millis,
-                    durableAckMode: options.request_durable_ack);
+                    durableAckMode: options.request_durable_ack,
+                    maxFrameRejections: options.max_frame_rejections,
+                    poisonMinEscalationWindow: options.poison_min_escalation_window_millis);
                 // Orphan-drainer shutdown uses the pool's own small fixed grace; do NOT pass
                 // close_flush_timeout here, or a wedged drainer adds the full flush budget to Dispose().
                 pool = new QwpBackgroundDrainerPool(

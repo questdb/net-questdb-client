@@ -188,6 +188,64 @@ public class QwpBackgroundDrainerTests
         Assert.That(Directory.GetFiles(slotDir, "sf-*.sfa"), Is.Empty);
     }
 
+    [Test]
+    public async Task Drainer_DownServer_NoQuarantine_SlotReadoptable()
+    {
+        var slotDir = Path.Combine(_root, "down-server");
+        SeedSlot(slotDir, payloads: new byte[][] { new byte[] { 1 }, new byte[] { 2 } });
+
+        var policy = new QwpReconnectPolicy(
+            TimeSpan.FromMilliseconds(5), TimeSpan.FromMilliseconds(20), TimeSpan.FromMilliseconds(150));
+        var drainer = new QwpBackgroundDrainer(
+            transportFactory: () => new StubTransport
+            {
+                OnConnect = _ => throw new IngressError(ErrorCode.SocketError, "server down")
+            },
+            reconnectPolicy: policy,
+            segmentCapacity: 4096,
+            drainTimeout: TimeSpan.FromMilliseconds(300));
+
+        var slotLock = QwpSlotLock.Acquire(slotDir);
+        using var pool = new QwpBackgroundDrainerPool(2, drainer);
+        pool.Enqueue(slotLock);
+        await pool.WaitForAllAsync();
+
+        Assert.That(File.Exists(Path.Combine(slotDir, ".failed")), Is.False,
+            "a down server is a transient outage — the drainer must not quarantine the slot");
+        Assert.That(Directory.GetFiles(slotDir, "sf-*.sfa"), Is.Not.Empty,
+            "the un-drained frames must be preserved for a later re-adoption");
+        using var reacquired = QwpSlotLock.Acquire(slotDir);
+        Assert.That(reacquired.SlotDirectory, Is.EqualTo(slotDir), "the slot lock must be released for re-adoption");
+    }
+
+    [Test]
+    public async Task Drainer_PoisonFrame_HonorsMaxFrameRejections_Quarantines()
+    {
+        var slotDir = Path.Combine(_root, "poison");
+        SeedSlot(slotDir, payloads: new byte[][] { new byte[] { 7 } });
+
+        var policy = new QwpReconnectPolicy(
+            TimeSpan.FromMilliseconds(1), TimeSpan.FromMilliseconds(4), TimeSpan.FromSeconds(30));
+        var drainer = new QwpBackgroundDrainer(
+            transportFactory: () => new StubTransport
+            {
+                OnSend = _ => ErrorAck(QwpStatusCode.WriteError, 0, "poison")
+            },
+            reconnectPolicy: policy,
+            segmentCapacity: 4096,
+            drainTimeout: TimeSpan.FromSeconds(5),
+            maxFrameRejections: 3,
+            poisonMinEscalationWindow: TimeSpan.Zero);
+
+        var slotLock = QwpSlotLock.Acquire(slotDir);
+        using var pool = new QwpBackgroundDrainerPool(2, drainer);
+        pool.Enqueue(slotLock);
+        await pool.WaitForAllAsync();
+
+        Assert.That(File.Exists(Path.Combine(slotDir, ".failed")), Is.True,
+            "a poison frame is deterministic under replay — the drainer honours max_frame_rejections and quarantines the slot");
+    }
+
     private static void SeedSlot(string slotDir, byte[][] payloads)
     {
         Directory.CreateDirectory(slotDir);
@@ -207,14 +265,27 @@ public class QwpBackgroundDrainerTests
         return buf;
     }
 
+    private static byte[] ErrorAck(QwpStatusCode status, long sequence, string message)
+    {
+        var msgBytes = System.Text.Encoding.UTF8.GetBytes(message);
+        var buf = new byte[11 + msgBytes.Length];
+        buf[0] = (byte)status;
+        BinaryPrimitives.WriteInt64LittleEndian(buf.AsSpan(1, 8), sequence);
+        BinaryPrimitives.WriteUInt16LittleEndian(buf.AsSpan(9, 2), (ushort)msgBytes.Length);
+        msgBytes.CopyTo(buf.AsSpan(11));
+        return buf;
+    }
+
     private sealed class StubTransport : IQwpCursorTransport
     {
         public Func<byte[], byte[]>? OnSend;
+        public Func<CancellationToken, Task>? OnConnect;
         public (string Host, int Port)? Endpoint { get; set; } = ("stub", 0);
         private readonly Channel<byte[]> _acks = Channel.CreateUnbounded<byte[]>();
         private int _autoSeq;
 
-        public Task ConnectAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+        public Task ConnectAsync(CancellationToken cancellationToken)
+            => OnConnect is null ? Task.CompletedTask : OnConnect(cancellationToken);
 
         public async Task SendBinaryAsync(ReadOnlyMemory<byte> data, CancellationToken cancellationToken)
         {

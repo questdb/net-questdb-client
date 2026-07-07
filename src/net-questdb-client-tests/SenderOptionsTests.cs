@@ -854,7 +854,7 @@ public class SenderOptionsTests
     public void ErrorPolicyResolver_WithoutSfDir_AcceptedAfterCursorEngineUnification()
     {
         var opts = new SenderOptions { protocol = ProtocolType.ws, addr = "h:9000" };
-        opts.error_policy_resolver = _ => SenderErrorPolicy.Halt;
+        opts.error_policy_resolver = _ => SenderErrorPolicy.Terminal;
         Assert.DoesNotThrow(() => opts.EnsureValid());
     }
 
@@ -862,7 +862,7 @@ public class SenderOptionsTests
     public void ErrorPolicyResolver_WithSfDir_PassesValidation()
     {
         var opts = new SenderOptions { protocol = ProtocolType.ws, addr = "h:9000", sf_dir = "/tmp/qdb" };
-        opts.error_policy_resolver = _ => SenderErrorPolicy.Halt;
+        opts.error_policy_resolver = _ => SenderErrorPolicy.Terminal;
         Assert.DoesNotThrow(() => opts.EnsureValid());
     }
 
@@ -893,11 +893,11 @@ public class SenderOptionsTests
         Assert.DoesNotThrow(() => opts.EnsureValid());
     }
 
-    [TestCase("halt", SenderErrorPolicy.Halt)]
-    [TestCase("HALT", SenderErrorPolicy.Halt)]
-    [TestCase("drop", SenderErrorPolicy.DropAndContinue)]
-    [TestCase("DROP", SenderErrorPolicy.DropAndContinue)]
-    [TestCase("drop_and_continue", SenderErrorPolicy.DropAndContinue)]
+    [TestCase("halt", SenderErrorPolicy.Terminal)]
+    [TestCase("HALT", SenderErrorPolicy.Terminal)]
+    [TestCase("drop", SenderErrorPolicy.Retriable)]
+    [TestCase("DROP", SenderErrorPolicy.Retriable)]
+    [TestCase("drop_and_continue", SenderErrorPolicy.Retriable)]
     public void OnServerError_AcceptsHaltAndDropAliases(string raw, SenderErrorPolicy expected)
     {
         var opts = new SenderOptions(
@@ -917,7 +917,7 @@ public class SenderOptionsTests
     public void OnServerError_WithoutSfDir_AcceptedAfterCursorEngineUnification()
     {
         var opts = new SenderOptions("ws::addr=h:9000;on_server_error=halt;");
-        Assert.That(opts.on_server_error, Is.EqualTo(SenderErrorPolicy.Halt));
+        Assert.That(opts.on_server_error, Is.EqualTo(SenderErrorPolicy.Terminal));
     }
 
     [Test]
@@ -935,11 +935,11 @@ public class SenderOptionsTests
             "ws::addr=h:9000;sf_dir=/tmp/qdb;" +
             "on_schema_mismatch_error=halt;on_parse_error=drop;" +
             "on_internal_error=drop_and_continue;on_security_error=halt;on_write_error=halt;");
-        Assert.That(opts.on_schema_mismatch_error, Is.EqualTo(SenderErrorPolicy.Halt));
-        Assert.That(opts.on_parse_error, Is.EqualTo(SenderErrorPolicy.DropAndContinue));
-        Assert.That(opts.on_internal_error, Is.EqualTo(SenderErrorPolicy.DropAndContinue));
-        Assert.That(opts.on_security_error, Is.EqualTo(SenderErrorPolicy.Halt));
-        Assert.That(opts.on_write_error, Is.EqualTo(SenderErrorPolicy.Halt));
+        Assert.That(opts.on_schema_mismatch_error, Is.EqualTo(SenderErrorPolicy.Terminal));
+        Assert.That(opts.on_parse_error, Is.EqualTo(SenderErrorPolicy.Retriable));
+        Assert.That(opts.on_internal_error, Is.EqualTo(SenderErrorPolicy.Retriable));
+        Assert.That(opts.on_security_error, Is.EqualTo(SenderErrorPolicy.Terminal));
+        Assert.That(opts.on_write_error, Is.EqualTo(SenderErrorPolicy.Terminal));
     }
 
     [Test]
@@ -958,10 +958,10 @@ public class SenderOptionsTests
             "on_server_error=halt;on_schema_mismatch_error=drop;");
         var resolver = opts.BuildEffectivePolicyResolver();
         Assert.That(resolver, Is.Not.Null);
-        Assert.That(resolver!(SenderErrorCategory.SchemaMismatch), Is.EqualTo(SenderErrorPolicy.DropAndContinue));
-        Assert.That(resolver(SenderErrorCategory.ParseError), Is.EqualTo(SenderErrorPolicy.Halt));
-        Assert.That(resolver(SenderErrorCategory.InternalError), Is.EqualTo(SenderErrorPolicy.Halt));
-        Assert.That(resolver(SenderErrorCategory.WriteError), Is.EqualTo(SenderErrorPolicy.Halt));
+        Assert.That(resolver!(SenderErrorCategory.SchemaMismatch), Is.EqualTo(SenderErrorPolicy.Retriable));
+        Assert.That(resolver(SenderErrorCategory.ParseError), Is.EqualTo(SenderErrorPolicy.Terminal));
+        Assert.That(resolver(SenderErrorCategory.InternalError), Is.EqualTo(SenderErrorPolicy.Terminal));
+        Assert.That(resolver(SenderErrorCategory.WriteError), Is.EqualTo(SenderErrorPolicy.Terminal));
     }
 
     [Test]
@@ -971,11 +971,11 @@ public class SenderOptionsTests
             "ws::addr=h:9000;sf_dir=/tmp/qdb;on_server_error=drop;");
         var resolver = opts.BuildEffectivePolicyResolver();
         Assert.That(resolver, Is.Not.Null);
-        Assert.That(resolver!(SenderErrorCategory.SchemaMismatch), Is.EqualTo(SenderErrorPolicy.DropAndContinue));
-        Assert.That(resolver(SenderErrorCategory.ParseError), Is.EqualTo(SenderErrorPolicy.DropAndContinue));
-        Assert.That(resolver(SenderErrorCategory.InternalError), Is.EqualTo(SenderErrorPolicy.DropAndContinue));
-        Assert.That(resolver(SenderErrorCategory.SecurityError), Is.EqualTo(SenderErrorPolicy.DropAndContinue));
-        Assert.That(resolver(SenderErrorCategory.WriteError), Is.EqualTo(SenderErrorPolicy.DropAndContinue));
+        Assert.That(resolver!(SenderErrorCategory.SchemaMismatch), Is.EqualTo(SenderErrorPolicy.Retriable));
+        Assert.That(resolver(SenderErrorCategory.ParseError), Is.EqualTo(SenderErrorPolicy.Retriable));
+        Assert.That(resolver(SenderErrorCategory.InternalError), Is.EqualTo(SenderErrorPolicy.Retriable));
+        Assert.That(resolver(SenderErrorCategory.SecurityError), Is.EqualTo(SenderErrorPolicy.Retriable));
+        Assert.That(resolver(SenderErrorCategory.WriteError), Is.EqualTo(SenderErrorPolicy.Retriable));
     }
 
     [Test]
@@ -983,10 +983,10 @@ public class SenderOptionsTests
     {
         var opts = new SenderOptions(
             "ws::addr=h:9000;sf_dir=/tmp/qdb;on_server_error=halt;on_schema_mismatch_error=halt;");
-        opts.error_policy_resolver = _ => SenderErrorPolicy.DropAndContinue;
+        opts.error_policy_resolver = _ => SenderErrorPolicy.Retriable;
         var resolver = opts.BuildEffectivePolicyResolver();
-        Assert.That(resolver!(SenderErrorCategory.SchemaMismatch), Is.EqualTo(SenderErrorPolicy.DropAndContinue));
-        Assert.That(resolver(SenderErrorCategory.ParseError), Is.EqualTo(SenderErrorPolicy.DropAndContinue));
+        Assert.That(resolver!(SenderErrorCategory.SchemaMismatch), Is.EqualTo(SenderErrorPolicy.Retriable));
+        Assert.That(resolver(SenderErrorCategory.ParseError), Is.EqualTo(SenderErrorPolicy.Retriable));
     }
 
     [Test]
@@ -1004,9 +1004,9 @@ public class SenderOptionsTests
             "ws::addr=h:9000;sf_dir=/tmp/qdb;" +
             "on_server_error=halt;on_schema_mismatch_error=drop;on_write_error=drop_and_continue;");
         var roundTripped = new SenderOptions(original.ToString());
-        Assert.That(roundTripped.on_server_error, Is.EqualTo(SenderErrorPolicy.Halt));
-        Assert.That(roundTripped.on_schema_mismatch_error, Is.EqualTo(SenderErrorPolicy.DropAndContinue));
-        Assert.That(roundTripped.on_write_error, Is.EqualTo(SenderErrorPolicy.DropAndContinue));
+        Assert.That(roundTripped.on_server_error, Is.EqualTo(SenderErrorPolicy.Terminal));
+        Assert.That(roundTripped.on_schema_mismatch_error, Is.EqualTo(SenderErrorPolicy.Retriable));
+        Assert.That(roundTripped.on_write_error, Is.EqualTo(SenderErrorPolicy.Retriable));
     }
 
     [Test]

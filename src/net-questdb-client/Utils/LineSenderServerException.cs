@@ -28,7 +28,7 @@ namespace QuestDB.Utils;
 
 /// <summary>
 ///     Thrown from the producer thread when the SF cursor engine has latched a
-///     <see cref="SenderErrorPolicy.Halt" />-policy <see cref="SenderError" />.
+///     <see cref="SenderErrorPolicy.Terminal" />-policy <see cref="SenderError" />.
 ///     The structured payload is on <see cref="Error" />.
 /// </summary>
 public sealed class LineSenderServerException : IngressError

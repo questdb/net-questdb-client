@@ -1185,35 +1185,18 @@ internal sealed class QwpCursorSendEngine : IDisposable
             tableName,
             DateTime.UtcNow);
 
-        if (policy == SenderErrorPolicy.Halt)
+        if (policy == SenderErrorPolicy.Terminal)
         {
             throw new HaltCarrier(senderError, new LineSenderServerException(senderError));
         }
 
-        if (fromFsn >= 0L)
-        {
-            lock (_stateLock)
-            {
-                if (_durableAckMode)
-                {
-                    var cappedSeq = fromFsn - fsnAtZero;
-                    _pendingDurable.Enqueue(new PendingDurable(cappedSeq, Array.Empty<QwpTableEntry>()));
-                    TrimCoveredPrefixLocked(fsnAtZero);
-                }
-                else
-                {
-                    var newAcked = checked(fromFsn + 1L);
-                    if (newAcked > _ackedFsn)
-                    {
-                        _ackedFsn = newAcked;
-                        _ring.Acknowledge(_ackedFsn - 1);
-                        FireAckSignalLocked();
-                    }
-                }
-            }
-        }
-
+        // Retriable: the watermark is NOT advanced — nothing is dropped. Account the rejection
+        // against the poison-frame detector (a frame that deterministically kills the connection
+        // escalates to a terminal ProtocolViolation), then recycle the connection so the reconnect
+        // path replays the rejected frame from ackedFsn.
         _errorDispatcher?.Offer(senderError);
+        NoteRetriableRejection(fromFsn);
+        throw new RetriableNackException(senderError, fromFsn);
     }
 
     private void DispatchTableEntries(in QwpResponse response)
@@ -1280,7 +1263,7 @@ internal sealed class QwpCursorSendEngine : IDisposable
     private static SenderError BuildEngineError(Exception error, bool isInitialConnect) =>
         new(
             category: SenderErrorCategory.Unknown,
-            appliedPolicy: SenderErrorPolicy.Halt,
+            appliedPolicy: SenderErrorPolicy.Terminal,
             serverStatusByte: SenderError.NoStatusByte,
             serverMessage: error.Message,
             messageSequence: SenderError.NoMessageSequence,
@@ -1304,7 +1287,7 @@ internal sealed class QwpCursorSendEngine : IDisposable
 
         return new SenderError(
             category: SenderErrorCategory.ProtocolViolation,
-            appliedPolicy: SenderErrorPolicy.Halt,
+            appliedPolicy: SenderErrorPolicy.Terminal,
             serverStatusByte: SenderError.NoStatusByte,
             serverMessage: error.Message,
             messageSequence: SenderError.NoMessageSequence,
@@ -1432,6 +1415,33 @@ internal sealed class QwpCursorSendEngine : IDisposable
         return null;
     }
 
+    // Poison-frame detector state. A retriable rejection (or a non-orderly close after a send) of
+    // the same head-of-line FSN with no ack progress accrues a strike; escalation to terminal is
+    // wired in the poison-detector work package. Guarded by _stateLock.
+    private long _poisonFsn = -1L;
+    private int _poisonStrikes;
+
+    private void NoteRetriableRejection(long fromFsn)
+    {
+        lock (_stateLock)
+        {
+            if (fromFsn < 0L)
+            {
+                return;
+            }
+
+            if (fromFsn == _poisonFsn && fromFsn >= _ackedFsn)
+            {
+                _poisonStrikes++;
+            }
+            else
+            {
+                _poisonFsn = fromFsn;
+                _poisonStrikes = 1;
+            }
+        }
+    }
+
     private sealed class HaltCarrier : Exception
     {
         public HaltCarrier(SenderError err, LineSenderServerException wire)
@@ -1443,5 +1453,20 @@ internal sealed class QwpCursorSendEngine : IDisposable
 
         public SenderError SenderError { get; }
         public LineSenderServerException Wire { get; }
+    }
+
+    // Retriable server NACK: not a terminal fault, so it routes through the transient reconnect
+    // path (recycle + replay from ackedFsn). Carries the fault for diagnostics only.
+    private sealed class RetriableNackException : Exception
+    {
+        public RetriableNackException(SenderError err, long fromFsn)
+            : base($"retriable server rejection at fsn={fromFsn}: {err.ServerMessage}")
+        {
+            SenderError = err;
+            FromFsn = fromFsn;
+        }
+
+        public SenderError SenderError { get; }
+        public long FromFsn { get; }
     }
 }

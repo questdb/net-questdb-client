@@ -490,18 +490,24 @@ public record SenderOptions
             raw ??= aliasRaw;
         }
         if (raw is null) return null;
-        if (string.Equals(raw, "halt", StringComparison.OrdinalIgnoreCase))
+        if (string.Equals(raw, "halt", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(raw, "terminal", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(raw, nameof(SenderErrorPolicy.Terminal), StringComparison.OrdinalIgnoreCase))
         {
-            return SenderErrorPolicy.Halt;
+            return SenderErrorPolicy.Terminal;
         }
-        if (string.Equals(raw, "drop", StringComparison.OrdinalIgnoreCase)
-            || string.Equals(raw, "drop_and_continue", StringComparison.OrdinalIgnoreCase)
-            || string.Equals(raw, nameof(SenderErrorPolicy.DropAndContinue), StringComparison.OrdinalIgnoreCase))
+        if (string.Equals(raw, "retry", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(raw, "retriable", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(raw, nameof(SenderErrorPolicy.Retriable), StringComparison.OrdinalIgnoreCase)
+            // Legacy aliases: the client no longer drops, so map the old drop policy to retriable
+            // (the closest no-data-loss behaviour).
+            || string.Equals(raw, "drop", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(raw, "drop_and_continue", StringComparison.OrdinalIgnoreCase))
         {
-            return SenderErrorPolicy.DropAndContinue;
+            return SenderErrorPolicy.Retriable;
         }
         throw new IngressError(ErrorCode.ConfigError,
-            $"`{name}` must be one of [halt, drop, drop_and_continue], got `{raw}`");
+            $"`{name}` must be one of [halt, retry], got `{raw}`");
     }
 
     private static InitialConnectMode ParseInitialConnectMode(string? raw)
@@ -1606,8 +1612,8 @@ public record SenderOptions
 
     /// <summary>
     ///     Optional callback invoked when the SF cursor engine observes a server-side rejection
-    ///     or reaches a terminal state. Fires for both <see cref="SenderErrorPolicy.DropAndContinue" />
-    ///     and <see cref="SenderErrorPolicy.Halt" /> outcomes. Programmatic-only.
+    ///     or reaches a terminal state. Fires for both <see cref="SenderErrorPolicy.Retriable" />
+    ///     and <see cref="SenderErrorPolicy.Terminal" /> outcomes. Programmatic-only.
     ///     When unset, the engine logs notifications via <see cref="System.Diagnostics.Trace" />
     ///     so failures aren't silently lost.
     /// </summary>
@@ -1621,7 +1627,7 @@ public record SenderOptions
     /// <summary>
     ///     Optional resolver overriding the per-<see cref="SenderErrorCategory" /> default policy.
     ///     <see cref="SenderErrorCategory.ProtocolViolation" /> and
-    ///     <see cref="SenderErrorCategory.Unknown" /> are always <see cref="SenderErrorPolicy.Halt" />
+    ///     <see cref="SenderErrorCategory.Unknown" /> are always <see cref="SenderErrorPolicy.Terminal" />
     ///     regardless of the resolver. Programmatic-only.
     /// </summary>
     [JsonIgnore]

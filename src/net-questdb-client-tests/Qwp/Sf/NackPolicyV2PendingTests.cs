@@ -38,63 +38,10 @@ public class NackPolicyV2PendingTests
 {
     private const string Pending = "pending NACK-policy-v2 / Invariant-B implementation";
 
-    // ---- Classifier: the retriable/terminal taxonomy replaces DROP_AND_CONTINUE/HALT ----
-
-    // Scenario: WRITE_ERROR reclassifies from DropAndContinue to Retriable.
-    [Test]
-    public void Classify_WriteError_IsRetriable() => Assert.Ignore(Pending);
-
-    // Scenario: INTERNAL_ERROR reclassifies to Retriable (was Halt).
-    [Test]
-    public void Classify_InternalError_IsRetriable() => Assert.Ignore(Pending);
-
-    // Scenario: an unrecognised status byte defaults to Retriable (fail-open), not Halt.
-    [Test]
-    public void Classify_UnknownByte_IsRetriable_FailOpen() => Assert.Ignore(Pending);
-
-    // Scenario: SCHEMA_MISMATCH stays Terminal (was DropAndContinue — the no-silent-loss trade).
-    [Test]
-    public void Classify_SchemaMismatch_IsTerminal() => Assert.Ignore(Pending);
-
-    // Scenario: PARSE_ERROR is Terminal.
-    [Test]
-    public void Classify_ParseError_IsTerminal() => Assert.Ignore(Pending);
-
-    // Scenario: SECURITY_ERROR is Terminal on a writable node.
-    [Test]
-    public void Classify_SecurityError_IsTerminal() => Assert.Ignore(Pending);
-
-    // Scenario: a user resolver cannot downgrade a Terminal category to retriable.
-    [Test]
-    public void ResolvePolicy_UserResolverCannotDowngradeTerminalToRetry() => Assert.Ignore(Pending);
-
-    // ---- Engine: retriable NACKs replay from ackedFsn+1, nothing is dropped ----
-
-    // Scenario: a WRITE_ERROR NACK tears down the connection, re-sends the same frame,
-    // and the engine stays non-terminal.
-    [Test]
-    public void WriteErrorNack_ReplaysFrame_NotDropped() => Assert.Ignore(Pending);
-
-    // Scenario: an INTERNAL_ERROR NACK replays the same frame instead of dropping it.
-    [Test]
-    public void InternalErrorNack_ReplaysFrame_NotDropped() => Assert.Ignore(Pending);
-
-    // Scenario: an unknown status byte retries rather than latching terminal.
-    [Test]
-    public void UnknownStatusNack_Replays_NotTerminal() => Assert.Ignore(Pending);
-
-    // Scenario: after any NACK the ack watermark and ring OldestFsn are unchanged (no data loss).
-    [Test]
-    public void Nack_DoesNotAdvanceAckedFsn() => Assert.Ignore(Pending);
-
-    // Scenario: SCHEMA_MISMATCH latches terminal AND the rejected frame is still present
-    // in the segment ring (bytes preserved on disk).
-    [Test]
-    public void SchemaMismatchNack_LatchesTerminal_DataPreservedOnDisk() => Assert.Ignore(Pending);
-
-    // Scenario: replay after a retriable NACK acks exactly once — no duplicate watermark advance.
-    [Test]
-    public void RetriableNack_ThenServerOk_AdvancesWatermarkOnce() => Assert.Ignore(Pending);
+    // NOTE: WP1 (classifier reclassification + retriable-replay / no-drop / watermark) is
+    // implemented — see QwpErrorClassifierTests and QwpCursorSendEngineTests
+    // (RetriableNack_*, Nack_DoesNotAdvanceAckedFsn, SchemaMismatchNack_LatchesTerminal_*).
+    // The stubs below track the still-pending poison-detector / Invariant-B / drainer work.
 
     // ---- Poison-frame detector replaces the WS close-code list ----
 

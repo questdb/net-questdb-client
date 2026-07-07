@@ -72,8 +72,8 @@ public sealed class SenderError
     public SenderErrorCategory Category { get; }
 
     /// <summary>
-    ///     The policy the I/O loop actually applied. <see cref="SenderErrorPolicy.DropAndContinue" />
-    ///     means the data was dropped; <see cref="SenderErrorPolicy.Halt" /> means a
+    ///     The policy the I/O loop actually applied. <see cref="SenderErrorPolicy.Retriable" />
+    ///     means the data was dropped; <see cref="SenderErrorPolicy.Terminal" /> means a
     ///     <see cref="LineSenderServerException" /> will be thrown on the next producer-thread call.
     /// </summary>
     public SenderErrorPolicy AppliedPolicy { get; }
@@ -141,7 +141,7 @@ public delegate void SenderErrorHandler(SenderError error);
 ///     Callback for <see cref="SenderOptions.error_policy_resolver" />. Returns the
 ///     <see cref="SenderErrorPolicy" /> to apply for a given <see cref="SenderErrorCategory" />.
 ///     <see cref="SenderErrorCategory.ProtocolViolation" /> and
-///     <see cref="SenderErrorCategory.Unknown" /> are forced <see cref="SenderErrorPolicy.Halt" />
+///     <see cref="SenderErrorCategory.Unknown" /> are forced <see cref="SenderErrorPolicy.Terminal" />
 ///     regardless of what the resolver returns.
 /// </summary>
 public delegate SenderErrorPolicy SenderErrorPolicyResolver(SenderErrorCategory category);

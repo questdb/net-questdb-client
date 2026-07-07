@@ -42,6 +42,8 @@ public sealed class QuestDBClientBuilder
     private TimeSpan? _maxLifetime;
     private int? _poolMax;
     private int? _poolMin;
+    private QuestDB.Utils.SenderErrorHandler? _errorHandler;
+    private QuestDB.Senders.ISenderConnectionListener? _connectionListener;
 #if NET7_0_OR_GREATER
     private string? _queryConfStr;
     private int? _queryPoolMax;
@@ -181,11 +183,33 @@ public sealed class QuestDBClientBuilder
         return this;
     }
 
+    /// <summary>
+    ///     Registers an ingest error handler applied to every pooled <c>ws</c>/<c>wss</c> sender.
+    ///     Surfaces async ingest errors (terminals and retriable notifications) that the pooled
+    ///     facade otherwise hides. Programmatic-only; ws-only (ignored for http/tcp handles).
+    /// </summary>
+    public QuestDBClientBuilder ErrorHandler(QuestDB.Utils.SenderErrorHandler handler)
+    {
+        _errorHandler = handler;
+        return this;
+    }
+
+    /// <summary>
+    ///     Registers a connection-state listener applied to every pooled <c>ws</c>/<c>wss</c> sender
+    ///     (connect / disconnect / reconnect / failover / auth-failed). Programmatic-only; ws-only.
+    /// </summary>
+    public QuestDBClientBuilder ConnectionListener(QuestDB.Senders.ISenderConnectionListener listener)
+    {
+        _connectionListener = listener;
+        return this;
+    }
+
     /// <summary>Builds and pre-warms the pool.</summary>
     public IQuestDBClient Build()
     {
         var poolConfig = BuildPoolConfig(out var queryConfStr, out var forceWsAsyncConnect);
-        return new QuestDBClientImpl(poolConfig, _confStr!, queryConfStr, forceWsAsyncConnect);
+        return new QuestDBClientImpl(poolConfig, _confStr!, queryConfStr, forceWsAsyncConnect,
+            _errorHandler, _connectionListener);
     }
 
     // Assembles the effective pool config without constructing any pool — split out so tests can

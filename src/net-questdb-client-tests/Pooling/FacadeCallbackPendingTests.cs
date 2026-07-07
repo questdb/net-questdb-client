@@ -22,37 +22,130 @@
  *
  ******************************************************************************/
 
+#if NET7_0_OR_GREATER
+
+using System.Buffers.Binary;
+using System.Collections.Concurrent;
 using NUnit.Framework;
+using QuestDB;
+using QuestDB.Enums;
+using QuestDB.Qwp;
+using QuestDB.Senders;
+using QuestDB.Utils;
+using dummy_http_server;
 
 namespace net_questdb_client_tests.Pooling;
 
-// Red-first placeholders for exposing the ingest callbacks + drainer observability on the
-// pooled QuestDBClient facade (PR #60 §2 / §8-M10). Assert.Ignore'd until QuestDBClientBuilder
-// gains ErrorHandler/ConnectionListener/DrainerListener and SenderPool propagates them to
-// every pooled sender (the per-slot connect-string re-parse currently drops programmatic
-// delegates). Driven against the in-process DummyQwpServer (401 for the terminal-error path).
+// Ingest error/connection callbacks exposed on the pooled QuestDBClient facade (PR #60 §2) and
+// propagated to every pooled ws sender. The per-slot connect-string re-parse in SenderPool drops
+// programmatic delegates, so the facade re-applies them per created sender.
 [TestFixture]
 public class FacadeCallbackPendingTests
 {
-    private const string Pending = "pending facade error/connection/drainer callback wiring";
-
-    // Scenario: an errorHandler set on QuestDBClientBuilder receives the async auth-terminal
-    // SenderError from a pooled sender against a 401-rejecting server.
+    // A facade errorHandler receives the async auth-terminal SenderError from a pooled sender against
+    // a 401-rejecting server. (Under Invariant B a plain connection error retries forever and never
+    // surfaces — only a genuine terminal like auth does, so we drive a 401.)
     [Test]
-    public void FacadeErrorHandler_ReceivesAsyncAuthTerminal() => Assert.Ignore(Pending);
+    public async Task FacadeErrorHandler_ReceivesAsyncAuthTerminal()
+    {
+        await using var server = new DummyQwpServer(new DummyQwpServerOptions
+        {
+            RejectUpgradeWith = System.Net.HttpStatusCode.Unauthorized,
+        });
+        await server.StartAsync();
+        var port = server.Uri.Port;
 
-    // Scenario: a connectionListener set on the builder observes Connected/Disconnected/
-    // Reconnected connection-state events.
-    [Test]
-    public void FacadeConnectionListener_ObservesConnectAndReconnect() => Assert.Ignore(Pending);
+        var fired = new ManualResetEventSlim();
+        SenderError? captured = null;
+        await using var client = QuestDBClient.Builder()
+            .FromConfig($"ws::addr=127.0.0.1:{port};initial_connect_retry=async;auto_flush=off;sender_pool_min=1;query_pool_min=0;")
+            .ErrorHandler(e => { captured = e; fired.Set(); })
+            .Build();
 
-    // Scenario: callbacks reach every pooled slot, not just the first — guards the per-slot
-    // connect-string re-parse regression that would silently drop programmatic delegates.
-    [Test]
-    public void FacadeCallbacks_PropagateToEveryPooledSender() => Assert.Ignore(Pending);
+        Assert.That(fired.Wait(TimeSpan.FromSeconds(5)), Is.True,
+            "the facade errorHandler must receive the async auth terminal from the pooled sender");
+        Assert.That(captured, Is.Not.Null);
+        Assert.That(captured!.Exception, Is.InstanceOf<IngressError>());
+        Assert.That(((IngressError)captured.Exception!).code, Is.EqualTo(ErrorCode.AuthError));
+    }
 
-    // Scenario: a drainer-observability listener on the facade receives background-drainer
-    // notifications (adoption, drain progress, quarantine).
+    // A facade connectionListener observes the pooled sender's connection-state transitions.
     [Test]
-    public void FacadeDrainerListener_ReceivesDrainerEvents() => Assert.Ignore(Pending);
+    public async Task FacadeConnectionListener_ObservesConnect()
+    {
+        await using var server = await StartAckingServerAsync();
+        var port = server.Uri.Port;
+
+        var listener = new RecordingListener();
+        await using var client = QuestDBClient.Builder()
+            .FromConfig($"ws::addr=127.0.0.1:{port};auto_flush=off;sender_pool_min=1;query_pool_min=0;")
+            .ConnectionListener(listener)
+            .Build();
+
+        await WaitFor(() => listener.Kinds.Contains(SenderConnectionEventKind.Connected), 5000);
+        Assert.That(listener.Kinds, Does.Contain(SenderConnectionEventKind.Connected),
+            "the facade connectionListener must observe the pooled sender connecting");
+    }
+
+    // Callbacks reach every pooled slot, not just the first — guards the per-slot connect-string
+    // re-parse regression that would silently drop programmatic delegates.
+    [Test]
+    public async Task FacadeCallbacks_PropagateToEveryPooledSender()
+    {
+        await using var server = await StartAckingServerAsync();
+        var port = server.Uri.Port;
+
+        const int min = 3;
+        var listener = new RecordingListener();
+        await using var client = QuestDBClient.Builder()
+            .FromConfig($"ws::addr=127.0.0.1:{port};auto_flush=off;sender_pool_min={min};sender_pool_max={min};query_pool_min=0;")
+            .ConnectionListener(listener)
+            .Build();
+
+        // Every one of the `min` pre-warmed senders must fire a Connected event through the listener.
+        await WaitFor(() => listener.CountOf(SenderConnectionEventKind.Connected) >= min, 5000);
+        Assert.That(listener.CountOf(SenderConnectionEventKind.Connected), Is.GreaterThanOrEqualTo(min),
+            $"every one of the {min} pooled senders must reach the shared connectionListener");
+    }
+
+    // ---- helpers ----
+
+    private sealed class RecordingListener : ISenderConnectionListener
+    {
+        private readonly ConcurrentQueue<SenderConnectionEventKind> _kinds = new();
+        public IReadOnlyCollection<SenderConnectionEventKind> Kinds => _kinds.ToArray();
+        public int CountOf(SenderConnectionEventKind kind) => _kinds.Count(k => k == kind);
+        public void OnEvent(SenderConnectionEvent evt) => _kinds.Enqueue(evt.Kind);
+    }
+
+    private static async Task<DummyQwpServer> StartAckingServerAsync()
+    {
+        long nextWireSeq = 0;
+        var server = new DummyQwpServer(new DummyQwpServerOptions
+        {
+            FrameHandler = _ => BuildOkAck(Interlocked.Increment(ref nextWireSeq) - 1),
+        });
+        await server.StartAsync();
+        return server;
+    }
+
+    private static byte[] BuildOkAck(long sequence)
+    {
+        var bytes = new byte[QwpConstants.OffsetTableCountInOkAck + 2];
+        bytes[0] = (byte)QwpStatusCode.Ok;
+        BinaryPrimitives.WriteInt64LittleEndian(bytes.AsSpan(1, 8), sequence);
+        BinaryPrimitives.WriteUInt16LittleEndian(bytes.AsSpan(QwpConstants.OffsetTableCountInOkAck, 2), 0);
+        return bytes;
+    }
+
+    private static async Task WaitFor(Func<bool> predicate, int timeoutMs)
+    {
+        var deadline = Environment.TickCount64 + timeoutMs;
+        while (!predicate() && Environment.TickCount64 < deadline)
+        {
+            await Task.Delay(25);
+        }
+    }
 }
+
+#endif

@@ -46,7 +46,9 @@ internal sealed class QuestDBClientImpl : IQuestDBClient
 #endif
 
     internal QuestDBClientImpl(SenderOptions poolConfig, string ingestConfStr, string? queryConfStr,
-        bool forceWsAsyncConnect = false)
+        bool forceWsAsyncConnect = false,
+        QuestDB.Utils.SenderErrorHandler? errorHandler = null,
+        QuestDB.Senders.ISenderConnectionListener? connectionListener = null)
     {
         SenderPool? pool = null;
         PoolHousekeeper? housekeeper = null;
@@ -59,7 +61,7 @@ internal sealed class QuestDBClientImpl : IQuestDBClient
         // never returned, so Close() never runs and everything already built leaks. Tear it down here.
         try
         {
-            pool = new SenderPool(poolConfig, ingestConfStr, forceWsAsyncConnect);
+            pool = new SenderPool(poolConfig, ingestConfStr, forceWsAsyncConnect, errorHandler, connectionListener);
 #if NET7_0_OR_GREATER
             queryPool = queryConfStr is null ? null : new QueryClientPool(poolConfig, queryConfStr);
             housekeeper = new PoolHousekeeper(pool, queryPool, poolConfig.housekeeper_interval_ms);

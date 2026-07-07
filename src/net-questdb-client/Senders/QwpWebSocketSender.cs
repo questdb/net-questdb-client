@@ -192,7 +192,9 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender, IPooledSlotSende
                 policyResolver: options.BuildEffectivePolicyResolver(),
                 durableAckMode: options.request_durable_ack,
                 ackWatermark: ackWatermark,
-                connectionEventSink: capturedSink is null ? null : (Action<SenderConnectionEvent>)(evt => capturedSink.Offer(evt)));
+                connectionEventSink: capturedSink is null ? null : (Action<SenderConnectionEvent>)(evt => capturedSink.Offer(evt)),
+                maxFrameRejections: options.max_frame_rejections,
+                poisonMinEscalationWindow: options.poison_min_escalation_window_millis);
 
             engine.Start();
 

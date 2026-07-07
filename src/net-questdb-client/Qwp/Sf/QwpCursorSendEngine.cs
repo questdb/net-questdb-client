@@ -76,6 +76,9 @@ internal sealed class QwpCursorSendEngine : IDisposable
     private long _totalReconnectAttempts;
     private long _totalReconnectsSucceeded;
     private int _negotiatedMaxBatchSize;
+    private readonly int _maxFrameRejections;
+    private readonly TimeSpan _poisonDwell;
+    private bool _sentOnCurrentConnection;
     private bool _terminal;
     private Exception? _terminalError;
     private bool _seenFirstConnect;
@@ -137,7 +140,9 @@ internal sealed class QwpCursorSendEngine : IDisposable
         SenderErrorPolicyResolver? policyResolver = null,
         bool durableAckMode = false,
         QwpAckWatermark? ackWatermark = null,
-        Action<QuestDB.Senders.SenderConnectionEvent>? connectionEventSink = null)
+        Action<QuestDB.Senders.SenderConnectionEvent>? connectionEventSink = null,
+        int maxFrameRejections = 4,
+        TimeSpan? poisonMinEscalationWindow = null)
     {
         ArgumentNullException.ThrowIfNull(ring);
         ArgumentNullException.ThrowIfNull(transportFactory);
@@ -159,6 +164,8 @@ internal sealed class QwpCursorSendEngine : IDisposable
         _durableAckMode = durableAckMode;
         _ackWatermark = ackWatermark;
         _connectionEventSink = connectionEventSink;
+        _maxFrameRejections = maxFrameRejections < 1 ? 1 : maxFrameRejections;
+        _poisonDwell = poisonMinEscalationWindow ?? TimeSpan.FromMilliseconds(5000);
 
         var baseSeed = ring.OldestFsn;
         if (ackWatermark is not null)
@@ -841,6 +848,10 @@ internal sealed class QwpCursorSendEngine : IDisposable
                     _durableTableWatermarks.Clear();
                 }
 
+                // Reset per-connection poison bookkeeping: a strike only counts when this connection
+                // actually shipped a frame (an accept-then-close), never on a pure connect failure.
+                Volatile.Write(ref _sentOnCurrentConnection, false);
+
                 try
                 {
                     await RunConnectionAsync(transport, fsnAtZero, ct).ConfigureAwait(false);
@@ -870,6 +881,38 @@ internal sealed class QwpCursorSendEngine : IDisposable
                     EmitConnectionEvent(QuestDB.Senders.SenderConnectionEventKind.Disconnected,
                         cause: ex, endpoint: _liveEndpoint);
                     _liveEndpoint = null;
+
+                    // Poison-frame pacing/escalation. A retriable NACK already struck (and checked for
+                    // escalation) in HandleServerRejection. A non-orderly close *after a send* strikes
+                    // here. A pure connect failure (nothing sent on this connection) is an outage, not
+                    // poison — it must never accrue a strike (Invariant B), so it uses normal backoff.
+                    if (ex is RetriableNackException)
+                    {
+                        if (!await PacedPoisonDelayAsync(Volatile.Read(ref _poisonStrikes), ct).ConfigureAwait(false))
+                        {
+                            return;
+                        }
+
+                        continue;
+                    }
+
+                    if (Volatile.Read(ref _sentOnCurrentConnection))
+                    {
+                        var strike = RegisterHeadOfLineStrike();
+                        if (strike.Escalation is not null)
+                        {
+                            SetTerminal(new LineSenderServerException(strike.Escalation), strike.Escalation);
+                            return;
+                        }
+
+                        if (!await PacedPoisonDelayAsync(strike.Strikes, ct).ConfigureAwait(false))
+                        {
+                            return;
+                        }
+
+                        continue;
+                    }
+
                     if (!await BackoffOrGiveUpAsync(ex, backoff, ct).ConfigureAwait(false))
                     {
                         return;
@@ -994,6 +1037,7 @@ internal sealed class QwpCursorSendEngine : IDisposable
 
             await transport.SendBinaryAsync(sendBuffer.AsMemory(0, frameLen), ct).ConfigureAwait(false);
             Interlocked.Increment(ref _totalFramesSent);
+            Volatile.Write(ref _sentOnCurrentConnection, true);
         }
     }
 
@@ -1195,7 +1239,12 @@ internal sealed class QwpCursorSendEngine : IDisposable
         // escalates to a terminal ProtocolViolation), then recycle the connection so the reconnect
         // path replays the rejected frame from ackedFsn.
         _errorDispatcher?.Offer(senderError);
-        NoteRetriableRejection(fromFsn);
+        var strike = RegisterHeadOfLineStrike();
+        if (strike.Escalation is not null)
+        {
+            throw new HaltCarrier(strike.Escalation, new LineSenderServerException(strike.Escalation));
+        }
+
         throw new RetriableNackException(senderError, fromFsn);
     }
 
@@ -1415,31 +1464,79 @@ internal sealed class QwpCursorSendEngine : IDisposable
         return null;
     }
 
-    // Poison-frame detector state. A retriable rejection (or a non-orderly close after a send) of
-    // the same head-of-line FSN with no ack progress accrues a strike; escalation to terminal is
-    // wired in the poison-detector work package. Guarded by _stateLock.
+    // Poison-frame detector: a retriable NACK, or a non-orderly close *after a send*, of the same
+    // head-of-line frame (== ackedFsn) with no ack progress accrues a strike. Once strikes reach
+    // max_frame_rejections AND the suspect has stayed poisoned for the escalation dwell, the episode
+    // escalates to a terminal ProtocolViolation. Any ack progress (ackedFsn advances) resets the
+    // detector on the next strike. Guarded by _stateLock.
     private long _poisonFsn = -1L;
     private int _poisonStrikes;
+    private long _poisonFirstStrikeTickMs;
 
-    private void NoteRetriableRejection(long fromFsn)
+    private readonly struct PoisonStrike
+    {
+        public PoisonStrike(int strikes, SenderError? escalation)
+        {
+            Strikes = strikes;
+            Escalation = escalation;
+        }
+
+        public int Strikes { get; }
+        public SenderError? Escalation { get; }
+    }
+
+    private PoisonStrike RegisterHeadOfLineStrike()
     {
         lock (_stateLock)
         {
-            if (fromFsn < 0L)
-            {
-                return;
-            }
-
-            if (fromFsn == _poisonFsn && fromFsn >= _ackedFsn)
+            var head = _ackedFsn;
+            var now = Environment.TickCount64;
+            if (head == _poisonFsn)
             {
                 _poisonStrikes++;
             }
             else
             {
-                _poisonFsn = fromFsn;
+                _poisonFsn = head;
                 _poisonStrikes = 1;
+                _poisonFirstStrikeTickMs = now;
             }
+
+            var dwellElapsed = _poisonDwell <= TimeSpan.Zero
+                || now - _poisonFirstStrikeTickMs >= (long)_poisonDwell.TotalMilliseconds;
+            var escalate = _poisonStrikes >= _maxFrameRejections && dwellElapsed;
+            return new PoisonStrike(_poisonStrikes, escalate ? BuildPoisonError(head, _poisonStrikes) : null);
         }
+    }
+
+    private static SenderError BuildPoisonError(long fsn, int strikes) =>
+        new(
+            category: SenderErrorCategory.ProtocolViolation,
+            appliedPolicy: SenderErrorPolicy.Terminal,
+            serverStatusByte: SenderError.NoStatusByte,
+            serverMessage:
+                $"poison frame at fsn={fsn}: {strikes} consecutive rejections/closes with no ack progress",
+            messageSequence: SenderError.NoMessageSequence,
+            fromFsn: fsn,
+            toFsn: fsn,
+            tableName: null,
+            detectedAtUtc: DateTime.UtcNow);
+
+    // Widen the reconnect delay by the strike count so an accept-then-close middlebox can't burn
+    // strikes at connect+send+close RTT rate. Returns false if cancelled during the wait.
+    private async Task<bool> PacedPoisonDelayAsync(int strikes, CancellationToken ct)
+    {
+        var delay = _reconnectPolicy.ComputeBackoff(strikes <= 1 ? 0 : strikes - 1);
+        try
+        {
+            await Task.Delay(delay, ct).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            return false;
+        }
+
+        return true;
     }
 
     private sealed class HaltCarrier : Exception

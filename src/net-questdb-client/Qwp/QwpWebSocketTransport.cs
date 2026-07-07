@@ -342,16 +342,15 @@ internal sealed class QwpWebSocketTransport : IQwpCursorTransport
         }
     }
 
-    // Protocol-violation close codes are terminal: replaying the same bytes against a fresh
-    // connection would just re-trigger the close. Everything else routes to the reconnect loop.
+    // NACK policy v2: WS close codes carry no policy semantics — every close is reconnect-eligible.
+    // A frame that deterministically kills the connection is caught behaviorally by the cursor
+    // engine's poison-frame detector (consecutive same-head rejections/closes with no ack progress),
+    // not by a close-code list. The rule is: the server must NACK-before-close for any semantic
+    // rejection; a bare close is always a transport event.
     private IngressError MapCloseToException()
     {
         var status = _client.CloseStatus ?? WebSocketCloseStatus.Empty;
         var reason = _client.CloseStatusDescription;
-        if (QwpProtocolViolationException.IsProtocolViolationCode(status))
-        {
-            return new QwpProtocolViolationException(status, reason);
-        }
         return new IngressError(
             ErrorCode.SocketError,
             $"server closed the WebSocket: {status} {reason}");

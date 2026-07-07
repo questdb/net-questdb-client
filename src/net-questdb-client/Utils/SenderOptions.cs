@@ -128,6 +128,8 @@ public record SenderOptions
     private SenderErrorPolicyResolver? _errorPolicyResolver;
     private int _errorInboxCapacity = 256;
     private int _connectionListenerInboxCapacity = 256;
+    private int _maxFrameRejections = 4;
+    private TimeSpan _poisonMinEscalationWindow = TimeSpan.FromMilliseconds(5000);
     private QuestDB.Senders.ISenderConnectionListener? _connectionListener;
     private SenderErrorPolicy? _onServerError;
     private SenderErrorPolicy? _onSchemaMismatchError;
@@ -158,6 +160,8 @@ public record SenderOptions
     private bool _errorPolicyResolverUserSet;
     private bool _errorInboxCapacityUserSet;
     private bool _connectionListenerInboxCapacityUserSet;
+    private bool _maxFrameRejectionsUserSet;
+    private bool _poisonMinEscalationWindowUserSet;
     private bool _connectionListenerUserSet;
     private bool _onServerErrorUserSet;
     private bool _onSchemaMismatchErrorUserSet;
@@ -311,6 +315,8 @@ public record SenderOptions
 
         ParseIntWithDefault(nameof(error_inbox_capacity), "256", out _errorInboxCapacity);
         ParseIntWithDefault(nameof(connection_listener_inbox_capacity), "256", out _connectionListenerInboxCapacity);
+        ParseIntWithDefault(nameof(max_frame_rejections), "4", out _maxFrameRejections);
+        ParseMillisecondsWithDefault(nameof(poison_min_escalation_window_millis), "5000", out _poisonMinEscalationWindow);
 
         _onServerError = ParsePolicyKey(nameof(on_server_error));
         _onSchemaMismatchError = ParsePolicyKey(nameof(on_schema_mismatch_error), aliasName: "on_schema_error");
@@ -735,6 +741,16 @@ public record SenderOptions
             throw new IngressError(ErrorCode.ConfigError,
                 $"`connection_listener_inbox_capacity` must be >= 1; got {_connectionListenerInboxCapacity}");
         }
+        if (_maxFrameRejections < 1)
+        {
+            throw new IngressError(ErrorCode.ConfigError,
+                $"`max_frame_rejections` must be >= 1; got {_maxFrameRejections}");
+        }
+        if (_poisonMinEscalationWindow < TimeSpan.Zero)
+        {
+            throw new IngressError(ErrorCode.ConfigError,
+                $"`poison_min_escalation_window_millis` must be >= 0; got {_poisonMinEscalationWindow.TotalMilliseconds}ms");
+        }
     }
 
     private bool HasAnyPolicyKeySet() =>
@@ -865,6 +881,8 @@ public record SenderOptions
         if (_errorPolicyResolverUserSet) Throw(nameof(error_policy_resolver));
         if (_errorInboxCapacityUserSet) Throw(nameof(error_inbox_capacity));
         if (_connectionListenerInboxCapacityUserSet) Throw(nameof(connection_listener_inbox_capacity));
+        if (_maxFrameRejectionsUserSet) Throw(nameof(max_frame_rejections));
+        if (_poisonMinEscalationWindowUserSet) Throw(nameof(poison_min_escalation_window_millis));
         if (_connectionListenerUserSet) Throw(nameof(ConnectionListener));
         if (_onServerErrorUserSet) Throw(nameof(on_server_error));
         if (_onSchemaMismatchErrorUserSet) Throw(nameof(on_schema_mismatch_error));
@@ -908,6 +926,7 @@ public record SenderOptions
             "close_flush_timeout_millis", "drain_orphans", "max_background_drainers", "ping_timeout",
             "durable_ack_keepalive_interval_millis", "proxy",
             "error_handler", "error_policy_resolver", "error_inbox_capacity", "connection_listener_inbox_capacity",
+            "max_frame_rejections", "poison_min_escalation_window_millis",
             "on_server_error", "on_schema_mismatch_error", "on_schema_error", "on_parse_error", "on_internal_error",
             "on_security_error", "on_write_error",
         };
@@ -1646,6 +1665,32 @@ public record SenderOptions
     {
         get => _errorInboxCapacity;
         set { _errorInboxCapacity = value; _errorInboxCapacityUserSet = true; }
+    }
+
+    /// <summary>
+    ///     Poison-frame detector threshold: the number of consecutive rejections of the same
+    ///     head-of-line frame (a retriable NACK, or a non-orderly close after a send, with no ack
+    ///     progress) that escalates the episode to a terminal <c>ProtocolViolation</c>. Replaces the
+    ///     WS close-code list — every close is otherwise reconnect-eligible. Must be >= 1. Defaults
+    ///     to 4. WS-only.
+    /// </summary>
+    public int max_frame_rejections
+    {
+        get => _maxFrameRejections;
+        set { _maxFrameRejections = value; _maxFrameRejectionsUserSet = true; }
+    }
+
+    /// <summary>
+    ///     Minimum wall-clock dwell a suspect head-of-line frame must stay poisoned before the
+    ///     poison detector escalates, even once <see cref="max_frame_rejections" /> strikes have
+    ///     accrued. Decouples "how many strikes prove determinism" from "how long a transient is
+    ///     allowed to look poisoned" so a brief outage can't false-positive into a terminal. <c>0</c>
+    ///     restores immediate escalation at the strike threshold. Defaults to 5000ms. WS-only.
+    /// </summary>
+    public TimeSpan poison_min_escalation_window_millis
+    {
+        get => _poisonMinEscalationWindow;
+        set { _poisonMinEscalationWindow = value; _poisonMinEscalationWindowUserSet = true; }
     }
 
     /// <summary>

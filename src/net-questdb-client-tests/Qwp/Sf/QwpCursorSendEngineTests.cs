@@ -491,6 +491,164 @@ public class QwpCursorSendEngineTests
         Assert.That(engine.NextFsn, Is.EqualTo(1L));
     }
 
+    // ---- Poison-frame detector: consecutive same-head rejections/closes escalate to terminal ----
+
+    [Test]
+    public void PoisonFrame_EscalatesToTerminalAfterMaxRejections()
+    {
+        var connectCount = 0;
+        using var engine = NewEngine(out _,
+            maxFrameRejections: 3,
+            poisonMinEscalationWindow: TimeSpan.Zero,
+            policy: new QwpReconnectPolicy(
+                TimeSpan.FromMilliseconds(1), TimeSpan.FromMilliseconds(4), TimeSpan.FromSeconds(30)),
+            factory: () =>
+            {
+                Interlocked.Increment(ref connectCount);
+                return new StubTransport { OnSend = _ => ErrorResponse(QwpStatusCode.WriteError, 0, "poison") };
+            });
+        engine.Start();
+        engine.AppendBlocking(new byte[] { 1 });
+
+        AssertEventually(() => engine.IsTerminallyFailed, "same-frame poison must escalate to terminal", 5000);
+        var lse = (LineSenderServerException)engine.TerminalError!;
+        Assert.That(lse.Error.Category, Is.EqualTo(SenderErrorCategory.ProtocolViolation),
+            "escalation must be a ProtocolViolation, not a data drop");
+    }
+
+    [Test]
+    public async Task PoisonFrame_BelowThreshold_KeepsRetrying()
+    {
+        var connectCount = 0;
+        using var engine = NewEngine(out _,
+            maxFrameRejections: 5,
+            poisonMinEscalationWindow: TimeSpan.Zero,
+            policy: new QwpReconnectPolicy(
+                TimeSpan.FromMilliseconds(1), TimeSpan.FromMilliseconds(4), TimeSpan.FromSeconds(30)),
+            factory: () =>
+            {
+                var idx = Interlocked.Increment(ref connectCount);
+                return idx <= 3
+                    ? new StubTransport { OnSend = _ => ErrorResponse(QwpStatusCode.WriteError, 0, "transient") }
+                    : new StubTransport();
+            });
+        engine.Start();
+        engine.AppendBlocking(new byte[] { 1 });
+
+        await engine.FlushAsync(TimeSpan.FromSeconds(5));
+        Assert.That(engine.IsTerminallyFailed, Is.False, "3 strikes < threshold(5) must not escalate");
+        Assert.That(engine.AckedFsn, Is.EqualTo(1L));
+    }
+
+    [Test]
+    public async Task OkAtOrBeyondSuspect_ResetsPoisonStrikes()
+    {
+        // Threshold is 2, but each NACK is on a distinct head-of-line frame separated by progress,
+        // so strikes never accumulate to 2 — proving an ack past the suspect resets the detector.
+        var attempts = new System.Collections.Concurrent.ConcurrentDictionary<byte, int>();
+        using var engine = NewEngine(out _,
+            segmentCapacity: 64 * 1024,
+            maxFrameRejections: 2,
+            poisonMinEscalationWindow: TimeSpan.Zero,
+            policy: new QwpReconnectPolicy(
+                TimeSpan.FromMilliseconds(1), TimeSpan.FromMilliseconds(4), TimeSpan.FromSeconds(30)),
+            factory: () =>
+            {
+                var wireSeq = -1;
+                return new StubTransport
+                {
+                    OnSend = frame =>
+                    {
+                        wireSeq++;
+                        var payload = frame[0];
+                        var n = attempts.AddOrUpdate(payload, 1, (_, c) => c + 1);
+                        // NACK payloads 0 and 5 on their first delivery only (one strike each),
+                        // then OK on replay — progress lands between the two strikes.
+                        return (payload is 0 or 5) && n == 1
+                            ? ErrorResponse(QwpStatusCode.WriteError, wireSeq, "flap")
+                            : OkResponse(wireSeq);
+                    }
+                };
+            });
+        engine.Start();
+        for (var i = 0; i < 10; i++) engine.AppendBlocking(new byte[] { (byte)i });
+
+        await engine.FlushAsync(TimeSpan.FromSeconds(10));
+        Assert.That(engine.IsTerminallyFailed, Is.False,
+            "single NACKs separated by progress must reset strikes and never escalate");
+        Assert.That(engine.AckedFsn, Is.EqualTo(10L));
+    }
+
+    [Test]
+    public void PoisonDwell_HoldsEscalationUntilWindowElapses()
+    {
+        var connectCount = 0;
+        using var engine = NewEngine(out _,
+            maxFrameRejections: 2,
+            poisonMinEscalationWindow: TimeSpan.FromMilliseconds(400),
+            policy: new QwpReconnectPolicy(
+                TimeSpan.FromMilliseconds(1), TimeSpan.FromMilliseconds(4), TimeSpan.FromSeconds(30)),
+            factory: () =>
+            {
+                Interlocked.Increment(ref connectCount);
+                return new StubTransport { OnSend = _ => ErrorResponse(QwpStatusCode.WriteError, 0, "poison") };
+            });
+        engine.Start();
+        engine.AppendBlocking(new byte[] { 1 });
+
+        // Strikes reach the threshold within a few ms, but the dwell holds escalation.
+        AssertEventually(() => Volatile.Read(ref connectCount) >= 3, "strikes should accrue past threshold");
+        Assert.That(engine.IsTerminallyFailed, Is.False, "threshold reached but the dwell window has not elapsed");
+        AssertEventually(() => engine.IsTerminallyFailed, "must escalate once the dwell window elapses", 2000);
+    }
+
+    [Test]
+    public void PoisonDwell_Zero_EscalatesImmediatelyAtThreshold()
+    {
+        var connectCount = 0;
+        using var engine = NewEngine(out _,
+            maxFrameRejections: 3,
+            poisonMinEscalationWindow: TimeSpan.Zero,
+            policy: new QwpReconnectPolicy(
+                TimeSpan.FromMilliseconds(1), TimeSpan.FromMilliseconds(4), TimeSpan.FromSeconds(30)),
+            factory: () =>
+            {
+                Interlocked.Increment(ref connectCount);
+                return new StubTransport { OnSend = _ => ErrorResponse(QwpStatusCode.WriteError, 0, "poison") };
+            });
+        engine.Start();
+        engine.AppendBlocking(new byte[] { 1 });
+
+        AssertEventually(() => engine.IsTerminallyFailed, "dwell=0 escalates at the strike threshold", 3000);
+        Assert.That(connectCount, Is.LessThanOrEqualTo(10),
+            $"escalation must be prompt at the threshold, not after a storm; saw {connectCount}");
+    }
+
+    [Test]
+    public void AcceptThenClose_RecycleIsPaced_NotStrikeStorm()
+    {
+        var connectCount = 0;
+        using var engine = NewEngine(out _,
+            maxFrameRejections: 4,
+            poisonMinEscalationWindow: TimeSpan.FromMilliseconds(200),
+            policy: new QwpReconnectPolicy(
+                TimeSpan.FromMilliseconds(5), TimeSpan.FromMilliseconds(50), TimeSpan.FromSeconds(30)),
+            factory: () =>
+            {
+                Interlocked.Increment(ref connectCount);
+                return new StubTransport { FailReceiveWith = new IngressError(ErrorCode.SocketError, "middlebox close") };
+            });
+        engine.Start();
+        engine.AppendBlocking(new byte[] { 1 });
+
+        AssertEventually(() => engine.IsTerminallyFailed,
+            "accept-then-close on the same frame must escalate", 5000);
+        Assert.That(connectCount, Is.LessThanOrEqualTo(30),
+            $"accept-then-close recycles must be paced, not a storm; saw {connectCount}");
+        Assert.That(((LineSenderServerException)engine.TerminalError!).Error.Category,
+            Is.EqualTo(SenderErrorCategory.ProtocolViolation));
+    }
+
     [Test]
     public void ReconnectBudgetExhausted_Terminal()
     {
@@ -934,7 +1092,9 @@ public class QwpCursorSendEngineTests
         string? slotDirectoryOverride = null,
         SenderErrorHandler? errorHandler = null,
         SenderErrorPolicyResolver? policyResolver = null,
-        int errorInboxCapacity = 256)
+        int errorInboxCapacity = 256,
+        int maxFrameRejections = 4,
+        TimeSpan? poisonMinEscalationWindow = null)
     {
         slotDir = slotDirectoryOverride ?? Path.Combine(_root, "sender-" + Guid.NewGuid().ToString("N"));
         var slotLock = QwpSlotLock.Acquire(slotDir);
@@ -953,7 +1113,9 @@ public class QwpCursorSendEngineTests
             initialConnectMode,
             maxTotalBytes: maxTotalBytes,
             errorDispatcher: dispatcher,
-            policyResolver: policyResolver);
+            policyResolver: policyResolver,
+            maxFrameRejections: maxFrameRejections,
+            poisonMinEscalationWindow: poisonMinEscalationWindow);
     }
 
     private static byte[] OkResponse(long sequence)
@@ -994,6 +1156,9 @@ public class QwpCursorSendEngineTests
         public Func<byte[], byte[]>? OnSend;
         public Func<byte[], Task<byte[]>>? OnSendAsync;
         public Func<CancellationToken, Task>? OnSendGate;
+        // Models an accept-then-close middlebox: once a frame has been shipped, the receive side
+        // faults with this exception (the frame is never acked), driving the poison detector.
+        public Exception? FailReceiveWith;
         public List<byte[]> Sent { get; } = new();
         public (string Host, int Port)? Endpoint { get; set; } = ("stub", 0);
 
@@ -1036,6 +1201,20 @@ public class QwpCursorSendEngineTests
 
         public async Task<int> ReceiveFrameAsync(Memory<byte> destination, CancellationToken cancellationToken)
         {
+            if (FailReceiveWith is not null)
+            {
+                // Wait until a frame has actually shipped so the engine has marked this connection
+                // as having sent (the frame is left un-acked), then fault as a server close.
+                while (true)
+                {
+                    lock (_sentLock) { if (Sent.Count > 0) break; }
+                    await Task.Delay(5, cancellationToken).ConfigureAwait(false);
+                }
+
+                await Task.Delay(25, cancellationToken).ConfigureAwait(false);
+                throw FailReceiveWith;
+            }
+
             var ack = await _acks.Reader.ReadAsync(cancellationToken).ConfigureAwait(false);
             ack.CopyTo(destination.Span);
             return ack.Length;

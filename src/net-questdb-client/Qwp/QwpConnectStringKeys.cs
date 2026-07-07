@@ -71,6 +71,7 @@ internal static class QwpConnectStringKeys
         "drain_orphans", "max_background_drainers", "ping_timeout",
         "durable_ack_keepalive_interval_millis", "proxy", "transaction",
         "connection_listener_inbox_capacity",
+        "max_frame_rejections", "poison_min_escalation_window_millis",
         "on_server_error", "on_schema_error", "on_schema_mismatch_error", "on_parse_error",
         "on_internal_error", "on_security_error", "on_write_error",
     };

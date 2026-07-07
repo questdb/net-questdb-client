@@ -43,51 +43,10 @@ public class NackPolicyV2PendingTests
     // (RetriableNack_*, Nack_DoesNotAdvanceAckedFsn, SchemaMismatchNack_LatchesTerminal_*).
     // The stubs below track the still-pending poison-detector / Invariant-B / drainer work.
 
-    // ---- Poison-frame detector replaces the WS close-code list ----
-
-    // Scenario: a transport that closes on the same head-of-line FSN max_frame_rejections
-    // times escalates to a ProtocolViolation terminal naming that FSN.
-    [Test]
-    public void PoisonFrame_EscalatesToTerminalAfterMaxRejections() => Assert.Ignore(Pending);
-
-    // Scenario: max_frame_rejections-1 same-FSN rejections do not escalate.
-    [Test]
-    public void PoisonFrame_BelowThreshold_KeepsRetrying() => Assert.Ignore(Pending);
-
-    // Scenario: a server OK at/beyond the suspect FSN clears the strike counter.
-    [Test]
-    public void OkAtOrBeyondSuspect_ResetsPoisonStrikes() => Assert.Ignore(Pending);
-
-    // Scenario: strikes reaching the threshold before poison_min_escalation_window_millis
-    // elapses do NOT escalate until the wall-clock window passes.
-    [Test]
-    public void PoisonDwell_HoldsEscalationUntilWindowElapses() => Assert.Ignore(Pending);
-
-    // Scenario: poison_min_escalation_window_millis=0 restores legacy immediate escalation
-    // at the strike threshold.
-    [Test]
-    public void PoisonDwell_Zero_EscalatesImmediatelyAtThreshold() => Assert.Ignore(Pending);
-
-    // Scenario: an accept-frame-then-close middlebox records <= max_frame_rejections recycles,
-    // not thousands at connect+send+close RTT rate (paced recycle).
-    [Test]
-    public void AcceptThenClose_RecycleIsPaced_NotStrikeStorm() => Assert.Ignore(Pending);
-
-    // Scenario: every WS close code (1002/1003/1006/1007/1008/1009/1011) is now reconnect-eligible;
-    // none escalates to terminal by itself.
-    [Test]
-    [TestCase(1002)]
-    [TestCase(1003)]
-    [TestCase(1006)]
-    [TestCase(1007)]
-    [TestCase(1008)]
-    [TestCase(1009)]
-    [TestCase(1011)]
-    public void ReconnectAfterAnyCloseCode_IsRetriable(int closeCode)
-    {
-        _ = closeCode;
-        Assert.Ignore(Pending);
-    }
+    // NOTE: WP2 (poison-frame detector + WS close-code delisting) is implemented — see
+    // QwpCursorSendEngineTests (PoisonFrame_*, PoisonDwell_*, AcceptThenClose_RecycleIsPaced_*),
+    // QwpWebSocketTransportTests.ReceiveFrame_AnyClose_RaisesReconnectEligibleSocketError, and
+    // QwpWebSocketSenderTests.ServerClosesWithAnyCode_IsReconnectEligible.
 
     // ---- Invariant B: a store-and-forward sender never terminates on a connection error ----
 

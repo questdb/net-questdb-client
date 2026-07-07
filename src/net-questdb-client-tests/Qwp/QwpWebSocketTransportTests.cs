@@ -391,44 +391,19 @@ public class QwpWebSocketTransportTests
         Assert.ThrowsAsync<IngressError>(async () => await transport.ReceiveFrameAsync(smallBuf));
     }
 
+    // NACK policy v2: every WS close code is now reconnect-eligible (SocketError) — the previously
+    // "protocol violation" codes (1002/1003/1007/1008/1009/1010) no longer raise a typed terminal.
+    // A deterministic connection-killer is caught behaviorally by the engine's poison detector.
     [TestCase(System.Net.WebSockets.WebSocketCloseStatus.ProtocolError)]
     [TestCase(System.Net.WebSockets.WebSocketCloseStatus.InvalidMessageType)]
     [TestCase(System.Net.WebSockets.WebSocketCloseStatus.InvalidPayloadData)]
     [TestCase(System.Net.WebSockets.WebSocketCloseStatus.PolicyViolation)]
     [TestCase(System.Net.WebSockets.WebSocketCloseStatus.MessageTooBig)]
     [TestCase(System.Net.WebSockets.WebSocketCloseStatus.MandatoryExtension)]
-    public async Task ReceiveFrame_ProtocolViolationClose_RaisesTypedTerminal(
-        System.Net.WebSockets.WebSocketCloseStatus status)
-    {
-        await using var server = new DummyQwpServer(new DummyQwpServerOptions
-        {
-            FrameHandler = _ => null!,
-            CloseAfterFrameCount = 1,
-            CloseStatus = status,
-            CloseReason = "boom",
-        });
-        await server.StartAsync();
-
-        using var transport = new QwpWebSocketTransport(new QwpWebSocketTransportOptions
-        {
-            Uri = server.Uri,
-        });
-        await transport.ConnectAsync();
-        await transport.SendBinaryAsync(new byte[] { 0x01 });
-
-        var buf = new byte[64];
-        var ex = Assert.ThrowsAsync<QwpProtocolViolationException>(
-            async () => await transport.ReceiveFrameAsync(buf));
-        Assert.That(ex!.CloseStatus, Is.EqualTo(status));
-        Assert.That(ex.code, Is.EqualTo(ErrorCode.ProtocolViolation));
-        Assert.That(ex.Reason, Is.EqualTo("boom"));
-        Assert.That(ex.Message, Does.Contain($"ws-close[{(int)status}]: boom"));
-    }
-
     [TestCase(System.Net.WebSockets.WebSocketCloseStatus.NormalClosure)]
     [TestCase(System.Net.WebSockets.WebSocketCloseStatus.EndpointUnavailable)]
     [TestCase(System.Net.WebSockets.WebSocketCloseStatus.InternalServerError)]
-    public async Task ReceiveFrame_ReconnectEligibleClose_RaisesSocketError(
+    public async Task ReceiveFrame_AnyClose_RaisesReconnectEligibleSocketError(
         System.Net.WebSockets.WebSocketCloseStatus status)
     {
         await using var server = new DummyQwpServer(new DummyQwpServerOptions

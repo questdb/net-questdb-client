@@ -580,6 +580,42 @@ public class QwpCursorSendEngineTests
     }
 
     [Test]
+    public void RetriableNack_WithConcurrentSendFault_StrikesOnce_NotTwice()
+    {
+        // Regression for the double-counted poison strike on NACK-before-close: the server NACKs the
+        // head-of-line frame (recv pump strikes in HandleServerRejection and throws RetriableNack)
+        // while the same in-flight send faults on the torn-down socket. If PickTerminalOrRetriableFault
+        // lets the non-terminal send-side transport fault mask the RetriableNack, the reconnect catch
+        // strikes the SAME head-of-line frame a second time (RegisterHeadOfLineStrike) — halving the
+        // poison budget. With maxFrameRejections=2 the double strike escalates to terminal after a
+        // single episode; a single strike (< 2) must replay and ack on reconnect instead.
+        var connectCount = 0;
+        using var engine = NewEngine(out _,
+            maxFrameRejections: 2,
+            poisonMinEscalationWindow: TimeSpan.Zero,
+            policy: new QwpReconnectPolicy(
+                TimeSpan.FromMilliseconds(1), TimeSpan.FromMilliseconds(4), TimeSpan.FromSeconds(30)),
+            factory: () =>
+            {
+                var conn = Interlocked.Increment(ref connectCount);
+                return new NackThenConcurrentSendFaultTransport(faultThisConnection: conn == 1);
+            });
+        engine.Start();
+        // Two frames: frame0's send returns with a NACK (strike #1), frame1's send faults concurrently.
+        engine.AppendBlocking(new byte[] { 0 });
+        engine.AppendBlocking(new byte[] { 1 });
+
+        AssertEventually(() => engine.AckedFsn == 2L,
+            "one NACK+concurrent-send-fault episode is a single strike (< threshold 2); the frames must " +
+            "replay and ack on a fresh connection, not escalate to terminal from a double-counted strike",
+            5000);
+        Assert.That(engine.IsTerminallyFailed, Is.False,
+            "a single retriable-NACK episode must not latch the sender terminal");
+        Assert.That(connectCount, Is.GreaterThanOrEqualTo(2),
+            "the poisoned connection must be recycled and the frame replayed on a fresh connection");
+    }
+
+    [Test]
     public async Task OkAtOrBeyondSuspect_ResetsPoisonStrikes()
     {
         // Threshold is 2, but each NACK is on a distinct head-of-line frame separated by progress,
@@ -1370,6 +1406,81 @@ public class QwpCursorSendEngineTests
             BinaryPrimitives.WriteInt64LittleEndian(buf.AsSpan(1, 8), seq);
             BinaryPrimitives.WriteUInt16LittleEndian(buf.AsSpan(9, 2), 0);
             return buf;
+        }
+    }
+
+    // Reproduces the NACK-before-close pipeline race the fix targets. On the poisoned connection two
+    // frames are sent:
+    //   frame0 send returns normally (so the engine marks _sentOnCurrentConnection) and its ack is a
+    //     retriable NACK — the recv pump strikes the head-of-line frame in HandleServerRejection
+    //     (strike #1) and throws RetriableNackException.
+    //   frame1 send concurrently faults with a non-terminal socket error (the torn-down connection).
+    // Ordering is made deterministic without sleeps racing the strike: the NACK for frame0 is only
+    // enqueued once frame1's send is in flight, so the connection is never cancelled before frame1 is
+    // sent; and frame1's fault is withheld until the recv pump has consumed the NACK, so strike #1 is
+    // always registered before both pumps fault together. On a non-poisoned connection every frame is
+    // acked OK, so the replayed frames land on the fresh connection.
+    private sealed class NackThenConcurrentSendFaultTransport : IQwpCursorTransport
+    {
+        private readonly bool _faultThisConnection;
+        private readonly Channel<byte[]> _acks = Channel.CreateUnbounded<byte[]>();
+        private readonly TaskCompletionSource _nackConsumed =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private int _sends;
+
+        public NackThenConcurrentSendFaultTransport(bool faultThisConnection)
+            => _faultThisConnection = faultThisConnection;
+
+        public (string Host, int Port)? Endpoint => ("stub", 0);
+
+        public Task ConnectAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+
+        public async Task SendBinaryAsync(ReadOnlyMemory<byte> data, CancellationToken cancellationToken)
+        {
+            var seq = Interlocked.Increment(ref _sends) - 1;
+            if (!_faultThisConnection)
+            {
+                await _acks.Writer.WriteAsync(OkResponse(seq), cancellationToken).ConfigureAwait(false);
+                return;
+            }
+
+            if (seq == 0)
+            {
+                // Return normally so the engine records _sentOnCurrentConnection, but withhold the NACK
+                // until frame1 is in flight (below) so the recv-side rejection can't cancel the
+                // connection before frame1 is even sent.
+                return;
+            }
+
+            // frame1: now that a second frame is being sent, release frame0's NACK so the recv pump
+            // strikes + throws while this send is in flight...
+            await _acks.Writer
+                .WriteAsync(ErrorResponse(QwpStatusCode.WriteError, 0, "poison"), cancellationToken)
+                .ConfigureAwait(false);
+            // ...wait until the recv pump has actually consumed the NACK (strike #1 registered), then
+            // fault this send with the concurrent socket error that must NOT re-strike the same frame.
+            await _nackConsumed.Task.ConfigureAwait(false);
+            throw new IngressError(ErrorCode.SocketError, "socket closed under concurrent send");
+        }
+
+        public async Task<int> ReceiveFrameAsync(Memory<byte> destination, CancellationToken cancellationToken)
+        {
+            var ack = await _acks.Reader.ReadAsync(cancellationToken).ConfigureAwait(false);
+            if (_faultThisConnection && ack[0] != (byte)QwpStatusCode.Ok)
+            {
+                _nackConsumed.TrySetResult();
+            }
+
+            ack.CopyTo(destination.Span);
+            return ack.Length;
+        }
+
+        public Task CloseAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+
+        public void Dispose()
+        {
+            _nackConsumed.TrySetResult();
+            _acks.Writer.TryComplete();
         }
     }
 }

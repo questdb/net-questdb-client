@@ -968,10 +968,11 @@ internal sealed class QwpCursorSendEngine : IDisposable
         // CLOSE frame while send's in-flight write fails with a generic transport error. Prefer
         // the terminal fault so QwpProtocolViolationException / QwpException don't get masked
         // by the concurrent send-side WebSocketException, which would otherwise route through
-        // the transient reconnect path.
+        // the transient reconnect path. A retriable NACK (already struck in HandleServerRejection)
+        // is preferred next, so the concurrent send fault doesn't mask it into a second strike.
         var sendFault = sendTask.Exception?.GetBaseException();
         var recvFault = recvTask.Exception?.GetBaseException();
-        var fault = PickTerminalFault(sendFault, recvFault) ?? sendFault ?? recvFault;
+        var fault = PickTerminalOrRetriableFault(sendFault, recvFault) ?? sendFault ?? recvFault;
         if (fault is not null)
         {
             throw fault;
@@ -1480,10 +1481,16 @@ internal sealed class QwpCursorSendEngine : IDisposable
             || (ex is IngressError ie && ie.code is ErrorCode.AuthError);
     }
 
-    private static Exception? PickTerminalFault(Exception? a, Exception? b)
+    private static Exception? PickTerminalOrRetriableFault(Exception? a, Exception? b)
     {
         if (a is not null && IsTerminalServerError(a)) return a;
         if (b is not null && IsTerminalServerError(b)) return b;
+        // A retriable NACK was already struck (and escalation-checked) in HandleServerRejection.
+        // Let it win over a concurrent send-side transport fault so the reconnect catch routes
+        // through the `ex is RetriableNackException` branch instead of striking the same
+        // rejection a second time.
+        if (a is RetriableNackException) return a;
+        if (b is RetriableNackException) return b;
         return null;
     }
 

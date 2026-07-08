@@ -16,8 +16,9 @@ from pathlib import Path
 
 import pytest
 
+from lib import lifecycle as lc
 from lib.obj_store import ObjStore
-from lib.pg_query import wait_for_dense_sequence
+from lib.pg_query import count_rows, wait_for_dense_sequence
 from lib.server import wait_port_free
 
 from .fake_upgrade_server import FakeUpgradeServer
@@ -332,15 +333,246 @@ def test_failover_past_replica_to_primary(server_factory, net_sidecar,
                             expected_count=row_count, timeout_s=60.0)
 
 
-# Intentionally NOT ported here:
-#   * Java testFailoverPromotedReplicaJoinsRotation / testStandaloneIsTreatedAsWritable
-#     and PrReviewRedTestsE2e C4 (terminal latched before handler) / C11 (post-halt
-#     flush throws typed) are pure client-behaviour cases already covered by the .NET
-#     unit suite (QwpRoleFilterTests, QwpCursorSendEngineMultiHostTests, and the WP1/WP5
-#     terminal-error tests). Re-driving them through the sidecar would be redundant.
-#   * The *delivery* half of the all-replica window (retry forever, then land every row
-#     once a node is promoted to PRIMARY) and graceful primary->replica demotion need a
-#     real role transition from server_factory; the durable-ack capability gap needs a
-#     primary without replication configured. Those depend on Enterprise fixture
-#     capabilities and belong in the cluster suite once the fixtures expose promotion /
-#     demotion / no-replication start modes.
+# ---------------------------------------------------------------------------
+# Real-cluster role-transition scenarios, ported from the Enterprise reference
+# suite (questdb-ent/e2e/tests/test_demotion_mid_stream.py and
+# test_durable_ack_failover.py) to drive the .NET sidecar instead of the Java
+# one. These reuse the existing Enterprise fixtures unchanged: server_factory
+# (role="primary"|"replica"), the min-http lifecycle control plane (lib.lifecycle
+# submit_switch / await_role), and pg_query convergence probes. No Enterprise-side
+# change is needed — the .NET sidecar has the same CONNECT/SEND/FLUSH/AWAIT_ACKED/
+# STATS verbs as the Java one.
+# ---------------------------------------------------------------------------
+
+_CLUSTER_TABLE = "net_role_transition"
+_CLUSTER_INITIAL_ROWS = 30
+_CLUSTER_WINDOW_ROWS = 40
+_CLUSTER_POST_ROWS = 20
+_CLUSTER_INGEST_BATCH = 10
+_CLUSTER_INGEST_BATCH_INTERVAL_S = 0.2
+_CLUSTER_DURABLE_ACK_AWAIT_TIMEOUT_MS = 60_000
+_CLUSTER_AWAIT_ROLE_TIMEOUT_S = 60.0
+_CLUSTER_POLL_INTERVAL_S = 0.25
+
+
+def _cluster_connect_string(a_http: int, b_http: int, sf_dir: Path) -> str:
+    """HA durable-ack connect string listing both endpoints (A primary, B replica).
+    reconnect_max_duration_millis bounds only a blocking initial connect; the
+    mid-stream reconnect loop that rides out the role transition never consults it
+    (Invariant B — only SF exhaustion or a non-retriable reject is terminal)."""
+    return (
+        f"ws::addr=127.0.0.1:{a_http},127.0.0.1:{b_http}"
+        ";user=admin;password=quest"
+        f";sf_dir={sf_dir}"
+        ";request_durable_ack=on"
+        ";reconnect_max_duration_millis=300000"
+        ";reconnect_initial_backoff_millis=100"
+        ";reconnect_max_backoff_millis=1000"
+        ";close_flush_timeout_millis=5000;"
+    )
+
+
+def _cluster_ingest_unaware(net_sidecar, *, count: int, start_index: int) -> int:
+    """Produce rows exactly as a real SF producer does — UNAWARE of the role
+    change: append (SEND) and publish to on-disk SF (FLUSH), both local ops that
+    return whether or not a primary is reachable. The only terminal condition is
+    SF exhaustion; a hard SEND/FLUSH failure across the transition IS the
+    regression (e.g. the demoted node NACKing instead of sending a reconnect-
+    eligible role-change close), so surface it as a descriptive assertion."""
+    try:
+        net_sidecar.send(_CLUSTER_TABLE, count=count, start_index=start_index)
+        return net_sidecar.flush()
+    except RuntimeError as e:  # NetSidecarError is a RuntimeError
+        raise AssertionError(
+            f"store-and-forward producer hard-failed while ingesting rows "
+            f"[{start_index}..{start_index + count}) across a role transition — a "
+            f"graceful role change must surface to the sender as a reconnect-eligible "
+            f"close (retry from SF), never a terminal; only SF exhaustion may be "
+            f"terminal. sidecar error: {e!r}")
+
+
+def _cluster_ingest_range(net_sidecar, *, start_index: int, total: int) -> int:
+    """Drive ``total`` rows in small batches with a brief pause so the producer is
+    genuinely mid-stream across the demote/promote events; return the highest fsn."""
+    end = start_index + total
+    idx = start_index
+    last_fsn = -1
+    while idx < end:
+        n = min(_CLUSTER_INGEST_BATCH, end - idx)
+        last_fsn = _cluster_ingest_unaware(net_sidecar, count=n, start_index=idx)
+        idx += n
+        time.sleep(_CLUSTER_INGEST_BATCH_INTERVAL_S)
+    return last_fsn
+
+
+def _cluster_wait_count(*, port: int, expected: int, timeout_s: float) -> None:
+    deadline = time.monotonic() + timeout_s
+    last = -1
+    while time.monotonic() < deadline:
+        last = count_rows(port=port, table=_CLUSTER_TABLE)
+        if last >= expected:
+            return
+        time.sleep(_CLUSTER_POLL_INTERVAL_S)
+    raise AssertionError(
+        f"row count on :{port} reached {last}, expected >= {expected} within {timeout_s}s")
+
+
+def _cluster_await_all_replica_round(net_sidecar, baseline, *, timeout_s: float) -> None:
+    """Coverage guard (counters only, never drives the producer): block until the
+    sender COMPLETED a full reconnect round against the all-replica topology.
+    reconnAttempts increments at the top of each round, so +2 proves the first
+    round's walk finished (looped back and incremented again) — i.e. both nodes
+    were reached and role-rejected — avoiding a promote-too-early race."""
+    target = baseline.reconn_attempts + 2
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        if net_sidecar.stats().reconn_attempts >= target:
+            return
+        time.sleep(0.1)
+    raise AssertionError(
+        "sender did not complete a full all-replica reconnect round "
+        f"(needed reconnAttempts >= {target}); the mid-stream role-change close "
+        "either never happened or was not treated as reconnect-eligible")
+
+
+def _cluster_await_read_only_evidence(log_dir: Path, *, node: str, timeout_s: float) -> None:
+    """Coverage witness: prove the demoted node's read-only gate fired on a
+    mid-stream frame (the role-change-close trigger), so the green path is
+    provably the one under test. The witness is the read-only refusal the forked
+    server logs when its ingress rejects the in-flight frame."""
+    needle = "replica access is read-only"
+    files = (log_dir / f"{node}.stdout.log", log_dir / f"{node}.stderr.log")
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        for f in files:
+            try:
+                if needle in f.read_text(encoding="utf-8", errors="replace"):
+                    return
+            except FileNotFoundError:
+                continue
+        time.sleep(_CLUSTER_POLL_INTERVAL_S)
+    raise AssertionError(
+        f"no mid-stream read-only refusal in {node}'s logs within {timeout_s}s — the "
+        f"role-change-close path this test exists to cover was not exercised")
+
+
+@pytest.mark.net_client
+def test_graceful_demotion_mid_stream_sender_survives(
+        server_factory, net_sidecar, scenario_dir: Path, log_dir: Path) -> None:
+    """Port of test_demotion_mid_stream: an in-place PRIMARY->REPLICA demote under
+    a producing durable-ack sender surfaces as a reconnect-eligible role-change
+    close (never a NACK); the sender rides the all-replica window and, once B is
+    promoted, every row — including the frame rejected at the demote — lands
+    exactly once."""
+    sf_dir = scenario_dir / "sf"
+    sf_dir.mkdir(parents=True, exist_ok=True)
+
+    a = server_factory("a", role="primary")
+    b = server_factory("b", role="replica")
+    a_ports = a.start(min_http=True)
+    b_ports = b.start(min_http=True)
+    assert a_ports.min_http is not None, "node a: min_http port not reported (needed to demote A)"
+    assert b_ports.min_http is not None, "node b: min_http port not reported (needed to promote B)"
+
+    net_sidecar.connect(_cluster_connect_string(a_ports.http, b_ports.http, sf_dir))
+
+    initial_fsn = _cluster_ingest_range(net_sidecar, start_index=0, total=_CLUSTER_INITIAL_ROWS)
+    assert net_sidecar.await_acked(initial_fsn, _CLUSTER_DURABLE_ACK_AWAIT_TIMEOUT_MS), (
+        f"initial batch was not durably acked by A [publishedFsn={initial_fsn}]")
+    wait_for_dense_sequence(port=a_ports.pg, table=_CLUSTER_TABLE,
+                            expected_count=_CLUSTER_INITIAL_ROWS, timeout_s=60.0)
+    _cluster_wait_count(port=b_ports.pg, expected=_CLUSTER_INITIAL_ROWS, timeout_s=120.0)
+
+    baseline = net_sidecar.stats()
+    assert baseline.server_errors == 0, (
+        f"pre-demote baseline already carries server errors ({baseline.server_errors})")
+
+    # Demote A in place (wait=False) so frames are in flight while the role flips.
+    lc.submit_switch(a_ports.min_http, "replica", wait=False)
+    _cluster_ingest_range(net_sidecar, start_index=_CLUSTER_INITIAL_ROWS,
+                          total=_CLUSTER_WINDOW_ROWS // 2)
+    lc.await_role(a_ports.min_http, "replica", timeout_s=_CLUSTER_AWAIT_ROLE_TIMEOUT_S)
+    _cluster_ingest_range(net_sidecar,
+                          start_index=_CLUSTER_INITIAL_ROWS + _CLUSTER_WINDOW_ROWS // 2,
+                          total=_CLUSTER_WINDOW_ROWS - _CLUSTER_WINDOW_ROWS // 2)
+
+    _cluster_await_all_replica_round(net_sidecar, baseline, timeout_s=30.0)
+    _cluster_await_read_only_evidence(log_dir, node="a", timeout_s=15.0)
+
+    # Wire-contract pin: the demote surfaced as a role-change close, not a NACK.
+    stats = net_sidecar.stats()
+    assert stats.server_errors == 0, (
+        f"the in-place demote surfaced as {stats.server_errors} client-visible NACK(s); "
+        f"a graceful role change must close with a reconnect-eligible NORMAL_CLOSURE")
+
+    lc.submit_switch(b_ports.min_http, "primary", wait=True,
+                     wait_timeout_s=_CLUSTER_AWAIT_ROLE_TIMEOUT_S)
+
+    final_fsn = _cluster_ingest_range(
+        net_sidecar, start_index=_CLUSTER_INITIAL_ROWS + _CLUSTER_WINDOW_ROWS,
+        total=_CLUSTER_POST_ROWS)
+    assert net_sidecar.await_acked(final_fsn, _CLUSTER_DURABLE_ACK_AWAIT_TIMEOUT_MS), (
+        f"rows produced across the in-place demote were lost [publishedFsn={final_fsn}]; "
+        f"the frame rejected by the role-change close must replay from SF after reconnect")
+
+    total = _CLUSTER_INITIAL_ROWS + _CLUSTER_WINDOW_ROWS + _CLUSTER_POST_ROWS
+    # Dense = no loss AND no duplicates: the in-flight frame replays exactly once.
+    wait_for_dense_sequence(port=b_ports.pg, table=_CLUSTER_TABLE,
+                            expected_count=total, timeout_s=120.0)
+
+
+@pytest.mark.net_client
+def test_durable_ack_sender_survives_replica_only_window(
+        server_factory, net_sidecar, scenario_dir: Path) -> None:
+    """Port of test_durable_ack_failover: kill the primary so only a REPLICA is
+    reachable; the durable-ack sender keeps buffering to SF through the all-replica
+    window (Invariant B — never terminal), and once B is promoted every outage-
+    window row drains and durably acks with no loss or duplication."""
+    sf_dir = scenario_dir / "sf"
+    sf_dir.mkdir(parents=True, exist_ok=True)
+
+    a = server_factory("a", role="primary")
+    b = server_factory("b", role="replica")
+    a_ports = a.start(min_http=True)
+    b_ports = b.start(min_http=True)
+    assert b_ports.min_http is not None, "node b: min_http port not reported (needed to promote B)"
+
+    net_sidecar.connect(_cluster_connect_string(a_ports.http, b_ports.http, sf_dir))
+
+    initial_fsn = _cluster_ingest_range(net_sidecar, start_index=0, total=_CLUSTER_INITIAL_ROWS)
+    assert net_sidecar.await_acked(initial_fsn, _CLUSTER_DURABLE_ACK_AWAIT_TIMEOUT_MS), (
+        f"initial batch was not durably acked by A [publishedFsn={initial_fsn}]")
+    wait_for_dense_sequence(port=a_ports.pg, table=_CLUSTER_TABLE,
+                            expected_count=_CLUSTER_INITIAL_ROWS, timeout_s=60.0)
+    _cluster_wait_count(port=b_ports.pg, expected=_CLUSTER_INITIAL_ROWS, timeout_s=120.0)
+
+    baseline = net_sidecar.stats()
+    a.kill_9()
+
+    # Produce straight through the replica-only window; rows accumulate in SF.
+    _cluster_ingest_range(net_sidecar, start_index=_CLUSTER_INITIAL_ROWS,
+                          total=_CLUSTER_WINDOW_ROWS)
+    _cluster_await_all_replica_round(net_sidecar, baseline, timeout_s=30.0)
+
+    lc.submit_switch(b_ports.min_http, "primary", wait=True,
+                     wait_timeout_s=_CLUSTER_AWAIT_ROLE_TIMEOUT_S)
+
+    final_fsn = _cluster_ingest_range(
+        net_sidecar, start_index=_CLUSTER_INITIAL_ROWS + _CLUSTER_WINDOW_ROWS,
+        total=_CLUSTER_POST_ROWS)
+    assert net_sidecar.await_acked(final_fsn, _CLUSTER_DURABLE_ACK_AWAIT_TIMEOUT_MS), (
+        f"rows produced across the failover were lost [publishedFsn={final_fsn}]; an SF "
+        f"sender must retain outage-window rows and drain them after promotion")
+
+    total = _CLUSTER_INITIAL_ROWS + _CLUSTER_WINDOW_ROWS + _CLUSTER_POST_ROWS
+    wait_for_dense_sequence(port=b_ports.pg, table=_CLUSTER_TABLE,
+                            expected_count=total, timeout_s=120.0)
+
+
+# Still deferred (need Enterprise fixture capabilities not present today):
+#   * SECURITY_ERROR / ACL denial on a writable node — needs per-user ACL provisioning
+#     in server_factory.
+#   * durable-ack capability gap terminal — needs a node started without replication so
+#     the /write/v4 upgrade omits the durable-ack header.
+# The PrReviewRedTestsE2e C4/C11 and promoted-replica-stickiness / standalone-writable
+# cases stay covered by the .NET unit suite (redundant to re-drive through the sidecar).

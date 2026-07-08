@@ -764,9 +764,11 @@ public record SenderOptions
     ///     <see cref="error_policy_resolver" /> → per-category override
     ///     (<see cref="on_schema_mismatch_error" /> etc.) → <see cref="on_server_error" /> →
     ///     spec defaults. Returns null when no override is configured (engine then falls through
-    ///     to spec defaults). <see cref="SenderErrorCategory.ProtocolViolation" /> and
-    ///     <see cref="SenderErrorCategory.Unknown" /> are forced halt by the engine, so a
-    ///     resolver returning anything else for them is ignored.
+    ///     to spec defaults). The engine forces <c>halt</c> for the Terminal-default categories
+    ///     (<see cref="SenderErrorCategory.SchemaMismatch" />, <see cref="SenderErrorCategory.ParseError" />,
+    ///     <see cref="SenderErrorCategory.SecurityError" />, <see cref="SenderErrorCategory.ProtocolViolation" />),
+    ///     so a resolver returning anything else for them is ignored;
+    ///     <see cref="SenderErrorCategory.Unknown" /> is fail-open <c>retry</c> and is consulted.
     /// </summary>
     internal SenderErrorPolicyResolver? BuildEffectivePolicyResolver()
     {
@@ -1648,9 +1650,12 @@ public record SenderOptions
 
     /// <summary>
     ///     Optional resolver overriding the per-<see cref="SenderErrorCategory" /> default policy.
-    ///     <see cref="SenderErrorCategory.ProtocolViolation" /> and
-    ///     <see cref="SenderErrorCategory.Unknown" /> are always <see cref="SenderErrorPolicy.Terminal" />
-    ///     regardless of the resolver. Programmatic-only.
+    ///     The deterministic categories (<see cref="SenderErrorCategory.SchemaMismatch" />,
+    ///     <see cref="SenderErrorCategory.ParseError" />, <see cref="SenderErrorCategory.SecurityError" />)
+    ///     and <see cref="SenderErrorCategory.ProtocolViolation" /> default to
+    ///     <see cref="SenderErrorPolicy.Terminal" /> and the resolver cannot downgrade them.
+    ///     <see cref="SenderErrorCategory.Unknown" /> is fail-open <see cref="SenderErrorPolicy.Retriable" />
+    ///     and <em>is</em> consulted. Programmatic-only.
     /// </summary>
     [JsonIgnore]
     public SenderErrorPolicyResolver? error_policy_resolver
@@ -1735,7 +1740,7 @@ public record SenderOptions
 
     /// <summary>
     ///     Default policy for any overridable category that has no per-category override.
-    ///     Connect-string accepts <c>halt</c>, <c>drop</c>, <c>drop_and_continue</c>.
+    ///     Connect-string accepts <c>halt</c>, <c>retry</c>.
     /// </summary>
     public SenderErrorPolicy? on_server_error
     {
@@ -1743,7 +1748,7 @@ public record SenderOptions
         set { _onServerError = value; _onServerErrorUserSet = true; }
     }
 
-    /// <summary>Override for <see cref="SenderErrorCategory.SchemaMismatch" />. Default: drop_and_continue.</summary>
+    /// <summary>Override for <see cref="SenderErrorCategory.SchemaMismatch" />. Default: halt.</summary>
     public SenderErrorPolicy? on_schema_mismatch_error
     {
         get => _onSchemaMismatchError;
@@ -1757,7 +1762,7 @@ public record SenderOptions
         set { _onParseError = value; _onParseErrorUserSet = true; }
     }
 
-    /// <summary>Override for <see cref="SenderErrorCategory.InternalError" />. Default: halt.</summary>
+    /// <summary>Override for <see cref="SenderErrorCategory.InternalError" />. Default: retry.</summary>
     public SenderErrorPolicy? on_internal_error
     {
         get => _onInternalError;
@@ -1771,7 +1776,7 @@ public record SenderOptions
         set { _onSecurityError = value; _onSecurityErrorUserSet = true; }
     }
 
-    /// <summary>Override for <see cref="SenderErrorCategory.WriteError" />. Default: drop_and_continue.</summary>
+    /// <summary>Override for <see cref="SenderErrorCategory.WriteError" />. Default: retry.</summary>
     public SenderErrorPolicy? on_write_error
     {
         get => _onWriteError;

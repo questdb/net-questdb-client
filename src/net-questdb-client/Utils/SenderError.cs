@@ -140,8 +140,11 @@ public delegate void SenderErrorHandler(SenderError error);
 /// <summary>
 ///     Callback for <see cref="SenderOptions.error_policy_resolver" />. Returns the
 ///     <see cref="SenderErrorPolicy" /> to apply for a given <see cref="SenderErrorCategory" />.
-///     <see cref="SenderErrorCategory.ProtocolViolation" /> and
-///     <see cref="SenderErrorCategory.Unknown" /> are forced <see cref="SenderErrorPolicy.Terminal" />
-///     regardless of what the resolver returns.
+///     The Terminal-default categories (<see cref="SenderErrorCategory.SchemaMismatch" />,
+///     <see cref="SenderErrorCategory.ParseError" />, <see cref="SenderErrorCategory.SecurityError" />,
+///     <see cref="SenderErrorCategory.ProtocolViolation" />) are forced
+///     <see cref="SenderErrorPolicy.Terminal" /> regardless of what the resolver returns;
+///     <see cref="SenderErrorCategory.Unknown" /> is fail-open <see cref="SenderErrorPolicy.Retriable" />
+///     and the resolver is consulted.
 /// </summary>
 public delegate SenderErrorPolicy SenderErrorPolicyResolver(SenderErrorCategory category);

@@ -616,6 +616,46 @@ public class QwpCursorSendEngineTests
     }
 
     [Test]
+    public void TerminalNack_WithConcurrentSendFault_LatchesTerminal_NotMaskedIntoRetry()
+    {
+        // Companion to RetriableNack_WithConcurrentSendFault_StrikesOnce_NotTwice, exercising the OTHER
+        // branch of PickTerminalOrRetriableFault: its first tier prefers a terminal server fault over a
+        // concurrent non-terminal send-side transport fault. Here the server NACKs the head-of-line
+        // frame with SCHEMA_MISMATCH (recv pump throws HaltCarrier — a terminal, IsTerminalServerError
+        // fault) while the same in-flight send faults on the torn-down socket. If the non-terminal
+        // send-side SocketError masked the HaltCarrier, RunConnectionAsync would surface the socket
+        // fault, the reconnect catch would route through the generic transient branch, and the sender
+        // would silently retry a deterministic schema clash *forever* (Invariant B) instead of latching
+        // terminal. The terminal fault must win: the sender stops on the SchemaMismatch and never
+        // recycles the connection.
+        var connectCount = 0;
+        using var engine = NewEngine(out _,
+            policy: new QwpReconnectPolicy(
+                TimeSpan.FromMilliseconds(1), TimeSpan.FromMilliseconds(4), TimeSpan.FromSeconds(30)),
+            factory: () =>
+            {
+                Interlocked.Increment(ref connectCount);
+                return new NackThenConcurrentSendFaultTransport(
+                    faultThisConnection: true, nackStatus: QwpStatusCode.SchemaMismatch);
+            });
+        engine.Start();
+        // frame0's send returns normally (marks _sentOnCurrentConnection) and its ack is a terminal
+        // SCHEMA_MISMATCH; frame1's send faults concurrently on the same torn-down socket.
+        engine.AppendBlocking(new byte[] { 0 });
+        engine.AppendBlocking(new byte[] { 1 });
+
+        AssertEventually(() => engine.IsTerminallyFailed,
+            "a terminal SCHEMA_MISMATCH NACK must latch terminal even when a concurrent send-side socket " +
+            "fault could mask it into the transient reconnect path", 5000);
+        var lse = (LineSenderServerException)engine.TerminalError!;
+        Assert.That(lse.Error.Category, Is.EqualTo(SenderErrorCategory.SchemaMismatch),
+            "the terminal fault, not the concurrent send-side socket error, must be the surfaced cause");
+        Assert.That(engine.AckedFsn, Is.EqualTo(0L), "the rejected frame is never acked");
+        Assert.That(Volatile.Read(ref connectCount), Is.EqualTo(1),
+            "a masked-then-retried terminal fault would recycle the connection; the terminal path must not");
+    }
+
+    [Test]
     public async Task OkAtOrBeyondSuspect_ResetsPoisonStrikes()
     {
         // Threshold is 2, but each NACK is on a distinct head-of-line frame separated by progress,
@@ -1423,13 +1463,22 @@ public class QwpCursorSendEngineTests
     private sealed class NackThenConcurrentSendFaultTransport : IQwpCursorTransport
     {
         private readonly bool _faultThisConnection;
+        private readonly QwpStatusCode _nackStatus;
         private readonly Channel<byte[]> _acks = Channel.CreateUnbounded<byte[]>();
         private readonly TaskCompletionSource _nackConsumed =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
         private int _sends;
 
-        public NackThenConcurrentSendFaultTransport(bool faultThisConnection)
-            => _faultThisConnection = faultThisConnection;
+        // nackStatus selects which side of PickTerminalOrRetriableFault's precedence is exercised:
+        // a retriable status (WriteError) makes frame0's recv pump throw RetriableNackException; a
+        // terminal status (SchemaMismatch) makes it throw HaltCarrier. Either must win over the
+        // concurrent non-terminal send-side socket fault below.
+        public NackThenConcurrentSendFaultTransport(
+            bool faultThisConnection, QwpStatusCode nackStatus = QwpStatusCode.WriteError)
+        {
+            _faultThisConnection = faultThisConnection;
+            _nackStatus = nackStatus;
+        }
 
         public (string Host, int Port)? Endpoint => ("stub", 0);
 
@@ -1455,7 +1504,7 @@ public class QwpCursorSendEngineTests
             // frame1: now that a second frame is being sent, release frame0's NACK so the recv pump
             // strikes + throws while this send is in flight...
             await _acks.Writer
-                .WriteAsync(ErrorResponse(QwpStatusCode.WriteError, 0, "poison"), cancellationToken)
+                .WriteAsync(ErrorResponse(_nackStatus, 0, "poison"), cancellationToken)
                 .ConfigureAwait(false);
             // ...wait until the recv pump has actually consumed the NACK (strike #1 registered), then
             // fault this send with the concurrent socket error that must NOT re-strike the same frame.

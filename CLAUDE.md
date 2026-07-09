@@ -640,9 +640,19 @@ surface.
   (`Json/specs/*.json`) driven via the `RunHttp` / `RunTcp`
   `[TestCaseSource]` parameterisation.
 - Benchmarks in `src/net-questdb-client-benchmarks/` (BenchmarkDotNet):
-  `BenchInsertsWs`, `BenchLatencyWs`, `BenchSfThroughput`,
-  `BenchSfAppend`, `BenchQueryWs`, plus the legacy ILP benches. The
-  ingest QWP suite uses
+  `BenchInsertsWs`, `BenchLatencyWs`, `BenchIngressLatencyWs`,
+  `BenchSfThroughput`, `BenchSfAppend`, `BenchQueryWs`, plus the legacy
+  ILP benches. `BenchIngressLatencyWs` is the port of java-questdb-client's
+  `QwpIngressLatencyBenchmark`: single-row `At(...) + Send()` latency with
+  a p50/p90/p99/p99.9 tail (p99/p99.9 via a custom `LatencyPercentileColumn`
+  since BDN's `StatisticColumn` tops out at P95/P100). It measures both
+  QWP contracts — SF durable-handover (`sf_dir` + `close_flush_timeout_millis=0`,
+  `Send()` returns after the mmap write, wire+ACK async) vs no-SF full-ACK
+  round-trip (default `close_flush_timeout_millis`, `Send()` drains) — against
+  an HTTP round-trip baseline. NB: its `DummyQwpServer` FrameHandler emits a
+  correct 11-byte OK ACK `[status][seq(8)][tableCount u16=0]`; the older WS
+  benches use a 9-byte ACK that only a live `QDB_BENCH_ENDPOINT` tolerates.
+  The ingest QWP suite uses
   `[GroupBenchmarksBy(BenchmarkLogicalGroupRule.ByCategory,
   BenchmarkLogicalGroupRule.ByParams)]` with
   `[BenchmarkCategory("Narrow"|"Wide"|"MultiTable")]` so each row

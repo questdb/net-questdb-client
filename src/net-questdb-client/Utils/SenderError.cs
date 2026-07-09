@@ -73,7 +73,8 @@ public sealed class SenderError
 
     /// <summary>
     ///     The policy the I/O loop actually applied. <see cref="SenderErrorPolicy.Retriable" />
-    ///     means the data was dropped; <see cref="SenderErrorPolicy.Terminal" /> means a
+    ///     means the frame is replayed from the ack watermark (nothing dropped);
+    ///     <see cref="SenderErrorPolicy.Terminal" /> means a
     ///     <see cref="LineSenderServerException" /> will be thrown on the next producer-thread call.
     /// </summary>
     public SenderErrorPolicy AppliedPolicy { get; }

@@ -232,6 +232,24 @@ steps:
     QDB_SERVER_LOG_DIR: $(Build.ArtifactStagingDirectory)/ServerLogs
   condition: eq(variables['osName'], 'Linux')
 
+# Docker-backed test fixtures (opt-in via QDB_DOCKER_TESTS): the QuestDbDocker* suites — ingest
+# fault-tolerance and egress query — bundled into one step since they share the opt-in and the
+# Linux Docker daemon. Linux only: the hosted ubuntu agent ships a Linux Docker daemon; the
+# Windows/macOS agents don't, so it must stay Linux-scoped. The fixtures self-skip everywhere the
+# env var is unset (all other legs). Each fixture manages its own container; both default to
+# questdb/questdb:nightly (the /write/v4 QWP ingest and /read/v1 egress endpoints are master-only)
+# so the image is pulled once and cached.
+- task: DotNetCoreCLI@2
+  displayName: 'Run Docker test fixtures on $(osName) (net9.0)'
+  inputs:
+    command: 'test'
+    projects: 'src/net-questdb-client-tests/net-questdb-client-tests.csproj'
+    arguments: '--configuration $(buildConfiguration) --framework net9.0 --no-build --verbosity normal --logger trx --blame-hang --blame-hang-timeout 600s --blame-hang-dump-type mini --filter "FullyQualifiedName~QuestDbDocker"'
+    publishTestResults: true
+  env:
+    QDB_DOCKER_TESTS: 'on'
+  condition: eq(variables['osName'], 'Linux')
+
 - task: DotNetCoreCLI@2
   displayName: 'Run tests on $(osName) (net9.0, excluding integration tests)'
   inputs:

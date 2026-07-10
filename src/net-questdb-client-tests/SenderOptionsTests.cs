@@ -969,6 +969,86 @@ public class SenderOptionsTests
     }
 
     [Test]
+    public void PoisonKeys_DefaultValues()
+    {
+        var opts = new SenderOptions { protocol = ProtocolType.ws, addr = "h:9000", sf_dir = "/tmp/qdb" };
+        Assert.That(opts.max_frame_rejections, Is.EqualTo(4));
+        Assert.That(opts.poison_min_escalation_window_millis, Is.EqualTo(TimeSpan.FromMilliseconds(5000)));
+        Assert.DoesNotThrow(() => opts.EnsureValid());
+    }
+
+    [Test]
+    public void PoisonKeys_ParseFromConnectString()
+    {
+        var opts = new SenderOptions(
+            "ws::addr=h:9000;sf_dir=/tmp/qdb;max_frame_rejections=7;poison_min_escalation_window_millis=250;");
+        Assert.That(opts.max_frame_rejections, Is.EqualTo(7));
+        Assert.That(opts.poison_min_escalation_window_millis, Is.EqualTo(TimeSpan.FromMilliseconds(250)));
+    }
+
+    [Test]
+    public void MaxFrameRejections_BelowMinimum_Rejected()
+    {
+        var opts = new SenderOptions
+        {
+            protocol = ProtocolType.ws, addr = "h:9000", sf_dir = "/tmp/qdb", max_frame_rejections = 0,
+        };
+        Assert.That(
+            () => opts.EnsureValid(),
+            Throws.TypeOf<IngressError>().With.Message.Contains(">= 1"));
+    }
+
+    [Test]
+    public void PoisonEscalationWindow_Negative_Rejected()
+    {
+        var opts = new SenderOptions
+        {
+            protocol = ProtocolType.ws, addr = "h:9000", sf_dir = "/tmp/qdb",
+            poison_min_escalation_window_millis = TimeSpan.FromMilliseconds(-1),
+        };
+        Assert.That(
+            () => opts.EnsureValid(),
+            Throws.TypeOf<IngressError>().With.Message.Contains(">= 0"));
+    }
+
+    [Test]
+    public void PoisonEscalationWindow_Zero_Accepted()
+    {
+        var opts = new SenderOptions
+        {
+            protocol = ProtocolType.ws, addr = "h:9000", sf_dir = "/tmp/qdb",
+            poison_min_escalation_window_millis = TimeSpan.Zero,
+        };
+        Assert.DoesNotThrow(() => opts.EnsureValid());
+    }
+
+    [Test]
+    public void PoisonKeys_ToString_RoundTrips()
+    {
+        var opts = new SenderOptions(
+            "ws::addr=h:9000;sf_dir=/tmp/qdb;max_frame_rejections=9;poison_min_escalation_window_millis=1234;");
+        var round = new SenderOptions(opts.ToString());
+        Assert.That(round.max_frame_rejections, Is.EqualTo(9));
+        Assert.That(round.poison_min_escalation_window_millis, Is.EqualTo(TimeSpan.FromMilliseconds(1234)));
+    }
+
+    [Test]
+    public void MaxFrameRejections_OnHttpScheme_Rejected()
+    {
+        var ex = Assert.Throws<IngressError>(
+            () => new SenderOptions("http::addr=h:9000;max_frame_rejections=4;"));
+        Assert.That(ex!.Message, Does.Contain("max_frame_rejections"));
+    }
+
+    [Test]
+    public void PoisonEscalationWindow_OnHttpScheme_Rejected()
+    {
+        var ex = Assert.Throws<IngressError>(
+            () => new SenderOptions("http::addr=h:9000;poison_min_escalation_window_millis=5000;"));
+        Assert.That(ex!.Message, Does.Contain("poison_min_escalation_window_millis"));
+    }
+
+    [Test]
     public void EffectiveResolver_Null_WhenNothingSet()
     {
         var opts = new SenderOptions { protocol = ProtocolType.ws, addr = "h:9000", sf_dir = "/tmp/qdb" };

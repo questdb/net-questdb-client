@@ -877,7 +877,13 @@ internal sealed class QwpCursorSendEngine : IDisposable
 
                     // Poison-frame pacing/escalation. A retriable NACK already struck (and checked for
                     // escalation) in HandleServerRejection. A non-orderly close *after a send* strikes
-                    // here. A pure connect failure (nothing sent on this connection) is an outage, not
+                    // here — deliberately, not only a server NACK: a frame that crashes the server
+                    // before it can NACK would otherwise loop forever. The cost is that a transient
+                    // server-side fault recurring at the same head (a crash-looping node that accepts
+                    // then dies before acking) is indistinguishable from content poison and can escalate
+                    // to terminal; the strike+dwell+pacing guards bound it, and any ack resets it. See
+                    // SenderOptions.max_frame_rejections for the behavior + RAM-mode data-loss note.
+                    // A pure connect failure (nothing sent on this connection) is an outage, not
                     // poison — it must never accrue a strike (Invariant B), so it uses normal backoff.
                     if (ex is RetriableNackException)
                     {

@@ -1682,6 +1682,26 @@ public record SenderOptions
     ///     WS close-code list — every close is otherwise reconnect-eligible. Must be >= 1. Defaults
     ///     to 4. WS-only.
     /// </summary>
+    /// <remarks>
+    ///     <b>A bare close after a send counts as a strike, not only a server NACK.</b> A frame that
+    ///     crashes the server before it can NACK would otherwise loop forever, so an accept-then-close
+    ///     with no ack progress at the same head is treated as a suspected poison frame. The detector
+    ///     therefore cannot distinguish "this frame's content kills the server" from a genuinely
+    ///     transient server-side fault that happens to recur at the same head — e.g. a crash-looping or
+    ///     OOM-killed node still accepting connections. If such a node accepts the head frame and dies
+    ///     before acking it on <see cref="max_frame_rejections" /> consecutive connections spanning at
+    ///     least <see cref="poison_min_escalation_window_millis" />, the sender latches terminal even
+    ///     though the outage is transient. Any single successful ack advances the head and resets the
+    ///     detector, so a server that acks between failures never escalates.
+    ///     <para />
+    ///     <b>Data-loss note.</b> On a terminal escalation the buffered un-acked frames are preserved in
+    ///     the store-and-forward log only when <c>sf_dir</c> is set. In the default RAM-backed mode
+    ///     (<c>sf_dir</c> unset) the segment ring is freed when the terminal sender is disposed or
+    ///     discarded by the pool, so those frames are dropped. Set <c>sf_dir</c> for durability across a
+    ///     poison-escalation terminal, and raise this threshold and/or
+    ///     <see cref="poison_min_escalation_window_millis" /> to widen tolerance for a flaky server that
+    ///     recurs at the same head.
+    /// </remarks>
     public int max_frame_rejections
     {
         get => _maxFrameRejections;
@@ -1742,13 +1762,31 @@ public record SenderOptions
     ///     Default policy for any overridable category that has no per-category override.
     ///     Connect-string accepts <c>halt</c>, <c>retry</c>.
     /// </summary>
+    /// <remarks>
+    ///     <b>Upgrade / migration note (NACK policy v2).</b> The per-category default policies changed:
+    ///     <see cref="SenderErrorCategory.SchemaMismatch" /> flipped from <c>drop_and_continue</c> to
+    ///     <c>halt</c>/terminal (a sender that previously tolerated schema drift and kept running now
+    ///     hard-halts on the first mismatch), and <see cref="SenderErrorCategory.WriteError" /> flipped
+    ///     from <c>drop_and_continue</c> to <c>retry</c> (retry-forever, replay from the ack watermark).
+    ///     The client no longer drops data on any policy. The legacy connect-string values
+    ///     <c>drop</c> / <c>drop_and_continue</c> still parse but are remapped to <c>retry</c> (the
+    ///     closest no-data-loss behaviour); for a terminal-default category
+    ///     (<see cref="SenderErrorCategory.SchemaMismatch" />, <see cref="SenderErrorCategory.ParseError" />,
+    ///     <see cref="SenderErrorCategory.SecurityError" />, <see cref="SenderErrorCategory.ProtocolViolation" />)
+    ///     that remap is then forced back to <c>halt</c>, so an explicit legacy <c>drop</c> there is
+    ///     silently ignored. Review any connect string relying on the old drop-and-continue behaviour.
+    /// </remarks>
     public SenderErrorPolicy? on_server_error
     {
         get => _onServerError;
         set { _onServerError = value; _onServerErrorUserSet = true; }
     }
 
-    /// <summary>Override for <see cref="SenderErrorCategory.SchemaMismatch" />. Default: halt.</summary>
+    /// <summary>
+    ///     Override for <see cref="SenderErrorCategory.SchemaMismatch" />. Default: halt
+    ///     (changed from <c>drop_and_continue</c> in NACK policy v2 — see <see cref="on_server_error" />).
+    ///     Terminal-default: the resolver / a legacy <c>drop</c> value cannot downgrade it to retry.
+    /// </summary>
     public SenderErrorPolicy? on_schema_mismatch_error
     {
         get => _onSchemaMismatchError;
@@ -1776,7 +1814,10 @@ public record SenderOptions
         set { _onSecurityError = value; _onSecurityErrorUserSet = true; }
     }
 
-    /// <summary>Override for <see cref="SenderErrorCategory.WriteError" />. Default: retry.</summary>
+    /// <summary>
+    ///     Override for <see cref="SenderErrorCategory.WriteError" />. Default: retry
+    ///     (changed from <c>drop_and_continue</c> in NACK policy v2 — see <see cref="on_server_error" />).
+    /// </summary>
     public SenderErrorPolicy? on_write_error
     {
         get => _onWriteError;

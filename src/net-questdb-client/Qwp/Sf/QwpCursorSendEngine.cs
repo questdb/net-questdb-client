@@ -255,16 +255,10 @@ internal sealed class QwpCursorSendEngine : IDisposable
     public int NegotiatedMaxBatchSize => Volatile.Read(ref _negotiatedMaxBatchSize);
 
     /// <summary>True once the engine has hit a terminal failure.</summary>
-    public bool IsTerminallyFailed
-    {
-        get
-        {
-            lock (_stateLock)
-            {
-                return _terminal;
-            }
-        }
-    }
+    // Lock-free: hit on every append via ThrowIfTerminal, so it must not contend on _stateLock with the
+    // pumps. The acquire read pairs with the release Volatile.Write in SetTerminal, which publishes
+    // _terminalError before the flag — so a reader observing true is guaranteed to see TerminalError.
+    public bool IsTerminallyFailed => Volatile.Read(ref _terminal);
 
     /// <summary>The terminal error, if any.</summary>
     public Exception? TerminalError
@@ -1328,9 +1322,11 @@ internal sealed class QwpCursorSendEngine : IDisposable
                 return;
             }
 
-            _terminal = true;
             _terminalError = error;
             isInitialConnect = !_seenFirstConnect;
+            // Release-publish the flag last so the lock-free IsTerminallyFailed reader that observes
+            // true is guaranteed to also see _terminalError (written above).
+            Volatile.Write(ref _terminal, true);
             FireAckSignalLocked();
             FireAppendSignalLocked();
         }

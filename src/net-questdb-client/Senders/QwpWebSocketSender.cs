@@ -338,22 +338,32 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender, IPooledSlotSende
     public ISender Table(ReadOnlySpan<char> name)
     {
         ThrowIfTerminal();
+
+        // Hot path: the same table is selected row after row, so a single-slot ordinal name match
+        // against the current table skips the dictionary hash+probe. _tables uses
+        // StringComparer.Ordinal, so SequenceEqual is exactly equivalent; a miss (first use or a
+        // table switch) falls to the dictionary and, if absent, creates the buffer.
+        var t = _currentTable;
+        if (t is null || !name.SequenceEqual(t.TableName))
+        {
 #if NET9_0_OR_GREATER
-        if (!_tablesLookup.TryGetValue(name, out var t))
-        {
-            var key = name.ToString();
-            t = new QwpTableBuffer(key, Options.max_name_len);
-            _tables[key] = t;
-        }
+            if (!_tablesLookup.TryGetValue(name, out t))
+            {
+                var key = name.ToString();
+                t = new QwpTableBuffer(key, Options.max_name_len);
+                _tables[key] = t;
+            }
 #else
-        var key = name.ToString();
-        if (!_tables.TryGetValue(key, out var t))
-        {
-            t = new QwpTableBuffer(key, Options.max_name_len);
-            _tables[key] = t;
-        }
+            var key = name.ToString();
+            if (!_tables.TryGetValue(key, out t))
+            {
+                t = new QwpTableBuffer(key, Options.max_name_len);
+                _tables[key] = t;
+            }
 #endif
-        _currentTable = t;
+            _currentTable = t;
+        }
+
         _currentTableSnapshotBytes = t.GetBufferedBytes();
         return this;
     }
@@ -1153,7 +1163,7 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender, IPooledSlotSende
         {
             throw new ObjectDisposedException(nameof(QwpWebSocketSender));
         }
-
+        
         if (_engine.IsTerminallyFailed)
         {
             var inner = _engine.TerminalError;

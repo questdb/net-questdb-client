@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+    <PropertyGroup>
+        <RootNamespace>QuestDB.StacBench</RootNamespace>
+        <Nullable>enable</Nullable>
+        <ImplicitUsings>enable</ImplicitUsings>
+        <Title>QuestDB client - STAC ingestion benchmark client</Title>
+        <Description>Standalone rows/sec + MB/s ingestion throughput client (port of java-questdb-client StacBenchmarkClient)</Description>
+        <!-- ws:: / QWP requires net7.0+; ilp-tcp / ilp-http would work on net6 but we track the soak TFM set. -->
+        <TargetFrameworks>net8.0;net9.0;net10.0</TargetFrameworks>
+        <CheckEolTargetFramework>false</CheckEolTargetFramework>
+        <OutputType>Exe</OutputType>
+        <ServerGarbageCollection>true</ServerGarbageCollection>
+        <ConcurrentGarbageCollection>true</ConcurrentGarbageCollection>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <ProjectReference Include="..\net-questdb-client\net-questdb-client.csproj"/>
+    </ItemGroup>
+
+</Project>

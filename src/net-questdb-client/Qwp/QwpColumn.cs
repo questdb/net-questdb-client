@@ -172,6 +172,33 @@ internal sealed class QwpColumn
     /// <summary>Appends a boolean value.</summary>
     public void AppendBool(bool value)
     {
+        // Inlined happy path: typed BOOLEAN, bit-slot capacity in hand, and no null bitmap yet —
+        // so NonNullCount == RowCount and AdvanceNonNull() collapses to RowCount++. Any other state
+        // (untyped, type drift, needs growth, bitmap present) falls to AppendBoolSlow.
+        var bitIndex = NonNullCount;
+        if (IsTyped && TypeCode == QwpTypeCode.Boolean && NullBitmap is null && BoolData != null &&
+            (bitIndex >> 3) < BoolData.Length)
+        {
+            var byteIndex = bitIndex >> 3;
+            var bitInByte = bitIndex & 7;
+            if (bitInByte == 0)
+            {
+                BoolData[byteIndex] = 0;
+            }
+            if (value)
+            {
+                BoolData[byteIndex] |= (byte)(1 << bitInByte);
+            }
+
+            RowCount++;
+            return;
+        }
+
+        AppendBoolSlow(value);
+    }
+
+    private void AppendBoolSlow(bool value)
+    {
         AssertOrSetType(QwpTypeCode.Boolean);
         var bitIndex = NonNullCount;
         EnsureBoolCapacity(bitIndex + 1);
@@ -222,6 +249,23 @@ internal sealed class QwpColumn
     /// <summary>Appends a 64-bit signed integer (little-endian).</summary>
     public void AppendLong(long value)
     {
+        // Inlined happy path: typed LONG, capacity in hand, and no null bitmap yet — so
+        // AdvanceNonNull() collapses to RowCount++ (EnsureBitmapCapacity is a no-op while
+        // NullBitmap is null). Any other state falls to AppendLongSlow, which runs the full path.
+        if (IsTyped && TypeCode == QwpTypeCode.Long && NullBitmap is null && FixedData != null &&
+            FixedData.Length >= FixedLen + 8)
+        {
+            BinaryPrimitives.WriteInt64LittleEndian(FixedData.AsSpan(FixedLen, 8), value);
+            FixedLen += 8;
+            RowCount++;
+            return;
+        }
+
+        AppendLongSlow(value);
+    }
+
+    private void AppendLongSlow(long value)
+    {
         AssertOrSetType(QwpTypeCode.Long);
         EnsureFixedCapacity(FixedLen + 8);
         BinaryPrimitives.WriteInt64LittleEndian(FixedData.AsSpan(FixedLen, 8), value);
@@ -241,6 +285,24 @@ internal sealed class QwpColumn
 
     /// <summary>Appends an IEEE-754 double-precision float (little-endian).</summary>
     public void AppendDouble(double value)
+    {
+        // Inlined happy path: typed DOUBLE, capacity in hand, and no null bitmap yet — so
+        // AdvanceNonNull() collapses to RowCount++ (EnsureBitmapCapacity is a no-op while
+        // NullBitmap is null). Any other state (untyped, type drift, needs growth, bitmap
+        // present) falls to AppendDoubleSlow, which runs the full AdvanceNonNull.
+        if (IsTyped && TypeCode == QwpTypeCode.Double && NullBitmap is null && FixedData != null &&
+            FixedData.Length >= FixedLen + 8)
+        {
+            BinaryPrimitives.WriteDoubleLittleEndian(FixedData.AsSpan(FixedLen, 8), value);
+            FixedLen += 8;
+            RowCount++;
+            return;
+        }
+
+        AppendDoubleSlow(value);
+    }
+
+    private void AppendDoubleSlow(double value)
     {
         AssertOrSetType(QwpTypeCode.Double);
         EnsureFixedCapacity(FixedLen + 8);
@@ -325,6 +387,24 @@ internal sealed class QwpColumn
 
     /// <summary>Appends a CHAR (single UTF-16 code unit) as 2 bytes little-endian.</summary>
     public void AppendChar(char value)
+    {
+        // Inlined happy path: typed CHAR, capacity in hand, and no null bitmap yet — so
+        // AdvanceNonNull() collapses to RowCount++ (EnsureBitmapCapacity is a no-op while
+        // NullBitmap is null). Any other state (untyped, type drift, needs growth, bitmap
+        // present) falls to AppendCharSlow, which runs the full AdvanceNonNull.
+        if (IsTyped && TypeCode == QwpTypeCode.Char && NullBitmap is null && FixedData != null &&
+            FixedData.Length >= FixedLen + 2)
+        {
+            BinaryPrimitives.WriteUInt16LittleEndian(FixedData.AsSpan(FixedLen, 2), value);
+            FixedLen += 2;
+            RowCount++;
+            return;
+        }
+
+        AppendCharSlow(value);
+    }
+
+    private void AppendCharSlow(char value)
     {
         AssertOrSetType(QwpTypeCode.Char);
         EnsureFixedCapacity(FixedLen + 2);

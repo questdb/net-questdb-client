@@ -875,7 +875,8 @@ internal sealed class QwpCursorSendEngine : IDisposable
                     // before it can NACK would otherwise loop forever. The cost is that a transient
                     // server-side fault recurring at the same head (a crash-looping node that accepts
                     // then dies before acking) is indistinguishable from content poison and can escalate
-                    // to terminal; the strike+dwell+pacing guards bound it, and any ack resets it. See
+                    // to terminal; the strike+dwell+pacing guards bound it, and any OK-level acceptance
+                    // at or beyond the suspect (incl. a plain OK in durable-ack mode) resets it. See
                     // SenderOptions.max_frame_rejections for the behavior + RAM-mode data-loss note.
                     // A pure connect failure (nothing sent on this connection) is an outage, not
                     // poison — it must never accrue a strike (Invariant B), so it uses normal backoff.
@@ -891,7 +892,7 @@ internal sealed class QwpCursorSendEngine : IDisposable
 
                     if (Volatile.Read(ref _sentOnCurrentConnection))
                     {
-                        var strike = RegisterHeadOfLineStrike();
+                        var strike = RegisterHeadOfLineCloseStrike();
                         if (strike.Escalation is not null)
                         {
                             SetTerminal(new LineSenderServerException(strike.Escalation), strike.Escalation);
@@ -1089,6 +1090,8 @@ internal sealed class QwpCursorSendEngine : IDisposable
                     ackedSeq = highestSentWireSeq;
                 }
 
+                AdvanceOkWatermarkAndResetPoisonLocked(fsnAtZero + ackedSeq);
+
                 var newAcked = checked(fsnAtZero + ackedSeq + 1);
                 if (newAcked > _ackedFsn)
                 {
@@ -1115,6 +1118,11 @@ internal sealed class QwpCursorSendEngine : IDisposable
             // sequence beyond our highest sent is still a valid commitment of everything we've
             // sent, and the queued per-table watermarks must still drive TrimCoveredPrefix.
             if (ackedSeq > highestSentWireSeq) ackedSeq = highestSentWireSeq;
+
+            // OK-level acceptance advances here even though the trim watermark (_ackedFsn) waits for
+            // DURABLE_ACK coverage below — this is what lets the poison detector reset on a genuine
+            // OK during a durable-ack replica-lag window instead of false-positiving to terminal.
+            AdvanceOkWatermarkAndResetPoisonLocked(fsnAtZero + ackedSeq);
 
             _pendingDurable.Enqueue(new PendingDurable(ackedSeq, entries));
             TrimCoveredPrefixLocked(fsnAtZero);
@@ -1242,7 +1250,7 @@ internal sealed class QwpCursorSendEngine : IDisposable
         // connect escalate a never-sent frame to a terminal poison error (Invariant B).
         if (fromFsn >= 0)
         {
-            var strike = RegisterHeadOfLineStrike();
+            var strike = RegisterHeadOfLineStrike(fromFsn);
             if (strike.Escalation is not null)
             {
                 throw new HaltCarrier(strike.Escalation, new LineSenderServerException(strike.Escalation));
@@ -1506,14 +1514,28 @@ internal sealed class QwpCursorSendEngine : IDisposable
         return null;
     }
 
-    // Poison-frame detector: a retriable NACK, or a non-orderly close *after a send*, of the same
-    // head-of-line frame (== ackedFsn) with no ack progress accrues a strike. Once strikes reach
+    // Poison-frame detector: a retriable NACK (keyed on the NACK-named frame), or a non-orderly
+    // close *after a send* (keyed on the OK-level head-of-line frame), of the same FSN with no
+    // OK-level acceptance progress at or beyond it accrues a strike. Once strikes reach
     // max_frame_rejections AND the suspect has stayed poisoned for the escalation dwell, the episode
-    // escalates to a terminal ProtocolViolation. Any ack progress (ackedFsn advances) resets the
-    // detector on the next strike. Guarded by _stateLock.
+    // escalates to a terminal ProtocolViolation. Any OK at or beyond the suspect resets the detector
+    // (see AdvanceOkWatermarkAndResetPoisonLocked). Progress is measured against _highestOkFsn, NOT
+    // the trim watermark _ackedFsn: in durable-ack mode _ackedFsn only advances on DURABLE_ACK
+    // coverage, so a post-reject recycle re-OKs frames behind the suspect from the durable watermark;
+    // keying or resetting on _ackedFsn would let those re-OKs launder the strike count every cycle
+    // (false-positive terminal on a transient) or, in reverse, never escalate a real poison frame.
+    // Guarded by _stateLock; all three fields survive reconnects (the detector spans connections).
+    // Mirrors java-questdb-client CursorWebSocketSendLoop.
     private long _poisonFsn = -1L;
     private int _poisonStrikes;
     private long _poisonFirstStrikeTickMs;
+
+    // Highest FSN the server has acknowledged at the OK level (STATUS_OK), across connections; -1
+    // when none. In default mode this tracks the trim watermark exactly; in durable-ack mode it runs
+    // AHEAD of _ackedFsn (which waits for DURABLE_ACK coverage). Used by the poison detector to
+    // measure genuine acceptance progress. Guarded by _stateLock; monotonic (replayed re-OKs of
+    // already-OK'd frames don't advance it, so replay can't launder the strike count).
+    private long _highestOkFsn = -1L;
 
     private readonly struct PoisonStrike
     {
@@ -1527,27 +1549,64 @@ internal sealed class QwpCursorSendEngine : IDisposable
         public SenderError? Escalation { get; }
     }
 
-    private PoisonStrike RegisterHeadOfLineStrike()
+    // NACK path: strike the NACK-named frame directly (the server judged those exact bytes).
+    private PoisonStrike RegisterHeadOfLineStrike(long rejectedFsn)
     {
         lock (_stateLock)
         {
-            var head = _ackedFsn;
-            var now = Environment.TickCount64;
-            if (head == _poisonFsn)
-            {
-                _poisonStrikes++;
-            }
-            else
-            {
-                _poisonFsn = head;
-                _poisonStrikes = 1;
-                _poisonFirstStrikeTickMs = now;
-            }
+            return RegisterHeadOfLineStrikeLocked(rejectedFsn);
+        }
+    }
 
-            var dwellElapsed = _poisonDwell <= TimeSpan.Zero
-                || now - _poisonFirstStrikeTickMs >= (long)_poisonDwell.TotalMilliseconds;
-            var escalate = _poisonStrikes >= _maxFrameRejections && dwellElapsed;
-            return new PoisonStrike(_poisonStrikes, escalate ? BuildPoisonError(head, _poisonStrikes) : null);
+    // Close-after-send path: no NACK names a frame, so implicate the OK-level head-of-line —
+    // max(_ackedFsn, _highestOkFsn + 1). Both operands are "first un-acked / un-OK'd" FSNs, so the
+    // max is the first frame the server has neither trimmed nor OK'd. In durable-ack mode this is
+    // ahead of _ackedFsn; in default mode _highestOkFsn + 1 == _ackedFsn so it collapses to _ackedFsn.
+    private PoisonStrike RegisterHeadOfLineCloseStrike()
+    {
+        lock (_stateLock)
+        {
+            return RegisterHeadOfLineStrikeLocked(Math.Max(_ackedFsn, _highestOkFsn + 1));
+        }
+    }
+
+    private PoisonStrike RegisterHeadOfLineStrikeLocked(long rejectedFsn)
+    {
+        var now = Environment.TickCount64;
+        if (rejectedFsn == _poisonFsn)
+        {
+            _poisonStrikes++;
+        }
+        else
+        {
+            _poisonFsn = rejectedFsn;
+            _poisonStrikes = 1;
+            _poisonFirstStrikeTickMs = now;
+        }
+
+        var dwellElapsed = _poisonDwell <= TimeSpan.Zero
+            || now - _poisonFirstStrikeTickMs >= (long)_poisonDwell.TotalMilliseconds;
+        var escalate = _poisonStrikes >= _maxFrameRejections && dwellElapsed;
+        return new PoisonStrike(_poisonStrikes, escalate ? BuildPoisonError(rejectedFsn, _poisonStrikes) : null);
+    }
+
+    // Records OK-level acceptance progress and clears poison suspicion once it reaches the suspect.
+    // okFsn is the absolute FSN of the last frame the server OK'd. An OK at or beyond _poisonFsn
+    // proves the earlier rejections were not deterministic (the frame is now accepted), so the
+    // detector resets. Re-OKs of frames behind the suspect (the norm in durable-ack replay) leave
+    // _highestOkFsn unchanged and don't reset, so a genuinely poison frame still escalates.
+    // Caller holds _stateLock. Mirrors the STATUS_OK handler in java-questdb-client.
+    private void AdvanceOkWatermarkAndResetPoisonLocked(long okFsn)
+    {
+        if (okFsn > _highestOkFsn)
+        {
+            _highestOkFsn = okFsn;
+        }
+
+        if (_poisonFsn >= 0 && okFsn >= _poisonFsn)
+        {
+            _poisonFsn = -1L;
+            _poisonStrikes = 0;
         }
     }
 

@@ -580,6 +580,54 @@ public class QwpCursorSendEngineTests
     }
 
     [Test]
+    public void PoisonFrame_DurableAckMode_OkLevelProgressResetsDetector()
+    {
+        // M1 regression / java-questdb-client parity. In durable-ack mode the trim watermark
+        // (AckedFsn) only advances on DURABLE_ACK coverage, so a plain OK never moves it. The poison
+        // detector must therefore measure progress against OK-level acceptance, not the trim
+        // watermark: a server that OKs one more frame each connection before dropping (a replica-lag
+        // window with a flapping wire) is making genuine progress and must NOT be escalated to a
+        // poison terminal. Before the fix the detector keyed on AckedFsn (pinned at 0), so every
+        // close struck the same head frame and escalated after maxFrameRejections closes — here that
+        // would be by connection 2, terminalising a purely transient outage (Invariant B violation,
+        // and RAM-mode data loss).
+        var connectCount = 0;
+        using var engine = NewEngine(out _,
+            durableAckMode: true,
+            maxFrameRejections: 2,
+            poisonMinEscalationWindow: TimeSpan.Zero,
+            policy: new QwpReconnectPolicy(
+                TimeSpan.FromMilliseconds(1), TimeSpan.FromMilliseconds(4), TimeSpan.FromSeconds(30)),
+            factory: () =>
+            {
+                var conn = Interlocked.Increment(ref connectCount);
+                var seq = -1;
+                return new StubTransport
+                {
+                    // Cumulative OK per shipped frame, each carrying an uncovered per-table entry so the
+                    // trim watermark stays pinned at 0 (no DURABLE_ACK ever raises the table watermark).
+                    OnSend = _ => OkResponseWithEntry(Interlocked.Increment(ref seq), "t", seqTxn: 1000),
+                    // Connection N OKs N frames, then drops — one more frame of OK-level progress each
+                    // cycle, so the suspect head advances and the detector resets on every reconnect.
+                    FailReceiveAfterAcks = conn,
+                };
+            });
+        engine.Start();
+        for (var i = 0; i < 12; i++)
+        {
+            engine.AppendBlocking(new byte[] { (byte)i });
+        }
+
+        // Ride out several OK-then-close cycles. Without OK-level reset this escalates by connection 2;
+        // with it the sender keeps reconnecting through the transient window.
+        AssertEventually(() => Volatile.Read(ref connectCount) >= 5,
+            "the sender must keep reconnecting through the OK-then-close window, not latch terminal", 5000);
+        Assert.That(engine.IsTerminallyFailed, Is.False,
+            "OK-level progress each cycle must reset the poison detector in durable-ack mode — a " +
+            "progressing transient must never escalate to a terminal ProtocolViolation");
+    }
+
+    [Test]
     public void RetriableNack_WithConcurrentSendFault_StrikesOnce_NotTwice()
     {
         // Regression for the double-counted poison strike on NACK-before-close: the server NACKs the
@@ -1305,7 +1353,8 @@ public class QwpCursorSendEngineTests
         SenderErrorPolicyResolver? policyResolver = null,
         int errorInboxCapacity = 256,
         int maxFrameRejections = 4,
-        TimeSpan? poisonMinEscalationWindow = null)
+        TimeSpan? poisonMinEscalationWindow = null,
+        bool durableAckMode = false)
     {
         slotDir = slotDirectoryOverride ?? Path.Combine(_root, "sender-" + Guid.NewGuid().ToString("N"));
         var slotLock = QwpSlotLock.Acquire(slotDir);
@@ -1325,6 +1374,7 @@ public class QwpCursorSendEngineTests
             maxTotalBytes: maxTotalBytes,
             errorDispatcher: dispatcher,
             policyResolver: policyResolver,
+            durableAckMode: durableAckMode,
             maxFrameRejections: maxFrameRejections,
             poisonMinEscalationWindow: poisonMinEscalationWindow);
     }
@@ -1335,6 +1385,25 @@ public class QwpCursorSendEngineTests
         buf[0] = (byte)QwpStatusCode.Ok;
         BinaryPrimitives.WriteInt64LittleEndian(buf.AsSpan(1, 8), sequence);
         BinaryPrimitives.WriteUInt16LittleEndian(buf.AsSpan(9, 2), 0);
+        return buf;
+    }
+
+    // OK carrying a single per-table seqTxn entry. In durable-ack mode such an OK is NOT trivially
+    // durable (an empty-entry OK is), so it does not advance the trim watermark until a matching
+    // DURABLE_ACK arrives — which is exactly what pins AckedFsn during a replica-lag window.
+    private static byte[] OkResponseWithEntry(long sequence, string table, long seqTxn)
+    {
+        var nameBytes = System.Text.Encoding.UTF8.GetBytes(table);
+        var buf = new byte[11 + 2 + nameBytes.Length + 8];
+        buf[0] = (byte)QwpStatusCode.Ok;
+        BinaryPrimitives.WriteInt64LittleEndian(buf.AsSpan(1, 8), sequence);
+        BinaryPrimitives.WriteUInt16LittleEndian(buf.AsSpan(9, 2), 1);
+        var pos = 11;
+        BinaryPrimitives.WriteUInt16LittleEndian(buf.AsSpan(pos, 2), (ushort)nameBytes.Length);
+        pos += 2;
+        nameBytes.CopyTo(buf.AsSpan(pos));
+        pos += nameBytes.Length;
+        BinaryPrimitives.WriteInt64LittleEndian(buf.AsSpan(pos, 8), seqTxn);
         return buf;
     }
 
@@ -1370,12 +1439,17 @@ public class QwpCursorSendEngineTests
         // Models an accept-then-close middlebox: once a frame has been shipped, the receive side
         // faults with this exception (the frame is never acked), driving the poison detector.
         public Exception? FailReceiveWith;
+        // Models "server ack'd N frames on this connection, then dropped": deliver this many acks
+        // from the channel, then fault the receive as a non-orderly close. Unlike FailReceiveWith,
+        // the acks ARE processed first (so OK-level progress is recorded before the close).
+        public int? FailReceiveAfterAcks;
         public List<byte[]> Sent { get; } = new();
         public (string Host, int Port)? Endpoint { get; set; } = ("stub", 0);
 
         private readonly Channel<byte[]> _acks = Channel.CreateUnbounded<byte[]>();
         private readonly object _sentLock = new();
         private int _autoSeq;
+        private int _acksDelivered;
         public bool Disposed { get; private set; }
 
         public Task ConnectAsync(CancellationToken cancellationToken)
@@ -1412,6 +1486,12 @@ public class QwpCursorSendEngineTests
 
         public async Task<int> ReceiveFrameAsync(Memory<byte> destination, CancellationToken cancellationToken)
         {
+            if (FailReceiveAfterAcks is int limit && _acksDelivered >= limit)
+            {
+                await Task.Delay(10, cancellationToken).ConfigureAwait(false);
+                throw FailReceiveWith ?? new IngressError(ErrorCode.SocketError, "server closed after acks");
+            }
+
             if (FailReceiveWith is not null)
             {
                 // Wait until a frame has actually shipped so the engine has marked this connection
@@ -1427,6 +1507,7 @@ public class QwpCursorSendEngineTests
             }
 
             var ack = await _acks.Reader.ReadAsync(cancellationToken).ConfigureAwait(false);
+            _acksDelivered++;
             ack.CopyTo(destination.Span);
             return ack.Length;
         }

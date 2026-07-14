@@ -44,9 +44,8 @@ namespace net_questdb_client_tests;
 ///     delivery is verified by polling <c>/exec select count()</c> over HTTP (WAL apply lag is
 ///     absorbed by the poll).
 ///
-///     These are the OSS-single-node scenarios from the PR #60 (§6 Invariant-B / §7 NACK-v2) gap
-///     analysis, covering the now-implemented Invariant-B / NACK-v2 behaviour end-to-end against a
-///     master (nightly) node. The three cluster-role scenarios (mid-stream demotion, all-replica
+///     These are the OSS-single-node scenarios covering the Invariant-B / NACK-v2 behaviour
+///     end-to-end against a master (nightly) node. The three cluster-role scenarios (mid-stream demotion, all-replica
 ///     window, durable-ack gap) are NOT here: they require the enterprise e2e harness, not
 ///     single-node Docker.
 /// </summary>
@@ -228,7 +227,7 @@ public class QuestDbDockerIngestFaultToleranceTests
     }
 
     // ------------------------------------------------------------------
-    // Pending — depend on the Invariant-B / NACK-v2 port (bodies complete, un-Ignore when landed)
+    // Invariant-B / NACK-v2 behaviour against a live single-node server.
     // ------------------------------------------------------------------
 
     // Scenario: an outage LONGER than the old reconnect budget no longer terminalises the sender —

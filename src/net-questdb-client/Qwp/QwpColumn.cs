@@ -513,7 +513,7 @@ internal sealed class QwpColumn
         snap.GeohashPrecisionBits = GeohashPrecisionBits;
         snap.IsTyped              = IsTyped;
         snap.DecimalScaleSet      = DecimalScaleSet;
-        snap.GeohashPrecisionSet  = GeohashPrecisionSet;  
+        snap.GeohashPrecisionSet  = GeohashPrecisionSet;
     }
 
     internal void Restore(Savepoint sp)

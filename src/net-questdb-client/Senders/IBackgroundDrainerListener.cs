@@ -30,9 +30,11 @@ namespace QuestDB.Senders;
 ///     <c>SenderOptions.DrainerListener</c>.
 /// </summary>
 /// <remarks>
-///     <b>Threading.</b> Invoked on the background-drainer worker thread that owns the drain, never on
-///     the I/O thread or a producer thread. Slow / throwing listeners cannot stall publishing or
-///     reconnect: any exception is caught and traced, and the drain continues.
+///     <b>Threading.</b> Invoked on a background-drainer worker thread, never on the I/O thread or a
+///     producer thread. Up to <c>max_background_drainers</c> drains run concurrently, each firing this
+///     callback inline, so <see cref="OnEvent" /> <b>can be called concurrently and must be
+///     thread-safe</b>. Slow / throwing listeners cannot stall publishing or reconnect: any exception
+///     is caught and traced, and the drain continues.
 ///     <para />
 ///     <b>Delivery.</b> Best-effort and rare relative to the data path — orphan adoption happens at
 ///     sender startup and each slot emits at most one <see cref="BackgroundDrainerEventKind.SlotAdopted" />

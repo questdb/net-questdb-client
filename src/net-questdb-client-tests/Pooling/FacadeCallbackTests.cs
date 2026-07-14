@@ -37,11 +37,11 @@ using dummy_http_server;
 
 namespace net_questdb_client_tests.Pooling;
 
-// Ingest error/connection callbacks exposed on the pooled QuestDBClient facade (PR #60 §2) and
-// propagated to every pooled ws sender. The per-slot connect-string re-parse in SenderPool drops
-// programmatic delegates, so the facade re-applies them per created sender.
+// Ingest error/connection callbacks exposed on the pooled QuestDBClient facade and propagated to
+// every pooled ws sender. The per-slot connect-string re-parse in SenderPool drops programmatic
+// delegates, so the facade re-applies them per created sender.
 [TestFixture]
-public class FacadeCallbackPendingTests
+public class FacadeCallbackTests
 {
     // A facade errorHandler receives the async auth-terminal SenderError from a pooled sender against
     // a 401-rejecting server. (Under Invariant B a plain connection error retries forever and never
@@ -138,7 +138,7 @@ public class FacadeCallbackPendingTests
                 .DrainerListener(listener)
                 .Build();
 
-            await WaitFor(() => listener.Contains(BackgroundDrainerEventKind.DrainCompleted), 10000);
+            await WaitFor(() => listener.Contains(BackgroundDrainerEventKind.DrainCompleted), 10_000);
 
             Assert.That(listener.Contains(BackgroundDrainerEventKind.SlotAdopted), Is.True,
                 "the facade drainerListener must observe the orphan slot being adopted");

@@ -188,6 +188,8 @@ public sealed class QuestDBClientBuilder
     ///     Registers an ingest error handler applied to every pooled <c>ws</c>/<c>wss</c> sender.
     ///     Surfaces async ingest errors (terminals and retriable notifications) that the pooled
     ///     facade otherwise hides. Programmatic-only; ws-only (ignored for http/tcp handles).
+    ///     The single handler instance is shared across every pooled sender and may be invoked
+    ///     concurrently, so it must be thread-safe.
     /// </summary>
     public QuestDBClientBuilder ErrorHandler(QuestDB.Utils.SenderErrorHandler handler)
     {
@@ -198,6 +200,8 @@ public sealed class QuestDBClientBuilder
     /// <summary>
     ///     Registers a connection-state listener applied to every pooled <c>ws</c>/<c>wss</c> sender
     ///     (connect / disconnect / reconnect / failover / auth-failed). Programmatic-only; ws-only.
+    ///     The single listener instance is shared across every pooled sender and may be invoked
+    ///     concurrently, so it must be thread-safe.
     /// </summary>
     public QuestDBClientBuilder ConnectionListener(QuestDB.Senders.ISenderConnectionListener listener)
     {
@@ -208,7 +212,9 @@ public sealed class QuestDBClientBuilder
     /// <summary>
     ///     Registers a background-drainer observability listener applied to every pooled <c>ws</c>/<c>wss</c>
     ///     sender: it observes orphan slot adoption and drain outcomes when <c>drain_orphans=on</c> and
-    ///     <c>sf_dir</c> is set. Programmatic-only; ws-only (ignored for http/tcp handles).
+    ///     <c>sf_dir</c> is set. Programmatic-only; ws-only (ignored for http/tcp handles). The single
+    ///     listener instance is shared across every pooled sender and its concurrent drains, so its
+    ///     <see cref="QuestDB.Senders.IBackgroundDrainerListener.OnEvent" /> must be thread-safe.
     /// </summary>
     public QuestDBClientBuilder DrainerListener(QuestDB.Senders.IBackgroundDrainerListener listener)
     {

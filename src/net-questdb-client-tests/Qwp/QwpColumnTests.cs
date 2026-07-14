@@ -154,7 +154,7 @@ public class QwpColumnTests
         col.AppendBool(true);
         col.AppendBool(true);
 
-        var sp = col.Snapshot();
+        var sp = col.NewSnapshot();
         col.AppendBool(true);
         col.Restore(sp);
         col.AppendBool(false);

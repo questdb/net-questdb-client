@@ -1586,7 +1586,12 @@ public record SenderOptions
         set { _sfAppendDeadline = value; _sfAppendDeadlineUserSet = true; }
     }
 
-    /// <summary>Total wall-clock budget for a single reconnect run. Defaults to 5 min.</summary>
+    /// <summary>
+    ///     Caps only the blocking initial connect (initial_connect_retry=sync). The background
+    ///     reconnect loop (mid-stream outages and async initial connect) does not consult this — it
+    ///     retries indefinitely and halts only on a terminal auth/upgrade error or close (Invariant B).
+    ///     Defaults to 5 min.
+    /// </summary>
     public TimeSpan reconnect_max_duration_millis
     {
         get => _reconnectMaxDuration;

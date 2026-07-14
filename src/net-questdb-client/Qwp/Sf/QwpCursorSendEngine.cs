@@ -1233,10 +1233,20 @@ internal sealed class QwpCursorSendEngine : IDisposable
         // escalates to a terminal ProtocolViolation), then recycle the connection so the reconnect
         // path replays the rejected frame from ackedFsn.
         _errorDispatcher?.Offer(senderError);
-        var strike = RegisterHeadOfLineStrike();
-        if (strike.Escalation is not null)
+
+        // Only a rejection that maps to a frame we actually shipped on this connection (fromFsn >= 0)
+        // can implicate the head frame. A pre-send NACK (fromFsn == -1: the server error-framed before
+        // our first send) says nothing about the bytes — it is a server-state verdict, not a frame
+        // verdict — so it must NOT accrue a poison strike, mirroring the close path's
+        // _sentOnCurrentConnection guard. Striking it would let a server that proactively NACKs on
+        // connect escalate a never-sent frame to a terminal poison error (Invariant B).
+        if (fromFsn >= 0)
         {
-            throw new HaltCarrier(strike.Escalation, new LineSenderServerException(strike.Escalation));
+            var strike = RegisterHeadOfLineStrike();
+            if (strike.Escalation is not null)
+            {
+                throw new HaltCarrier(strike.Escalation, new LineSenderServerException(strike.Escalation));
+            }
         }
 
         throw new RetriableNackException(senderError, fromFsn);

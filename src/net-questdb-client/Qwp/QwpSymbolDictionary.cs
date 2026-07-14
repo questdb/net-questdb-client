@@ -117,6 +117,36 @@ internal sealed class QwpSymbolDictionary
         return id;
     }
 
+    /// <summary>
+    ///     Overload for a value already held as a <see cref="string" />: probes the dictionary by
+    ///     reference and, on first sight, stores that reference directly — skipping the per-call
+    ///     <c>ToString</c> the span overload pays on pre-net9 targets, and the first-seen <c>ToString</c>
+    ///     on all targets.
+    /// </summary>
+    public int Add(string value)
+    {
+        if (_ids.TryGetValue(value, out var id))
+        {
+            return id;
+        }
+
+        // First sighting — same UTF-8 validation as the span overload (see there for why).
+        try
+        {
+            _ = QwpStrictUtf8.Encoding.GetByteCount(value);
+        }
+        catch (System.Text.EncoderFallbackException ex)
+        {
+            throw new IngressError(ErrorCode.InvalidName,
+                "symbol value is not valid UTF-8 (lone surrogate)", ex);
+        }
+
+        id = _values.Count;
+        _values.Add(value);
+        _ids[value] = id;
+        return id;
+    }
+
     /// <summary>Returns the symbol value at the given global id.</summary>
     public string GetSymbol(int id)
     {

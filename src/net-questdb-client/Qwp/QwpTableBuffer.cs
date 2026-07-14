@@ -348,6 +348,177 @@ internal sealed class QwpTableBuffer
         }
     }
 
+    // String-name overloads of the hot scalar appends: they route through the string GetOrCreateColumn
+    // so a stable column-name instance is resolved by reference equality on the positional fast path.
+    public void AppendBool(string columnName, bool value)
+    {
+        try { GetOrCreateColumn(columnName)?.AppendBool(value); }
+        catch { CancelCurrentRow(); throw; }
+    }
+
+    public void AppendInt(string columnName, int value)
+    {
+        try { GetOrCreateColumn(columnName)?.AppendInt(value); }
+        catch { CancelCurrentRow(); throw; }
+    }
+
+    public void AppendLong(string columnName, long value)
+    {
+        try { GetOrCreateColumn(columnName)?.AppendLong(value); }
+        catch { CancelCurrentRow(); throw; }
+    }
+
+    public void AppendDouble(string columnName, double value)
+    {
+        try { GetOrCreateColumn(columnName)?.AppendDouble(value); }
+        catch { CancelCurrentRow(); throw; }
+    }
+
+    public void AppendChar(string columnName, char value)
+    {
+        try { GetOrCreateColumn(columnName)?.AppendChar(value); }
+        catch { CancelCurrentRow(); throw; }
+    }
+
+    public void AppendSymbol(string columnName, int globalId)
+    {
+        try { GetOrCreateColumn(columnName)?.AppendSymbol(globalId); }
+        catch { CancelCurrentRow(); throw; }
+    }
+
+    public void AppendByte(string columnName, sbyte value)
+    {
+        try { GetOrCreateColumn(columnName)?.AppendByte(value); }
+        catch { CancelCurrentRow(); throw; }
+    }
+
+    public void AppendShort(string columnName, short value)
+    {
+        try { GetOrCreateColumn(columnName)?.AppendShort(value); }
+        catch { CancelCurrentRow(); throw; }
+    }
+
+    public void AppendFloat(string columnName, float value)
+    {
+        try { GetOrCreateColumn(columnName)?.AppendFloat(value); }
+        catch { CancelCurrentRow(); throw; }
+    }
+
+    public void AppendTimestampMicros(string columnName, long micros)
+    {
+        try { GetOrCreateColumn(columnName)?.AppendTimestampMicros(micros); }
+        catch { CancelCurrentRow(); throw; }
+    }
+
+    public void AppendTimestampNanos(string columnName, long nanos)
+    {
+        try { GetOrCreateColumn(columnName)?.AppendTimestampNanos(nanos); }
+        catch { CancelCurrentRow(); throw; }
+    }
+
+    public void AppendDateMillis(string columnName, long millis)
+    {
+        try { GetOrCreateColumn(columnName)?.AppendDateMillis(millis); }
+        catch { CancelCurrentRow(); throw; }
+    }
+
+    public void AppendUuid(string columnName, Guid value)
+    {
+        try { GetOrCreateColumn(columnName)?.AppendUuid(value); }
+        catch { CancelCurrentRow(); throw; }
+    }
+
+    public void AppendVarchar(string columnName, ReadOnlySpan<char> value)
+    {
+        try { GetOrCreateColumn(columnName)?.AppendVarchar(value); }
+        catch { CancelCurrentRow(); throw; }
+    }
+
+    public void AppendDecimal64(string columnName, decimal value)
+    {
+        try { GetOrCreateColumn(columnName)?.AppendDecimal64(value); }
+        catch { CancelCurrentRow(); throw; }
+    }
+
+    public void AppendDecimal128(string columnName, decimal value)
+    {
+        try { GetOrCreateColumn(columnName)?.AppendDecimal128(value); }
+        catch { CancelCurrentRow(); throw; }
+    }
+
+    public void AppendDecimal256(string columnName, decimal value)
+    {
+        try { GetOrCreateColumn(columnName)?.AppendDecimal256(value); }
+        catch { CancelCurrentRow(); throw; }
+    }
+
+    public void AppendDecimal64(string columnName, decimal value, byte scale)
+    {
+        try { GetOrCreateColumn(columnName)?.AppendDecimal64(value, scale); }
+        catch { CancelCurrentRow(); throw; }
+    }
+
+    public void AppendDecimal128(string columnName, decimal value, byte scale)
+    {
+        try { GetOrCreateColumn(columnName)?.AppendDecimal128(value, scale); }
+        catch { CancelCurrentRow(); throw; }
+    }
+
+    public void AppendDecimal256(string columnName, decimal value, byte scale)
+    {
+        try { GetOrCreateColumn(columnName)?.AppendDecimal256(value, scale); }
+        catch { CancelCurrentRow(); throw; }
+    }
+
+    public void AppendDecimal128(string columnName, long lo, long hi, byte scale)
+    {
+        try { GetOrCreateColumn(columnName)?.AppendDecimal128(lo, hi, scale); }
+        catch { CancelCurrentRow(); throw; }
+    }
+
+    public void AppendDecimal256(string columnName, long l0, long l1, long l2, long l3, byte scale)
+    {
+        try { GetOrCreateColumn(columnName)?.AppendDecimal256(l0, l1, l2, l3, scale); }
+        catch { CancelCurrentRow(); throw; }
+    }
+
+    public void AppendBinary(string columnName, ReadOnlySpan<byte> value)
+    {
+        try { GetOrCreateColumn(columnName)?.AppendBinary(value); }
+        catch { CancelCurrentRow(); throw; }
+    }
+
+    public void AppendIPv4(string columnName, uint addr)
+    {
+        try { GetOrCreateColumn(columnName)?.AppendIPv4(addr); }
+        catch { CancelCurrentRow(); throw; }
+    }
+
+    public void AppendLong256(string columnName, BigInteger value)
+    {
+        try { GetOrCreateColumn(columnName)?.AppendLong256(value); }
+        catch { CancelCurrentRow(); throw; }
+    }
+
+    public void AppendGeohash(string columnName, ulong hash, int precisionBits)
+    {
+        try { GetOrCreateColumn(columnName)?.AppendGeohash(hash, precisionBits); }
+        catch { CancelCurrentRow(); throw; }
+    }
+
+    public void AppendDoubleArray(string columnName, ReadOnlySpan<double> values, ReadOnlySpan<int> shape)
+    {
+        try { GetOrCreateColumn(columnName)?.AppendDoubleArray(values, shape); }
+        catch { CancelCurrentRow(); throw; }
+    }
+
+    public void AppendLongArray(string columnName, ReadOnlySpan<long> values, ReadOnlySpan<int> shape)
+    {
+        try { GetOrCreateColumn(columnName)?.AppendLongArray(values, shape); }
+        catch { CancelCurrentRow(); throw; }
+    }
+
+
     /// <summary>Append a DECIMAL64 value. The first call locks the column scale.</summary>
     public void AppendDecimal64(ReadOnlySpan<char> columnName, decimal value)
     {
@@ -591,17 +762,35 @@ internal sealed class QwpTableBuffer
     {
         try
         {
-            EnsureCanAppendRow();
-            var ts = EnsureDesignatedTimestampColumn();
-            _designatedSavepoint ??= ts.Snapshot();
-            ts.AppendTimestampMicros(timestampMicros);
-            FinaliseRow();
+            // Happy path: ts column already exists (steady state) and the row limit is not hit. The
+            // savepoint is per-row (reset in FinaliseRow) so it is always taken here — it is what lets
+            // CancelCurrentRow roll the ts column back if a later append/FinaliseRow throws. Row-1
+            // creation and the row-limit throw are the cold AtSlow.
+            var ts = DesignatedTimestampColumn;
+            if (ts != null && RowCount < QwpConstants.MaxRowsPerTable)
+            {
+                _designatedSavepoint = ts.NewSnapshot();
+                ts.AppendTimestampMicros(timestampMicros);
+                FinaliseRow();
+                return;
+            }
+
+            AtSlow(timestampMicros);
         }
         catch
         {
             CancelCurrentRow();
             throw;
         }
+    }
+
+    private void AtSlow(long timestampMicros)
+    {
+        EnsureCanAppendRow();
+        var ts = DesignatedTimestampColumn ?? CreateDesignatedTimestampColumn();
+        _designatedSavepoint = ts.NewSnapshot();
+        ts.AppendTimestampMicros(timestampMicros);
+        FinaliseRow();
     }
 
     /// <summary>
@@ -611,11 +800,16 @@ internal sealed class QwpTableBuffer
     {
         try
         {
-            EnsureCanAppendRow();
-            var ts = EnsureDesignatedTimestampColumn();
-            _designatedSavepoint ??= ts.Snapshot();
-            ts.AppendTimestampNanos(timestampNanos);
-            FinaliseRow();
+            var ts = DesignatedTimestampColumn;
+            if (ts != null && RowCount < QwpConstants.MaxRowsPerTable)
+            {
+                _designatedSavepoint = ts.NewSnapshot();
+                ts.AppendTimestampNanos(timestampNanos);
+                FinaliseRow();
+                return;
+            }
+
+            AtNanosSlow(timestampNanos);
         }
         catch
         {
@@ -624,14 +818,28 @@ internal sealed class QwpTableBuffer
         }
     }
 
+    private void AtNanosSlow(long timestampNanos)
+    {
+        EnsureCanAppendRow();
+        var ts = DesignatedTimestampColumn ?? CreateDesignatedTimestampColumn();
+        _designatedSavepoint = ts.NewSnapshot();
+        ts.AppendTimestampNanos(timestampNanos);
+        FinaliseRow();
+    }
+
     private void EnsureCanAppendRow()
     {
+        // Kept tiny so the JIT inlines the check into At/AtNanos; the throwing string interpolation
+        // lives in a cold helper to stay under the inline budget.
         if (RowCount >= QwpConstants.MaxRowsPerTable)
         {
-            throw new IngressError(ErrorCode.InvalidApiCall,
-                                   $"table '{TableName}' exceeds the {QwpConstants.MaxRowsPerTable}-row limit");
+            ThrowRowLimitExceeded();
         }
     }
+
+    private void ThrowRowLimitExceeded() =>
+        throw new IngressError(ErrorCode.InvalidApiCall,
+                               $"table '{TableName}' exceeds the {QwpConstants.MaxRowsPerTable}-row limit");
 
     /// <summary>
     ///     Look up an existing column or create a new one.
@@ -654,15 +862,47 @@ internal sealed class QwpTableBuffer
             var col = _columns[cursor];
             if (!_touchedInCurrentRow[cursor] && columnName.SequenceEqual(col.Name))
             {
-                _appendCursor                = cursor + 1;
-                _rowSavepoints[cursor]       = col.Snapshot();
-                _touchedInCurrentRow[cursor] = true;
-                HasPendingRow                = true;
+                TouchAtCursor(cursor, col);
                 return col;
             }
         }
 
         return OrCreateColumn(columnName);
+    }
+
+    /// <summary>
+    ///     String overload of <see cref="GetOrCreateColumn(ReadOnlySpan{char})" />. When the caller
+    ///     passes a stable string instance (interned literal / cached name), the positional match is a
+    ///     single <see cref="object.ReferenceEquals(object,object)" /> pointer compare instead of the
+    ///     char-by-char <c>SequenceEqual</c> — a span can't carry the string identity, hence the
+    ///     dedicated overload. Columns created via this path store the caller's exact string as their
+    ///     <see cref="QwpColumn.Name" />, so later same-instance appends hit the reference compare;
+    ///     equal-but-distinct instances fall back to SequenceEqual, then the dictionary.
+    /// </summary>
+    private QwpColumn? GetOrCreateColumn(string columnName)
+    {
+        var cursor = _appendCursor;
+        if ((uint)cursor < (uint)_columns.Count)
+        {
+            var col = _columns[cursor];
+            if (!_touchedInCurrentRow[cursor] &&
+                (ReferenceEquals(columnName, col.Name) || columnName.AsSpan().SequenceEqual(col.Name)))
+            {
+                TouchAtCursor(cursor, col);
+                return col;
+            }
+        }
+
+        return OrCreateColumn(columnName);
+    }
+
+    // Commits the positional-fast-path bookkeeping once the column at the cursor is confirmed.
+    private void TouchAtCursor(int cursor, QwpColumn col)
+    {
+        _appendCursor                = cursor + 1;
+        col.Snapshot(ref _rowSavepoints[cursor]);
+        _touchedInCurrentRow[cursor] = true;
+        HasPendingRow                = true;
     }
 
     private QwpColumn? OrCreateColumn(ReadOnlySpan<char> columnName)
@@ -671,20 +911,30 @@ internal sealed class QwpTableBuffer
         // exist (first touch out of order) or already be written this row (duplicate), or be new.
 #if NET9_0_OR_GREATER
         if (_columnIndexLookup.TryGetValue(columnName, out var existing))
+        {
+            return TouchExisting(existing);
+        }
 #else
         if (_columnIndex.TryGetValue(columnName.ToString(), out var existing))
-#endif
         {
-            if (existing < _touchedInCurrentRow.Length && _touchedInCurrentRow[existing])
-            {
-                // Same column appended earlier in this row — keep the first value (cursor unchanged).
-                return null;
-            }
+            return TouchExisting(existing);
+        }
+#endif
+        if (columnName.Length == 0)
+        {
+            throw new IngressError(ErrorCode.InvalidName, "column name must not be empty");
+        }
 
-            SnapshotOnFirstTouch(existing, _columns[existing]);
-            var resolved = MarkTouched(existing) ? _columns[existing] : null;
-            _appendCursor = existing + 1;
-            return resolved;
+        return AddColumn(columnName.ToString());
+    }
+
+    private QwpColumn? OrCreateColumn(string columnName)
+    {
+        // String cold path: same resolution as the span overload, but a brand-new column stores the
+        // caller's exact string as its Name so the reference-equality fast path can hit next time.
+        if (_columnIndex.TryGetValue(columnName, out var existing))
+        {
+            return TouchExisting(existing);
         }
 
         if (columnName.Length == 0)
@@ -692,11 +942,29 @@ internal sealed class QwpTableBuffer
             throw new IngressError(ErrorCode.InvalidName, "column name must not be empty");
         }
 
-        int idx;
+        return AddColumn(columnName);
+    }
+
+    private QwpColumn? TouchExisting(int existing)
+    {
+        if (existing < _touchedInCurrentRow.Length && _touchedInCurrentRow[existing])
+        {
+            // Same column appended earlier in this row — keep the first value (cursor unchanged).
+            return null;
+        }
+
+        SnapshotOnFirstTouch(existing, _columns[existing]);
+        var resolved = MarkTouched(existing) ? _columns[existing] : null;
+        _appendCursor = existing + 1;
+        return resolved;
+    }
+
+    private QwpColumn AddColumn(string name)
+    {
         int nameByteCount;
         try
         {
-            nameByteCount = QwpStrictUtf8.Encoding.GetByteCount(columnName);
+            nameByteCount = QwpStrictUtf8.Encoding.GetByteCount(name);
         }
         catch (EncoderFallbackException ex)
         {
@@ -716,9 +984,8 @@ internal sealed class QwpTableBuffer
                                    $"table '{TableName}' exceeds the {QwpConstants.MaxColumnsPerTable}-column limit");
         }
 
-        var name = columnName.ToString();
-        var col  = new QwpColumn(name, RowCount);
-        idx = _columns.Count;
+        var col = new QwpColumn(name, RowCount);
+        var idx = _columns.Count;
         _columns.Add(col);
         _columnIndex[name] = idx;
 
@@ -751,7 +1018,7 @@ internal sealed class QwpTableBuffer
             Array.Resize(ref _rowSavepoints, Math.Max(4, index + 1));
         }
 
-        _rowSavepoints[index] = col.Snapshot();
+        _rowSavepoints[index] = col.NewSnapshot();
     }
 
     internal void CancelCurrentRow()
@@ -793,25 +1060,22 @@ internal sealed class QwpTableBuffer
     }
 
     /// <summary>
-    /// 
-    ///     Lazily creates the designated-timestamp column. The first <c>AppendTimestamp*</c> call
-    ///     on the returned column locks its type code (TIMESTAMP vs. TIMESTAMP_NANOS); subsequent
-    ///     mismatched calls throw via <see cref="QwpColumn" />'s type guard.
+    ///     Lazily creates the designated-timestamp column (cold path of At/AtNanos, inlined there).
+    ///     The first <c>AppendTimestamp*</c> call on the returned column locks its type code
+    ///     (TIMESTAMP vs. TIMESTAMP_NANOS); subsequent mismatched calls throw via
+    ///     <see cref="QwpColumn" />'s type guard.
     /// </summary>
-    private QwpColumn EnsureDesignatedTimestampColumn()
+    private QwpColumn CreateDesignatedTimestampColumn()
     {
-        if (DesignatedTimestampColumn is null)
-        {
-            DesignatedTimestampColumn      = new QwpColumn(string.Empty, RowCount);
-            _designatedCreatedInCurrentRow = true;
-        }
-
+        DesignatedTimestampColumn      = new QwpColumn(string.Empty, RowCount);
+        _designatedCreatedInCurrentRow = true;
         return DesignatedTimestampColumn;
     }
 
     private void FinaliseRow()
     {
-        for (var i = 0; i < _columns.Count; i++)
+        var columnsCount = _columns.Count;
+        for (var i = 0; i < columnsCount; i++)
         {
             if (!_touchedInCurrentRow[i])
             {
@@ -821,7 +1085,7 @@ internal sealed class QwpTableBuffer
             }
         }
 
-        for (var i = 0; i < _columns.Count; i++)
+        for (var i = 0; i < columnsCount; i++)
         {
             _touchedInCurrentRow[i] = false;
         }
@@ -829,7 +1093,7 @@ internal sealed class QwpTableBuffer
         RowCount++;
         HasPendingRow                  = false;
         _appendCursor                  = 0;
-        _committedColumnCount          = _columns.Count;
+        _committedColumnCount          = columnsCount;
         _designatedSavepoint           = null;
         _designatedCreatedInCurrentRow = false;
     }

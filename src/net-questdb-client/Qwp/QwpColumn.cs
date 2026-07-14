@@ -314,6 +314,23 @@ internal sealed class QwpColumn
     /// <summary>Appends a TIMESTAMP value (microseconds since epoch).</summary>
     public void AppendTimestampMicros(long micros)
     {
+        // Inlined happy path: typed TIMESTAMP, capacity in hand, no null bitmap. The designated ts
+        // column is written every row and is never null, so this is the steady state; AdvanceNonNull
+        // collapses to RowCount++ while NullBitmap is null.
+        if (IsTyped && TypeCode == QwpTypeCode.Timestamp && NullBitmap is null && FixedData != null &&
+            FixedData.Length >= FixedLen + 8)
+        {
+            BinaryPrimitives.WriteInt64LittleEndian(FixedData.AsSpan(FixedLen, 8), micros);
+            FixedLen += 8;
+            RowCount++;
+            return;
+        }
+
+        AppendTimestampMicrosSlow(micros);
+    }
+
+    private void AppendTimestampMicrosSlow(long micros)
+    {
         AssertOrSetType(QwpTypeCode.Timestamp);
         EnsureFixedCapacity(FixedLen + 8);
         BinaryPrimitives.WriteInt64LittleEndian(FixedData.AsSpan(FixedLen, 8), micros);
@@ -323,6 +340,21 @@ internal sealed class QwpColumn
 
     /// <summary>Appends a TIMESTAMP_NANOS value (nanoseconds since epoch).</summary>
     public void AppendTimestampNanos(long nanos)
+    {
+        // Inlined happy path: mirrors AppendTimestampMicros (typed TIMESTAMP_NANOS, capacity, no bitmap).
+        if (IsTyped && TypeCode == QwpTypeCode.TimestampNanos && NullBitmap is null && FixedData != null &&
+            FixedData.Length >= FixedLen + 8)
+        {
+            BinaryPrimitives.WriteInt64LittleEndian(FixedData.AsSpan(FixedLen, 8), nanos);
+            FixedLen += 8;
+            RowCount++;
+            return;
+        }
+
+        AppendTimestampNanosSlow(nanos);
+    }
+
+    private void AppendTimestampNanosSlow(long nanos)
     {
         AssertOrSetType(QwpTypeCode.TimestampNanos);
         EnsureFixedCapacity(FixedLen + 8);
@@ -439,18 +471,18 @@ internal sealed class QwpColumn
         AdvanceNonNull();
     }
 
-    internal readonly struct Savepoint
+    internal struct Savepoint
     {
-        public readonly int RowCount;
-        public readonly int NullCount;
-        public readonly int FixedLen;
-        public readonly int StrLen;
-        public readonly QwpTypeCode TypeCode;
-        public readonly byte DecimalScale;
-        public readonly int GeohashPrecisionBits;
-        public readonly bool IsTyped;
-        public readonly bool DecimalScaleSet;
-        public readonly bool GeohashPrecisionSet;
+        public int RowCount;
+        public int NullCount;
+        public int FixedLen;
+        public int StrLen;
+        public QwpTypeCode TypeCode;
+        public byte DecimalScale;
+        public int GeohashPrecisionBits;
+        public bool IsTyped;
+        public bool DecimalScaleSet;
+        public bool GeohashPrecisionSet;
 
         public Savepoint(QwpColumn col)
         {
@@ -467,7 +499,22 @@ internal sealed class QwpColumn
         }
     }
 
-    internal Savepoint Snapshot() => new Savepoint(this);
+    internal Savepoint NewSnapshot() => new(this);
+
+
+    internal void Snapshot(ref Savepoint snap)
+    {
+        snap.RowCount             = RowCount;
+        snap.NullCount            = NullCount;
+        snap.FixedLen             = FixedLen;
+        snap.StrLen               = StrLen;
+        snap.TypeCode             = TypeCode;
+        snap.DecimalScale         = DecimalScale;
+        snap.GeohashPrecisionBits = GeohashPrecisionBits;
+        snap.IsTyped              = IsTyped;
+        snap.DecimalScaleSet      = DecimalScaleSet;
+        snap.GeohashPrecisionSet  = GeohashPrecisionSet;  
+    }
 
     internal void Restore(Savepoint sp)
     {

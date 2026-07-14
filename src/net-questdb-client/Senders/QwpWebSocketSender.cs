@@ -481,6 +481,250 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender, IPooledSlotSende
         return this;
     }
 
+    // String-name overloads (override the ISender defaults): a stable name instance flows through to
+    // QwpTableBuffer's string GetOrCreateColumn, where the positional match is a reference compare
+    // rather than a char-by-char SequenceEqual. HTTP/TCP keep the span-forwarding default.
+
+    /// <inheritdoc />
+    public ISender Symbol(string name, ReadOnlySpan<char> value)
+    {
+        ThrowIfTerminal();
+        var preCount = _symbolDictionary.Count;
+        try
+        {
+            var globalId = _symbolDictionary.Add(value);
+            EnsureCurrentTable().AppendSymbol(name, globalId);
+            if (globalId > _currentBatchMaxSymbolId)
+            {
+                _currentBatchMaxSymbolId = globalId;
+            }
+        }
+        catch
+        {
+            if (_symbolDictionary.Count > preCount)
+            {
+                _symbolDictionary.RollbackTo(preCount);
+            }
+            _currentTable?.CancelCurrentRow();
+            throw;
+        }
+        return this;
+    }
+
+    /// <inheritdoc />
+    public ISender Symbol(string name, string value)
+    {
+        ThrowIfTerminal();
+        var preCount = _symbolDictionary.Count;
+        try
+        {
+            // Add(string): probe/store by reference — no ToString of the value (see QwpSymbolDictionary).
+            var globalId = _symbolDictionary.Add(value);
+            EnsureCurrentTable().AppendSymbol(name, globalId);
+            if (globalId > _currentBatchMaxSymbolId)
+            {
+                _currentBatchMaxSymbolId = globalId;
+            }
+        }
+        catch
+        {
+            if (_symbolDictionary.Count > preCount)
+            {
+                _symbolDictionary.RollbackTo(preCount);
+            }
+            _currentTable?.CancelCurrentRow();
+            throw;
+        }
+        return this;
+    }
+
+    /// <inheritdoc />
+    public ISender Column(string name, long value)
+    {
+        ThrowIfTerminal();
+        EnsureCurrentTable().AppendLong(name, value);
+        return this;
+    }
+
+    /// <inheritdoc />
+    public ISender Column(string name, int value)
+    {
+        ThrowIfTerminal();
+        EnsureCurrentTable().AppendInt(name, value);
+        return this;
+    }
+
+    /// <inheritdoc />
+    public ISender Column(string name, bool value)
+    {
+        ThrowIfTerminal();
+        EnsureCurrentTable().AppendBool(name, value);
+        return this;
+    }
+
+    /// <inheritdoc />
+    public ISender Column(string name, double value)
+    {
+        ThrowIfTerminal();
+        EnsureCurrentTable().AppendDouble(name, value);
+        return this;
+    }
+
+    /// <inheritdoc />
+    public ISender Column(string name, char value)
+    {
+        ThrowIfTerminal();
+        EnsureCurrentTable().AppendChar(name, value);
+        return this;
+    }
+
+    // ---- string-name overrides (all column types): carry the caller's name identity to the buffer's
+    // string GetOrCreateColumn (reference-equality fast path). Arrays route via the ISender span default.
+
+    /// <inheritdoc />
+    public ISender Column(string name, ReadOnlySpan<char> value)
+    {
+        ThrowIfTerminal();
+        EnsureCurrentTable().AppendVarchar(name, value);
+        return this;
+    }
+
+    /// <inheritdoc />
+    public ISender Column(string name, DateTime value)
+    {
+        ThrowIfTerminal();
+        EnsureCurrentTable().AppendTimestampMicros(name, DateTimeToMicros(value));
+        return this;
+    }
+
+    /// <inheritdoc />
+    public ISender Column(string name, DateTimeOffset value)
+    {
+        ThrowIfTerminal();
+        EnsureCurrentTable().AppendTimestampMicros(name, DateTimeToMicros(value.UtcDateTime));
+        return this;
+    }
+
+    /// <inheritdoc />
+    public ISender ColumnNanos(string name, long timestampNanos)
+    {
+        ThrowIfTerminal();
+        EnsureCurrentTable().AppendTimestampNanos(name, timestampNanos);
+        return this;
+    }
+
+    /// <inheritdoc />
+    public ISender Column(string name, Guid value)
+    {
+        ThrowIfTerminal();
+        EnsureCurrentTable().AppendUuid(name, value);
+        return this;
+    }
+
+    /// <inheritdoc />
+    public ISender ColumnDecimal64(string name, decimal value, byte scale)
+    {
+        ThrowIfTerminal();
+        EnsureCurrentTable().AppendDecimal64(name, value, scale);
+        return this;
+    }
+
+    /// <inheritdoc />
+    public ISender ColumnDecimal128(string name, decimal value, byte scale)
+    {
+        ThrowIfTerminal();
+        EnsureCurrentTable().AppendDecimal128(name, value, scale);
+        return this;
+    }
+
+    /// <inheritdoc />
+    public ISender ColumnDecimal256(string name, decimal value, byte scale)
+    {
+        ThrowIfTerminal();
+        EnsureCurrentTable().AppendDecimal256(name, value, scale);
+        return this;
+    }
+
+    /// <inheritdoc />
+    public ISender ColumnDecimal128(string name, long lo, long hi, byte scale)
+    {
+        ThrowIfTerminal();
+        EnsureCurrentTable().AppendDecimal128(name, lo, hi, scale);
+        return this;
+    }
+
+    /// <inheritdoc />
+    public ISender ColumnDecimal256(string name, long l0, long l1, long l2, long l3, byte scale)
+    {
+        ThrowIfTerminal();
+        EnsureCurrentTable().AppendDecimal256(name, l0, l1, l2, l3, scale);
+        return this;
+    }
+
+    /// <inheritdoc />
+    public ISender Column(string name, decimal value)
+        => throw new IngressError(ErrorCode.InvalidApiCall,
+            "QWP requires an explicit decimal type and scale; use ColumnDecimal64/128/256(name, value, scale)");
+
+    /// <inheritdoc />
+    public IQwpWebSocketSender ColumnIPv4(string name, System.Net.IPAddress addr) => ColumnIPv4(name.AsSpan(), addr);
+
+    /// <inheritdoc />
+    public IQwpWebSocketSender ColumnBinary(string name, ReadOnlySpan<byte> value)
+    {
+        ThrowIfTerminal();
+        EnsureCurrentTable().AppendBinary(name, value);
+        return this;
+    }
+
+    /// <inheritdoc />
+    public IQwpWebSocketSender ColumnByte(string name, sbyte value)
+    {
+        ThrowIfTerminal();
+        EnsureCurrentTable().AppendByte(name, value);
+        return this;
+    }
+
+    /// <inheritdoc />
+    public IQwpWebSocketSender ColumnShort(string name, short value)
+    {
+        ThrowIfTerminal();
+        EnsureCurrentTable().AppendShort(name, value);
+        return this;
+    }
+
+    /// <inheritdoc />
+    public IQwpWebSocketSender ColumnFloat(string name, float value)
+    {
+        ThrowIfTerminal();
+        EnsureCurrentTable().AppendFloat(name, value);
+        return this;
+    }
+
+    /// <inheritdoc />
+    public IQwpWebSocketSender ColumnDate(string name, long millisSinceEpoch)
+    {
+        ThrowIfTerminal();
+        EnsureCurrentTable().AppendDateMillis(name, millisSinceEpoch);
+        return this;
+    }
+
+    /// <inheritdoc />
+    public IQwpWebSocketSender ColumnGeohash(string name, ulong hash, int precisionBits)
+    {
+        ThrowIfTerminal();
+        EnsureCurrentTable().AppendGeohash(name, hash, precisionBits);
+        return this;
+    }
+
+    /// <inheritdoc />
+    public IQwpWebSocketSender ColumnLong256(string name, System.Numerics.BigInteger value)
+    {
+        ThrowIfTerminal();
+        EnsureCurrentTable().AppendLong256(name, value);
+        return this;
+    }
+
     /// <inheritdoc />
     public ISender Column(ReadOnlySpan<char> name, char value)
     {
@@ -695,9 +939,9 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender, IPooledSlotSende
         ThrowIfTerminal();
         GuardLastFlushNotSet();
         var t = EnsureCurrentTable();
-        GuardRowSize(t);
+        var committedBytes = GuardRowSize(t);
         t.At(DateTimeToMicros(value));
-        OnRowCommitted(t);
+        OnRowCommitted(t, committedBytes);
         return FlushIfNecessaryAsyncCore(ct);
     }
 
@@ -711,9 +955,9 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender, IPooledSlotSende
         ThrowIfTerminal();
         GuardLastFlushNotSet();
         var t = EnsureCurrentTable();
-        GuardRowSize(t);
+        var committedBytes = GuardRowSize(t);
         t.At(value);
-        OnRowCommitted(t);
+        OnRowCommitted(t, committedBytes);
         return FlushIfNecessaryAsyncCore(ct);
     }
 
@@ -727,9 +971,9 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender, IPooledSlotSende
         ThrowIfTerminal();
         GuardLastFlushNotSet();
         var t = EnsureCurrentTable();
-        GuardRowSize(t);
+        var committedBytes = GuardRowSize(t);
         t.AtNanos(timestampNanos);
-        OnRowCommitted(t);
+        OnRowCommitted(t, committedBytes);
         return FlushIfNecessaryAsyncCore(ct);
     }
 
@@ -739,9 +983,9 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender, IPooledSlotSende
         ThrowIfTerminal();
         GuardLastFlushNotSet();
         var t = EnsureCurrentTable();
-        GuardRowSize(t);
+        var committedBytes = GuardRowSize(t);
         t.At(DateTimeToMicros(value));
-        OnRowCommitted(t);
+        OnRowCommitted(t, committedBytes);
         FlushIfNecessary(ct);
     }
 
@@ -757,9 +1001,9 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender, IPooledSlotSende
         ThrowIfTerminal();
         GuardLastFlushNotSet();
         var t = EnsureCurrentTable();
-        GuardRowSize(t);
+        var committedBytes = GuardRowSize(t);
         t.At(value);
-        OnRowCommitted(t);
+        OnRowCommitted(t, committedBytes);
         FlushIfNecessary(ct);
     }
 
@@ -775,9 +1019,9 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender, IPooledSlotSende
         ThrowIfTerminal();
         GuardLastFlushNotSet();
         var t = EnsureCurrentTable();
-        GuardRowSize(t);
+        var committedBytes = GuardRowSize(t);
         t.AtNanos(timestampNanos);
-        OnRowCommitted(t);
+        OnRowCommitted(t, committedBytes);
         FlushIfNecessary(ct);
     }
 
@@ -1232,14 +1476,27 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender, IPooledSlotSende
         return configured < safeBudget ? configured : (int)safeBudget;
     }
 
-    private void GuardRowSize(QwpTableBuffer t)
+    // The designated timestamp is a single 8-byte fixed value; FinaliseRow's null-padding adds no
+    // buffered bytes (AppendNull leaves NonNullCount/FixedLen/StrLen unchanged). So the table's
+    // buffered total after t.At()/t.AtNanos() is exactly the pre-append total + this. Lets GuardRowSize
+    // and OnRowCommitted share one GetBufferedBytes() scan per row instead of two.
+    private const long DesignatedTimestampBytes = 8;
+
+    // Returns the table's buffered-byte total as it will be *after* the imminent t.At()/t.AtNanos()
+    // (measured pre-append + the designated timestamp), so the caller hands it straight to
+    // OnRowCommitted — one O(columns) GetBufferedBytes() scan per row instead of two.
+    private long GuardRowSize(QwpTableBuffer t)
     {
-        var cap = _engine.NegotiatedMaxBatchSize;
+        var buffered     = t.GetBufferedBytes() + DesignatedTimestampBytes;
+        var cap          = _engine.NegotiatedMaxBatchSize;
         var effectiveCap = cap > 0 ? cap : QwpConstants.MaxBatchBytes;
-        var rowBytes = t.GetBufferedBytes() - _currentTableSnapshotBytes;
+        var rowBytes     = buffered - _currentTableSnapshotBytes;
         // 10% margin matches EffectiveAutoFlushBytes: framing overhead pushes a raw-cap-sized row over.
         var safeBudget = (long)effectiveCap * 9 / 10;
-        if (rowBytes <= safeBudget) return;
+        if (rowBytes <= safeBudget)
+        {
+            return buffered;
+        }
         t.CancelCurrentRow();
         throw new IngressError(ErrorCode.InvalidApiCall, cap > 0
             ? $"row too large for server batch cap [rowBytes={rowBytes}, serverMaxBatchSize={cap}]"
@@ -1247,10 +1504,13 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender, IPooledSlotSende
               + $"protocolMaxBatchSize={QwpConstants.MaxBatchBytes}, server cap not yet negotiated]");
     }
 
-    private void OnRowCommitted(QwpTableBuffer t)
+    private void OnRowCommitted(QwpTableBuffer t, long bufferedNow)
     {
+        // Guards the "designated append adds exactly DesignatedTimestampBytes" invariant that lets us
+        // skip the second GetBufferedBytes() scan; DEBUG-only, compiled out of release.
+        System.Diagnostics.Debug.Assert(bufferedNow == t.GetBufferedBytes(),
+            "designated-timestamp append must add exactly DesignatedTimestampBytes buffered bytes");
         _runningRowCount++;
-        var bufferedNow = t.GetBufferedBytes();
         _pendingBytes += bufferedNow - _currentTableSnapshotBytes;
         _currentTableSnapshotBytes = bufferedNow;
     }

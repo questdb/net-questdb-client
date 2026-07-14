@@ -932,14 +932,16 @@ internal sealed class QwpTableBuffer
     {
         // String cold path: same resolution as the span overload, but a brand-new column stores the
         // caller's exact string as its Name so the reference-equality fast path can hit next time.
+        // Null/empty is rejected up front (as the span path does for an empty span) so a null name
+        // throws the same InvalidName rather than an ArgumentNullException from Dictionary.TryGetValue.
+        if (string.IsNullOrEmpty(columnName))
+        {
+            throw new IngressError(ErrorCode.InvalidName, "column name must not be empty");
+        }
+
         if (_columnIndex.TryGetValue(columnName, out var existing))
         {
             return TouchExisting(existing);
-        }
-
-        if (columnName.Length == 0)
-        {
-            throw new IngressError(ErrorCode.InvalidName, "column name must not be empty");
         }
 
         return AddColumn(columnName);

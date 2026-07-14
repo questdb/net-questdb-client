@@ -51,6 +51,20 @@ public class QwpSymbolDictionaryTests
     }
 
     [Test]
+    public void Add_NullString_MatchesEmptySpanAndDoesNotThrow()
+    {
+        var d = new QwpSymbolDictionary();
+        // A (string)null must behave like the span overload's empty span (null-to-empty), not throw
+        // ArgumentNullException from Dictionary.TryGetValue.
+        var idNull = d.Add((string)null!);
+        Assert.That(idNull, Is.EqualTo(0));
+        Assert.That(d.Add(default(ReadOnlySpan<char>)), Is.EqualTo(idNull), "empty span should map to the same id");
+        Assert.That(d.Add(string.Empty), Is.EqualTo(idNull), "empty string should map to the same id");
+        Assert.That(d.GetSymbol(idNull), Is.EqualTo(string.Empty));
+        Assert.That(d.Count, Is.EqualTo(1));
+    }
+
+    [Test]
     public void DeltaIsAllEntriesUntilFirstCommit()
     {
         var d = new QwpSymbolDictionary();

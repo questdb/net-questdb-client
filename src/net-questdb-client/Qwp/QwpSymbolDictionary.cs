@@ -125,6 +125,11 @@ internal sealed class QwpSymbolDictionary
     /// </summary>
     public int Add(string value)
     {
+        // A (string)null passed to the span overload arrives as an empty span and is stored as the
+        // empty symbol; match that here rather than letting Dictionary.TryGetValue / GetByteCount throw
+        // ArgumentNullException on a null key.
+        value ??= string.Empty;
+
         if (_ids.TryGetValue(value, out var id))
         {
             return id;

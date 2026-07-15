@@ -25,22 +25,29 @@
 namespace QuestDB.Enums;
 
 /// <summary>
-///     Policy applied by the client when a <see cref="SenderErrorCategory" /> fires.
-///     <see cref="SenderErrorCategory.ProtocolViolation" /> and
-///     <see cref="SenderErrorCategory.Unknown" /> are forced <see cref="Halt" />.
+///     Policy applied by the client when a <see cref="SenderErrorCategory" /> fires. The client
+///     never silently drops data: a rejection is either retried or latched terminal with the
+///     bytes preserved in the store-and-forward log.
+///     <see cref="SenderErrorCategory.SchemaMismatch" />, <see cref="SenderErrorCategory.ParseError" />,
+///     <see cref="SenderErrorCategory.SecurityError" /> and
+///     <see cref="SenderErrorCategory.ProtocolViolation" /> are forced <see cref="Terminal" />;
+///     <see cref="SenderErrorCategory.Unknown" /> is fail-open <see cref="Retriable" />.
 /// </summary>
 public enum SenderErrorPolicy
 {
     /// <summary>
-    ///     Drop the rejected batch from the SF disk store (advance the ack watermark past it)
-    ///     and continue draining subsequent batches. The data is lost from the sender's perspective.
+    ///     Recycle the connection and replay the rejected frame from the ack watermark
+    ///     (<c>ackedFsn+1</c>) through the reconnect machinery. The watermark does not advance —
+    ///     nothing is dropped. A frame that deterministically kills the connection is escalated to
+    ///     <see cref="Terminal" /> by the poison-frame detector, not by dropping it.
     /// </summary>
-    DropAndContinue,
+    Retriable,
 
     /// <summary>
-    ///     Latch the error as terminal. The next producer-thread API call throws
-    ///     <see cref="Utils.LineSenderServerException" />. The sender does not drain further
-    ///     until the caller closes and rebuilds it.
+    ///     Latch the error as terminal — the rejection is deterministic under byte-identical replay.
+    ///     The next producer-thread API call throws <see cref="Utils.LineSenderServerException" />;
+    ///     the rejected bytes stay in the SF store. The sender does not drain further until the
+    ///     caller closes and rebuilds it.
     /// </summary>
-    Halt,
+    Terminal,
 }

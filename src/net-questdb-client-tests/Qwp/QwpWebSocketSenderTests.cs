@@ -538,9 +538,13 @@ public class QwpWebSocketSenderTests
     [TestCase(System.Net.WebSockets.WebSocketCloseStatus.PolicyViolation)]
     [TestCase(System.Net.WebSockets.WebSocketCloseStatus.MessageTooBig)]
     [TestCase(System.Net.WebSockets.WebSocketCloseStatus.MandatoryExtension)]
-    public async Task ServerClosesWithProtocolViolation_TerminatesWithoutReconnect(
+    public async Task ServerClosesWithAnyCode_IsReconnectEligible(
         System.Net.WebSockets.WebSocketCloseStatus status)
     {
+        // NACK policy v2: WS close codes carry no policy semantics — every close is reconnect-eligible.
+        // A frame that deterministically kills the connection is caught behaviorally by the poison
+        // detector, not by a close-code list. Here we hold the poison detector off (huge threshold +
+        // dwell) to assert the close code itself no longer terminalises the sender.
         await using var server = new DummyQwpServer(new DummyQwpServerOptions
         {
             FrameHandler = _ => BuildOkAck(0),
@@ -551,55 +555,18 @@ public class QwpWebSocketSenderTests
         await server.StartAsync();
 
         var sender = NewSender(server,
-            "auto_flush=off;reconnect_initial_backoff_millis=10;reconnect_max_backoff_millis=50;reconnect_max_duration_millis=5000;");
+            "auto_flush=off;reconnect_initial_backoff_millis=10;reconnect_max_backoff_millis=50;" +
+            "max_frame_rejections=100000;poison_min_escalation_window_millis=600000;");
         try
         {
             sender.Table("t").Column("v", 1L).At(DateTime.UtcNow);
+            try { sender.Send(); } catch (IngressError) { /* first send may race the close */ }
 
-            // Standalone Send drains, so the protocol-violation close may surface at this first Send
-            // (it races the OK-ack), or on a later Send once the close reaches the engine. Handle both.
-            IngressError? caught = null;
-            try
-            {
-                sender.Send();
-            }
-            catch (IngressError ex)
-            {
-                caught = ex;
-            }
-
-            await WaitFor(() => server.ReceivedFrames.Count >= 1);
-
-            // Once the protocol-violation close hits the engine, an API call must surface a terminal
-            // IngressError carrying ProtocolViolation — without sitting in reconnect.
-            if (caught is null)
-            {
-                await WaitFor(() =>
-                {
-                    try
-                    {
-                        sender.Table("t").Column("v", 2L).At(DateTime.UtcNow);
-                        sender.Send();
-                        return false;
-                    }
-                    catch (IngressError ex)
-                    {
-                        caught = ex;
-                        return true;
-                    }
-                }, timeoutMs: 5000);
-            }
-
-            Assert.That(caught, Is.Not.Null);
-            var rootCode = caught!.code is ErrorCode.ProtocolViolation
-                ? caught.code
-                : (caught.InnerException as IngressError)?.code ?? caught.code;
-            Assert.That(rootCode, Is.EqualTo(ErrorCode.ProtocolViolation));
-
-            // No reconnect attempts: the engine must terminate after the single upgrade. Frame count
-            // races with the in-flight close so isn't a stable signal — UpgradeCount is.
-            await Task.Delay(200);
-            Assert.That(server.UpgradeCount, Is.EqualTo(1));
+            // The engine must reconnect after the close (not terminate on the close code): the server
+            // accepts-then-closes on every connection, so a second upgrade proves reconnect-eligibility.
+            await WaitFor(() => server.UpgradeCount >= 2, timeoutMs: 5000);
+            Assert.That(server.UpgradeCount, Is.GreaterThanOrEqualTo(2),
+                "every WS close code is now a transport event → the sender must reconnect");
         }
         finally
         {
@@ -608,8 +575,11 @@ public class QwpWebSocketSenderTests
     }
 
     [Test]
-    public async Task ServerClosesAfterFirstFrame_ReconnectsThenTerminalAfterBudget()
+    public async Task ServerClosesAfterEachFrame_ReconnectsForever_StaysUsable()
     {
+        // The server acks each frame then closes the socket. Invariant B: the sender reconnects
+        // forever and never terminalises on the (now sync-initial-only) reconnect budget — sends
+        // keep working past what used to be a budget-exhaustion terminal.
         await using var server = new DummyQwpServer(new DummyQwpServerOptions
         {
             FrameHandler = _ => BuildOkAck(0),
@@ -625,21 +595,16 @@ public class QwpWebSocketSenderTests
         sender.Send();
 
         await WaitFor(() => server.ReceivedFrames.Count >= 1);
+        await Task.Delay(700); // well past reconnect_max_duration_millis (500ms)
 
-        // Server is gone after frame 1; sender retries through the reconnect budget then terminalises.
-        await WaitFor(() =>
+        // A later send still succeeds — the sender is not terminal and reconnected transparently.
+        Assert.DoesNotThrow(() =>
         {
-            try
-            {
-                sender.Table("t").Column("v", 2L).At(DateTime.UtcNow);
-                sender.Send();
-                return false;
-            }
-            catch (IngressError)
-            {
-                return true;
-            }
-        }, timeoutMs: 5000);
+            sender.Table("t").Column("v", 2L).At(DateTime.UtcNow);
+            sender.Send();
+        });
+        Assert.That(server.ReceivedFrames.Count, Is.GreaterThanOrEqualTo(2),
+            "the second frame is delivered after a reconnect — the sender never terminalised on the budget");
     }
 
     private static System.Security.Cryptography.X509Certificates.X509Certificate2 NewSelfSignedCertificate(string subject)

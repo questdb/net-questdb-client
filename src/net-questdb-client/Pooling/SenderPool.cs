@@ -49,6 +49,9 @@ internal sealed class SenderPool
     private readonly SemaphoreSlim _capacity;
     private readonly CancellationTokenSource _closeCts = new();
     private readonly string? _confStr;
+    private readonly QuestDB.Utils.SenderErrorHandler? _errorHandler;
+    private readonly QuestDB.Senders.ISenderConnectionListener? _connectionListener;
+    private readonly QuestDB.Senders.IBackgroundDrainerListener? _drainerListener;
     private readonly object _gate = new();
     private readonly TimeSpan _idleTimeout;
     private readonly TimeSpan _maxLifetime;
@@ -98,15 +101,21 @@ internal sealed class SenderPool
     /// <summary>Production constructor: pool sizes come from <paramref name="poolConfig" />, senders are
     ///     built from <paramref name="confStr" />. <paramref name="forceWsAsyncConnect" /> is set by the
     ///     <c>lazy_connect</c> facade path so pooled ws senders connect asynchronously.</summary>
-    internal SenderPool(SenderOptions poolConfig, string confStr, bool forceWsAsyncConnect = false)
-        : this(poolConfig, confStr, null, forceWsAsyncConnect)
+    internal SenderPool(SenderOptions poolConfig, string confStr, bool forceWsAsyncConnect = false,
+        QuestDB.Utils.SenderErrorHandler? errorHandler = null,
+        QuestDB.Senders.ISenderConnectionListener? connectionListener = null,
+        QuestDB.Senders.IBackgroundDrainerListener? drainerListener = null)
+        : this(poolConfig, confStr, null, forceWsAsyncConnect, errorHandler, connectionListener, drainerListener)
     {
     }
 
     /// <summary>Test seam: inject a sender factory so unit tests need no live server. <paramref name="confStr" />
     ///     may be null when a factory is supplied.</summary>
     internal SenderPool(SenderOptions poolConfig, string? confStr, Func<int, ISender>? senderFactory,
-        bool forceWsAsyncConnect = false)
+        bool forceWsAsyncConnect = false,
+        QuestDB.Utils.SenderErrorHandler? errorHandler = null,
+        QuestDB.Senders.ISenderConnectionListener? connectionListener = null,
+        QuestDB.Senders.IBackgroundDrainerListener? drainerListener = null)
     {
         // Re-validate: builder methods may have mutated min/max after the connect-string parse.
         poolConfig.ValidatePoolOptions();
@@ -120,6 +129,9 @@ internal sealed class SenderPool
         _confStr = confStr;
         _senderFactory = senderFactory ?? CreateDefaultInner;
         _forceWsAsyncConnect = forceWsAsyncConnect;
+        _errorHandler = errorHandler;
+        _connectionListener = connectionListener;
+        _drainerListener = drainerListener;
         _capacity = new SemaphoreSlim(_max, _max);
 
         _storeAndForward = poolConfig.IsWebSocket() && !string.IsNullOrEmpty(poolConfig.sf_dir);
@@ -987,6 +999,16 @@ internal sealed class SenderPool
         {
             options.initial_connect_mode = InitialConnectMode.async;
         }
+        // Programmatic ingest callbacks are ws-only; setting them on an http/tcp options would trip
+        // the ws-only-key validation. The per-slot re-parse above drops any that rode the original
+        // options, so re-apply the facade-registered delegates here.
+        if (options.IsWebSocket())
+        {
+            if (_errorHandler is not null) options.error_handler = _errorHandler;
+            if (_connectionListener is not null) options.ConnectionListener = _connectionListener;
+            if (_drainerListener is not null) options.DrainerListener = _drainerListener;
+        }
+
         if (_storeAndForward)
         {
             if (slotIndex < 0)

@@ -101,7 +101,7 @@ public class QwpSenderErrorDispatcherTests
 
     private static SenderError MakeError(long fsn) => new(
         category: SenderErrorCategory.ProtocolViolation,
-        appliedPolicy: SenderErrorPolicy.DropAndContinue,
+        appliedPolicy: SenderErrorPolicy.Terminal,
         serverStatusByte: SenderError.NoStatusByte,
         serverMessage: null,
         messageSequence: SenderError.NoMessageSequence,

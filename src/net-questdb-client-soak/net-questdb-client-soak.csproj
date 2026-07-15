@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+    <PropertyGroup>
+        <RootNamespace>QuestDB.Soak</RootNamespace>
+        <Nullable>enable</Nullable>
+        <ImplicitUsings>enable</ImplicitUsings>
+        <Title>QuestDB client - Soak / profiling harness</Title>
+        <Description>Long-running load generator for profiling the QWP WebSocket sender, pool and store-and-forward</Description>
+        <!-- ws:: / QWP and the egress query client require net7.0+. -->
+        <TargetFrameworks>net8.0;net9.0;net10.0</TargetFrameworks>
+        <CheckEolTargetFramework>false</CheckEolTargetFramework>
+        <OutputType>Exe</OutputType>
+        <ServerGarbageCollection>true</ServerGarbageCollection>
+        <ConcurrentGarbageCollection>true</ConcurrentGarbageCollection>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <ProjectReference Include="..\net-questdb-client\net-questdb-client.csproj"/>
+    </ItemGroup>
+
+</Project>

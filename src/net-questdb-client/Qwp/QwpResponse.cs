@@ -143,7 +143,7 @@ internal readonly struct QwpResponse
     // Cancelled (0x0A) / LimitExceeded (0x0B) are defined for egress QUERY_ERROR; they must not
     // appear on the ingest reply channel. Other undefined bytes are left through so future status
     // codes the server adds are forward-compatible — the engine routes them via the Unknown
-    // category which always halts (see QwpErrorClassifier).
+    // category, which fails open to Retriable (see QwpErrorClassifier).
     private static bool IsKnownEgressOnlyStatus(QwpStatusCode status)
     {
         return status is QwpStatusCode.Cancelled or QwpStatusCode.LimitExceeded;

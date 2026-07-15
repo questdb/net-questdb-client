@@ -122,6 +122,24 @@ public interface IQwpWebSocketSender : ISender
     /// <summary>Append a LONG256 value (256-bit unsigned integer) to the named column.</summary>
     IQwpWebSocketSender ColumnLong256(ReadOnlySpan<char> name, System.Numerics.BigInteger value);
 
+    // String-name overloads: default to span, QwpWebSocketSender overrides to carry name identity.
+    IQwpWebSocketSender ColumnBinary(string name, ReadOnlySpan<byte> value) => ColumnBinary(name.AsSpan(), value);
+
+    IQwpWebSocketSender ColumnIPv4(string name, System.Net.IPAddress addr) => ColumnIPv4(name.AsSpan(), addr);
+
+    IQwpWebSocketSender ColumnByte(string name, sbyte value) => ColumnByte(name.AsSpan(), value);
+
+    IQwpWebSocketSender ColumnShort(string name, short value) => ColumnShort(name.AsSpan(), value);
+
+    IQwpWebSocketSender ColumnFloat(string name, float value) => ColumnFloat(name.AsSpan(), value);
+
+    IQwpWebSocketSender ColumnDate(string name, long millisSinceEpoch) => ColumnDate(name.AsSpan(), millisSinceEpoch);
+
+    IQwpWebSocketSender ColumnGeohash(string name, ulong hash, int precisionBits) => ColumnGeohash(name.AsSpan(), hash, precisionBits);
+
+    IQwpWebSocketSender ColumnLong256(string name, System.Numerics.BigInteger value) => ColumnLong256(name.AsSpan(), value);
+
+
     /// <summary>
     ///     Number of <see cref="QuestDB.Utils.SenderError" /> notifications dropped because the
     ///     async error inbox was full. Non-zero indicates the user-supplied error_handler can't

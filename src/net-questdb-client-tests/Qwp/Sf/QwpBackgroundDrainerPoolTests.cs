@@ -26,6 +26,7 @@ using NUnit.Framework;
 using QuestDB.Enums;
 using QuestDB.Qwp;
 using QuestDB.Qwp.Sf;
+using QuestDB.Senders;
 using QuestDB.Utils;
 
 namespace net_questdb_client_tests.Qwp.Sf;
@@ -335,6 +336,217 @@ public class QwpBackgroundDrainerPoolTests
         finally
         {
             slotLock.Dispose();
+        }
+    }
+
+    // ---- DrainerListener (WP7 / M5) observability -----------------------------------------------
+    // The outcome-path tests above assert only side effects (.failed sentinel presence, lock release).
+    // These pin the emitted BackgroundDrainerEvent stream itself — kind sequence, wired Cause, and
+    // SlotDirectory — for every terminal outcome, so a mis-wired kind/cause can't ship undetected.
+
+    [Test]
+    public async Task Enqueue_Success_EmitsSlotAdoptedThenDrainCompleted()
+    {
+        var slotDir = Path.Combine(_root, "slot");
+        var slotLock = QwpSlotLock.Acquire(slotDir);
+        var listener = new RecordingDrainerListener();
+
+        using var pool = new QwpBackgroundDrainerPool(2, new SuccessDrainer(), listener: listener);
+        pool.Enqueue(slotLock);
+        await pool.WaitForAllAsync();
+
+        var events = listener.Events;
+        Assert.That(events.Select(e => e.Kind), Is.EqualTo(new[]
+        {
+            BackgroundDrainerEventKind.SlotAdopted,
+            BackgroundDrainerEventKind.DrainCompleted,
+        }), "success emits adoption then completion, in that order");
+        Assert.That(events.All(e => e.SlotDirectory == slotDir), Is.True);
+        Assert.That(events.All(e => e.Cause is null), Is.True, "adopted/completed carry no cause");
+        Assert.That(events.All(e => e.Timestamp != default), Is.True);
+    }
+
+    [Test]
+    public async Task Enqueue_TransientFault_EmitsDrainRetryingWithCause_AndNoSentinel()
+    {
+        // TimeoutException is a retryable drain fault: DrainRetrying, no .failed sentinel, cause wired.
+        var slotDir = Path.Combine(_root, "slot");
+        var slotLock = QwpSlotLock.Acquire(slotDir);
+        var cause = new TimeoutException("close_flush_timeout (5000 ms) expired with un-acked frames pending");
+        var listener = new RecordingDrainerListener();
+
+        using var pool = new QwpBackgroundDrainerPool(2, new ThrowingDrainer(cause), listener: listener);
+        pool.Enqueue(slotLock);
+        await pool.WaitForAllAsync();
+
+        var events = listener.Events;
+        Assert.That(events.Select(e => e.Kind), Is.EqualTo(new[]
+        {
+            BackgroundDrainerEventKind.SlotAdopted,
+            BackgroundDrainerEventKind.DrainRetrying,
+        }), "a transient fault emits adoption then DrainRetrying (never Quarantined)");
+
+        var terminal = events[^1];
+        Assert.That(terminal.Cause, Is.SameAs(cause), "the transient fault must be surfaced as the event cause");
+        Assert.That(terminal.SlotDirectory, Is.EqualTo(slotDir));
+        Assert.That(File.Exists(Path.Combine(slotDir, ".failed")), Is.False,
+            "DrainRetrying must not accompany a permanent sentinel");
+    }
+
+    [Test]
+    public async Task Enqueue_DeterministicTerminal_EmitsDrainQuarantinedWithCause_AndSentinel()
+    {
+        // A schema-mismatch is a deterministic terminal: DrainQuarantined + .failed sentinel, cause wired.
+        var slotDir = Path.Combine(_root, "slot");
+        var slotLock = QwpSlotLock.Acquire(slotDir);
+        var cause = new QwpException(QwpStatusCode.SchemaMismatch, sequence: 0, message: "schema-mismatch");
+        var listener = new RecordingDrainerListener();
+
+        using var pool = new QwpBackgroundDrainerPool(2, new ThrowingDrainer(cause), listener: listener);
+        pool.Enqueue(slotLock);
+        await pool.WaitForAllAsync();
+
+        var events = listener.Events;
+        Assert.That(events.Select(e => e.Kind), Is.EqualTo(new[]
+        {
+            BackgroundDrainerEventKind.SlotAdopted,
+            BackgroundDrainerEventKind.DrainQuarantined,
+        }), "a deterministic terminal emits adoption then DrainQuarantined (never Retrying)");
+
+        var terminal = events[^1];
+        Assert.That(terminal.Cause, Is.SameAs(cause), "the terminal fault must be surfaced as the event cause");
+        Assert.That(terminal.SlotDirectory, Is.EqualTo(slotDir));
+        Assert.That(File.Exists(Path.Combine(slotDir, ".failed")), Is.True,
+            "DrainQuarantined must accompany the .failed sentinel");
+    }
+
+    [Test]
+    public async Task Enqueue_CooperativelyCancelled_EmitsSlotAdoptedThenDrainCancelled()
+    {
+        var slotDir = Path.Combine(_root, "slot");
+        var slotLock = QwpSlotLock.Acquire(slotDir);
+        var drainer = new GatedDrainer();
+        var listener = new RecordingDrainerListener();
+        using var cts = new CancellationTokenSource();
+
+        using var pool = new QwpBackgroundDrainerPool(2, drainer, listener: listener);
+        pool.Enqueue(slotLock, cts.Token);
+        await drainer.WaitForInFlightAsync(1); // drain is parked inside DrainAsync → SlotAdopted already fired.
+
+        // Cancel WITHOUT releasing the gate: the only way out of the wait is cancellation, so the
+        // outcome is deterministically DrainCancelled (never a racy DrainCompleted).
+        cts.Cancel();
+
+        try { await pool.WaitForAllAsync(); }
+        catch (OperationCanceledException) { /* expected — the drain task faults with OCE */ }
+
+        var events = listener.Events;
+        Assert.That(events.Select(e => e.Kind), Is.EqualTo(new[]
+        {
+            BackgroundDrainerEventKind.SlotAdopted,
+            BackgroundDrainerEventKind.DrainCancelled,
+        }), "cancellation of a running drain emits adoption then DrainCancelled");
+        Assert.That(events[^1].Cause, Is.Null, "cancellation carries no cause");
+        Assert.That(events[^1].SlotDirectory, Is.EqualTo(slotDir));
+    }
+
+    [Test]
+    public async Task Enqueue_CancelledBeforeSlotAcquired_EmitsNothingForThatSlot()
+    {
+        // Adoption is signalled on the worker thread only once the drain actually starts (after the
+        // concurrency semaphore is acquired). A slot cancelled while still queued must emit no events.
+        var drainer = new GatedDrainer();
+        var listener = new RecordingDrainerListener();
+        using var pool = new QwpBackgroundDrainerPool(1, drainer, listener: listener); // single slot
+
+        var slotA = Path.Combine(_root, "slot-a");
+        var slotB = Path.Combine(_root, "slot-b");
+        var lockA = QwpSlotLock.Acquire(slotA);
+        var lockB = QwpSlotLock.Acquire(slotB);
+        using var ctsB = new CancellationTokenSource();
+
+        pool.Enqueue(lockA); // A takes the only slot and parks in DrainAsync.
+        await drainer.WaitForInFlightAsync(1);
+        pool.Enqueue(lockB, ctsB.Token); // B blocks in _slots.WaitAsync — no slot free.
+        ctsB.Cancel(); // B is cancelled while queued, before it ever adopts.
+
+        drainer.ReleaseAll(); // let A finish cleanly.
+        try { await pool.WaitForAllAsync(); }
+        catch (OperationCanceledException) { /* B faulted with OCE from the queued wait */ }
+
+        var events = listener.Events;
+        Assert.That(events.Any(e => e.SlotDirectory == slotB), Is.False,
+            "a slot cancelled before its drain started must emit no events");
+        Assert.That(events.Select(e => e.Kind), Is.EqualTo(new[]
+        {
+            BackgroundDrainerEventKind.SlotAdopted,
+            BackgroundDrainerEventKind.DrainCompleted,
+        }), "only the slot that actually ran (A) is reported");
+        Assert.That(events.All(e => e.SlotDirectory == slotA), Is.True);
+    }
+
+    [Test]
+    public async Task Enqueue_NoListener_DrainStillCompletes()
+    {
+        // The listener is optional; a null listener must not perturb the drain outcome.
+        var slotDir = Path.Combine(_root, "slot");
+        var slotLock = QwpSlotLock.Acquire(slotDir);
+        var drainer = new SuccessDrainer();
+
+        using var pool = new QwpBackgroundDrainerPool(2, drainer, listener: null);
+        pool.Enqueue(slotLock);
+        await pool.WaitForAllAsync();
+
+        Assert.That(drainer.Drained, Has.Member(slotDir));
+    }
+
+    [Test]
+    public async Task Enqueue_ThrowingListener_IsContained_AndDrainStillReleasesLock()
+    {
+        // A slow/throwing listener must never fault the drain or leak out of RunDrainAsync.
+        var slotDir = Path.Combine(_root, "slot");
+        var slotLock = QwpSlotLock.Acquire(slotDir);
+        var listener = new ThrowingDrainerListener();
+
+        using var pool = new QwpBackgroundDrainerPool(2, new SuccessDrainer(), listener: listener);
+        pool.Enqueue(slotLock);
+        Assert.DoesNotThrowAsync(async () => await pool.WaitForAllAsync());
+
+        Assert.That(listener.InvocationCount, Is.EqualTo(2), "both adoption and completion still fired");
+        // Drain succeeded despite the throwing listener → lock released, re-acquirable.
+        using var reacquired = QwpSlotLock.Acquire(slotDir);
+        Assert.That(reacquired.SlotDirectory, Is.EqualTo(slotDir));
+    }
+
+    private sealed class RecordingDrainerListener : IBackgroundDrainerListener
+    {
+        private readonly List<BackgroundDrainerEvent> _events = new();
+        private readonly object _lock = new();
+
+        public IReadOnlyList<BackgroundDrainerEvent> Events
+        {
+            get
+            {
+                lock (_lock) { return _events.ToArray(); }
+            }
+        }
+
+        public void OnEvent(BackgroundDrainerEvent evt)
+        {
+            lock (_lock) { _events.Add(evt); }
+        }
+    }
+
+    private sealed class ThrowingDrainerListener : IBackgroundDrainerListener
+    {
+        private int _invocationCount;
+
+        public int InvocationCount => Volatile.Read(ref _invocationCount);
+
+        public void OnEvent(BackgroundDrainerEvent evt)
+        {
+            Interlocked.Increment(ref _invocationCount);
+            throw new InvalidOperationException("listener blew up");
         }
     }
 

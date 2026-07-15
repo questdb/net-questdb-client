@@ -40,22 +40,30 @@ internal static class QwpErrorClassifier
             _ => SenderErrorCategory.Unknown,
         };
 
+    // NACK policy v2: never drop. WRITE_ERROR / INTERNAL_ERROR retry (a transient server-side
+    // condition), UNKNOWN retries fail-open (a future status byte must not kill old clients), and
+    // only rejections that are deterministic under byte-identical replay latch terminal.
     public static SenderErrorPolicy DefaultPolicy(SenderErrorCategory category) =>
         category switch
         {
-            SenderErrorCategory.SchemaMismatch => SenderErrorPolicy.DropAndContinue,
-            SenderErrorCategory.WriteError => SenderErrorPolicy.DropAndContinue,
-            _ => SenderErrorPolicy.Halt,
+            SenderErrorCategory.WriteError => SenderErrorPolicy.Retriable,
+            SenderErrorCategory.InternalError => SenderErrorPolicy.Retriable,
+            SenderErrorCategory.Unknown => SenderErrorPolicy.Retriable,
+            _ => SenderErrorPolicy.Terminal,
         };
 
+    // Categories whose default is Terminal are deterministic rejections — a user resolver may not
+    // downgrade them to Retriable (that would spin the reconnect machinery on a poison frame
+    // forever). Retriable-default categories may be biased up to Terminal (e.g. on_write_error=halt).
     public static SenderErrorPolicy ResolvePolicy(
         SenderErrorCategory category,
         SenderErrorPolicyResolver? resolver)
     {
-        if (category is SenderErrorCategory.ProtocolViolation or SenderErrorCategory.Unknown)
+        var fallback = DefaultPolicy(category);
+        if (fallback == SenderErrorPolicy.Terminal)
         {
-            return SenderErrorPolicy.Halt;
+            return SenderErrorPolicy.Terminal;
         }
-        return resolver?.Invoke(category) ?? DefaultPolicy(category);
+        return resolver?.Invoke(category) ?? fallback;
     }
 }

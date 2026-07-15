@@ -25,35 +25,29 @@
 namespace QuestDB.Senders;
 
 /// <summary>
-///     Categorisation of <see cref="SenderConnectionEvent" /> transitions observed by the QWP
-///     ingest client.
+///     Categorisation of a <see cref="BackgroundDrainerEvent" /> emitted while a store-and-forward
+///     sender adopts and drains a crashed sibling's slot directory (<c>drain_orphans=on</c>).
 /// </summary>
-public enum SenderConnectionEventKind
+public enum BackgroundDrainerEventKind
 {
-    /// <summary>The very first successful connect of this sender's lifetime.</summary>
-    Connected,
+    /// <summary>An orphaned slot's lock was claimed and the slot was queued for a background drain.</summary>
+    SlotAdopted,
 
-    /// <summary>The active wire connection dropped and the reconnect loop is about to start.</summary>
-    Disconnected,
-
-    /// <summary>A reconnect attempt succeeded (against any endpoint).</summary>
-    Reconnected,
+    /// <summary>The slot drained cleanly: every un-acked frame was delivered and the segment files unlinked.</summary>
+    DrainCompleted,
 
     /// <summary>
-    ///     A reconnect attempt succeeded against an endpoint different from the previously-active
-    ///     one. Mutually exclusive with <see cref="Reconnected" />.
+    ///     A <b>transient</b> failure (drain timeout, server outage, reconnect-budget exhaustion) left the
+    ///     slot un-drained. No sentinel is dropped; the slot is left for re-adoption on a later sweep.
     /// </summary>
-    FailedOver,
-
-    /// <summary>A single endpoint connect or upgrade attempt failed; client will try the next.</summary>
-    EndpointAttemptFailed,
-
-    /// <summary>Every endpoint in the configured address list was attempted and none accepted.</summary>
-    AllEndpointsUnreachable,
+    DrainRetrying,
 
     /// <summary>
-    ///     Terminal: server-rejected credentials. The sender will halt; the next producer-thread API
-    ///     call surfaces an <see cref="QuestDB.Utils.IngressError" />.
+    ///     A <b>deterministic</b> terminal failure (auth reject, protocol / poison-frame violation, corrupt
+    ///     segments). A <c>.failed</c> sentinel is written so later sweeps skip the slot for manual inspection.
     /// </summary>
-    AuthFailed,
+    DrainQuarantined,
+
+    /// <summary>The drain was cancelled (sender shutdown). The slot is left intact for a retry on next startup.</summary>
+    DrainCancelled,
 }

@@ -96,6 +96,11 @@ public class Program
         BenchmarkRunner.Run<BenchLatencyWs>(config);
     }
 
+    public static void RunIngressLatencyWsBench(ManualConfig config)
+    {
+        BenchmarkRunner.Run<BenchIngressLatencyWs>(config);
+    }
+
     public static void RunSfThroughputBench(ManualConfig config)
     {
         BenchmarkRunner.Run<BenchSfThroughput>(config);

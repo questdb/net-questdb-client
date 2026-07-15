@@ -53,6 +53,8 @@ internal sealed class QwpBackgroundDrainer : IQwpSlotDrainer
     private readonly long _segmentCapacity;
     private readonly TimeSpan _drainTimeout;
     private readonly bool _durableAckMode;
+    private readonly int _maxFrameRejections;
+    private readonly TimeSpan? _poisonMinEscalationWindow;
 
     // Per-drain context isolates host-health state across concurrent drains; the foreground engine
     // and each pooled drainer task get their own tracker so a BeginRound by one does not clear the
@@ -62,7 +64,9 @@ internal sealed class QwpBackgroundDrainer : IQwpSlotDrainer
         QwpReconnectPolicy reconnectPolicy,
         long segmentCapacity,
         TimeSpan drainTimeout,
-        bool durableAckMode = false)
+        bool durableAckMode = false,
+        int maxFrameRejections = 4,
+        TimeSpan? poisonMinEscalationWindow = null)
     {
         ArgumentNullException.ThrowIfNull(contextBuilder);
         ArgumentNullException.ThrowIfNull(reconnectPolicy);
@@ -81,6 +85,8 @@ internal sealed class QwpBackgroundDrainer : IQwpSlotDrainer
         _segmentCapacity = segmentCapacity;
         _drainTimeout = drainTimeout;
         _durableAckMode = durableAckMode;
+        _maxFrameRejections = maxFrameRejections;
+        _poisonMinEscalationWindow = poisonMinEscalationWindow;
     }
 
     public QwpBackgroundDrainer(
@@ -89,13 +95,17 @@ internal sealed class QwpBackgroundDrainer : IQwpSlotDrainer
         long segmentCapacity,
         TimeSpan drainTimeout,
         Func<bool>? skipBackoffPredicate = null,
-        bool durableAckMode = false)
+        bool durableAckMode = false,
+        int maxFrameRejections = 4,
+        TimeSpan? poisonMinEscalationWindow = null)
         : this(
             () => new DrainContext(transportFactory, skipBackoffPredicate),
             reconnectPolicy,
             segmentCapacity,
             drainTimeout,
-            durableAckMode)
+            durableAckMode,
+            maxFrameRejections,
+            poisonMinEscalationWindow)
     {
         ArgumentNullException.ThrowIfNull(transportFactory);
     }
@@ -126,7 +136,9 @@ internal sealed class QwpBackgroundDrainer : IQwpSlotDrainer
                 initialConnectMode: InitialConnectMode.off,
                 skipBackoffPredicate: ctx.SkipBackoffPredicate,
                 durableAckMode: _durableAckMode,
-                ackWatermark: watermark);
+                ackWatermark: watermark,
+                maxFrameRejections: _maxFrameRejections,
+                poisonMinEscalationWindow: _poisonMinEscalationWindow);
 
             if (ring.NextFsn > ring.OldestFsn)
             {

@@ -174,13 +174,112 @@ public interface ISender : IDisposable, IAsyncDisposable
     /// <returns>Itself</returns>
     public ISender Symbol(ReadOnlySpan<char> name, ReadOnlySpan<char> value);
 
+    // String-name overloads. The default implementations forward to the span versions, so HTTP/TCP
+    // senders need no change; QwpWebSocketSender overrides them to carry the caller's string identity
+    // down to its column resolver, where a stable/interned name matches by reference equality instead
+    // of a char-by-char compare. Prefer these when the column name is a constant string (fixed schema).
+    /// <inheritdoc cref="Symbol(ReadOnlySpan{char},ReadOnlySpan{char})" />
+    public ISender Symbol(string name, ReadOnlySpan<char> value) => Symbol(name.AsSpan(), value);
+
+    /// <inheritdoc cref="Symbol(ReadOnlySpan{char},ReadOnlySpan{char})" />
+    public ISender Symbol(string name, string value) => Symbol(name.AsSpan(), value.AsSpan());
+
+    /// <inheritdoc cref="Column(ReadOnlySpan{char},long)" />
+    public ISender Column(string name, long value) => Column(name.AsSpan(), value);
+
+    /// <inheritdoc cref="Column(ReadOnlySpan{char},int)" />
+    public ISender Column(string name, int value) => Column(name.AsSpan(), value);
+
+    /// <inheritdoc cref="Column(ReadOnlySpan{char},bool)" />
+    public ISender Column(string name, bool value) => Column(name.AsSpan(), value);
+
+    /// <inheritdoc cref="Column(ReadOnlySpan{char},double)" />
+    public ISender Column(string name, double value) => Column(name.AsSpan(), value);
+
+    /// <inheritdoc cref="Column(ReadOnlySpan{char},char)" />
+    public ISender Column(string name, char value) => Column(name.AsSpan(), value);
+
+    // Remaining string-name overloads (see the block above). Forward to the span versions by default;
+    // QwpWebSocketSender overrides them to keep the caller's name identity. NullableColumn forwards to
+    // the string Column so the identity survives the null check too.
+    /// <inheritdoc cref="Column(ReadOnlySpan{char},ReadOnlySpan{char})" />
+    public ISender Column(string name, ReadOnlySpan<char> value) => Column(name.AsSpan(), value);
+
+    /// <inheritdoc cref="Column(ReadOnlySpan{char},DateTime)" />
+    public ISender Column(string name, DateTime value) => Column(name.AsSpan(), value);
+
+    /// <inheritdoc cref="Column(ReadOnlySpan{char},DateTimeOffset)" />
+    public ISender Column(string name, DateTimeOffset value) => Column(name.AsSpan(), value);
+
+    /// <inheritdoc cref="ColumnNanos(ReadOnlySpan{char},long)" />
+    public ISender ColumnNanos(string name, long timestampNanos) => ColumnNanos(name.AsSpan(), timestampNanos);
+
+    /// <inheritdoc cref="Column(ReadOnlySpan{char},Guid)" />
+    public ISender Column(string name, Guid value) => Column(name.AsSpan(), value);
+
+    /// <inheritdoc cref="Column(ReadOnlySpan{char},decimal)" />
+    public ISender Column(string name, decimal value) => Column(name.AsSpan(), value);
+
+    /// <inheritdoc cref="Column(ReadOnlySpan{char},Array)" />
+    public ISender Column(string name, Array value) => Column(name.AsSpan(), value);
+
+    /// <inheritdoc cref="ColumnDecimal64(ReadOnlySpan{char},decimal,byte)" />
+    public ISender ColumnDecimal64(string name, decimal value, byte scale) => ColumnDecimal64(name.AsSpan(), value, scale);
+
+    /// <inheritdoc cref="ColumnDecimal128(ReadOnlySpan{char},decimal,byte)" />
+    public ISender ColumnDecimal128(string name, decimal value, byte scale) => ColumnDecimal128(name.AsSpan(), value, scale);
+
+    /// <inheritdoc cref="ColumnDecimal256(ReadOnlySpan{char},decimal,byte)" />
+    public ISender ColumnDecimal256(string name, decimal value, byte scale) => ColumnDecimal256(name.AsSpan(), value, scale);
+
+    /// <inheritdoc cref="ColumnDecimal128(ReadOnlySpan{char},long,long,byte)" />
+    public ISender ColumnDecimal128(string name, long lo, long hi, byte scale) => ColumnDecimal128(name.AsSpan(), lo, hi, scale);
+
+    /// <inheritdoc cref="ColumnDecimal256(ReadOnlySpan{char},long,long,long,long,byte)" />
+    public ISender ColumnDecimal256(string name, long l0, long l1, long l2, long l3, byte scale) => ColumnDecimal256(name.AsSpan(), l0, l1, l2, l3, scale);
+
+    /// <inheritdoc cref="Column{T}(ReadOnlySpan{char},ReadOnlySpan{T})" />
+    public ISender Column<T>(string name, ReadOnlySpan<T> value) where T : struct => Column<T>(name.AsSpan(), value);
+
+    /// <inheritdoc cref="Column{T}(ReadOnlySpan{char},IEnumerable{T},IEnumerable{int})" />
+    public ISender Column<T>(string name, IEnumerable<T> value, IEnumerable<int> shape) where T : struct => Column<T>(name.AsSpan(), value, shape);
+
+    /// <inheritdoc cref="NullableColumn(ReadOnlySpan{char},string)" />
+    public ISender NullableColumn(string name, string? value) => value != null ? Column(name, value) : this;
+
+    /// <inheritdoc cref="NullableColumn(ReadOnlySpan{char},long?)" />
+    public ISender NullableColumn(string name, long? value) => value.HasValue ? Column(name, value.Value) : this;
+
+    /// <inheritdoc cref="NullableColumn(ReadOnlySpan{char},bool?)" />
+    public ISender NullableColumn(string name, bool? value) => value.HasValue ? Column(name, value.Value) : this;
+
+    /// <inheritdoc cref="NullableColumn(ReadOnlySpan{char},double?)" />
+    public ISender NullableColumn(string name, double? value) => value.HasValue ? Column(name, value.Value) : this;
+
+    /// <inheritdoc cref="NullableColumn(ReadOnlySpan{char},DateTime?)" />
+    public ISender NullableColumn(string name, DateTime? value) => value.HasValue ? Column(name, value.Value) : this;
+
+    /// <inheritdoc cref="NullableColumn(ReadOnlySpan{char},DateTimeOffset?)" />
+    public ISender NullableColumn(string name, DateTimeOffset? value) => value.HasValue ? Column(name, value.Value) : this;
+
+    /// <inheritdoc cref="NullableColumn(ReadOnlySpan{char},decimal?)" />
+    public ISender NullableColumn(string name, decimal? value) => value.HasValue ? Column(name, value.Value) : this;
+
+    /// <inheritdoc cref="NullableColumn(ReadOnlySpan{char},Guid?)" />
+    public ISender NullableColumn(string name, Guid? value) => value.HasValue ? Column(name, value.Value) : this;
+
+    /// <inheritdoc cref="NullableColumn(ReadOnlySpan{char},char?)" />
+    public ISender NullableColumn(string name, char? value) => value.HasValue ? Column(name, value.Value) : this;
+
+    /// <inheritdoc cref="NullableColumn(ReadOnlySpan{char},Array)" />
+    public ISender NullableColumn(string name, Array? value) => value != null ? Column(name, value) : this;
+
+    /// <inheritdoc cref="NullableColumn{T}(ReadOnlySpan{char},IEnumerable{T},IEnumerable{int})" />
+    public ISender NullableColumn<T>(string name, IEnumerable<T>? value, IEnumerable<int>? shape) where T : struct
+        => value != null && shape != null ? Column(name, value, shape) : this;
+
     /// <summary>
-    ///     Adds a column (field) to the current row.
-    /// </summary>
-    /// <param name="name">The name of the column</param>
-    /// <param name="value">The value for the column</param>
-    /// <summary>
-    ///     Adds a column (field) with the specified string value to the current row.
+    ///     Adds a column (field) with the specified character-span value to the current row.
     /// </summary>
     /// <param name="name">The column name.</param>
     /// <param name="value">The column value as a character span.</param>

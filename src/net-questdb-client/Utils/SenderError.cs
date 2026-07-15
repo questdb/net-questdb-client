@@ -72,8 +72,9 @@ public sealed class SenderError
     public SenderErrorCategory Category { get; }
 
     /// <summary>
-    ///     The policy the I/O loop actually applied. <see cref="SenderErrorPolicy.DropAndContinue" />
-    ///     means the data was dropped; <see cref="SenderErrorPolicy.Halt" /> means a
+    ///     The policy the I/O loop actually applied. <see cref="SenderErrorPolicy.Retriable" />
+    ///     means the frame is replayed from the ack watermark (nothing dropped);
+    ///     <see cref="SenderErrorPolicy.Terminal" /> means a
     ///     <see cref="LineSenderServerException" /> will be thrown on the next producer-thread call.
     /// </summary>
     public SenderErrorPolicy AppliedPolicy { get; }
@@ -140,8 +141,11 @@ public delegate void SenderErrorHandler(SenderError error);
 /// <summary>
 ///     Callback for <see cref="SenderOptions.error_policy_resolver" />. Returns the
 ///     <see cref="SenderErrorPolicy" /> to apply for a given <see cref="SenderErrorCategory" />.
-///     <see cref="SenderErrorCategory.ProtocolViolation" /> and
-///     <see cref="SenderErrorCategory.Unknown" /> are forced <see cref="SenderErrorPolicy.Halt" />
-///     regardless of what the resolver returns.
+///     The Terminal-default categories (<see cref="SenderErrorCategory.SchemaMismatch" />,
+///     <see cref="SenderErrorCategory.ParseError" />, <see cref="SenderErrorCategory.SecurityError" />,
+///     <see cref="SenderErrorCategory.ProtocolViolation" />) are forced
+///     <see cref="SenderErrorPolicy.Terminal" /> regardless of what the resolver returns;
+///     <see cref="SenderErrorCategory.Unknown" /> is fail-open <see cref="SenderErrorPolicy.Retriable" />
+///     and the resolver is consulted.
 /// </summary>
 public delegate SenderErrorPolicy SenderErrorPolicyResolver(SenderErrorCategory category);

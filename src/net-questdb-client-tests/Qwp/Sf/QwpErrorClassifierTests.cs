@@ -42,13 +42,15 @@ public class QwpErrorClassifierTests
         Assert.That(QwpErrorClassifier.Classify(status), Is.EqualTo(expected));
     }
 
-    [TestCase(SenderErrorCategory.SchemaMismatch, SenderErrorPolicy.DropAndContinue)]
-    [TestCase(SenderErrorCategory.WriteError, SenderErrorPolicy.DropAndContinue)]
-    [TestCase(SenderErrorCategory.ParseError, SenderErrorPolicy.Halt)]
-    [TestCase(SenderErrorCategory.InternalError, SenderErrorPolicy.Halt)]
-    [TestCase(SenderErrorCategory.SecurityError, SenderErrorPolicy.Halt)]
-    [TestCase(SenderErrorCategory.ProtocolViolation, SenderErrorPolicy.Halt)]
-    [TestCase(SenderErrorCategory.Unknown, SenderErrorPolicy.Halt)]
+    // NACK policy v2: no silent drop. WRITE_ERROR / INTERNAL_ERROR / UNKNOWN retry; the
+    // deterministic-under-replay categories latch terminal.
+    [TestCase(SenderErrorCategory.WriteError, SenderErrorPolicy.Retriable)]
+    [TestCase(SenderErrorCategory.InternalError, SenderErrorPolicy.Retriable)]
+    [TestCase(SenderErrorCategory.Unknown, SenderErrorPolicy.Retriable)]
+    [TestCase(SenderErrorCategory.SchemaMismatch, SenderErrorPolicy.Terminal)]
+    [TestCase(SenderErrorCategory.ParseError, SenderErrorPolicy.Terminal)]
+    [TestCase(SenderErrorCategory.SecurityError, SenderErrorPolicy.Terminal)]
+    [TestCase(SenderErrorCategory.ProtocolViolation, SenderErrorPolicy.Terminal)]
     public void DefaultPolicy_MatchesSpec(SenderErrorCategory category, SenderErrorPolicy expected)
     {
         Assert.That(QwpErrorClassifier.DefaultPolicy(category), Is.EqualTo(expected));
@@ -58,26 +60,30 @@ public class QwpErrorClassifierTests
     public void ResolvePolicy_NullResolver_FallsBackToDefault()
     {
         Assert.That(
-            QwpErrorClassifier.ResolvePolicy(SenderErrorCategory.SchemaMismatch, resolver: null),
-            Is.EqualTo(SenderErrorPolicy.DropAndContinue));
+            QwpErrorClassifier.ResolvePolicy(SenderErrorCategory.WriteError, resolver: null),
+            Is.EqualTo(SenderErrorPolicy.Retriable));
     }
 
     [Test]
-    public void ResolvePolicy_ResolverWins_ForOverridableCategories()
+    public void ResolvePolicy_ResolverCanUpgradeRetriableToTerminal()
     {
         Assert.That(
             QwpErrorClassifier.ResolvePolicy(
-                SenderErrorCategory.SchemaMismatch,
-                _ => SenderErrorPolicy.Halt),
-            Is.EqualTo(SenderErrorPolicy.Halt));
+                SenderErrorCategory.WriteError,
+                _ => SenderErrorPolicy.Terminal),
+            Is.EqualTo(SenderErrorPolicy.Terminal));
     }
 
+    // A user resolver must never downgrade a deterministic (terminal-default) rejection to retriable —
+    // that would spin the reconnect machinery on a poison frame forever.
+    [TestCase(SenderErrorCategory.SchemaMismatch)]
+    [TestCase(SenderErrorCategory.ParseError)]
+    [TestCase(SenderErrorCategory.SecurityError)]
     [TestCase(SenderErrorCategory.ProtocolViolation)]
-    [TestCase(SenderErrorCategory.Unknown)]
-    public void ResolvePolicy_AlwaysHalt_ForFatalCategories(SenderErrorCategory category)
+    public void ResolvePolicy_AlwaysTerminal_ForDeterministicCategories(SenderErrorCategory category)
     {
         Assert.That(
-            QwpErrorClassifier.ResolvePolicy(category, _ => SenderErrorPolicy.DropAndContinue),
-            Is.EqualTo(SenderErrorPolicy.Halt));
+            QwpErrorClassifier.ResolvePolicy(category, _ => SenderErrorPolicy.Retriable),
+            Is.EqualTo(SenderErrorPolicy.Terminal));
     }
 }

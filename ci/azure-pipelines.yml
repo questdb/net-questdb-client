@@ -118,6 +118,8 @@ steps:
 # the net_client-marked failover tests run against an Enterprise
 # primary. The Enterprise pipeline posts a status check back on the
 # PR (`enterprise-e2e-net-client` context); this step fire-and-forgets.
+# The enterprise run uses an enterprise branch of the same name when one
+# exists (coordinated change), otherwise enterprise main.
 #
 # Prerequisites (one-time, in the Azure DevOps UI):
 #   1. Register ci/build-and-test-e2e-net-client.yaml in the
@@ -161,20 +163,40 @@ steps:
       CLIENT_BRANCH="$(Build.SourceBranchName)"
     fi
 
+    # Run the enterprise pipeline on an enterprise branch of the SAME name when one
+    # exists (so a coordinated client+enterprise change is tested together), else
+    # fall back to enterprise main. Best-effort: any lookup failure falls back to main.
+    ENT_REPO="${ENT_REPO:-questdb-enterprise}"
+    ENT_REF="refs/heads/main"
+    if [ -n "${CLIENT_BRANCH}" ] && [ "${CLIENT_BRANCH}" != "main" ]; then
+      echo "Checking for enterprise branch '${CLIENT_BRANCH}' in ${ENT_REPO}..."
+      MATCH=$(curl -fsS -u ":${ENT_DISPATCH_PAT}" \
+        "${ORG_URL}${PROJECT}/_apis/git/repositories/${ENT_REPO}/refs?filter=heads/${CLIENT_BRANCH}&api-version=7.0" \
+        | jq -r --arg r "refs/heads/${CLIENT_BRANCH}" 'first(.value[]?.name | select(. == $r)) // ""') \
+        || MATCH=""
+      if [ -n "${MATCH}" ]; then
+        ENT_REF="refs/heads/${CLIENT_BRANCH}"
+        echo "Found matching enterprise branch; enterprise run will use ${ENT_REF}."
+      else
+        echo "No matching enterprise branch; enterprise run will use ${ENT_REF}."
+      fi
+    fi
+
     BODY=$(jq -n \
       --arg commit "$(Build.SourceVersion)" \
       --arg pr "${CLIENT_PR_NUMBER}" \
       --arg branch "${CLIENT_BRANCH}" \
+      --arg entref "${ENT_REF}" \
       '{
         templateParameters: {
           netClientCommit: $commit,
           netClientPrNumber: $pr,
           clientBranch: $branch
         },
-        resources: { repositories: { self: { refName: "refs/heads/main" } } }
+        resources: { repositories: { self: { refName: $entref } } }
       }')
 
-    echo "Dispatching enterprise e2e: commit=$(Build.SourceVersion) PR=${CLIENT_PR_NUMBER} branch=${CLIENT_BRANCH}"
+    echo "Dispatching enterprise e2e: commit=$(Build.SourceVersion) PR=${CLIENT_PR_NUMBER} branch=${CLIENT_BRANCH} ent_ref=${ENT_REF}"
 
     RESPONSE=$(curl -fsS -u ":${ENT_DISPATCH_PAT}" \
       -H "Content-Type: application/json" \
@@ -208,6 +230,24 @@ steps:
     QUESTDB_REPO: $(QUESTDB_REPO)
     # QuestDbManager tees each launched server's full stdout/stderr here; published on failure below.
     QDB_SERVER_LOG_DIR: $(Build.ArtifactStagingDirectory)/ServerLogs
+  condition: eq(variables['osName'], 'Linux')
+
+# Docker-backed test fixtures (opt-in via QDB_DOCKER_TESTS): the QuestDbDocker* suites — ingest
+# fault-tolerance and egress query — bundled into one step since they share the opt-in and the
+# Linux Docker daemon. Linux only: the hosted ubuntu agent ships a Linux Docker daemon; the
+# Windows/macOS agents don't, so it must stay Linux-scoped. The fixtures self-skip everywhere the
+# env var is unset (all other legs). Each fixture manages its own container; both default to
+# questdb/questdb:nightly (the /write/v4 QWP ingest and /read/v1 egress endpoints are master-only)
+# so the image is pulled once and cached.
+- task: DotNetCoreCLI@2
+  displayName: 'Run Docker test fixtures on $(osName) (net9.0)'
+  inputs:
+    command: 'test'
+    projects: 'src/net-questdb-client-tests/net-questdb-client-tests.csproj'
+    arguments: '--configuration $(buildConfiguration) --framework net9.0 --no-build --verbosity normal --logger trx --blame-hang --blame-hang-timeout 600s --blame-hang-dump-type mini --filter "FullyQualifiedName~QuestDbDocker"'
+    publishTestResults: true
+  env:
+    QDB_DOCKER_TESTS: 'on'
   condition: eq(variables['osName'], 'Linux')
 
 - task: DotNetCoreCLI@2

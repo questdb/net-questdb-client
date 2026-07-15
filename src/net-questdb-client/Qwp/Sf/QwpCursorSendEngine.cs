@@ -76,6 +76,9 @@ internal sealed class QwpCursorSendEngine : IDisposable
     private long _totalReconnectAttempts;
     private long _totalReconnectsSucceeded;
     private int _negotiatedMaxBatchSize;
+    private readonly int _maxFrameRejections;
+    private readonly TimeSpan _poisonDwell;
+    private bool _sentOnCurrentConnection;
     private bool _terminal;
     private Exception? _terminalError;
     private bool _seenFirstConnect;
@@ -137,7 +140,9 @@ internal sealed class QwpCursorSendEngine : IDisposable
         SenderErrorPolicyResolver? policyResolver = null,
         bool durableAckMode = false,
         QwpAckWatermark? ackWatermark = null,
-        Action<QuestDB.Senders.SenderConnectionEvent>? connectionEventSink = null)
+        Action<QuestDB.Senders.SenderConnectionEvent>? connectionEventSink = null,
+        int maxFrameRejections = 4,
+        TimeSpan? poisonMinEscalationWindow = null)
     {
         ArgumentNullException.ThrowIfNull(ring);
         ArgumentNullException.ThrowIfNull(transportFactory);
@@ -159,6 +164,8 @@ internal sealed class QwpCursorSendEngine : IDisposable
         _durableAckMode = durableAckMode;
         _ackWatermark = ackWatermark;
         _connectionEventSink = connectionEventSink;
+        _maxFrameRejections = maxFrameRejections < 1 ? 1 : maxFrameRejections;
+        _poisonDwell = poisonMinEscalationWindow ?? TimeSpan.FromMilliseconds(5000);
 
         var baseSeed = ring.OldestFsn;
         if (ackWatermark is not null)
@@ -248,16 +255,10 @@ internal sealed class QwpCursorSendEngine : IDisposable
     public int NegotiatedMaxBatchSize => Volatile.Read(ref _negotiatedMaxBatchSize);
 
     /// <summary>True once the engine has hit a terminal failure.</summary>
-    public bool IsTerminallyFailed
-    {
-        get
-        {
-            lock (_stateLock)
-            {
-                return _terminal;
-            }
-        }
-    }
+    // Lock-free: hit on every append via ThrowIfTerminal, so it must not contend on _stateLock with the
+    // pumps. The acquire read pairs with the release Volatile.Write in SetTerminal, which publishes
+    // _terminalError before the flag — so a reader observing true is guaranteed to see TerminalError.
+    public bool IsTerminallyFailed => Volatile.Read(ref _terminal);
 
     /// <summary>The terminal error, if any.</summary>
     public Exception? TerminalError
@@ -723,12 +724,11 @@ internal sealed class QwpCursorSendEngine : IDisposable
                         cause: ex, endpoint: transport.Endpoint);
                     backoff.ResetAttempt();
                     backoff.OutageStartTickMs ??= Environment.TickCount64;
-                    var elapsed = TimeSpan.FromMilliseconds(
-                        Environment.TickCount64 - backoff.OutageStartTickMs.Value);
-                    if (elapsed >= _reconnectPolicy.MaxOutageDuration)
+
+                    // Invariant B: an all-replica / role-reject window is transient — retry forever.
+                    // Only the blocking SYNC initial connect is bounded by reconnect_max_duration_millis.
+                    if (RoleRejectBudgetExhausted(backoff))
                     {
-                        EmitConnectionEvent(QuestDB.Senders.SenderConnectionEventKind.ReconnectBudgetExhausted,
-                            cause: ex, endpoint: transport.Endpoint);
                         SetTerminal(ex);
                         return;
                     }
@@ -742,27 +742,21 @@ internal sealed class QwpCursorSendEngine : IDisposable
                         cause: ex, endpoint: transport.Endpoint);
                     Interlocked.Increment(ref _currentRoundSeq);
 
-                    var remaining = _reconnectPolicy.MaxOutageDuration - elapsed;
-                    var jittered = _reconnectPolicy.ComputeBackoff(0);
-                    var sleep = remaining < jittered ? remaining : jittered;
                     try
                     {
-                        await Task.Delay(sleep, ct).ConfigureAwait(false);
+                        await Task.Delay(_reconnectPolicy.ComputeBackoff(0), ct).ConfigureAwait(false);
                     }
                     catch (OperationCanceledException)
                     {
                         return;
                     }
 
-                    elapsed = TimeSpan.FromMilliseconds(
-                        Environment.TickCount64 - backoff.OutageStartTickMs.Value);
-                    if (elapsed >= _reconnectPolicy.MaxOutageDuration)
+                    if (RoleRejectBudgetExhausted(backoff))
                     {
-                        EmitConnectionEvent(QuestDB.Senders.SenderConnectionEventKind.ReconnectBudgetExhausted,
-                            cause: ex, endpoint: transport.Endpoint);
                         SetTerminal(ex);
                         return;
                     }
+
                     continue;
                 }
                 catch (Exception ex)
@@ -841,6 +835,10 @@ internal sealed class QwpCursorSendEngine : IDisposable
                     _durableTableWatermarks.Clear();
                 }
 
+                // Reset per-connection poison bookkeeping: a strike only counts when this connection
+                // actually shipped a frame (an accept-then-close), never on a pure connect failure.
+                Volatile.Write(ref _sentOnCurrentConnection, false);
+
                 try
                 {
                     await RunConnectionAsync(transport, fsnAtZero, ct).ConfigureAwait(false);
@@ -855,11 +853,6 @@ internal sealed class QwpCursorSendEngine : IDisposable
                     SetTerminal(hc.Wire, hc.SenderError);
                     return;
                 }
-                catch (QwpProtocolViolationException ex)
-                {
-                    SetTerminal(ex, BuildProtocolViolationError(ex));
-                    return;
-                }
                 catch (Exception ex) when (IsTerminalServerError(ex))
                 {
                     SetTerminal(ex);
@@ -870,6 +863,45 @@ internal sealed class QwpCursorSendEngine : IDisposable
                     EmitConnectionEvent(QuestDB.Senders.SenderConnectionEventKind.Disconnected,
                         cause: ex, endpoint: _liveEndpoint);
                     _liveEndpoint = null;
+
+                    // Poison-frame pacing/escalation. A retriable NACK already struck (and checked for
+                    // escalation) in HandleServerRejection. A non-orderly close *after a send* strikes
+                    // here — deliberately, not only a server NACK: a frame that crashes the server
+                    // before it can NACK would otherwise loop forever. The cost is that a transient
+                    // server-side fault recurring at the same head (a crash-looping node that accepts
+                    // then dies before acking) is indistinguishable from content poison and can escalate
+                    // to terminal; the strike+dwell+pacing guards bound it, and any OK-level acceptance
+                    // at or beyond the suspect (incl. a plain OK in durable-ack mode) resets it. See
+                    // SenderOptions.max_frame_rejections for the behavior + RAM-mode data-loss note.
+                    // A pure connect failure (nothing sent on this connection) is an outage, not
+                    // poison — it must never accrue a strike (Invariant B), so it uses normal backoff.
+                    if (ex is RetriableNackException)
+                    {
+                        if (!await PacedPoisonDelayAsync(Volatile.Read(ref _poisonStrikes), ct).ConfigureAwait(false))
+                        {
+                            return;
+                        }
+
+                        continue;
+                    }
+
+                    if (Volatile.Read(ref _sentOnCurrentConnection))
+                    {
+                        var strike = RegisterHeadOfLineCloseStrike();
+                        if (strike.Escalation is not null)
+                        {
+                            SetTerminal(new LineSenderServerException(strike.Escalation), strike.Escalation);
+                            return;
+                        }
+
+                        if (!await PacedPoisonDelayAsync(strike.Strikes, ct).ConfigureAwait(false))
+                        {
+                            return;
+                        }
+
+                        continue;
+                    }
+
                     if (!await BackoffOrGiveUpAsync(ex, backoff, ct).ConfigureAwait(false))
                     {
                         return;
@@ -930,12 +962,13 @@ internal sealed class QwpCursorSendEngine : IDisposable
 
         // Both pumps can fault simultaneously when the server closes the socket: recv sees the
         // CLOSE frame while send's in-flight write fails with a generic transport error. Prefer
-        // the terminal fault so QwpProtocolViolationException / QwpException don't get masked
+        // the terminal fault so a QwpException doesn't get masked
         // by the concurrent send-side WebSocketException, which would otherwise route through
-        // the transient reconnect path.
+        // the transient reconnect path. A retriable NACK (already struck in HandleServerRejection)
+        // is preferred next, so the concurrent send fault doesn't mask it into a second strike.
         var sendFault = sendTask.Exception?.GetBaseException();
         var recvFault = recvTask.Exception?.GetBaseException();
-        var fault = PickTerminalFault(sendFault, recvFault) ?? sendFault ?? recvFault;
+        var fault = PickTerminalOrRetriableFault(sendFault, recvFault) ?? sendFault ?? recvFault;
         if (fault is not null)
         {
             throw fault;
@@ -994,6 +1027,7 @@ internal sealed class QwpCursorSendEngine : IDisposable
 
             await transport.SendBinaryAsync(sendBuffer.AsMemory(0, frameLen), ct).ConfigureAwait(false);
             Interlocked.Increment(ref _totalFramesSent);
+            Volatile.Write(ref _sentOnCurrentConnection, true);
         }
     }
 
@@ -1051,6 +1085,8 @@ internal sealed class QwpCursorSendEngine : IDisposable
                     ackedSeq = highestSentWireSeq;
                 }
 
+                AdvanceOkWatermarkAndResetPoisonLocked(fsnAtZero + ackedSeq);
+
                 var newAcked = checked(fsnAtZero + ackedSeq + 1);
                 if (newAcked > _ackedFsn)
                 {
@@ -1077,6 +1113,11 @@ internal sealed class QwpCursorSendEngine : IDisposable
             // sequence beyond our highest sent is still a valid commitment of everything we've
             // sent, and the queued per-table watermarks must still drive TrimCoveredPrefix.
             if (ackedSeq > highestSentWireSeq) ackedSeq = highestSentWireSeq;
+
+            // OK-level acceptance advances here even though the trim watermark (_ackedFsn) waits for
+            // DURABLE_ACK coverage below — this is what lets the poison detector reset on a genuine
+            // OK during a durable-ack replica-lag window instead of false-positiving to terminal.
+            AdvanceOkWatermarkAndResetPoisonLocked(fsnAtZero + ackedSeq);
 
             _pendingDurable.Enqueue(new PendingDurable(ackedSeq, entries));
             TrimCoveredPrefixLocked(fsnAtZero);
@@ -1185,35 +1226,33 @@ internal sealed class QwpCursorSendEngine : IDisposable
             tableName,
             DateTime.UtcNow);
 
-        if (policy == SenderErrorPolicy.Halt)
+        if (policy == SenderErrorPolicy.Terminal)
         {
             throw new HaltCarrier(senderError, new LineSenderServerException(senderError));
         }
 
-        if (fromFsn >= 0L)
+        // Retriable: the watermark is NOT advanced — nothing is dropped. Account the rejection
+        // against the poison-frame detector (a frame that deterministically kills the connection
+        // escalates to a terminal ProtocolViolation), then recycle the connection so the reconnect
+        // path replays the rejected frame from ackedFsn.
+        _errorDispatcher?.Offer(senderError);
+
+        // Only a rejection that maps to a frame we actually shipped on this connection (fromFsn >= 0)
+        // can implicate the head frame. A pre-send NACK (fromFsn == -1: the server error-framed before
+        // our first send) says nothing about the bytes — it is a server-state verdict, not a frame
+        // verdict — so it must NOT accrue a poison strike, mirroring the close path's
+        // _sentOnCurrentConnection guard. Striking it would let a server that proactively NACKs on
+        // connect escalate a never-sent frame to a terminal poison error (Invariant B).
+        if (fromFsn >= 0)
         {
-            lock (_stateLock)
+            var strike = RegisterHeadOfLineStrike(fromFsn);
+            if (strike.Escalation is not null)
             {
-                if (_durableAckMode)
-                {
-                    var cappedSeq = fromFsn - fsnAtZero;
-                    _pendingDurable.Enqueue(new PendingDurable(cappedSeq, Array.Empty<QwpTableEntry>()));
-                    TrimCoveredPrefixLocked(fsnAtZero);
-                }
-                else
-                {
-                    var newAcked = checked(fromFsn + 1L);
-                    if (newAcked > _ackedFsn)
-                    {
-                        _ackedFsn = newAcked;
-                        _ring.Acknowledge(_ackedFsn - 1);
-                        FireAckSignalLocked();
-                    }
-                }
+                throw new HaltCarrier(strike.Escalation, new LineSenderServerException(strike.Escalation));
             }
         }
 
-        _errorDispatcher?.Offer(senderError);
+        throw new RetriableNackException(senderError, fromFsn);
     }
 
     private void DispatchTableEntries(in QwpResponse response)
@@ -1231,21 +1270,51 @@ internal sealed class QwpCursorSendEngine : IDisposable
         }
     }
 
+    // Invariant B: once rows are accepted into store-and-forward, the background loop never gives up
+    // on a wall-clock budget. Only the blocking SYNC initial connect (initial_connect_retry=on) is
+    // bounded by reconnect_max_duration_millis so the constructor can fail loud; async initial connect
+    // and every mid-stream reconnect retry forever with capped exponential backoff + jitter.
+    private bool IsBlockingInitialConnect() => !_seenFirstConnect && _initialConnectMode == InitialConnectMode.on;
+
+    // Role-reject / all-replica window: bounded only during the blocking SYNC initial connect;
+    // otherwise Invariant B applies and the loop retries forever.
+    private bool RoleRejectBudgetExhausted(BackoffState state)
+    {
+        if (!IsBlockingInitialConnect())
+        {
+            return false;
+        }
+
+        state.OutageStartTickMs ??= Environment.TickCount64;
+        var elapsed = TimeSpan.FromMilliseconds(Environment.TickCount64 - state.OutageStartTickMs.Value);
+        return elapsed >= _reconnectPolicy.MaxOutageDuration;
+    }
+
     private async Task<bool> BackoffOrGiveUpAsync(Exception lastError, BackoffState state, CancellationToken ct)
     {
         state.OutageStartTickMs ??= Environment.TickCount64;
-        var elapsed = TimeSpan.FromMilliseconds(Environment.TickCount64 - state.OutageStartTickMs.Value);
-        var next = _reconnectPolicy.NextBackoffOrGiveUp(state.Attempt, elapsed);
-        if (next is null)
+
+        TimeSpan delay;
+        if (IsBlockingInitialConnect())
         {
-            EmitConnectionEvent(QuestDB.Senders.SenderConnectionEventKind.ReconnectBudgetExhausted, cause: lastError);
-            SetTerminal(lastError);
-            return false;
+            var elapsed = TimeSpan.FromMilliseconds(Environment.TickCount64 - state.OutageStartTickMs.Value);
+            var next = _reconnectPolicy.NextBackoffOrGiveUp(state.Attempt, elapsed);
+            if (next is null)
+            {
+                SetTerminal(lastError);
+                return false;
+            }
+
+            delay = next.Value;
+        }
+        else
+        {
+            delay = _reconnectPolicy.ComputeBackoff(state.Attempt);
         }
 
         try
         {
-            await Task.Delay(next.Value, ct).ConfigureAwait(false);
+            await Task.Delay(delay, ct).ConfigureAwait(false);
         }
         catch (OperationCanceledException)
         {
@@ -1266,9 +1335,11 @@ internal sealed class QwpCursorSendEngine : IDisposable
                 return;
             }
 
-            _terminal = true;
             _terminalError = error;
             isInitialConnect = !_seenFirstConnect;
+            // Release-publish the flag last so the lock-free IsTerminallyFailed reader that observes
+            // true is guaranteed to also see _terminalError (written above).
+            Volatile.Write(ref _terminal, true);
             FireAckSignalLocked();
             FireAppendSignalLocked();
         }
@@ -1280,7 +1351,7 @@ internal sealed class QwpCursorSendEngine : IDisposable
     private static SenderError BuildEngineError(Exception error, bool isInitialConnect) =>
         new(
             category: SenderErrorCategory.Unknown,
-            appliedPolicy: SenderErrorPolicy.Halt,
+            appliedPolicy: SenderErrorPolicy.Terminal,
             serverStatusByte: SenderError.NoStatusByte,
             serverMessage: error.Message,
             messageSequence: SenderError.NoMessageSequence,
@@ -1290,31 +1361,6 @@ internal sealed class QwpCursorSendEngine : IDisposable
             detectedAtUtc: DateTime.UtcNow,
             exception: error,
             isInitialConnect: isInitialConnect);
-
-    private SenderError BuildProtocolViolationError(QwpProtocolViolationException error)
-    {
-        long fromFsn, toFsn;
-        lock (_stateLock)
-        {
-            // _ackedFsn is the first un-acked FSN; the highest published FSN is NextFsn - 1.
-            // A fully-drained slot leaves fromFsn > toFsn — by convention, an empty span.
-            fromFsn = _ackedFsn;
-            toFsn = _ring.NextFsn - 1L;
-        }
-
-        return new SenderError(
-            category: SenderErrorCategory.ProtocolViolation,
-            appliedPolicy: SenderErrorPolicy.Halt,
-            serverStatusByte: SenderError.NoStatusByte,
-            serverMessage: error.Message,
-            messageSequence: SenderError.NoMessageSequence,
-            fromFsn: fromFsn,
-            toFsn: toFsn,
-            tableName: null,
-            detectedAtUtc: DateTime.UtcNow,
-            exception: error,
-            isInitialConnect: !_seenFirstConnect);
-    }
 
     /// <summary>
     ///     Completes when the engine has either successfully established its first connection or
@@ -1419,17 +1465,148 @@ internal sealed class QwpCursorSendEngine : IDisposable
     internal static bool IsTerminalServerError(Exception ex)
     {
         return ex is QwpException
-            || ex is QwpProtocolViolationException
             || ex is HaltCarrier
             || ex is InvalidDataException
             || (ex is IngressError ie && ie.code is ErrorCode.AuthError);
     }
 
-    private static Exception? PickTerminalFault(Exception? a, Exception? b)
+    private static Exception? PickTerminalOrRetriableFault(Exception? a, Exception? b)
     {
         if (a is not null && IsTerminalServerError(a)) return a;
         if (b is not null && IsTerminalServerError(b)) return b;
+        // A retriable NACK was already struck (and escalation-checked) in HandleServerRejection.
+        // Let it win over a concurrent send-side transport fault so the reconnect catch routes
+        // through the `ex is RetriableNackException` branch instead of striking the same
+        // rejection a second time.
+        if (a is RetriableNackException) return a;
+        if (b is RetriableNackException) return b;
         return null;
+    }
+
+    // Poison-frame detector: a retriable NACK (keyed on the NACK-named frame), or a non-orderly
+    // close *after a send* (keyed on the OK-level head-of-line frame), of the same FSN with no
+    // OK-level acceptance progress at or beyond it accrues a strike. Once strikes reach
+    // max_frame_rejections AND the suspect has stayed poisoned for the escalation dwell, the episode
+    // escalates to a terminal ProtocolViolation. Any OK at or beyond the suspect resets the detector
+    // (see AdvanceOkWatermarkAndResetPoisonLocked). Progress is measured against _highestOkFsn, NOT
+    // the trim watermark _ackedFsn: in durable-ack mode _ackedFsn only advances on DURABLE_ACK
+    // coverage, so a post-reject recycle re-OKs frames behind the suspect from the durable watermark;
+    // keying or resetting on _ackedFsn would let those re-OKs launder the strike count every cycle
+    // (false-positive terminal on a transient) or, in reverse, never escalate a real poison frame.
+    // Guarded by _stateLock; all three fields survive reconnects (the detector spans connections).
+    // Mirrors java-questdb-client CursorWebSocketSendLoop.
+    private long _poisonFsn = -1L;
+    private int _poisonStrikes;
+    private long _poisonFirstStrikeTickMs;
+
+    // Highest FSN the server has acknowledged at the OK level (STATUS_OK), across connections; -1
+    // when none. In default mode this tracks the trim watermark exactly; in durable-ack mode it runs
+    // AHEAD of _ackedFsn (which waits for DURABLE_ACK coverage). Used by the poison detector to
+    // measure genuine acceptance progress. Guarded by _stateLock; monotonic (replayed re-OKs of
+    // already-OK'd frames don't advance it, so replay can't launder the strike count).
+    private long _highestOkFsn = -1L;
+
+    private readonly struct PoisonStrike
+    {
+        public PoisonStrike(int strikes, SenderError? escalation)
+        {
+            Strikes = strikes;
+            Escalation = escalation;
+        }
+
+        public int Strikes { get; }
+        public SenderError? Escalation { get; }
+    }
+
+    // NACK path: strike the NACK-named frame directly (the server judged those exact bytes).
+    private PoisonStrike RegisterHeadOfLineStrike(long rejectedFsn)
+    {
+        lock (_stateLock)
+        {
+            return RegisterHeadOfLineStrikeLocked(rejectedFsn);
+        }
+    }
+
+    // Close-after-send path: no NACK names a frame, so implicate the OK-level head-of-line —
+    // max(_ackedFsn, _highestOkFsn + 1). Both operands are "first un-acked / un-OK'd" FSNs, so the
+    // max is the first frame the server has neither trimmed nor OK'd. In durable-ack mode this is
+    // ahead of _ackedFsn; in default mode _highestOkFsn + 1 == _ackedFsn so it collapses to _ackedFsn.
+    private PoisonStrike RegisterHeadOfLineCloseStrike()
+    {
+        lock (_stateLock)
+        {
+            return RegisterHeadOfLineStrikeLocked(Math.Max(_ackedFsn, _highestOkFsn + 1));
+        }
+    }
+
+    private PoisonStrike RegisterHeadOfLineStrikeLocked(long rejectedFsn)
+    {
+        var now = Environment.TickCount64;
+        if (rejectedFsn == _poisonFsn)
+        {
+            _poisonStrikes++;
+        }
+        else
+        {
+            _poisonFsn = rejectedFsn;
+            _poisonStrikes = 1;
+            _poisonFirstStrikeTickMs = now;
+        }
+
+        var dwellElapsed = _poisonDwell <= TimeSpan.Zero
+            || now - _poisonFirstStrikeTickMs >= (long)_poisonDwell.TotalMilliseconds;
+        var escalate = _poisonStrikes >= _maxFrameRejections && dwellElapsed;
+        return new PoisonStrike(_poisonStrikes, escalate ? BuildPoisonError(rejectedFsn, _poisonStrikes) : null);
+    }
+
+    // Records OK-level acceptance progress and clears poison suspicion once it reaches the suspect.
+    // okFsn is the absolute FSN of the last frame the server OK'd. An OK at or beyond _poisonFsn
+    // proves the earlier rejections were not deterministic (the frame is now accepted), so the
+    // detector resets. Re-OKs of frames behind the suspect (the norm in durable-ack replay) leave
+    // _highestOkFsn unchanged and don't reset, so a genuinely poison frame still escalates.
+    // Caller holds _stateLock. Mirrors the STATUS_OK handler in java-questdb-client.
+    private void AdvanceOkWatermarkAndResetPoisonLocked(long okFsn)
+    {
+        if (okFsn > _highestOkFsn)
+        {
+            _highestOkFsn = okFsn;
+        }
+
+        if (_poisonFsn >= 0 && okFsn >= _poisonFsn)
+        {
+            _poisonFsn = -1L;
+            _poisonStrikes = 0;
+        }
+    }
+
+    private static SenderError BuildPoisonError(long fsn, int strikes) =>
+        new(
+            category: SenderErrorCategory.ProtocolViolation,
+            appliedPolicy: SenderErrorPolicy.Terminal,
+            serverStatusByte: SenderError.NoStatusByte,
+            serverMessage:
+                $"poison frame at fsn={fsn}: {strikes} consecutive rejections/closes with no ack progress",
+            messageSequence: SenderError.NoMessageSequence,
+            fromFsn: fsn,
+            toFsn: fsn,
+            tableName: null,
+            detectedAtUtc: DateTime.UtcNow);
+
+    // Widen the reconnect delay by the strike count so an accept-then-close middlebox can't burn
+    // strikes at connect+send+close RTT rate. Returns false if cancelled during the wait.
+    private async Task<bool> PacedPoisonDelayAsync(int strikes, CancellationToken ct)
+    {
+        var delay = _reconnectPolicy.ComputeBackoff(strikes <= 1 ? 0 : strikes - 1);
+        try
+        {
+            await Task.Delay(delay, ct).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            return false;
+        }
+
+        return true;
     }
 
     private sealed class HaltCarrier : Exception
@@ -1443,5 +1620,20 @@ internal sealed class QwpCursorSendEngine : IDisposable
 
         public SenderError SenderError { get; }
         public LineSenderServerException Wire { get; }
+    }
+
+    // Retriable server NACK: not a terminal fault, so it routes through the transient reconnect
+    // path (recycle + replay from ackedFsn). Carries the fault for diagnostics only.
+    private sealed class RetriableNackException : Exception
+    {
+        public RetriableNackException(SenderError err, long fromFsn)
+            : base($"retriable server rejection at fsn={fromFsn}: {err.ServerMessage}")
+        {
+            SenderError = err;
+            FromFsn = fromFsn;
+        }
+
+        public SenderError SenderError { get; }
+        public long FromFsn { get; }
     }
 }

@@ -128,7 +128,10 @@ public record SenderOptions
     private SenderErrorPolicyResolver? _errorPolicyResolver;
     private int _errorInboxCapacity = 256;
     private int _connectionListenerInboxCapacity = 256;
+    private int _maxFrameRejections = 4;
+    private TimeSpan _poisonMinEscalationWindow = TimeSpan.FromMilliseconds(5000);
     private QuestDB.Senders.ISenderConnectionListener? _connectionListener;
+    private QuestDB.Senders.IBackgroundDrainerListener? _drainerListener;
     private SenderErrorPolicy? _onServerError;
     private SenderErrorPolicy? _onSchemaMismatchError;
     private SenderErrorPolicy? _onParseError;
@@ -158,7 +161,10 @@ public record SenderOptions
     private bool _errorPolicyResolverUserSet;
     private bool _errorInboxCapacityUserSet;
     private bool _connectionListenerInboxCapacityUserSet;
+    private bool _maxFrameRejectionsUserSet;
+    private bool _poisonMinEscalationWindowUserSet;
     private bool _connectionListenerUserSet;
+    private bool _drainerListenerUserSet;
     private bool _onServerErrorUserSet;
     private bool _onSchemaMismatchErrorUserSet;
     private bool _onParseErrorUserSet;
@@ -311,6 +317,8 @@ public record SenderOptions
 
         ParseIntWithDefault(nameof(error_inbox_capacity), "256", out _errorInboxCapacity);
         ParseIntWithDefault(nameof(connection_listener_inbox_capacity), "256", out _connectionListenerInboxCapacity);
+        ParseIntWithDefault(nameof(max_frame_rejections), "4", out _maxFrameRejections);
+        ParseMillisecondsWithDefault(nameof(poison_min_escalation_window_millis), "5000", out _poisonMinEscalationWindow);
 
         _onServerError = ParsePolicyKey(nameof(on_server_error));
         _onSchemaMismatchError = ParsePolicyKey(nameof(on_schema_mismatch_error), aliasName: "on_schema_error");
@@ -490,18 +498,24 @@ public record SenderOptions
             raw ??= aliasRaw;
         }
         if (raw is null) return null;
-        if (string.Equals(raw, "halt", StringComparison.OrdinalIgnoreCase))
+        if (string.Equals(raw, "halt", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(raw, "terminal", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(raw, nameof(SenderErrorPolicy.Terminal), StringComparison.OrdinalIgnoreCase))
         {
-            return SenderErrorPolicy.Halt;
+            return SenderErrorPolicy.Terminal;
         }
-        if (string.Equals(raw, "drop", StringComparison.OrdinalIgnoreCase)
-            || string.Equals(raw, "drop_and_continue", StringComparison.OrdinalIgnoreCase)
-            || string.Equals(raw, nameof(SenderErrorPolicy.DropAndContinue), StringComparison.OrdinalIgnoreCase))
+        if (string.Equals(raw, "retry", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(raw, "retriable", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(raw, nameof(SenderErrorPolicy.Retriable), StringComparison.OrdinalIgnoreCase)
+            // Legacy aliases: the client no longer drops, so map the old drop policy to retriable
+            // (the closest no-data-loss behaviour).
+            || string.Equals(raw, "drop", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(raw, "drop_and_continue", StringComparison.OrdinalIgnoreCase))
         {
-            return SenderErrorPolicy.DropAndContinue;
+            return SenderErrorPolicy.Retriable;
         }
         throw new IngressError(ErrorCode.ConfigError,
-            $"`{name}` must be one of [halt, drop, drop_and_continue], got `{raw}`");
+            $"`{name}` must be one of [halt, retry], got `{raw}`");
     }
 
     private static InitialConnectMode ParseInitialConnectMode(string? raw)
@@ -729,6 +743,16 @@ public record SenderOptions
             throw new IngressError(ErrorCode.ConfigError,
                 $"`connection_listener_inbox_capacity` must be >= 1; got {_connectionListenerInboxCapacity}");
         }
+        if (_maxFrameRejections < 1)
+        {
+            throw new IngressError(ErrorCode.ConfigError,
+                $"`max_frame_rejections` must be >= 1; got {_maxFrameRejections}");
+        }
+        if (_poisonMinEscalationWindow < TimeSpan.Zero)
+        {
+            throw new IngressError(ErrorCode.ConfigError,
+                $"`poison_min_escalation_window_millis` must be >= 0; got {_poisonMinEscalationWindow.TotalMilliseconds}ms");
+        }
     }
 
     private bool HasAnyPolicyKeySet() =>
@@ -740,9 +764,11 @@ public record SenderOptions
     ///     <see cref="error_policy_resolver" /> → per-category override
     ///     (<see cref="on_schema_mismatch_error" /> etc.) → <see cref="on_server_error" /> →
     ///     spec defaults. Returns null when no override is configured (engine then falls through
-    ///     to spec defaults). <see cref="SenderErrorCategory.ProtocolViolation" /> and
-    ///     <see cref="SenderErrorCategory.Unknown" /> are forced halt by the engine, so a
-    ///     resolver returning anything else for them is ignored.
+    ///     to spec defaults). The engine forces <c>halt</c> for the Terminal-default categories
+    ///     (<see cref="SenderErrorCategory.SchemaMismatch" />, <see cref="SenderErrorCategory.ParseError" />,
+    ///     <see cref="SenderErrorCategory.SecurityError" />, <see cref="SenderErrorCategory.ProtocolViolation" />),
+    ///     so a resolver returning anything else for them is ignored;
+    ///     <see cref="SenderErrorCategory.Unknown" /> is fail-open <c>retry</c> and is consulted.
     /// </summary>
     internal SenderErrorPolicyResolver? BuildEffectivePolicyResolver()
     {
@@ -859,7 +885,10 @@ public record SenderOptions
         if (_errorPolicyResolverUserSet) Throw(nameof(error_policy_resolver));
         if (_errorInboxCapacityUserSet) Throw(nameof(error_inbox_capacity));
         if (_connectionListenerInboxCapacityUserSet) Throw(nameof(connection_listener_inbox_capacity));
+        if (_maxFrameRejectionsUserSet) Throw(nameof(max_frame_rejections));
+        if (_poisonMinEscalationWindowUserSet) Throw(nameof(poison_min_escalation_window_millis));
         if (_connectionListenerUserSet) Throw(nameof(ConnectionListener));
+        if (_drainerListenerUserSet) Throw(nameof(DrainerListener));
         if (_onServerErrorUserSet) Throw(nameof(on_server_error));
         if (_onSchemaMismatchErrorUserSet) Throw(nameof(on_schema_mismatch_error));
         if (_onParseErrorUserSet) Throw(nameof(on_parse_error));
@@ -902,6 +931,7 @@ public record SenderOptions
             "close_flush_timeout_millis", "drain_orphans", "max_background_drainers", "ping_timeout",
             "durable_ack_keepalive_interval_millis", "proxy",
             "error_handler", "error_policy_resolver", "error_inbox_capacity", "connection_listener_inbox_capacity",
+            "max_frame_rejections", "poison_min_escalation_window_millis",
             "on_server_error", "on_schema_mismatch_error", "on_schema_error", "on_parse_error", "on_internal_error",
             "on_security_error", "on_write_error",
         };
@@ -1556,7 +1586,12 @@ public record SenderOptions
         set { _sfAppendDeadline = value; _sfAppendDeadlineUserSet = true; }
     }
 
-    /// <summary>Total wall-clock budget for a single reconnect run. Defaults to 5 min.</summary>
+    /// <summary>
+    ///     Caps only the blocking initial connect (initial_connect_retry=sync). The background
+    ///     reconnect loop (mid-stream outages and async initial connect) does not consult this — it
+    ///     retries indefinitely and halts only on a terminal auth/upgrade error or close (Invariant B).
+    ///     Defaults to 5 min.
+    /// </summary>
     public TimeSpan reconnect_max_duration_millis
     {
         get => _reconnectMaxDuration;
@@ -1606,8 +1641,8 @@ public record SenderOptions
 
     /// <summary>
     ///     Optional callback invoked when the SF cursor engine observes a server-side rejection
-    ///     or reaches a terminal state. Fires for both <see cref="SenderErrorPolicy.DropAndContinue" />
-    ///     and <see cref="SenderErrorPolicy.Halt" /> outcomes. Programmatic-only.
+    ///     or reaches a terminal state. Fires for both <see cref="SenderErrorPolicy.Retriable" />
+    ///     and <see cref="SenderErrorPolicy.Terminal" /> outcomes. Programmatic-only.
     ///     When unset, the engine logs notifications via <see cref="System.Diagnostics.Trace" />
     ///     so failures aren't silently lost.
     /// </summary>
@@ -1620,9 +1655,12 @@ public record SenderOptions
 
     /// <summary>
     ///     Optional resolver overriding the per-<see cref="SenderErrorCategory" /> default policy.
-    ///     <see cref="SenderErrorCategory.ProtocolViolation" /> and
-    ///     <see cref="SenderErrorCategory.Unknown" /> are always <see cref="SenderErrorPolicy.Halt" />
-    ///     regardless of the resolver. Programmatic-only.
+    ///     The deterministic categories (<see cref="SenderErrorCategory.SchemaMismatch" />,
+    ///     <see cref="SenderErrorCategory.ParseError" />, <see cref="SenderErrorCategory.SecurityError" />)
+    ///     and <see cref="SenderErrorCategory.ProtocolViolation" /> default to
+    ///     <see cref="SenderErrorPolicy.Terminal" /> and the resolver cannot downgrade them.
+    ///     <see cref="SenderErrorCategory.Unknown" /> is fail-open <see cref="SenderErrorPolicy.Retriable" />
+    ///     and <em>is</em> consulted. Programmatic-only.
     /// </summary>
     [JsonIgnore]
     public SenderErrorPolicyResolver? error_policy_resolver
@@ -1640,6 +1678,52 @@ public record SenderOptions
     {
         get => _errorInboxCapacity;
         set { _errorInboxCapacity = value; _errorInboxCapacityUserSet = true; }
+    }
+
+    /// <summary>
+    ///     Poison-frame detector threshold: the number of consecutive rejections of the same
+    ///     head-of-line frame (a retriable NACK, or a non-orderly close after a send, with no ack
+    ///     progress) that escalates the episode to a terminal <c>ProtocolViolation</c>. Replaces the
+    ///     WS close-code list — every close is otherwise reconnect-eligible. Must be >= 1. Defaults
+    ///     to 4. WS-only.
+    /// </summary>
+    /// <remarks>
+    ///     <b>A bare close after a send counts as a strike, not only a server NACK.</b> A frame that
+    ///     crashes the server before it can NACK would otherwise loop forever, so an accept-then-close
+    ///     with no ack progress at the same head is treated as a suspected poison frame. The detector
+    ///     therefore cannot distinguish "this frame's content kills the server" from a genuinely
+    ///     transient server-side fault that happens to recur at the same head — e.g. a crash-looping or
+    ///     OOM-killed node still accepting connections. If such a node accepts the head frame and dies
+    ///     before acking it on <see cref="max_frame_rejections" /> consecutive connections spanning at
+    ///     least <see cref="poison_min_escalation_window_millis" />, the sender latches terminal even
+    ///     though the outage is transient. Any single successful ack advances the head and resets the
+    ///     detector, so a server that acks between failures never escalates.
+    ///     <para />
+    ///     <b>Data-loss note.</b> On a terminal escalation the buffered un-acked frames are preserved in
+    ///     the store-and-forward log only when <c>sf_dir</c> is set. In the default RAM-backed mode
+    ///     (<c>sf_dir</c> unset) the segment ring is freed when the terminal sender is disposed or
+    ///     discarded by the pool, so those frames are dropped. Set <c>sf_dir</c> for durability across a
+    ///     poison-escalation terminal, and raise this threshold and/or
+    ///     <see cref="poison_min_escalation_window_millis" /> to widen tolerance for a flaky server that
+    ///     recurs at the same head.
+    /// </remarks>
+    public int max_frame_rejections
+    {
+        get => _maxFrameRejections;
+        set { _maxFrameRejections = value; _maxFrameRejectionsUserSet = true; }
+    }
+
+    /// <summary>
+    ///     Minimum wall-clock dwell a suspect head-of-line frame must stay poisoned before the
+    ///     poison detector escalates, even once <see cref="max_frame_rejections" /> strikes have
+    ///     accrued. Decouples "how many strikes prove determinism" from "how long a transient is
+    ///     allowed to look poisoned" so a brief outage can't false-positive into a terminal. <c>0</c>
+    ///     restores immediate escalation at the strike threshold. Defaults to 5000ms. WS-only.
+    /// </summary>
+    public TimeSpan poison_min_escalation_window_millis
+    {
+        get => _poisonMinEscalationWindow;
+        set { _poisonMinEscalationWindow = value; _poisonMinEscalationWindowUserSet = true; }
     }
 
     /// <summary>
@@ -1667,16 +1751,47 @@ public record SenderOptions
     }
 
     /// <summary>
-    ///     Default policy for any overridable category that has no per-category override.
-    ///     Connect-string accepts <c>halt</c>, <c>drop</c>, <c>drop_and_continue</c>.
+    ///     Programmatic-only registration of an <see cref="QuestDB.Senders.IBackgroundDrainerListener" />
+    ///     observing orphan slot adoption + drain outcomes (SF <c>drain_orphans=on</c>). Not a
+    ///     connect-string key (a callback can't be expressed in a string). WS-only; ignored on other
+    ///     transports.
     /// </summary>
+    [JsonIgnore]
+    public QuestDB.Senders.IBackgroundDrainerListener? DrainerListener
+    {
+        get => _drainerListener;
+        set { _drainerListener = value; _drainerListenerUserSet = true; }
+    }
+
+    /// <summary>
+    ///     Default policy for any overridable category that has no per-category override.
+    ///     Connect-string accepts <c>halt</c>, <c>retry</c>.
+    /// </summary>
+    /// <remarks>
+    ///     <b>Upgrade / migration note (NACK policy v2).</b> The per-category default policies changed:
+    ///     <see cref="SenderErrorCategory.SchemaMismatch" /> flipped from <c>drop_and_continue</c> to
+    ///     <c>halt</c>/terminal (a sender that previously tolerated schema drift and kept running now
+    ///     hard-halts on the first mismatch), and <see cref="SenderErrorCategory.WriteError" /> flipped
+    ///     from <c>drop_and_continue</c> to <c>retry</c> (retry-forever, replay from the ack watermark).
+    ///     The client no longer drops data on any policy. The legacy connect-string values
+    ///     <c>drop</c> / <c>drop_and_continue</c> still parse but are remapped to <c>retry</c> (the
+    ///     closest no-data-loss behaviour); for a terminal-default category
+    ///     (<see cref="SenderErrorCategory.SchemaMismatch" />, <see cref="SenderErrorCategory.ParseError" />,
+    ///     <see cref="SenderErrorCategory.SecurityError" />, <see cref="SenderErrorCategory.ProtocolViolation" />)
+    ///     that remap is then forced back to <c>halt</c>, so an explicit legacy <c>drop</c> there is
+    ///     silently ignored. Review any connect string relying on the old drop-and-continue behaviour.
+    /// </remarks>
     public SenderErrorPolicy? on_server_error
     {
         get => _onServerError;
         set { _onServerError = value; _onServerErrorUserSet = true; }
     }
 
-    /// <summary>Override for <see cref="SenderErrorCategory.SchemaMismatch" />. Default: drop_and_continue.</summary>
+    /// <summary>
+    ///     Override for <see cref="SenderErrorCategory.SchemaMismatch" />. Default: halt
+    ///     (changed from <c>drop_and_continue</c> in NACK policy v2 — see <see cref="on_server_error" />).
+    ///     Terminal-default: the resolver / a legacy <c>drop</c> value cannot downgrade it to retry.
+    /// </summary>
     public SenderErrorPolicy? on_schema_mismatch_error
     {
         get => _onSchemaMismatchError;
@@ -1690,7 +1805,7 @@ public record SenderOptions
         set { _onParseError = value; _onParseErrorUserSet = true; }
     }
 
-    /// <summary>Override for <see cref="SenderErrorCategory.InternalError" />. Default: halt.</summary>
+    /// <summary>Override for <see cref="SenderErrorCategory.InternalError" />. Default: retry.</summary>
     public SenderErrorPolicy? on_internal_error
     {
         get => _onInternalError;
@@ -1704,7 +1819,10 @@ public record SenderOptions
         set { _onSecurityError = value; _onSecurityErrorUserSet = true; }
     }
 
-    /// <summary>Override for <see cref="SenderErrorCategory.WriteError" />. Default: drop_and_continue.</summary>
+    /// <summary>
+    ///     Override for <see cref="SenderErrorCategory.WriteError" />. Default: retry
+    ///     (changed from <c>drop_and_continue</c> in NACK policy v2 — see <see cref="on_server_error" />).
+    /// </summary>
     public SenderErrorPolicy? on_write_error
     {
         get => _onWriteError;

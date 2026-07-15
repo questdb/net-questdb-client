@@ -277,6 +277,87 @@ public class QwpTableBufferTests
     }
 
     [Test]
+    public void OutOfOrderColumns_AcrossRows_RouteToCorrectColumn()
+    {
+        // Positional-cursor coverage: row 0 fixes the column order (a, b, c). Row 1 touches them in a
+        // DIFFERENT order (c, a, b), the only pattern that drives TouchExisting's cursor realignment
+        // (_appendCursor = existing + 1 with existing != cursor). A cursor bug that mis-realigned would
+        // silently write each value to the wrong column while every column still held *a* value, so the
+        // per-cell reads below are what catch it.
+        var t = new QwpTableBuffer("t");
+
+        t.AppendLong("a", 10);
+        t.AppendLong("b", 20);
+        t.AppendLong("c", 30);
+        t.At(0);
+
+        // c realigns the cursor back to 3, a realigns it back to 1, b then lands as a cursor fast-path hit.
+        t.AppendLong("c", 31);
+        t.AppendLong("a", 11);
+        t.AppendLong("b", 21);
+        t.At(1);
+
+        Assert.That(t.RowCount, Is.EqualTo(2));
+        Assert.That(t.Columns.Count, Is.EqualTo(3), "no duplicate columns from the out-of-order row");
+
+        var a = t.Columns[0];
+        var b = t.Columns[1];
+        var c = t.Columns[2];
+        Assert.That(a.Name, Is.EqualTo("a"));
+        Assert.That(b.Name, Is.EqualTo("b"));
+        Assert.That(c.Name, Is.EqualTo("c"));
+        foreach (var col in new[] { a, b, c })
+        {
+            Assert.That(col.NonNullCount, Is.EqualTo(2), $"{col.Name} must hold both rows with no null-pad");
+            Assert.That(col.NullCount, Is.Zero, $"{col.Name} must not be null-padded on the out-of-order row");
+        }
+
+        Assert.That(ReadLong(a, 0), Is.EqualTo(10L));
+        Assert.That(ReadLong(a, 1), Is.EqualTo(11L));
+        Assert.That(ReadLong(b, 0), Is.EqualTo(20L));
+        Assert.That(ReadLong(b, 1), Is.EqualTo(21L));
+        Assert.That(ReadLong(c, 0), Is.EqualTo(30L));
+        Assert.That(ReadLong(c, 1), Is.EqualTo(31L));
+    }
+
+    [Test]
+    public void SpanAndStringColumnNames_Interleaved_ResolveSameColumn()
+    {
+        // The span-name and string-name append paths share the positional cursor but match differently
+        // (span: SequenceEqual; string: ReferenceEquals-then-SequenceEqual). Interleaving them for the
+        // same logical column across rows must resolve the SAME column, never a duplicate — the only
+        // coverage for the span positional happy path and the string ReferenceEquals-miss fallback.
+        var t = new QwpTableBuffer("t");
+
+        // Row 0: create "a"/"b" via the string overload (stores the literal instances as Name).
+        t.AppendLong("a", 10);
+        t.AppendLong("b", 20);
+        t.At(0);
+
+        // Row 1: same columns via the SPAN overload (distinct span → SequenceEqual match).
+        t.AppendLong("a".AsSpan(), 11);
+        t.AppendLong("b".AsSpan(), 21);
+        t.At(1);
+
+        // Row 2: freshly-allocated strings (not the interned literals) → ReferenceEquals miss, SequenceEqual hit.
+        t.AppendLong(new string('a', 1), 12);
+        t.AppendLong(new string('b', 1), 22);
+        t.At(2);
+
+        Assert.That(t.Columns.Count, Is.EqualTo(2), "span/string paths must not create duplicate columns");
+        var a = t.Columns[0];
+        var b = t.Columns[1];
+        Assert.That(a.NonNullCount, Is.EqualTo(3));
+        Assert.That(b.NonNullCount, Is.EqualTo(3));
+        Assert.That(ReadLong(a, 0), Is.EqualTo(10L));
+        Assert.That(ReadLong(a, 1), Is.EqualTo(11L));
+        Assert.That(ReadLong(a, 2), Is.EqualTo(12L));
+        Assert.That(ReadLong(b, 0), Is.EqualTo(20L));
+        Assert.That(ReadLong(b, 1), Is.EqualTo(21L));
+        Assert.That(ReadLong(b, 2), Is.EqualTo(22L));
+    }
+
+    [Test]
     public void WideRow_512Columns_RoundTrips()
     {
         const int columnCount = 512;

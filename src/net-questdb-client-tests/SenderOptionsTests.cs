@@ -217,7 +217,7 @@ public class SenderOptionsTests
         var opts = new SenderOptions("ws::addr=localhost:9000;");
         Assert.That(opts.sf_dir, Is.Null);
         Assert.That(opts.sender_id, Is.EqualTo("default"));
-        Assert.That(opts.sf_max_bytes, Is.EqualTo(4L * 1024 * 1024));
+        Assert.That(opts.sf_max_segment_bytes, Is.EqualTo(4L * 1024 * 1024));
         Assert.That(opts.sf_max_total_bytes, Is.EqualTo(128L * 1024 * 1024));
         Assert.That(opts.sf_durability, Is.EqualTo("memory"));
         Assert.That(opts.sf_append_deadline_millis, Is.EqualTo(TimeSpan.FromSeconds(30)));
@@ -242,7 +242,7 @@ public class SenderOptionsTests
     {
         var opts = new SenderOptions(
             "wss::addr=questdb.io:9000;sf_dir=/var/qdb-sf;sender_id=svc-7;" +
-            "sf_max_bytes=1048576;sf_max_total_bytes=10485760;sf_durability=memory;" +
+            "sf_max_segment_bytes=1048576;sf_max_total_bytes=10485760;sf_durability=memory;" +
             "sf_append_deadline_millis=10000;reconnect_max_duration_millis=60000;" +
             "reconnect_initial_backoff_millis=200;reconnect_max_backoff_millis=5000;" +
             "initial_connect_retry=on;close_flush_timeout_millis=2000;" +
@@ -250,7 +250,7 @@ public class SenderOptionsTests
 
         Assert.That(opts.sf_dir, Is.EqualTo("/var/qdb-sf"));
         Assert.That(opts.sender_id, Is.EqualTo("svc-7"));
-        Assert.That(opts.sf_max_bytes, Is.EqualTo(1048576L));
+        Assert.That(opts.sf_max_segment_bytes, Is.EqualTo(1048576L));
         Assert.That(opts.sf_max_total_bytes, Is.EqualTo(10485760L));
         Assert.That(opts.sf_durability, Is.EqualTo("memory"));
         Assert.That(opts.sf_append_deadline_millis, Is.EqualTo(TimeSpan.FromMilliseconds(10000)));
@@ -1196,7 +1196,7 @@ public class SenderOptionsTests
     {
         var keys = new[]
         {
-            "sender_id=foo", "sf_max_bytes=1024", "sf_max_total_bytes=1024", "sf_durability=memory",
+            "sender_id=foo", "sf_max_segment_bytes=1024", "sf_max_total_bytes=1024", "sf_durability=memory",
             "sf_append_deadline_millis=1000", "reconnect_max_duration_millis=1000",
             "reconnect_initial_backoff_millis=1", "reconnect_max_backoff_millis=1",
             "initial_connect_retry=on", "close_flush_timeout_millis=100",
@@ -1425,19 +1425,19 @@ public class SenderOptionsTests
     }
 
     [Test]
-    public void SfMaxTotalBytes_LessThanTwiceSfMaxBytes_Rejected()
+    public void SfMaxTotalBytes_LessThanTwiceSfMaxSegmentBytes_Rejected()
     {
         Assert.That(
-            () => new SenderOptions("ws::addr=h:9000;sf_dir=/tmp/test;sf_max_bytes=8000000;sf_max_total_bytes=10000000;"),
+            () => new SenderOptions("ws::addr=h:9000;sf_dir=/tmp/test;sf_max_segment_bytes=8000000;sf_max_total_bytes=10000000;"),
             Throws.TypeOf<IngressError>().With.Message.Contains("sf_max_total_bytes"));
     }
 
     [Test]
-    public void SfMaxBytes_NonPositive_Rejected()
+    public void SfMaxSegmentBytes_NonPositive_Rejected()
     {
         Assert.That(
-            () => new SenderOptions("ws::addr=h:9000;sf_dir=/tmp/test;sf_max_bytes=0;"),
-            Throws.TypeOf<IngressError>().With.Message.Contains("sf_max_bytes"));
+            () => new SenderOptions("ws::addr=h:9000;sf_dir=/tmp/test;sf_max_segment_bytes=0;"),
+            Throws.TypeOf<IngressError>().With.Message.Contains("sf_max_segment_bytes"));
     }
 
     [Test]

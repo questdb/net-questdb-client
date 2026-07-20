@@ -94,7 +94,7 @@ public record SenderOptions
 
     private string? _sfDir;
     private string _senderId = "default";
-    private long _sfMaxBytes = 4L * 1024 * 1024;
+    private long _sfMaxSegmentBytes = 4L * 1024 * 1024;
     private long _sfMaxTotalBytes = 128L * 1024 * 1024;
     private string _sfDurability = "memory";
     private TimeSpan _sfAppendDeadline = TimeSpan.FromMilliseconds(30000);
@@ -143,7 +143,7 @@ public record SenderOptions
     private bool _transactionUserSet;
     private bool _sfDirUserSet;
     private bool _senderIdUserSet;
-    private bool _sfMaxBytesUserSet;
+    private bool _sfMaxSegmentBytesUserSet;
     private bool _sfMaxTotalBytesUserSet;
     private bool _sfDurabilityUserSet;
     private bool _sfAppendDeadlineUserSet;
@@ -284,8 +284,8 @@ public record SenderOptions
         ParseStringWithDefault(nameof(sf_dir), null, out _sfDir);
         ParseStringWithDefault(nameof(sender_id), "default", out var senderIdRaw);
         SetSenderId(senderIdRaw ?? "default");
-        ParseLongWithDefault(nameof(sf_max_bytes),
-            (4L * 1024 * 1024).ToString(System.Globalization.CultureInfo.InvariantCulture), out _sfMaxBytes);
+        ParseLongWithDefault(nameof(sf_max_segment_bytes),
+            (4L * 1024 * 1024).ToString(System.Globalization.CultureInfo.InvariantCulture), out _sfMaxSegmentBytes);
         _sfMaxTotalBytesUserSet = ReadOptionFromBuilder(nameof(sf_max_total_bytes)) is not null;
         var defaultMaxTotal = string.IsNullOrEmpty(_sfDir)
             ? 128L * 1024 * 1024
@@ -829,30 +829,30 @@ public record SenderOptions
             _sfMaxTotalBytes = 10L * 1024 * 1024 * 1024;
         }
 
-        if (_sfMaxBytes <= 0)
+        if (_sfMaxSegmentBytes <= 0)
         {
             throw new IngressError(ErrorCode.ConfigError,
-                $"`sf_max_bytes` must be > 0; got {_sfMaxBytes}");
+                $"`sf_max_segment_bytes` must be > 0; got {_sfMaxSegmentBytes}");
         }
         // A segment is buffered as a single contiguous byte[] (QwpCursorSendEngine's send buffer),
         // so it must fit a managed array; reject early as a clean ConfigError instead of letting an
         // oversized value surface as an opaque OverflowException/OOM at engine construction.
-        if (_sfMaxBytes > Array.MaxLength)
+        if (_sfMaxSegmentBytes > Array.MaxLength)
         {
             throw new IngressError(ErrorCode.ConfigError,
-                $"`sf_max_bytes` ({_sfMaxBytes}) exceeds the maximum single-segment size of {Array.MaxLength} bytes");
+                $"`sf_max_segment_bytes` ({_sfMaxSegmentBytes}) exceeds the maximum single-segment size of {Array.MaxLength} bytes");
         }
         if (_sfMaxTotalBytes <= 0)
         {
             throw new IngressError(ErrorCode.ConfigError,
                 $"`sf_max_total_bytes` must be > 0; got {_sfMaxTotalBytes}");
         }
-        // Overflow-safe form of `_sfMaxTotalBytes < 2 * _sfMaxBytes`; the doubled multiply
-        // wraps negative for huge sf_max_bytes and would defeat the check.
-        if (_sfMaxTotalBytes / 2 < _sfMaxBytes)
+        // Overflow-safe form of `_sfMaxTotalBytes < 2 * _sfMaxSegmentBytes`; the doubled multiply
+        // wraps negative for huge sf_max_segment_bytes and would defeat the check.
+        if (_sfMaxTotalBytes / 2 < _sfMaxSegmentBytes)
         {
             throw new IngressError(ErrorCode.ConfigError,
-                $"`sf_max_total_bytes` ({_sfMaxTotalBytes}) must be >= 2 * `sf_max_bytes` ({_sfMaxBytes}) so the segment manager has room to provision a hot spare.");
+                $"`sf_max_total_bytes` ({_sfMaxTotalBytes}) must be >= 2 * `sf_max_segment_bytes` ({_sfMaxSegmentBytes}) so the segment manager has room to provision a hot spare.");
         }
     }
 
@@ -867,7 +867,7 @@ public record SenderOptions
         if (_transactionUserSet) Throw(nameof(transaction));
         if (_sfDirUserSet) Throw(nameof(sf_dir));
         if (_senderIdUserSet) Throw(nameof(sender_id));
-        if (_sfMaxBytesUserSet) Throw(nameof(sf_max_bytes));
+        if (_sfMaxSegmentBytesUserSet) Throw(nameof(sf_max_segment_bytes));
         if (_sfMaxTotalBytesUserSet) Throw(nameof(sf_max_total_bytes));
         if (_sfDurabilityUserSet) Throw(nameof(sf_durability));
         if (_sfAppendDeadlineUserSet) Throw(nameof(sf_append_deadline_millis));
@@ -925,7 +925,7 @@ public record SenderOptions
         var keys = new List<string>
         {
             "request_durable_ack", "transaction",
-            "sf_dir", "sender_id", "sf_max_bytes", "sf_max_total_bytes", "sf_durability",
+            "sf_dir", "sender_id", "sf_max_segment_bytes", "sf_max_total_bytes", "sf_durability",
             "sf_append_deadline_millis", "reconnect_max_duration_millis", "reconnect_initial_backoff_millis",
             "reconnect_max_backoff_millis", "initial_connect_retry", "initial_connect_mode",
             "close_flush_timeout_millis", "drain_orphans", "max_background_drainers", "ping_timeout",
@@ -1549,10 +1549,10 @@ public record SenderOptions
     }
 
     /// <summary>Per-segment rotation threshold in bytes. Defaults to 4 MiB.</summary>
-    public long sf_max_bytes
+    public long sf_max_segment_bytes
     {
-        get => _sfMaxBytes;
-        set { _sfMaxBytes = value; _sfMaxBytesUserSet = true; }
+        get => _sfMaxSegmentBytes;
+        set { _sfMaxSegmentBytes = value; _sfMaxSegmentBytesUserSet = true; }
     }
 
     /// <summary>

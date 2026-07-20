@@ -144,7 +144,7 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender, IPooledSlotSende
                 var sfRoot = options.sf_dir!;
                 var slotDir = Path.Combine(sfRoot, options.sender_id);
                 slotLock = QwpSlotLock.Acquire(slotDir);
-                ring = QwpSegmentRing.Open(slotDir, segmentCapacity: options.sf_max_bytes);
+                ring = QwpSegmentRing.Open(slotDir, segmentCapacity: options.sf_max_segment_bytes);
                 if (ring.NextFsn == 0)
                 {
                     // Clear any stale watermark from a prior session that left no segments behind.
@@ -154,7 +154,7 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender, IPooledSlotSende
             }
             else
             {
-                ring = QwpSegmentRing.OpenMemoryBacked(segmentCapacity: options.sf_max_bytes);
+                ring = QwpSegmentRing.OpenMemoryBacked(segmentCapacity: options.sf_max_segment_bytes);
             }
 
             var authHeader = BuildAuthHeader(options);
@@ -225,7 +225,7 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender, IPooledSlotSende
                             () => !drainerTracker.IsRoundExhausted);
                     },
                     policy,
-                    segmentCapacity: options.sf_max_bytes,
+                    segmentCapacity: options.sf_max_segment_bytes,
                     drainTimeout: options.reconnect_max_duration_millis,
                     durableAckMode: options.request_durable_ack,
                     maxFrameRejections: options.max_frame_rejections,

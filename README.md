@@ -312,7 +312,7 @@ The config string format is:
 | `request_durable_ack`             | `off`        | `on` / `off` — opts into per-table object-store ACK watermarks (cast to `IQwpWebSocketSender`).         |
 | `sf_dir`                          |              | Path to a local directory enabling store-and-forward. Sets the SF stack on this sender.                  |
 | `sender_id`                       | `default`    | Slot identifier under `<sf_dir>/<sender_id>/`. Must be unique per process sharing the same `sf_dir`.     |
-| `sf_max_bytes`                    | `4194304`    | Per-segment rotation threshold in bytes (default 4 MiB).                                                 |
+| `sf_max_segment_bytes`                    | `4194304`    | Per-segment rotation threshold in bytes (default 4 MiB).                                                 |
 | `sf_max_total_bytes`              | `10 GiB` with `sf_dir`, `128 MiB` otherwise | Hard cap on total disk usage; back-pressures the producer when exceeded.            |
 | `sf_durability`                   | `memory`     | Durability mode. Only `memory` is supported in v1.                                                       |
 | `sf_append_deadline_millis`       | `30000`      | Max wait when the disk cap is hit before `Send` throws.                                                  |

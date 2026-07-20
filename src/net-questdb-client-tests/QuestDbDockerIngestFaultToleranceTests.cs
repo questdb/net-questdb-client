@@ -301,10 +301,10 @@ public class QuestDbDockerIngestFaultToleranceTests
     public async Task SfExhaustion_SurfacesAsAppendBackpressure_NotTerminal()
     {
         var table = NewTable();
-        // sf_max_total_bytes must be >= 2 * sf_max_bytes (room for a hot spare). Pooled Send is a
+        // sf_max_total_bytes must be >= 2 * sf_max_segment_bytes (room for a hot spare). Pooled Send is a
         // non-draining flush-to-ring, so the tiny store fills and surfaces append backpressure.
         await using var client = QuestDBClient.Connect(WsConn(
-            "sf_dir=" + NewSfDir() + ";sf_max_bytes=524288;sf_max_total_bytes=1048576;" +
+            "sf_dir=" + NewSfDir() + ";sf_max_segment_bytes=524288;sf_max_total_bytes=1048576;" +
             "sf_append_deadline_millis=2000;sender_pool_min=1;query_pool_min=0;"));
 
         await PauseAsync();

@@ -325,7 +325,7 @@ internal sealed class QwpSegmentRing : IDisposable
         if (frame.Length + QwpMmapSegment.EnvelopeHeaderSize > _segmentCapacity)
         {
             throw new ArgumentException(
-                $"frame ({frame.Length} bytes) exceeds segment capacity ({_segmentCapacity} bytes); raise sf_max_bytes",
+                $"frame ({frame.Length} bytes) exceeds segment capacity ({_segmentCapacity} bytes); raise sf_max_segment_bytes",
                 nameof(frame));
         }
 

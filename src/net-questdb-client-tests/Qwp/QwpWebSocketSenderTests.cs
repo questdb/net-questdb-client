@@ -962,7 +962,7 @@ public class QwpWebSocketSenderTests
         {
             using var sender = NewSender(server,
                 $"auto_flush_rows=2;auto_flush_interval=off;auto_flush_bytes=off;" +
-                $"sf_dir={sfRoot};sender_id=af-test;sf_max_bytes=4096;");
+                $"sf_dir={sfRoot};sender_id=af-test;sf_max_segment_bytes=4096;");
 
             for (var i = 0; i < 5; i++)
             {
@@ -989,7 +989,7 @@ public class QwpWebSocketSenderTests
         try
         {
             using (var sender = NewSender(server,
-                       $"auto_flush=off;sf_dir={sfRoot};sender_id=svc-multi;sf_max_bytes=4096;"))
+                       $"auto_flush=off;sf_dir={sfRoot};sender_id=svc-multi;sf_max_segment_bytes=4096;"))
             {
                 for (var i = 0; i < 3; i++)
                 {
@@ -1025,7 +1025,7 @@ public class QwpWebSocketSenderTests
         try
         {
             using (var sender = NewSender(server,
-                       $"auto_flush=off;sf_dir={sfRoot};sender_id=svc-a;sf_max_bytes=4096;"))
+                       $"auto_flush=off;sf_dir={sfRoot};sender_id=svc-a;sf_max_segment_bytes=4096;"))
             {
                 sender.Table("trades")
                     .Symbol("ticker", "ETH-USD")
@@ -1114,7 +1114,7 @@ public class QwpWebSocketSenderTests
         {
             using (var sender = NewSender(server,
                        $"auto_flush=on;auto_flush_rows=1;auto_flush_interval=off;auto_flush_bytes=off;" +
-                       $"sf_dir={sentRoot};sender_id=svc-a;sf_max_bytes=4096;"))
+                       $"sf_dir={sentRoot};sender_id=svc-a;sf_max_segment_bytes=4096;"))
             {
                 sender.Table("trades").Symbol("ticker", "ETH-USD").Column("price", 2615.54)
                     .At(new DateTime(2026, 4, 28, 12, 0, 0, DateTimeKind.Utc)); // auto-flush → on-disk ring
@@ -1133,7 +1133,7 @@ public class QwpWebSocketSenderTests
         try
         {
             using (var sender = NewSender(server,
-                       $"auto_flush=off;sf_dir={unsentRoot};sender_id=svc-b;sf_max_bytes=4096;"))
+                       $"auto_flush=off;sf_dir={unsentRoot};sender_id=svc-b;sf_max_segment_bytes=4096;"))
             {
                 sender.Table("trades").Symbol("ticker", "ETH-USD").Column("price", 2615.54)
                     .At(new DateTime(2026, 4, 28, 12, 0, 0, DateTimeKind.Utc));

@@ -29,6 +29,7 @@ using NUnit.Framework;
 using QuestDB;
 using QuestDB.Enums;
 using QuestDB.Qwp;
+using QuestDB.Qwp.Sf;
 using QuestDB.Senders;
 using QuestDB.Utils;
 using dummy_http_server;
@@ -57,6 +58,35 @@ public class QwpWebSocketSenderTests
 
         sender.Table("t").Column("x", 1L);
         Assert.ThrowsAsync<IngressError>(async () => await sender.SendAsync());
+    }
+
+    [Test]
+    public async Task RepeatingCurrentTableMidRow_PreservesPendingByteAccounting()
+    {
+        await using var server = StartServerWithOkAcks();
+        using var sender = NewSender(server, "auto_flush=off;");
+        const string value = "pending";
+
+        sender.Table("t").Column("s", value);
+        sender.Table("t").At(DateTime.UtcNow);
+
+        // First VARCHAR row: UTF-8 payload + two uint offsets + the 8-byte designated timestamp.
+        Assert.That(sender.Length, Is.EqualTo(value.Length + 2 * sizeof(uint) + sizeof(long)));
+    }
+
+    [Test]
+    public async Task SwitchingTablesMidRow_IsRejectedAndCurrentRowRemainsUsable()
+    {
+        await using var server = StartServerWithOkAcks();
+        using var sender = NewSender(server, "auto_flush=off;");
+
+        sender.Table("a").Column("x", 1L);
+        var ex = Assert.Throws<IngressError>(() => sender.Table("b"));
+        Assert.That(ex!.Message, Does.Contain("cannot switch tables while row is in progress"));
+
+        sender.Table("a").At(DateTime.UtcNow);
+        Assert.DoesNotThrow(() => sender.Send());
+        await WaitFor(() => server.ReceivedFrames.Count >= 1);
     }
 
     [Test]
@@ -207,7 +237,7 @@ public class QwpWebSocketSenderTests
     }
 
     [Test]
-    public async Task EndToEnd_SecondFlush_StaysSelfSufficient()
+    public async Task EndToEnd_SchemasStayInlineAcrossFlushes()
     {
         await using var server = StartServerWithOkAcks();
         using var sender = NewSender(server, "auto_flush=off;");
@@ -224,6 +254,34 @@ public class QwpWebSocketSenderTests
         // Byte 17 is col_count (= 2: user column "v" + designated TS).
         Assert.That(frames[0][17], Is.EqualTo((byte)2));
         Assert.That(frames[1][17], Is.EqualTo((byte)2));
+    }
+
+    [Test]
+    public async Task EndToEnd_SymbolDictionary_SendsOnlyNewEntriesAfterFirstFlush()
+    {
+        await using var server = StartServerWithOkAcks();
+        using var sender = NewSender(server, "auto_flush=off;");
+
+        sender.Table("t").Symbol("sym", "alpha").At(DateTime.UtcNow);
+        sender.Send();
+
+        // Reusing id 0 requires no dictionary bytes in the second frame.
+        sender.Table("t").Symbol("sym", "alpha").At(DateTime.UtcNow);
+        sender.Send();
+
+        // The next new value is emitted as the contiguous suffix starting at id 1.
+        sender.Table("t").Symbol("sym", "beta").At(DateTime.UtcNow);
+        sender.Send();
+
+        await WaitFor(() => server.ReceivedFrames.Count >= 3);
+        var frames = server.ReceivedFrames.Take(3).ToArray();
+
+        Assert.That(ReadSymbolDelta(frames[0]),
+            Is.EqualTo((0, new[] { "alpha" })));
+        Assert.That(ReadSymbolDelta(frames[1]),
+            Is.EqualTo((1, Array.Empty<string>())));
+        Assert.That(ReadSymbolDelta(frames[2]),
+            Is.EqualTo((1, new[] { "beta" })));
     }
 
     [Test]
@@ -278,7 +336,7 @@ public class QwpWebSocketSenderTests
     }
 
     [Test]
-    public async Task EndToEnd_SymbolDictAccumulatesAcrossFlushes()
+    public async Task EndToEnd_SymbolIdsAccumulateButFramesCarryOnlyDelta()
     {
         await using var server = StartServerWithOkAcks();
         using var sender = NewSender(server, "auto_flush=off;");
@@ -291,16 +349,10 @@ public class QwpWebSocketSenderTests
         await WaitFor(() => server.ReceivedFrames.Count >= 2);
         var frames = server.ReceivedFrames.Take(2).ToList();
 
-        // Frames stay self-sufficient (delta_start=0), but symbol ids accumulate: the
-        // second frame re-emits the full prefix ["us", "eu"] so a client symbol id
-        // always denotes the same value across flushes.
-        Assert.That(frames[0][12], Is.EqualTo(0));
-        Assert.That(frames[0][13], Is.EqualTo(1));
-
-        Assert.That(frames[1][12], Is.EqualTo(0));
-        Assert.That(frames[1][13], Is.EqualTo(2));
-        Assert.That(System.Text.Encoding.UTF8.GetString(frames[1], 15, 2), Is.EqualTo("us"));
-        Assert.That(System.Text.Encoding.UTF8.GetString(frames[1], 18, 2), Is.EqualTo("eu"));
+        // Ids remain sender-lifetime global, while the second frame carries only id 1 ("eu").
+        // Reconnect catch-up restores id 0 before any dependent frame is replayed.
+        Assert.That(ReadSymbolDelta(frames[0]), Is.EqualTo((0, new[] { "us" })));
+        Assert.That(ReadSymbolDelta(frames[1]), Is.EqualTo((1, new[] { "eu" })));
     }
 
     [Test]
@@ -982,7 +1034,7 @@ public class QwpWebSocketSenderTests
     }
 
     [Test]
-    public async Task EndToEnd_Sf_EveryFrame_IsSelfSufficient_AcrossMultipleFlushes()
+    public async Task EndToEnd_Sf_UsesPersistedSymbolDeltasAcrossMultipleFlushes()
     {
         await using var server = StartServerWithOkAcks();
         var sfRoot = Path.Combine(Path.GetTempPath(), "qwp-sf-multi-" + Guid.NewGuid().ToString("N"));
@@ -1005,11 +1057,14 @@ public class QwpWebSocketSenderTests
             }
 
             Assert.That(server.ReceivedFrames.Count, Is.EqualTo(3));
-            foreach (var frame in server.ReceivedFrames)
-            {
-                Assert.That(frame[12], Is.EqualTo(0x00), "delta_start = 0 in self-sufficient mode");
-                Assert.That(frame[13], Is.EqualTo(0x01), "delta_count = 1 (single symbol re-emitted each flush)");
-            }
+            var frames = server.ReceivedFrames.ToArray();
+            Assert.That(ReadSymbolDelta(frames[0]),
+                Is.EqualTo((0, new[] { "ETH-USD" })));
+            Assert.That(ReadSymbolDelta(frames[1]),
+                Is.EqualTo((1, Array.Empty<string>())),
+                "the persisted side file makes a full prefix in every SF frame unnecessary");
+            Assert.That(ReadSymbolDelta(frames[2]),
+                Is.EqualTo((1, Array.Empty<string>())));
         }
         finally
         {
@@ -1018,7 +1073,7 @@ public class QwpWebSocketSenderTests
     }
 
     [Test]
-    public async Task EndToEnd_Sf_SingleRow_FrameReachesServerAndIsSelfSufficient()
+    public async Task EndToEnd_Sf_SingleRow_FrameReachesServerWithPersistedDelta()
     {
         await using var server = StartServerWithOkAcks();
         var sfRoot = Path.Combine(Path.GetTempPath(), "qwp-sf-smoke-" + Guid.NewGuid().ToString("N"));
@@ -1040,10 +1095,91 @@ public class QwpWebSocketSenderTests
             Assert.That(server.ReceivedFrames.Count, Is.EqualTo(1));
             var frame = server.ReceivedFrames.First();
 
-            // SF frames are self-sufficient: delta dict starts at id 0 with the full known set,
-            // even after the engine commits. (The inline schema travels with every frame anyway.)
-            Assert.That(frame[12], Is.EqualTo(0x00), "delta_start = 0 in self-sufficient mode");
-            Assert.That(frame[13], Is.EqualTo(0x01), "delta_count = 1 (single symbol 'ETH-USD')");
+            // The first SF frame introduces id 0; subsequent frames use deltas and recovery gets
+            // the complete prefix from the per-slot .symbol-dict side file.
+            Assert.That(ReadSymbolDelta(frame),
+                Is.EqualTo((0, new[] { "ETH-USD" })));
+        }
+        finally
+        {
+            TryDeleteDirectory(sfRoot);
+        }
+    }
+
+    [Test]
+    public async Task EndToEnd_Sf_Restart_CatchesUpDictionaryBeforeReplayingUnackedFrame()
+    {
+        var sfRoot = Path.Combine(Path.GetTempPath(), "qwp-sf-restart-dict-" + Guid.NewGuid().ToString("N"));
+        const string senderId = "svc-restart";
+        var symbolDictionaryPath = Path.Combine(sfRoot, senderId, QwpPersistedSymbolDictionary.FileName);
+        var port = 0;
+
+        try
+        {
+            var firstServer = new DummyQwpServer(new DummyQwpServerOptions
+            {
+                // Persist and transmit the data frame, but leave it unacked so the next sender
+                // instance must recover and replay it from the same SF slot.
+                FrameHandler = _ => null,
+            });
+            await firstServer.StartAsync();
+            port = firstServer.Uri.Port;
+            try
+            {
+                using (var firstSender = NewSender(firstServer,
+                           $"auto_flush=off;close_flush_timeout_millis=0;sf_dir={sfRoot};" +
+                           $"sender_id={senderId};sf_max_segment_bytes=4096;"))
+                {
+                    firstSender.Table("trades")
+                        .Symbol("ticker", "ETH-USD")
+                        .Column("price", 2615.54)
+                        .At(new DateTime(2026, 4, 28, 12, 0, 0, DateTimeKind.Utc));
+                    firstSender.Send();
+                    await WaitFor(() => firstServer.ReceivedFrames.Count >= 1);
+                    Assert.That(firstServer.ReceivedFrames.Count, Is.EqualTo(1));
+                }
+            }
+            finally
+            {
+                await firstServer.DisposeAsync();
+            }
+
+            Assert.That(File.Exists(symbolDictionaryPath), Is.True,
+                "the write-ahead dictionary must survive while its data frame is unacked");
+
+            long nextSequence = 0;
+            await using var restartedServer = new DummyQwpServer(new DummyQwpServerOptions
+            {
+                Port = port,
+                FrameHandler = _ => BuildOkAck(Interlocked.Increment(ref nextSequence) - 1),
+            });
+            await restartedServer.StartAsync();
+
+            using (var restartedSender = NewSender(restartedServer,
+                       $"auto_flush=off;sf_dir={sfRoot};sender_id={senderId};sf_max_segment_bytes=4096;"))
+            {
+                ((IQwpWebSocketSender)restartedSender).Ping();
+                await WaitFor(() => restartedServer.ReceivedFrames.Count >= 2);
+
+                var frames = restartedServer.ReceivedFrames.ToArray();
+                Assert.That(frames, Has.Length.EqualTo(2));
+                Assert.That(BinaryPrimitives.ReadUInt16LittleEndian(
+                        frames[0].AsSpan(QwpConstants.OffsetTableCount, 2)),
+                    Is.EqualTo(0), "the connection-scoped dictionary catch-up must be sent first");
+                Assert.That(frames[0][QwpConstants.OffsetFlags] & QwpConstants.FlagDeferCommit,
+                    Is.EqualTo(QwpConstants.FlagDeferCommit));
+                Assert.That(ReadSymbolDelta(frames[0]),
+                    Is.EqualTo((0, new[] { "ETH-USD" })));
+
+                Assert.That(BinaryPrimitives.ReadUInt16LittleEndian(
+                        frames[1].AsSpan(QwpConstants.OffsetTableCount, 2)),
+                    Is.EqualTo(1), "the unacked data frame must be replayed after catch-up");
+                Assert.That(ReadSymbolDelta(frames[1]),
+                    Is.EqualTo((0, new[] { "ETH-USD" })));
+            }
+
+            Assert.That(File.Exists(symbolDictionaryPath), Is.False,
+                "a fully acked and closed slot no longer needs the recovery side file");
         }
         finally
         {
@@ -1122,6 +1258,8 @@ public class QwpWebSocketSenderTests
 
             Assert.That(SegmentBytesOnDisk(sentRoot), Is.GreaterThan(0),
                 "a flushed row is persisted to the SF segment ring");
+            Assert.That(File.Exists(Path.Combine(sentRoot, "svc-a", QwpPersistedSymbolDictionary.FileName)),
+                Is.True, "an unacked delta frame must retain its write-ahead symbol dictionary");
         }
         finally
         {
@@ -1724,6 +1862,26 @@ public class QwpWebSocketSenderTests
         BinaryPrimitives.WriteInt64LittleEndian(bytes.AsSpan(1, 8), sequence);
         BinaryPrimitives.WriteUInt16LittleEndian(bytes.AsSpan(9, 2), 0);
         return bytes;
+    }
+
+    private static (int Start, string[] Entries) ReadSymbolDelta(byte[] frame)
+    {
+        var p = QwpConstants.HeaderSize;
+        var start = checked((int)QwpVarint.Read(frame.AsSpan(p), out var read));
+        p += read;
+        var count = checked((int)QwpVarint.Read(frame.AsSpan(p), out read));
+        p += read;
+
+        var entries = new string[count];
+        for (var i = 0; i < count; i++)
+        {
+            var len = checked((int)QwpVarint.Read(frame.AsSpan(p), out read));
+            p += read;
+            entries[i] = QwpStrictUtf8.Encoding.GetString(frame, p, len);
+            p += len;
+        }
+
+        return (start, entries);
     }
 
     private static byte[] BuildOkAckWithEntries(long sequence, params (string Name, long SeqTxn)[] entries)

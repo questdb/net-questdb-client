@@ -46,6 +46,18 @@ public enum SenderErrorCategory
     /// <summary>Non-critical Cairo error, table not accepting writes. Wire 0x09.</summary>
     WriteError,
 
+    /// <summary>
+    ///     The connected node cannot currently accept writes (for example a replica or demoting
+    ///     primary). Wire 0x0C. Reconnecting allows endpoint rotation.
+    /// </summary>
+    NotWritable,
+
+    /// <summary>
+    ///     A delta began above the server's connection-scoped symbol dictionary. Wire 0x0D.
+    ///     Reconnecting and sending dictionary catch-up makes the same data frame valid.
+    /// </summary>
+    DictionaryGap,
+
     /// <summary>WebSocket-layer close frame with a terminal code.</summary>
     ProtocolViolation,
 

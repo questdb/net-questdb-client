@@ -166,7 +166,7 @@ public sealed class QueryOptions
 
     /// <summary>TLS hostname/cert verification policy for <c>wss::</c>.</summary>
     public TlsVerifyType tls_verify { get; set; } = TlsVerifyType.on;
-    /// <summary>Optional path to a PFX bundle pinning custom CA roots.</summary>
+    /// <summary>Optional path to a PEM or PFX/PKCS#12 bundle pinning custom CA roots.</summary>
     public string? tls_roots { get; set; }
     /// <summary>Optional password for <see cref="tls_roots" />.</summary>
     public string? tls_roots_password { get; set; }

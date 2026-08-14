@@ -36,6 +36,8 @@ public class QwpErrorClassifierTests
     [TestCase(QwpStatusCode.InternalError, SenderErrorCategory.InternalError)]
     [TestCase(QwpStatusCode.SecurityError, SenderErrorCategory.SecurityError)]
     [TestCase(QwpStatusCode.WriteError, SenderErrorCategory.WriteError)]
+    [TestCase(QwpStatusCode.NotWritable, SenderErrorCategory.NotWritable)]
+    [TestCase(QwpStatusCode.DictionaryGap, SenderErrorCategory.DictionaryGap)]
     [TestCase((QwpStatusCode)0xFF, SenderErrorCategory.Unknown)]
     public void Classify_ReturnsExpectedCategory(QwpStatusCode status, SenderErrorCategory expected)
     {
@@ -46,6 +48,8 @@ public class QwpErrorClassifierTests
     // deterministic-under-replay categories latch terminal.
     [TestCase(SenderErrorCategory.WriteError, SenderErrorPolicy.Retriable)]
     [TestCase(SenderErrorCategory.InternalError, SenderErrorPolicy.Retriable)]
+    [TestCase(SenderErrorCategory.NotWritable, SenderErrorPolicy.Retriable)]
+    [TestCase(SenderErrorCategory.DictionaryGap, SenderErrorPolicy.Retriable)]
     [TestCase(SenderErrorCategory.Unknown, SenderErrorPolicy.Retriable)]
     [TestCase(SenderErrorCategory.SchemaMismatch, SenderErrorPolicy.Terminal)]
     [TestCase(SenderErrorCategory.ParseError, SenderErrorPolicy.Terminal)]

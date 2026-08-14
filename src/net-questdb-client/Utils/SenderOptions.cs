@@ -1556,8 +1556,10 @@ public record SenderOptions
     }
 
     /// <summary>
-    ///     Hard cap on total bytes across all live segments in the slot. Defaults to 128 MiB without
-    ///     <see cref="sf_dir" /> set, 10 GiB with it. When the cap is hit the producer hits backpressure.
+    ///     Hard cap on total bytes across all live segments and the persisted symbol dictionary in
+    ///     the slot. Defaults to 128 MiB without <see cref="sf_dir" /> set, 10 GiB with it. When the
+    ///     cap is hit the producer hits backpressure. File mode may exceed the cap by the minimum
+    ///     active-segment-plus-spare working set when a large dictionary leaves no reclaimable room.
     /// </summary>
     public long sf_max_total_bytes
     {

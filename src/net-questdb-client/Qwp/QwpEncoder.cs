@@ -44,8 +44,8 @@ namespace QuestDB.Qwp;
 ///     no longer has a schema-mode byte or schema-id. The encoder is stateless across flushes.
 ///     <para />
 ///     <b>FLAG_DELTA_SYMBOL_DICT</b> is always set; symbol columns reference connection-global ids.
-///     In self-sufficient mode the prelude carries the dictionary prefix from id 0 covering every
-///     id the frame references; in delta mode it carries only the delta since the last flush.
+///     In prefix mode the prelude carries the dictionary prefix from id 0 covering every id the
+///     frame references; in normal delta mode it carries only entries published since the last frame.
 ///     When a frame references no symbols, the prelude is empty (<c>0x00 0x00</c>) but still written.
 ///     <para />
 ///     <b>FLAG_GORILLA</b> is always set. Each TIMESTAMP / TIMESTAMP_NANOS column body is
@@ -53,9 +53,9 @@ namespace QuestDB.Qwp;
 ///     DoD); the encoder transparently falls back to uncompressed when DoDs overflow int32, and
 ///     always emits the flag (even for all-null columns).
 ///     <para />
-///     The encoder reads the symbol dictionary but never mutates it; in self-sufficient mode it
-///     re-emits the dictionary prefix from id 0 on every frame, so there is no per-flush watermark
-///     to advance.
+///     The encoder reads the symbol dictionary but never mutates it. Prefix mode remains available
+///     for compatibility and recovery tests; production RAM and store-and-forward senders use
+///     deltas and restore connection state with a dictionary catch-up frame after every reconnect.
 /// </remarks>
 internal static class QwpEncoder
 {
@@ -67,10 +67,11 @@ internal static class QwpEncoder
     /// <param name="tables">Non-empty tables to include. The caller is expected to filter out tables with zero rows.</param>
     /// <param name="symbolDictionary">Connection-global symbol dictionary; only the delta is emitted.</param>
     /// <param name="selfSufficient">
-    ///     If <c>true</c>, the symbol delta prelude starts at id 0 — the receiver needs no prior
-    ///     connection state. Required by store-and-forward mode where each frame must be replayable
-    ///     in isolation. Column schemas always travel inline regardless of this flag. Defaults to <c>false</c>.
+    ///     If <c>true</c>, the symbol delta prelude starts at id 0, so the receiver needs no prior
+    ///     connection state. Column schemas always travel inline regardless of this flag. Production
+    ///     senders use <c>false</c>; this mode is retained for compatibility and recovery tests.
     /// </param>
+    /// <param name="deferCommit">Whether to set <c>FLAG_DEFER_COMMIT</c> on the encoded frame.</param>
     /// <returns>The complete QWP frame, including the 12-byte header.</returns>
     /// <remarks>Allocates per call. Production paths use <see cref="EncodeInto" /> directly.</remarks>
     internal static byte[] Encode(

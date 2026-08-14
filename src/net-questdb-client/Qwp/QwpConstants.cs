@@ -97,6 +97,13 @@ internal static class QwpConstants
     /// <summary>Maximum number of columns in a single table.</summary>
     public const int MaxColumnsPerTable = 2048;
 
+    /// <summary>
+    ///     Maximum number of distinct symbol values in an ingress sender's connection-global
+    ///     dictionary. The server rejects a delta whose start id plus entry count exceeds this
+    ///     limit, so the sender must refuse the next new value before buffering its row.
+    /// </summary>
+    public const int MaxSymbolDictionarySize = 1_000_000;
+
     /// <summary>Maximum table or column name length, in UTF-8 bytes.</summary>
     public const int MaxNameLengthBytes = 127;
 

@@ -52,6 +52,7 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender, IPooledSlotSende
     private readonly Dictionary<string, QwpTableBuffer>.AlternateLookup<ReadOnlySpan<char>> _tablesLookup;
 #endif
     private readonly QwpSymbolDictionary _symbolDictionary;
+    private readonly bool _selfSufficientSymbolFrames;
     private readonly List<QwpTableBuffer> _flushBatch = new();
     private readonly QwpEncoder.FrameBuilder _encoderBuffer;
 
@@ -61,6 +62,7 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender, IPooledSlotSende
     private readonly QwpSenderErrorDispatcher? _errorDispatcher;
     private readonly QwpConnectionEventDispatcher? _connectionEventDispatcher;
     private readonly QwpTlsAuth.CertificateValidator? _certValidator;
+    private readonly QwpPersistedSymbolDictionary? _persistedSymbolDictionary;
 
     private readonly Dictionary<string, long> _committedSeqTxn = new(StringComparer.Ordinal);
     private readonly Dictionary<string, long> _durableSeqTxn = new(StringComparer.Ordinal);
@@ -98,7 +100,11 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender, IPooledSlotSende
 #endif
         _encoderBuffer = new QwpEncoder.FrameBuilder(EncoderInitialCapacity);
 
-        (_slotLock, _engine, _drainerPool, _errorDispatcher, _connectionEventDispatcher, _certValidator) = BuildEngineStack(options);
+        (_slotLock, _engine, _drainerPool, _errorDispatcher, _connectionEventDispatcher,
+            _certValidator, _persistedSymbolDictionary) = BuildEngineStack(options, _symbolDictionary);
+        // Both RAM and file-backed modes now have a reconnect dictionary source: the I/O mirror in
+        // RAM, and the per-slot persisted dictionary for SF/restart/orphan recovery.
+        _selfSufficientSymbolFrames = false;
         _engine.SetTableEntryHandler(UpdateSeqTxnFromAck);
     }
 
@@ -124,8 +130,8 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender, IPooledSlotSende
     /// </summary>
     public bool IsFullyDrained => _engine.IsFullyDrained;
 
-    private static (QwpSlotLock? slotLock, QwpCursorSendEngine engine, QwpBackgroundDrainerPool? pool, QwpSenderErrorDispatcher? dispatcher, QwpConnectionEventDispatcher? eventDispatcher, QwpTlsAuth.CertificateValidator? certValidator)
-        BuildEngineStack(SenderOptions options)
+    private static (QwpSlotLock? slotLock, QwpCursorSendEngine engine, QwpBackgroundDrainerPool? pool, QwpSenderErrorDispatcher? dispatcher, QwpConnectionEventDispatcher? eventDispatcher, QwpTlsAuth.CertificateValidator? certValidator, QwpPersistedSymbolDictionary? persistedSymbolDictionary)
+        BuildEngineStack(SenderOptions options, QwpSymbolDictionary symbolDictionary)
     {
         var sfMode = !string.IsNullOrEmpty(options.sf_dir);
         QwpSlotLock? slotLock = null;
@@ -136,6 +142,7 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender, IPooledSlotSende
         QwpSenderErrorDispatcher? dispatcher = null;
         QwpConnectionEventDispatcher? eventDispatcher = null;
         QwpTlsAuth.CertificateValidator? certValidator = null;
+        QwpPersistedSymbolDictionary? persistedSymbolDictionary = null;
 
         try
         {
@@ -151,6 +158,12 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender, IPooledSlotSende
                     QwpAckWatermark.RemoveOrphan(slotDir);
                 }
                 ackWatermark = QwpAckWatermark.Open(slotDir);
+                persistedSymbolDictionary = QwpPersistedSymbolDictionary.OpenOrRecover(slotDir, ring);
+                foreach (var symbol in persistedSymbolDictionary.SnapshotEntries())
+                {
+                    symbolDictionary.AddRecovered(symbol);
+                }
+                symbolDictionary.Commit();
             }
             else
             {
@@ -194,7 +207,9 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender, IPooledSlotSende
                 ackWatermark: ackWatermark,
                 connectionEventSink: capturedSink is null ? null : (Action<SenderConnectionEvent>)(evt => capturedSink.Offer(evt)),
                 maxFrameRejections: options.max_frame_rejections,
-                poisonMinEscalationWindow: options.poison_min_escalation_window_millis);
+                poisonMinEscalationWindow: options.poison_min_escalation_window_millis,
+                deltaDictionaryCatchUp: true,
+                persistedSymbolDictionary: persistedSymbolDictionary);
 
             engine.Start();
 
@@ -257,7 +272,7 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender, IPooledSlotSende
                 }
             }
 
-            return (slotLock, engine, pool, dispatcher, eventDispatcher, certValidator);
+            return (slotLock, engine, pool, dispatcher, eventDispatcher, certValidator, persistedSymbolDictionary);
         }
         catch (Exception)
         {
@@ -269,6 +284,7 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender, IPooledSlotSende
             SfCleanup.Dispose(ackWatermark);
             SfCleanup.Dispose(slotLock);
             SfCleanup.Dispose(certValidator);
+            SfCleanup.Dispose(persistedSymbolDictionary);
             throw;
         }
     }
@@ -344,25 +360,36 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender, IPooledSlotSende
         // StringComparer.Ordinal, so SequenceEqual is exactly equivalent; a miss (first use or a
         // table switch) falls to the dictionary and, if absent, creates the buffer.
         var t = _currentTable;
-        if (t is null || !name.SequenceEqual(t.TableName))
+        if (t is not null && name.SequenceEqual(t.TableName))
         {
-#if NET9_0_OR_GREATER
-            if (!_tablesLookup.TryGetValue(name, out t))
-            {
-                var key = name.ToString();
-                t = new QwpTableBuffer(key, Options.max_name_len);
-                _tables[key] = t;
-            }
-#else
-            var key = name.ToString();
-            if (!_tables.TryGetValue(key, out t))
-            {
-                t = new QwpTableBuffer(key, Options.max_name_len);
-                _tables[key] = t;
-            }
-#endif
-            _currentTable = t;
+            // Do not re-anchor the byte snapshot when callers repeat Table() in the middle of a row:
+            // the buffer already contains that row's uncommitted bytes, while the snapshot must stay
+            // at the last committed boundary for row-size and auto-flush accounting.
+            return this;
         }
+
+        if (t?.HasPendingRow == true)
+        {
+            throw new IngressError(ErrorCode.InvalidApiCall,
+                $"cannot switch tables while row is in progress [currentTable={t.TableName}]");
+        }
+
+#if NET9_0_OR_GREATER
+        if (!_tablesLookup.TryGetValue(name, out t))
+        {
+            var key = name.ToString();
+            t = new QwpTableBuffer(key, Options.max_name_len);
+            _tables[key] = t;
+        }
+#else
+        var key = name.ToString();
+        if (!_tables.TryGetValue(key, out t))
+        {
+            t = new QwpTableBuffer(key, Options.max_name_len);
+            _tables[key] = t;
+        }
+#endif
+        _currentTable = t;
 
         _currentTableSnapshotBytes = t.GetBufferedBytes();
         return this;
@@ -1123,8 +1150,8 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender, IPooledSlotSende
 
         return QwpEncoder.EncodeInto(
             _encoderBuffer, _flushBatch, _symbolDictionary,
-            selfSufficient: true,
-            symbolDeltaCount: _currentBatchMaxSymbolId + 1,
+            selfSufficient: _selfSufficientSymbolFrames,
+            symbolDeltaCount: _selfSufficientSymbolFrames ? _currentBatchMaxSymbolId + 1 : -1,
             deferCommit: deferCommit);
     }
 
@@ -1135,8 +1162,8 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender, IPooledSlotSende
     {
         return QwpEncoder.EncodeInto(
             _encoderBuffer, Array.Empty<QwpTableBuffer>(), _symbolDictionary,
-            selfSufficient: true,
-            symbolDeltaCount: _currentBatchMaxSymbolId + 1,
+            selfSufficient: _selfSufficientSymbolFrames,
+            symbolDeltaCount: _selfSufficientSymbolFrames ? _currentBatchMaxSymbolId + 1 : -1,
             deferCommit: false);
     }
 
@@ -1146,6 +1173,7 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender, IPooledSlotSende
         if (len > 0)
         {
             GuardBatchSize(len);
+            PersistSymbolDictionaryBeforePublish();
             _engine.AppendBlocking(_encoderBuffer.AsSpan(0, len), ct);
             OnFlushSucceeded();
             _hasDeferredMessages = deferCommit;
@@ -1156,6 +1184,8 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender, IPooledSlotSende
         if (!deferCommit && _hasDeferredMessages)
         {
             var commitLen = EncodeCommitFrame();
+            GuardBatchSize(commitLen);
+            PersistSymbolDictionaryBeforePublish();
             _engine.AppendBlocking(_encoderBuffer.AsSpan(0, commitLen), ct);
             OnFlushSucceeded();
             _hasDeferredMessages = false;
@@ -1168,6 +1198,7 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender, IPooledSlotSende
         if (len > 0)
         {
             GuardBatchSize(len);
+            PersistSymbolDictionaryBeforePublish();
             await _engine.AppendAsync(_encoderBuffer.WrittenMemory, ct).ConfigureAwait(false);
             OnFlushSucceeded();
             _hasDeferredMessages = deferCommit;
@@ -1176,7 +1207,9 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender, IPooledSlotSende
 
         if (!deferCommit && _hasDeferredMessages)
         {
-            EncodeCommitFrame();
+            var commitLen = EncodeCommitFrame();
+            GuardBatchSize(commitLen);
+            PersistSymbolDictionaryBeforePublish();
             await _engine.AppendAsync(_encoderBuffer.WrittenMemory, ct).ConfigureAwait(false);
             OnFlushSucceeded();
             _hasDeferredMessages = false;
@@ -1195,7 +1228,9 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender, IPooledSlotSende
         if (len == 0)
         {
             if (!_hasDeferredMessages) return _engine.NextFsn - 1;
-            EncodeCommitFrame();
+            var commitLen = EncodeCommitFrame();
+            GuardBatchSize(commitLen);
+            PersistSymbolDictionaryBeforePublish();
             await _engine.AppendAsync(_encoderBuffer.WrittenMemory, ct).ConfigureAwait(false);
             var committedFsn = _engine.NextFsn - 1;
             OnFlushSucceeded();
@@ -1203,6 +1238,7 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender, IPooledSlotSende
             return committedFsn;
         }
         GuardBatchSize(len);
+        PersistSymbolDictionaryBeforePublish();
         await _engine.AppendAsync(_encoderBuffer.WrittenMemory, ct).ConfigureAwait(false);
         var publishedFsn = _engine.NextFsn - 1;
         OnFlushSucceeded();
@@ -1220,6 +1256,10 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender, IPooledSlotSende
 
     private void OnFlushSucceeded()
     {
+        // Publication into the ordered cursor ring, rather than the later server ACK, is the
+        // producer's delta boundary. Reconnect catch-up restores this published prefix before any
+        // frame that depends on it is replayed.
+        _symbolDictionary.Commit();
         ResetPendingState();
         LastFlush = DateTime.UtcNow;
         _lastFlushTickCount = Environment.TickCount64;
@@ -1227,8 +1267,8 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender, IPooledSlotSende
 
     private void ResetPendingState()
     {
-        // Symbol ids must stay stable for the connection's lifetime; resetting the
-        // dictionary per flush makes the server serve stale symbol-cache hits.
+        // Symbol ids must stay stable for the sender's lifetime; reconnect catch-up restores the
+        // same id space on every new connection.
         _currentBatchMaxSymbolId = -1;
         foreach (var t in _flushBatch)
         {
@@ -1239,6 +1279,8 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender, IPooledSlotSende
         _runningRowCount = 0;
         _pendingBytes = 0;
         _currentTableSnapshotBytes = 0;
+        // No buffered row can still reference entries allocated after the last published frame.
+        RollbackUnpublishedSymbols();
         _currentTable = null;
     }
 
@@ -1273,6 +1315,7 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender, IPooledSlotSende
         _runningRowCount = 0;
         _pendingBytes = 0;
         _currentTableSnapshotBytes = 0;
+        RollbackUnpublishedSymbols();
     }
 
     /// <inheritdoc />
@@ -1523,6 +1566,17 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender, IPooledSlotSende
         ResetPendingState();
         throw new IngressError(ErrorCode.InvalidApiCall,
             $"batch too large for server batch cap [messageSize={messageSize}, serverMaxBatchSize={cap}, droppedRows={droppedRows}]");
+    }
+
+    private void PersistSymbolDictionaryBeforePublish()
+    {
+        _persistedSymbolDictionary?.AppendNewSymbols(_symbolDictionary);
+    }
+
+    private void RollbackUnpublishedSymbols()
+    {
+        var persistenceFloor = _persistedSymbolDictionary?.Count ?? 0;
+        _symbolDictionary.RollbackTo(Math.Max(_symbolDictionary.CommittedCount, persistenceFloor));
     }
 
     private long DateTimeToMicros(DateTime value)

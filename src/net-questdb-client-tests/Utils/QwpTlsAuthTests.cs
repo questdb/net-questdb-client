@@ -161,6 +161,48 @@ public class QwpTlsAuthTests
         }
     }
 
+    [Test]
+    public void BuildCertificateValidator_PemBundleAcceptsCertificateFromEveryRoot()
+    {
+        using var firstCa = NewCertificateAuthority("CN=qwp-first-ca");
+        using var secondCa = NewCertificateAuthority("CN=qwp-second-ca");
+        using var firstLeaf = NewLeafCertificate("CN=first.qwp.test", firstCa);
+        using var secondLeaf = NewLeafCertificate("CN=second.qwp.test", secondCa);
+
+        var pemPath = Path.Combine(Path.GetTempPath(), "qwp-ca-bundle-" + Guid.NewGuid().ToString("N") + ".pem");
+        File.WriteAllText(pemPath,
+            ExportCertificatePem(firstCa) + Environment.NewLine + ExportCertificatePem(secondCa));
+        try
+        {
+            using var validator = QwpTlsAuth.BuildCertificateValidator(TlsVerifyType.on, pemPath, null);
+            Assert.That(validator, Is.Not.Null);
+
+            using var firstChain = new X509Chain();
+            Assert.That(
+                validator!.Callback(this, firstLeaf, firstChain, SslPolicyErrors.RemoteCertificateChainErrors),
+                Is.True,
+                "the first root in the PEM bundle must be trusted");
+
+            using var secondChain = new X509Chain();
+            Assert.That(
+                validator.Callback(this, secondLeaf, secondChain, SslPolicyErrors.RemoteCertificateChainErrors),
+                Is.True,
+                "roots after the first PEM certificate must also be trusted");
+        }
+        finally
+        {
+            try { File.Delete(pemPath); } catch { }
+        }
+    }
+
+    private static string ExportCertificatePem(X509Certificate2 certificate)
+    {
+        // X509Certificate2.ExportCertificatePem() is newer than the library's net6 target.
+        var base64 = Convert.ToBase64String(certificate.RawData, Base64FormattingOptions.InsertLineBreaks);
+        return $"-----BEGIN CERTIFICATE-----{Environment.NewLine}{base64}{Environment.NewLine}" +
+               $"-----END CERTIFICATE-----{Environment.NewLine}";
+    }
+
     private static X509Certificate2 NewCertificateAuthority(string subject)
     {
         using var rsa = RSA.Create(2048);

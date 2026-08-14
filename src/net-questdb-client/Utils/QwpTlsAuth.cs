@@ -58,27 +58,27 @@ internal static class QwpTlsAuth
 
     /// <summary>
     ///     Owns the <see cref="RemoteCertificateValidationCallback" /> for the TLS handshake and,
-    ///     for custom-root pinning, the loaded CA certificate. The owning sender / query client
-    ///     must <see cref="Dispose" /> this so the native cert handle is freed deterministically
+    ///     for custom-root pinning, the loaded CA certificates. The owning sender / query client
+    ///     must <see cref="Dispose" /> this so the native cert handles are freed deterministically
     ///     instead of waiting on GC finalization.
     /// </summary>
     internal sealed class CertificateValidator : IDisposable
     {
-        private readonly Lazy<X509Certificate2>? _trustRoot;
+        private readonly Lazy<X509Certificate2Collection>? _trustRoots;
 
-        internal CertificateValidator(RemoteCertificateValidationCallback callback, Lazy<X509Certificate2>? trustRoot)
+        internal CertificateValidator(RemoteCertificateValidationCallback callback, Lazy<X509Certificate2Collection>? trustRoots)
         {
             Callback = callback;
-            _trustRoot = trustRoot;
+            _trustRoots = trustRoots;
         }
 
         public RemoteCertificateValidationCallback Callback { get; }
 
         public void Dispose()
         {
-            if (_trustRoot is { IsValueCreated: true })
+            if (_trustRoots is { IsValueCreated: true })
             {
-                _trustRoot.Value.Dispose();
+                DisposeCertificates(_trustRoots.Value);
             }
         }
     }
@@ -86,7 +86,7 @@ internal static class QwpTlsAuth
     /// <summary>
     ///     Builds the certificate validator for the TLS handshake. Returns <c>null</c> when the
     ///     system default chain validation is sufficient. The returned holder owns any loaded
-    ///     custom-root certificate and must be disposed by the caller.
+    ///     custom-root certificates and must be disposed by the caller.
     /// </summary>
     public static CertificateValidator? BuildCertificateValidator(
         TlsVerifyType tlsVerify,
@@ -95,7 +95,7 @@ internal static class QwpTlsAuth
     {
         if (tlsVerify == TlsVerifyType.unsafe_off)
         {
-            return new CertificateValidator((_, _, _, _) => true, trustRoot: null);
+            return new CertificateValidator((_, _, _, _) => true, trustRoots: null);
         }
 
         if (string.IsNullOrEmpty(tlsRoots))
@@ -104,8 +104,8 @@ internal static class QwpTlsAuth
         }
 
         // Lazy-load on first handshake so a non-existent path doesn't fail at builder time;
-        // once loaded the cert is cached and every subsequent handshake reuses it.
-        var trustRoot = new Lazy<X509Certificate2>(() => LoadTrustRoot(tlsRoots, tlsRootsPassword));
+        // once loaded the certificates are cached and every subsequent handshake reuses them.
+        var trustRoots = new Lazy<X509Certificate2Collection>(() => LoadTrustRoots(tlsRoots, tlsRootsPassword));
         RemoteCertificateValidationCallback callback = (_, certificate, chain, errors) =>
         {
             if ((errors & ~SslPolicyErrors.RemoteCertificateChainErrors) != 0)
@@ -118,24 +118,54 @@ internal static class QwpTlsAuth
             chain.ChainPolicy.RevocationMode = X509RevocationMode.NoCheck;
             if (chain.ChainPolicy.CustomTrustStore.Count == 0)
             {
-                chain.ChainPolicy.CustomTrustStore.Add(trustRoot.Value);
+                chain.ChainPolicy.CustomTrustStore.AddRange(trustRoots.Value);
             }
             return chain.Build(serverCert);
         };
-        return new CertificateValidator(callback, trustRoot);
+        return new CertificateValidator(callback, trustRoots);
     }
 
-    internal static X509Certificate2 LoadTrustRoot(string path, string? password)
+    internal static X509Certificate2Collection LoadTrustRoots(string path, string? password)
     {
-        // CreateFromPemFile's second arg is a key file path, not a password — leave it null for PEM.
+        var roots = new X509Certificate2Collection();
         var ext = System.IO.Path.GetExtension(path);
-        if (string.Equals(ext, ".pfx", StringComparison.OrdinalIgnoreCase)
-            || string.Equals(ext, ".p12", StringComparison.OrdinalIgnoreCase))
+        try
         {
+            if (string.Equals(ext, ".pfx", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(ext, ".p12", StringComparison.OrdinalIgnoreCase))
+            {
 #pragma warning disable SYSLIB0057
-            return new X509Certificate2(path, password);
+                roots.Import(path, password, X509KeyStorageFlags.DefaultKeySet);
 #pragma warning restore SYSLIB0057
+            }
+            else
+            {
+                // ImportFromPemFile reads every CERTIFICATE block, not just the first one. A CA
+                // bundle must make every contained root available to CustomTrustStore.
+                roots.ImportFromPemFile(path);
+            }
+
+            if (roots.Count == 0)
+            {
+                throw new System.Security.Cryptography.CryptographicException(
+                    $"no X.509 certificates found in TLS roots file '{path}'");
+            }
+
+            return roots;
         }
-        return X509Certificate2.CreateFromPemFile(path);
+        catch
+        {
+            DisposeCertificates(roots);
+            throw;
+        }
+    }
+
+    internal static void DisposeCertificates(X509Certificate2Collection certificates)
+    {
+        foreach (X509Certificate2 certificate in certificates)
+        {
+            certificate.Dispose();
+        }
+        certificates.Clear();
     }
 }

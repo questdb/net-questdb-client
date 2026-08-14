@@ -26,6 +26,7 @@ using System.Buffers.Binary;
 using System.Threading.Channels;
 using NUnit.Framework;
 using QuestDB.Enums;
+using QuestDB.Qwp;
 using QuestDB.Qwp.Sf;
 using QuestDB.Utils;
 
@@ -250,9 +251,14 @@ public class QwpBackgroundDrainerTests
     {
         Directory.CreateDirectory(slotDir);
         using var ring = QwpSegmentRing.Open(slotDir, segmentCapacity: 4096);
-        foreach (var p in payloads)
+        foreach (var _ in payloads)
         {
-            Assert.That(ring.TryAppend(p), Is.True);
+            // Recovery now validates the ring as QWP rather than treating its contents as opaque
+            // bytes. Use a legal zero-table commit frame while retaining the requested frame count.
+            var frame = QwpEncoder.Encode(
+                Array.Empty<QwpTableBuffer>(),
+                new QwpSymbolDictionary());
+            Assert.That(ring.TryAppend(frame), Is.True);
         }
     }
 

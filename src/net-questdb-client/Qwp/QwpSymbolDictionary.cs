@@ -28,7 +28,7 @@ using QuestDB.Utils;
 namespace QuestDB.Qwp;
 
 /// <summary>
-///     Connection-scoped, monotonically growing symbol dictionary used in
+///     Sender-lifetime, monotonically growing symbol dictionary used in
 ///     <see cref="QwpConstants.FlagDeltaSymbolDict" /> mode.
 /// </summary>
 /// <remarks>
@@ -39,35 +39,44 @@ namespace QuestDB.Qwp;
 ///     <para />
 ///     Lifecycle:
 ///     <list type="bullet">
-///         <item><see cref="Add" /> assigns ids; called from the user thread per row.</item>
-///         <item><see cref="Commit" /> moves the watermark forward after a successful flush.</item>
+///         <item><see cref="Add(string)" /> assigns ids; called from the user thread per row.</item>
+///         <item><see cref="Commit" /> moves the watermark after a frame is published to the cursor ring.</item>
 ///         <item><see cref="Rollback" /> drops uncommitted entries when a flush failed.</item>
-///         <item><see cref="Reset" /> clears everything; called when the wire connection resets.</item>
+///         <item><see cref="Reset" /> clears everything when the whole sender lifetime is reset.</item>
 ///     </list>
 /// </remarks>
 internal sealed class QwpSymbolDictionary
 {
-    private readonly Dictionary<string, int> _ids = new(StringComparer.Ordinal);
-    private readonly List<string> _values = new();
+    private readonly Dictionary<string, int> _ids;
+    private readonly List<string> _values;
 #if NET9_0_OR_GREATER
     private readonly Dictionary<string, int>.AlternateLookup<ReadOnlySpan<char>> _idsLookup;
-
-    public QwpSymbolDictionary()
-    {
-        _idsLookup = _ids.GetAlternateLookup<ReadOnlySpan<char>>();
-    }
-#else
-    public QwpSymbolDictionary()
-    {
-    }
 #endif
+
+    public QwpSymbolDictionary() : this(64)
+    {
+    }
+
+    internal QwpSymbolDictionary(int initialCapacity)
+    {
+        if (initialCapacity < 0 || initialCapacity > QwpConstants.MaxSymbolDictionarySize)
+        {
+            throw new ArgumentOutOfRangeException(nameof(initialCapacity));
+        }
+
+        _ids = new Dictionary<string, int>(initialCapacity, StringComparer.Ordinal);
+        _values = new List<string>(initialCapacity);
+#if NET9_0_OR_GREATER
+        _idsLookup = _ids.GetAlternateLookup<ReadOnlySpan<char>>();
+#endif
+    }
 
     private int _committedCount;
 
     /// <summary>Total number of entries assigned (committed + uncommitted).</summary>
     public int Count => _values.Count;
 
-    /// <summary>Number of entries the server has acknowledged.</summary>
+    /// <summary>Number of entries already published in the ordered cursor ring.</summary>
     public int CommittedCount => _committedCount;
 
     /// <summary>Starting index of the on-wire delta block (= <see cref="CommittedCount" />).</summary>
@@ -95,11 +104,12 @@ internal sealed class QwpSymbolDictionary
         }
 #endif
 
-        // First sighting of this value. The symbol dictionary is re-encoded into every
-        // self-sufficient frame, so a value that is not valid UTF-8 (e.g. a lone surrogate) would
-        // throw from the encoder on every flush and permanently wedge the sender. Validate once,
-        // here, before the value is stored — repeated values return via the fast path above and
-        // never reach this check, so the hot path pays nothing.
+        ThrowIfFull();
+
+        // First sighting of this value. A value that is not valid UTF-8 (e.g. a lone surrogate)
+        // would throw whenever its delta or reconnect catch-up is encoded and permanently wedge the
+        // sender. Validate once, here, before the value is stored. Repeated values return via the
+        // fast path above and never reach this check, so the hot path pays nothing.
         try
         {
             _ = QwpStrictUtf8.Encoding.GetByteCount(value);
@@ -135,6 +145,8 @@ internal sealed class QwpSymbolDictionary
             return id;
         }
 
+        ThrowIfFull();
+
         // First sighting — same UTF-8 validation as the span overload (see there for why).
         try
         {
@@ -161,6 +173,22 @@ internal sealed class QwpSymbolDictionary
                 $"symbol id {id} out of range [0, {_values.Count})");
         }
         return _values[id];
+    }
+
+    /// <summary>
+    ///     Appends one recovered entry at the next dense id without de-duplicating it. Recovery is
+    ///     keyed by entry position, so collapsing equal strings would shift every later id.
+    /// </summary>
+    internal int AddRecovered(string value)
+    {
+        ArgumentNullException.ThrowIfNull(value);
+        ThrowIfFull();
+        var id = _values.Count;
+        _values.Add(value);
+        // The highest recovered id wins reverse lookup for a duplicate value. Both ids encode to
+        // identical UTF-8 bytes, so resolving future rows to either is semantically equivalent.
+        _ids[value] = id;
+        return id;
     }
 
     /// <summary>Advances the committed watermark; clears the delta.</summary>
@@ -204,5 +232,18 @@ internal sealed class QwpSymbolDictionary
         _ids.Clear();
         _values.Clear();
         _committedCount = 0;
+    }
+
+    private void ThrowIfFull()
+    {
+        if (_values.Count < QwpConstants.MaxSymbolDictionarySize)
+        {
+            return;
+        }
+
+        throw new IngressError(ErrorCode.InvalidApiCall,
+            $"global symbol dictionary is full: the QWP protocol caps a sender's distinct symbol values at {QwpConstants.MaxSymbolDictionarySize}. " +
+            "Rows using already-registered symbol values continue to work. To start a fresh dictionary, close this sender and build a new one. " +
+            "For unbounded-cardinality data use varchar columns instead of symbol");
     }
 }

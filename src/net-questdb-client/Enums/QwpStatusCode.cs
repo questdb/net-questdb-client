@@ -58,4 +58,17 @@ public enum QwpStatusCode : byte
 
     /// <summary>A protocol limit was hit.</summary>
     LimitExceeded = 0x0B,
+
+    /// <summary>
+    ///     The connected node is currently read-only or otherwise cannot accept writes. Senders
+    ///     recycle the connection so failover can select a writable endpoint.
+    /// </summary>
+    NotWritable = 0x0C,
+
+    /// <summary>
+    ///     A delta symbol dictionary started above the server's connection dictionary. The verdict
+    ///     is connection-state-dependent, so ingress senders recycle the connection and retry after
+    ///     re-registering their dictionary.
+    /// </summary>
+    DictionaryGap = 0x0D,
 }

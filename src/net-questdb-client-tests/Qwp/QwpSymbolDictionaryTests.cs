@@ -23,7 +23,9 @@
  ******************************************************************************/
 
 using NUnit.Framework;
+using QuestDB.Enums;
 using QuestDB.Qwp;
+using QuestDB.Utils;
 
 namespace net_questdb_client_tests.Qwp;
 
@@ -48,6 +50,34 @@ public class QwpSymbolDictionaryTests
         d.Add("eu");
         Assert.That(d.Add("us"), Is.EqualTo(0));
         Assert.That(d.Count, Is.EqualTo(2));
+    }
+
+    [Test]
+    public void Add_RefusesNewValuePastProtocolCapWithoutMutatingDictionary()
+    {
+        var d = new QwpSymbolDictionary(QwpConstants.MaxSymbolDictionarySize);
+        for (var i = 0; i < QwpConstants.MaxSymbolDictionarySize; i++)
+        {
+            d.Add("s" + i);
+        }
+        Assert.That(d.Count, Is.EqualTo(QwpConstants.MaxSymbolDictionarySize));
+
+        var ex = Assert.Throws<IngressError>(() => d.Add("one-too-many"));
+        Assert.That(ex!.code, Is.EqualTo(ErrorCode.InvalidApiCall));
+        Assert.That(ex.Message, Does.Contain(QwpConstants.MaxSymbolDictionarySize.ToString()));
+        Assert.That(ex.Message, Does.Contain("close this sender"));
+
+        Assert.That(d.Count, Is.EqualTo(QwpConstants.MaxSymbolDictionarySize));
+        Assert.That(d.Add("s42"), Is.EqualTo(42), "existing values remain usable at the cap");
+        Assert.Throws<IngressError>(() => d.Add("one-too-many".AsSpan()));
+        Assert.That(d.Count, Is.EqualTo(QwpConstants.MaxSymbolDictionarySize),
+            "a refused value must not mutate the dictionary");
+    }
+
+    [Test]
+    public void MaxSymbolDictionarySize_MatchesServerProtocolLimit()
+    {
+        Assert.That(QwpConstants.MaxSymbolDictionarySize, Is.EqualTo(1_000_000));
     }
 
     [Test]

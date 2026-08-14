@@ -58,8 +58,9 @@ internal class HttpSender : AbstractSender
 
     private readonly Func<HttpRequestMessage> _sendRequestFactory;
     private readonly Func<HttpRequestMessage> _settingRequestFactory;
+    private readonly Func<SocketsHttpHandler, HttpClient> _httpClientFactory;
 
-    private Lazy<X509Certificate2>? _trustRoot;
+    private Lazy<X509Certificate2Collection>? _trustRoots;
 
     /// <summary>
     ///     Manages round-robin address rotation for failover.
@@ -79,12 +80,39 @@ internal class HttpSender : AbstractSender
     ///     buffering and protocol parameters, authentication, and timeouts.
     /// </param>
     public HttpSender(SenderOptions options)
+        : this(options, static handler => new HttpClient(handler, disposeHandler: false))
     {
+    }
+
+    internal HttpSender(SenderOptions options, Func<SocketsHttpHandler, HttpClient> httpClientFactory)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        ArgumentNullException.ThrowIfNull(httpClientFactory);
+
         _sendRequestFactory    = GenerateRequest;
         _settingRequestFactory = GenerateSettingsRequest;
+        _httpClientFactory     = httpClientFactory;
 
         Options = options;
-        Build();
+        try
+        {
+            Build();
+        }
+        catch
+        {
+            // A failed constructor returns no sender for the caller to dispose. Release every client,
+            // handler, and lazily loaded trust root acquired before the failure, while preserving the
+            // exception that explains why construction failed.
+            try
+            {
+                DisposeNetworkResources();
+            }
+            catch
+            {
+                // Cleanup failure must not hide the constructor failure.
+            }
+            throw;
+        }
     }
 
     /// <summary>
@@ -108,10 +136,10 @@ internal class HttpSender : AbstractSender
             handler.SslOptions.TargetHost          = host;
             handler.SslOptions.EnabledSslProtocols = SslProtocols.Tls12 | SslProtocols.Tls13;
 
-            if (_trustRoot is null && !string.IsNullOrEmpty(Options.tls_roots))
+            if (_trustRoots is null && !string.IsNullOrEmpty(Options.tls_roots))
             {
-                _trustRoot = new Lazy<X509Certificate2>(
-                    () => QwpTlsAuth.LoadTrustRoot(Options.tls_roots!, Options.tls_roots_password));
+                _trustRoots = new Lazy<X509Certificate2Collection>(
+                    () => QwpTlsAuth.LoadTrustRoots(Options.tls_roots!, Options.tls_roots_password));
             }
 
             if (Options.tls_verify == TlsVerifyType.unsafe_off)
@@ -120,7 +148,7 @@ internal class HttpSender : AbstractSender
             }
             else
             {
-                var trustRoot = _trustRoot;
+                var trustRoots = _trustRoots;
                 handler.SslOptions.RemoteCertificateValidationCallback =
                     (_, certificate, chain, errors) =>
                     {
@@ -129,12 +157,12 @@ internal class HttpSender : AbstractSender
                             return false;
                         }
 
-                        if (trustRoot is not null)
+                        if (trustRoots is not null)
                         {
                             chain!.ChainPolicy.TrustMode = X509ChainTrustMode.CustomRootTrust;
                             if (chain.ChainPolicy.CustomTrustStore.Count == 0)
                             {
-                                chain.ChainPolicy.CustomTrustStore.Add(trustRoot.Value);
+                                chain.ChainPolicy.CustomTrustStore.AddRange(trustRoots.Value);
                             }
                         }
 
@@ -223,33 +251,57 @@ internal class HttpSender : AbstractSender
         var host = AddressProvider.ParseHost(address);
 
         // Get or create a handler for this specific address
+        var createdHandler = false;
         if (!_handlerCache.TryGetValue(address, out var handler))
         {
-            handler                = CreateHandler(host);
-            _handlerCache[address] = handler;
+            handler = CreateHandler(host);
+            try
+            {
+                _handlerCache[address] = handler;
+                createdHandler = true;
+            }
+            catch
+            {
+                handler.Dispose();
+                throw;
+            }
         }
 
-        var client = new HttpClient(handler);
-
-        var uri = new UriBuilder(Options.protocol.ToString(), host, port);
-        client.BaseAddress = uri.Uri;
-        client.Timeout     = Timeout.InfiniteTimeSpan;
-
-        // Apply authentication headers
-        if (!string.IsNullOrEmpty(Options.username) && !string.IsNullOrEmpty(Options.password))
+        HttpClient? client = null;
+        try
         {
-            client.DefaultRequestHeaders.Authorization
-                = new AuthenticationHeaderValue("Basic",
-                                                Convert.ToBase64String(
-                                                    Encoding.ASCII.GetBytes(
-                                                        $"{Options.username}:{Options.password}")));
-        }
-        else if (!string.IsNullOrEmpty(Options.token))
-        {
-            client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", Options.token);
-        }
+            client = _httpClientFactory(handler);
 
-        return client;
+            var uri = new UriBuilder(Options.protocol.ToString(), host, port);
+            client.BaseAddress = uri.Uri;
+            client.Timeout     = Timeout.InfiniteTimeSpan;
+
+            // Apply authentication headers
+            if (!string.IsNullOrEmpty(Options.username) && !string.IsNullOrEmpty(Options.password))
+            {
+                client.DefaultRequestHeaders.Authorization
+                    = new AuthenticationHeaderValue("Basic",
+                                                    Convert.ToBase64String(
+                                                        Encoding.ASCII.GetBytes(
+                                                            $"{Options.username}:{Options.password}")));
+            }
+            else if (!string.IsNullOrEmpty(Options.token))
+            {
+                client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", Options.token);
+            }
+
+            return client;
+        }
+        catch
+        {
+            client?.Dispose();
+            if (createdHandler)
+            {
+                _handlerCache.Remove(address);
+                handler.Dispose();
+            }
+            throw;
+        }
     }
 
     /// <summary>
@@ -262,8 +314,16 @@ internal class HttpSender : AbstractSender
         if (!_clientCache.TryGetValue(address, out var client))
         {
             // Create and cache a new client for this address
-            client                = CreateClientForAddress(address);
-            _clientCache[address] = client;
+            client = CreateClientForAddress(address);
+            try
+            {
+                _clientCache[address] = client;
+            }
+            catch
+            {
+                client.Dispose();
+                throw;
+            }
         }
 
         _client = client;
@@ -812,6 +872,14 @@ internal class HttpSender : AbstractSender
     /// <inheritdoc />
     public override void Dispose()
     {
+        DisposeNetworkResources();
+
+        Buffer.Clear();
+        Buffer.TrimExcessBuffers();
+    }
+
+    private void DisposeNetworkResources()
+    {
         // Dispose all cached clients
         foreach (var client in _clientCache.Values)
         {
@@ -828,13 +896,10 @@ internal class HttpSender : AbstractSender
 
         _handlerCache.Clear();
 
-        if (_trustRoot is { IsValueCreated: true })
+        if (_trustRoots is { IsValueCreated: true })
         {
-            _trustRoot.Value.Dispose();
+            QwpTlsAuth.DisposeCertificates(_trustRoots.Value);
         }
-        _trustRoot = null;
-
-        Buffer.Clear();
-        Buffer.TrimExcessBuffers();
+        _trustRoots = null;
     }
 }

@@ -434,6 +434,28 @@ public class QwpCursorSendEngineTests
             "the rejected frame must reach the wire again on replay");
     }
 
+    [TestCase(QwpStatusCode.NotWritable)]
+    [TestCase(QwpStatusCode.DictionaryGap)]
+    public async Task ConnectionStateNack_DoesNotPoisonDataFrame(QwpStatusCode status)
+    {
+        var connectCount = 0;
+        using var engine = NewEngine(out _,
+            factory: () => Interlocked.Increment(ref connectCount) == 1
+                ? new StubTransport { OnSend = _ => ErrorResponse(status, 0, "retry on a fresh endpoint") }
+                : new StubTransport(),
+            maxFrameRejections: 1,
+            poisonMinEscalationWindow: TimeSpan.Zero);
+        engine.Start();
+        engine.AppendBlocking(new byte[] { 43 });
+
+        await engine.FlushAsync(TimeSpan.FromSeconds(5));
+
+        Assert.That(connectCount, Is.GreaterThanOrEqualTo(2));
+        Assert.That(engine.IsTerminallyFailed, Is.False,
+            "a node/connection-state rejection must not consume the poison-frame budget");
+        Assert.That(engine.AckedFsn, Is.EqualTo(1L));
+    }
+
     [Test]
     public void Nack_DoesNotAdvanceAckedFsn()
     {
@@ -1244,6 +1266,153 @@ public class QwpCursorSendEngineTests
     }
 
     [Test]
+    public async Task DeltaDictionary_ReconnectCatchesUpBeforeReplay_AndKeepsAckMappingAligned()
+    {
+        var dictionary = new QwpSymbolDictionary();
+        dictionary.Add("alpha");
+        var firstFrame = QwpEncoder.Encode(Array.Empty<QwpTableBuffer>(), dictionary);
+        dictionary.Commit();
+        dictionary.Add("beta");
+        var secondFrame = QwpEncoder.Encode(Array.Empty<QwpTableBuffer>(), dictionary);
+
+        var transports = new System.Collections.Concurrent.ConcurrentQueue<StubTransport>();
+        var connection = 0;
+        using var engine = NewEngine(out _,
+            factory: () =>
+            {
+                var n = Interlocked.Increment(ref connection);
+                var transport = new StubTransport();
+                if (n == 1)
+                {
+                    transport.FailReceiveAfterAcks = 1;
+                    transport.FailReceiveWith = new IngressError(ErrorCode.SocketError, "injected reconnect");
+                }
+                transports.Enqueue(transport);
+                return transport;
+            },
+            deltaDictionaryCatchUp: true);
+
+        engine.Start();
+        engine.AppendBlocking(firstFrame);
+        await engine.FlushAsync(TimeSpan.FromSeconds(5));
+
+        AssertEventually(() => Volatile.Read(ref connection) >= 2,
+            "engine did not reconnect after the injected close", timeoutMs: 5000);
+        var secondTransport = transports.ToArray()[1];
+        AssertEventually(() => secondTransport.Sent.Count >= 1,
+            "fresh connection did not receive dictionary catch-up", timeoutMs: 5000);
+
+        var catchUp = secondTransport.Sent[0];
+        Assert.That(BinaryPrimitives.ReadUInt16LittleEndian(
+            catchUp.AsSpan(QwpConstants.OffsetTableCount, 2)), Is.Zero,
+            "catch-up must be table-less");
+        Assert.That(catchUp[QwpConstants.OffsetFlags] & QwpConstants.FlagDeferCommit,
+            Is.EqualTo(QwpConstants.FlagDeferCommit),
+            "a table-less catch-up must never commit a deferred transaction");
+        Assert.That(ReadSymbolDelta(catchUp), Is.EqualTo((0, new[] { "alpha" })));
+
+        engine.AppendBlocking(secondFrame);
+        await engine.FlushAsync(TimeSpan.FromSeconds(5));
+
+        AssertEventually(() => secondTransport.Sent.Any(frame =>
+            {
+                var delta = ReadSymbolDelta(frame);
+                return delta.Start == 1 && delta.Entries.SequenceEqual(new[] { "beta" });
+            }),
+            "delta data frame was not sent after catch-up", timeoutMs: 5000);
+        Assert.That(engine.AckedFsn, Is.EqualTo(2),
+            "catch-up ACK must map below the replay cursor and never consume a real FSN");
+    }
+
+    [Test]
+    public void DeltaDictionary_CatchUpNackAfterProgress_DoesNotPoisonHistoricalFsn()
+    {
+        var dictionary = new QwpSymbolDictionary();
+        dictionary.Add("alpha");
+        var frame = QwpEncoder.Encode(Array.Empty<QwpTableBuffer>(), dictionary);
+
+        var slotDir = Path.Combine(_root, "catchup-nack-after-progress");
+        var slotLock = QwpSlotLock.Acquire(slotDir);
+        var ring = QwpSegmentRing.Open(slotDir, segmentCapacity: 4096);
+        Assert.That(ring.TryAppend(frame), Is.True);
+        var persistedDictionary = QwpPersistedSymbolDictionary.OpenOrRecover(slotDir, ring);
+        var ackWatermark = QwpAckWatermark.Open(slotDir);
+        Assert.That(ackWatermark, Is.Not.Null);
+        ackWatermark!.Write(0L); // startup cursor is FSN 1, so catch-up wire seq 0 maps to historical FSN 0
+
+        var connection = 0;
+        using var engine = new QwpCursorSendEngine(
+            slotLock,
+            ring,
+            () =>
+            {
+                var n = Interlocked.Increment(ref connection);
+                if (n == 1)
+                {
+                    return new StubTransport
+                    {
+                        OnSend = _ => ErrorResponse(QwpStatusCode.DictionaryGap, 0, "reject catch-up once"),
+                    };
+                }
+                return new StubTransport();
+            },
+            new QwpReconnectPolicy(
+                TimeSpan.FromMilliseconds(1), TimeSpan.FromMilliseconds(4), TimeSpan.FromSeconds(5)),
+            appendDeadline: TimeSpan.FromSeconds(5),
+            initialConnectMode: InitialConnectMode.on,
+            ackWatermark: ackWatermark,
+            maxFrameRejections: 1,
+            poisonMinEscalationWindow: TimeSpan.Zero,
+            deltaDictionaryCatchUp: true,
+            persistedSymbolDictionary: persistedDictionary);
+
+        engine.Start();
+
+        AssertEventually(() => Volatile.Read(ref connection) >= 2,
+            "a catch-up NACK must recycle without poisoning an already-acked historical FSN", 5000);
+        Assert.That(engine.IsTerminallyFailed, Is.False);
+        Assert.That(engine.AckedFsn, Is.EqualTo(1L));
+    }
+
+    [Test]
+    public void DeltaDictionary_CatchUpCapGap_RetriesPastBlockingInitialConnectBudget()
+    {
+        var dictionary = new QwpSymbolDictionary();
+        dictionary.Add(new string('x', 128));
+        var frame = QwpEncoder.Encode(Array.Empty<QwpTableBuffer>(), dictionary);
+
+        var slotDir = Path.Combine(_root, "catchup-cap-gap-retry");
+        var slotLock = QwpSlotLock.Acquire(slotDir);
+        var ring = QwpSegmentRing.Open(slotDir, segmentCapacity: 4096);
+        Assert.That(ring.TryAppend(frame), Is.True);
+        var persistedDictionary = QwpPersistedSymbolDictionary.OpenOrRecover(slotDir, ring);
+        var connection = 0;
+
+        using var engine = new QwpCursorSendEngine(
+            slotLock,
+            ring,
+            () =>
+            {
+                Interlocked.Increment(ref connection);
+                return new StubTransport { NegotiatedMaxBatchSize = 64 };
+            },
+            new QwpReconnectPolicy(
+                TimeSpan.FromMilliseconds(1), TimeSpan.FromMilliseconds(2), TimeSpan.Zero),
+            appendDeadline: TimeSpan.FromSeconds(5),
+            initialConnectMode: InitialConnectMode.on,
+            deltaDictionaryCatchUp: true,
+            persistedSymbolDictionary: persistedDictionary);
+
+        engine.Start();
+
+        AssertEventually(() => Volatile.Read(ref connection) >= 2,
+            "a catch-up cap gap must retry even after the blocking initial-connect budget expires", 5000);
+        Assert.That(engine.IsTerminallyFailed, Is.False);
+        Assert.That(engine.FirstConnectTask.IsCompletedSuccessfully, Is.True,
+            "the accepted WebSocket upgrade must release the constructor while catch-up retries in the background");
+    }
+
+    [Test]
     public async Task MultipleProducers_AllFramesEventuallyDrained()
     {
         const int producerCount = 4;
@@ -1354,7 +1523,8 @@ public class QwpCursorSendEngineTests
         int errorInboxCapacity = 256,
         int maxFrameRejections = 4,
         TimeSpan? poisonMinEscalationWindow = null,
-        bool durableAckMode = false)
+        bool durableAckMode = false,
+        bool deltaDictionaryCatchUp = false)
     {
         slotDir = slotDirectoryOverride ?? Path.Combine(_root, "sender-" + Guid.NewGuid().ToString("N"));
         var slotLock = QwpSlotLock.Acquire(slotDir);
@@ -1376,7 +1546,8 @@ public class QwpCursorSendEngineTests
             policyResolver: policyResolver,
             durableAckMode: durableAckMode,
             maxFrameRejections: maxFrameRejections,
-            poisonMinEscalationWindow: poisonMinEscalationWindow);
+            poisonMinEscalationWindow: poisonMinEscalationWindow,
+            deltaDictionaryCatchUp: deltaDictionaryCatchUp);
     }
 
     private static byte[] OkResponse(long sequence)
@@ -1418,6 +1589,24 @@ public class QwpCursorSendEngineTests
         return buf;
     }
 
+    private static (int Start, string[] Entries) ReadSymbolDelta(byte[] frame)
+    {
+        var p = QwpConstants.HeaderSize;
+        var start = checked((int)QwpVarint.Read(frame.AsSpan(p), out var read));
+        p += read;
+        var count = checked((int)QwpVarint.Read(frame.AsSpan(p), out read));
+        p += read;
+        var entries = new string[count];
+        for (var i = 0; i < count; i++)
+        {
+            var len = checked((int)QwpVarint.Read(frame.AsSpan(p), out read));
+            p += read;
+            entries[i] = QwpStrictUtf8.Encoding.GetString(frame, p, len);
+            p += len;
+        }
+        return (start, entries);
+    }
+
     private static void AssertEventually(Func<bool> condition, string message, int timeoutMs = 1000, int pollMs = 10)
     {
         var deadline = DateTime.UtcNow.AddMilliseconds(timeoutMs);
@@ -1445,6 +1634,7 @@ public class QwpCursorSendEngineTests
         public int? FailReceiveAfterAcks;
         public List<byte[]> Sent { get; } = new();
         public (string Host, int Port)? Endpoint { get; set; } = ("stub", 0);
+        public int NegotiatedMaxBatchSize { get; set; }
 
         private readonly Channel<byte[]> _acks = Channel.CreateUnbounded<byte[]>();
         private readonly object _sentLock = new();

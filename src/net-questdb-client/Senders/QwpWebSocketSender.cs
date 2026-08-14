@@ -158,7 +158,15 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender, IPooledSlotSende
                     QwpAckWatermark.RemoveOrphan(slotDir);
                 }
                 ackWatermark = QwpAckWatermark.Open(slotDir);
-                persistedSymbolDictionary = QwpPersistedSymbolDictionary.OpenOrRecover(slotDir, ring);
+                try
+                {
+                    persistedSymbolDictionary = QwpPersistedSymbolDictionary.OpenOrRecover(slotDir, ring);
+                }
+                catch (InvalidDataException ex)
+                {
+                    throw new IngressError(ErrorCode.ConfigError,
+                        $"store-and-forward slot `{slotDir}` cannot be recovered: {ex.Message}", ex);
+                }
                 foreach (var symbol in persistedSymbolDictionary.SnapshotEntries())
                 {
                     symbolDictionary.AddRecovered(symbol);

@@ -112,11 +112,19 @@ internal sealed class QwpPersistedSymbolDictionary : IDisposable
 
             var result = new QwpPersistedSymbolDictionary(filePath, stream!, entries);
             stream = null;
-            if (entries.Count > loadedCount)
+            try
             {
-                result.AppendRange(entries, loadedCount, entries.Count);
+                if (entries.Count > loadedCount)
+                {
+                    result.AppendRange(entries, loadedCount, entries.Count);
+                }
+                return result;
             }
-            return result;
+            catch
+            {
+                SfCleanup.Dispose(result);
+                throw;
+            }
         }
         catch
         {
@@ -281,13 +289,21 @@ internal sealed class QwpPersistedSymbolDictionary : IDisposable
         }
 
         var stream = OpenFile(filePath, FileMode.Open);
-        if (validEnd < stream.Length)
+        try
         {
-            stream.SetLength(validEnd);
-            stream.Flush(flushToDisk: false);
+            if (validEnd < stream.Length)
+            {
+                stream.SetLength(validEnd);
+                stream.Flush(flushToDisk: false);
+            }
+            stream.Position = validEnd;
+            return (stream, entries, true);
         }
-        stream.Position = validEnd;
-        return (stream, entries, true);
+        catch
+        {
+            SfCleanup.Dispose(stream);
+            throw;
+        }
     }
 
     private static void FoldRing(QwpSegmentRing ring, List<string> entries)

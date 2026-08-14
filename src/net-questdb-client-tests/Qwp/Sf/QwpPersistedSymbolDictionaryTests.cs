@@ -23,8 +23,11 @@
  ******************************************************************************/
 
 using NUnit.Framework;
+using QuestDB;
+using QuestDB.Enums;
 using QuestDB.Qwp;
 using QuestDB.Qwp.Sf;
+using QuestDB.Utils;
 
 namespace net_questdb_client_tests.Qwp.Sf;
 
@@ -54,12 +57,14 @@ public sealed class QwpPersistedSymbolDictionaryTests
     {
         var slot = Slot("layout");
         using var ring = QwpSegmentRing.Open(slot, segmentCapacity: 4096);
-        using var persisted = QwpPersistedSymbolDictionary.OpenOrRecover(slot, ring);
         var dictionary = new QwpSymbolDictionary();
         dictionary.Add("a");
         dictionary.Add("é");
 
-        persisted.AppendNewSymbols(dictionary);
+        using (var persisted = QwpPersistedSymbolDictionary.OpenOrRecover(slot, ring))
+        {
+            persisted.AppendNewSymbols(dictionary);
+        }
 
         // Java PersistedSymbolDict format:
         // SYD1 + version/reserved + [count=2][entryBytes=5][1,'a'][2,C3,A9] + CRC32C.
@@ -137,6 +142,33 @@ public sealed class QwpPersistedSymbolDictionaryTests
         Assert.That(File.Exists(Path.Combine(slot, QwpPersistedSymbolDictionary.FileName)), Is.False,
             "a failed recovery must not fabricate a dictionary that would make the gap look valid next time");
     }
+
+#if NET7_0_OR_GREATER
+    [Test]
+    public void SenderStartup_UnreplayableDictionarySurfacesIngressError()
+    {
+        const string senderId = "sender-recovery-error";
+        var slot = Slot(senderId);
+        using (var ring = QwpSegmentRing.Open(slot, segmentCapacity: 4096))
+        {
+            var dictionary = new QwpSymbolDictionary();
+            dictionary.Add("missing-prefix");
+            dictionary.Commit();
+            dictionary.Add("surviving-suffix");
+            Assert.That(ring.TryAppend(QwpEncoder.Encode(
+                Array.Empty<QwpTableBuffer>(), dictionary)), Is.True);
+        }
+
+        var error = Assert.Throws<IngressError>(() => Sender.New(
+            $"ws::addr=127.0.0.1:1;sf_dir={_root};sender_id={senderId};" +
+            "sf_max_segment_bytes=4096;initial_connect_retry=async;"));
+
+        Assert.That(error!.code, Is.EqualTo(ErrorCode.ConfigError));
+        Assert.That(error.InnerException, Is.TypeOf<InvalidDataException>());
+        Assert.That(error.Message, Does.Contain("cannot be recovered"));
+        Assert.That(error.Message, Does.Contain("unreplayable symbol dictionary gap"));
+    }
+#endif
 
     [Test]
     public void TornTrailingChunk_IsTruncatedAndHealedFromSurvivingFrames()

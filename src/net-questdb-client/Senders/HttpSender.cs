@@ -282,7 +282,7 @@ internal class HttpSender : AbstractSender
                 client.DefaultRequestHeaders.Authorization
                     = new AuthenticationHeaderValue("Basic",
                                                     Convert.ToBase64String(
-                                                        Encoding.ASCII.GetBytes(
+                                                        Encoding.UTF8.GetBytes(
                                                             $"{Options.username}:{Options.password}")));
             }
             else if (!string.IsNullOrEmpty(Options.token))

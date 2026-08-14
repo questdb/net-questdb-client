@@ -31,6 +31,20 @@ namespace net_questdb_client_tests.Qwp.Sf;
 [TestFixture]
 public class QwpErrorClassifierTests
 {
+    [TestCase(SenderErrorCategory.SchemaMismatch, 0)]
+    [TestCase(SenderErrorCategory.ParseError, 1)]
+    [TestCase(SenderErrorCategory.InternalError, 2)]
+    [TestCase(SenderErrorCategory.SecurityError, 3)]
+    [TestCase(SenderErrorCategory.WriteError, 4)]
+    [TestCase(SenderErrorCategory.ProtocolViolation, 5)]
+    [TestCase(SenderErrorCategory.Unknown, 6)]
+    [TestCase(SenderErrorCategory.NotWritable, 7)]
+    [TestCase(SenderErrorCategory.DictionaryGap, 8)]
+    public void NumericValue_PreservesPublishedOrdinals(SenderErrorCategory category, int expected)
+    {
+        Assert.That((int)category, Is.EqualTo(expected));
+    }
+
     [TestCase(QwpStatusCode.SchemaMismatch, SenderErrorCategory.SchemaMismatch)]
     [TestCase(QwpStatusCode.ParseError, SenderErrorCategory.ParseError)]
     [TestCase(QwpStatusCode.InternalError, SenderErrorCategory.InternalError)]

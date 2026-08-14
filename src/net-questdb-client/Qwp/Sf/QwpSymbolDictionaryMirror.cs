@@ -273,10 +273,13 @@ internal sealed class QwpSymbolDictionaryMirror
         var p = QwpConstants.HeaderSize;
         var startRaw = ReadVarint(frame, ref p, limit, "symbol delta start");
         var countRaw = ReadVarint(frame, ref p, limit, "symbol delta count");
-        if (startRaw > int.MaxValue || countRaw > int.MaxValue || startRaw + countRaw > int.MaxValue)
+        if (startRaw > QwpConstants.MaxSymbolDictionarySize
+            || countRaw > QwpConstants.MaxSymbolDictionarySize
+            || startRaw + countRaw > QwpConstants.MaxSymbolDictionarySize)
         {
             throw new InvalidDataException(
-                $"QWP symbol delta range is out of bounds: start={startRaw}, count={countRaw}");
+                $"QWP symbol delta range exceeds the {QwpConstants.MaxSymbolDictionarySize}-entry limit: " +
+                $"start={startRaw}, count={countRaw}");
         }
 
         var entriesStart = p;

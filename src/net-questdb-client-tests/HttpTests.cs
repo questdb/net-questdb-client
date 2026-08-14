@@ -64,6 +64,30 @@ public class HttpTests
     }
 
     [Test]
+    public void BasicAuth_EncodesNonAsciiCredentialsAsUtf8()
+    {
+        var options = new SenderOptions
+        {
+            protocol         = ProtocolType.http,
+            protocol_version = ProtocolVersion.V1,
+            username         = "用户",
+            password         = "пароль",
+        };
+        HttpClient? client = null;
+
+        using var sender = new HttpSender(options, handler =>
+        {
+            client = new HttpClient(handler, disposeHandler: false);
+            return client;
+        });
+
+        Assert.That(client, Is.Not.Null);
+        Assert.That(client!.DefaultRequestHeaders.Authorization?.Scheme, Is.EqualTo("Basic"));
+        Assert.That(client.DefaultRequestHeaders.Authorization?.Parameter,
+            Is.EqualTo(Convert.ToBase64String(Encoding.UTF8.GetBytes("用户:пароль"))));
+    }
+
+    [Test]
     public async Task BasicArrayDouble()
     {
         using var server = new DummyHttpServer(withBasicAuth: false);

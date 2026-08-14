@@ -1280,14 +1280,15 @@ public class QwpCursorSendEngineTests
         using var engine = NewEngine(out _,
             factory: () =>
             {
-                var n = Interlocked.Increment(ref connection);
+                var firstConnection = Volatile.Read(ref connection) == 0;
                 var transport = new StubTransport();
-                if (n == 1)
+                if (firstConnection)
                 {
                     transport.FailReceiveAfterAcks = 1;
                     transport.FailReceiveWith = new IngressError(ErrorCode.SocketError, "injected reconnect");
                 }
                 transports.Enqueue(transport);
+                Interlocked.Increment(ref connection);
                 return transport;
             },
             deltaDictionaryCatchUp: true);
@@ -1299,10 +1300,10 @@ public class QwpCursorSendEngineTests
         AssertEventually(() => Volatile.Read(ref connection) >= 2,
             "engine did not reconnect after the injected close", timeoutMs: 5000);
         var secondTransport = transports.ToArray()[1];
-        AssertEventually(() => secondTransport.Sent.Count >= 1,
+        AssertEventually(() => secondTransport.SentSnapshot.Length >= 1,
             "fresh connection did not receive dictionary catch-up", timeoutMs: 5000);
 
-        var catchUp = secondTransport.Sent[0];
+        var catchUp = secondTransport.SentSnapshot[0];
         Assert.That(BinaryPrimitives.ReadUInt16LittleEndian(
             catchUp.AsSpan(QwpConstants.OffsetTableCount, 2)), Is.Zero,
             "catch-up must be table-less");
@@ -1314,7 +1315,7 @@ public class QwpCursorSendEngineTests
         engine.AppendBlocking(secondFrame);
         await engine.FlushAsync(TimeSpan.FromSeconds(5));
 
-        AssertEventually(() => secondTransport.Sent.Any(frame =>
+        AssertEventually(() => secondTransport.SentSnapshot.Any(frame =>
             {
                 var delta = ReadSymbolDelta(frame);
                 return delta.Start == 1 && delta.Entries.SequenceEqual(new[] { "beta" });
@@ -1635,6 +1636,11 @@ public class QwpCursorSendEngineTests
         public List<byte[]> Sent { get; } = new();
         public (string Host, int Port)? Endpoint { get; set; } = ("stub", 0);
         public int NegotiatedMaxBatchSize { get; set; }
+
+        public byte[][] SentSnapshot
+        {
+            get { lock (_sentLock) return Sent.ToArray(); }
+        }
 
         private readonly Channel<byte[]> _acks = Channel.CreateUnbounded<byte[]>();
         private readonly object _sentLock = new();

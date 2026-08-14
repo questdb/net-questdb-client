@@ -397,6 +397,57 @@ public class QuestDbWebSocketIntegrationTests
     }
 
     [Test]
+    public async Task Reconnect_WsCloseMidSession_SymbolDictionaryCatchUpReplays()
+    {
+        await DropTableAsync("test_ws_close_symbols");
+        var realEndpoint = _questDb!.GetWebSocketEndpoint();
+        using var proxy = new TcpProxy(realEndpoint);
+        await proxy.StartAsync();
+
+        using (var sender = Sender.New(
+                   $"ws::addr={proxy.LocalEndpoint};auto_flush=off;"
+                   + "reconnect_max_duration_millis=60000;"
+                   + "reconnect_initial_backoff_millis=50;reconnect_max_backoff_millis=500;"))
+        {
+            var qwp = (IQwpWebSocketSender)sender;
+
+            for (var i = 0; i < 10; i++)
+            {
+                sender.Table("test_ws_close_symbols")
+                    .Symbol("sym", i % 2 == 0 ? "alpha" : "beta")
+                    .Column("v", (long)i).At(DateTime.UtcNow);
+            }
+            await sender.SendAsync();
+            await qwp.PingAsync();
+
+            proxy.KillAllConnections();
+
+            // Post-kill rows reuse pre-kill symbol ids (restored by dictionary catch-up on the new
+            // connection) and introduce a new value that rides the post-reconnect delta.
+            for (var i = 10; i < 30; i++)
+            {
+                sender.Table("test_ws_close_symbols")
+                    .Symbol("sym", i % 3 == 0 ? "gamma" : i % 2 == 0 ? "alpha" : "beta")
+                    .Column("v", (long)i).At(DateTime.UtcNow);
+            }
+            await sender.SendAsync();
+
+            for (var i = 0; i < 200; i++)
+            {
+                try { await qwp.PingAsync(); break; }
+                catch { await Task.Delay(100); }
+            }
+        }
+
+        await VerifyTableRowCountAsync("test_ws_close_symbols", expected: 30, maxAttempts: 150);
+        var rows = await QueryAllRowsAsync(
+            "select sym, count() from test_ws_close_symbols order by sym");
+        Assert.That(
+            rows.Select(r => (r[0].GetString(), r[1].GetInt64())),
+            Is.EqualTo(new[] { ("alpha", 12L), ("beta", 12L), ("gamma", 6L) }));
+    }
+
+    [Test]
     public async Task SchemaCacheReuse_TwoFlushesSameTable_BothLand()
     {
         await DropTableAsync("test_ws_schema_reuse");

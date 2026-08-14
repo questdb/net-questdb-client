@@ -40,6 +40,7 @@ internal sealed class QwpSegmentManager : IDisposable
     private readonly TimeSpan _shutdownWait;
     private readonly TimeSpan _heartbeatInterval;
     private readonly Func<long>? _sideFileBytesProvider;
+    private long _lastSideFileBytes;
     private readonly SemaphoreSlim _wakeup = new(0, 1);
     private readonly CancellationTokenSource _cts = new();
 
@@ -82,7 +83,7 @@ internal sealed class QwpSegmentManager : IDisposable
     }
 
     public long CommittedBytes => Volatile.Read(ref _committedBytes);
-    public long SideFileBytes => ReadSideFileBytes();
+    public long SideFileBytes => Volatile.Read(ref _lastSideFileBytes);
     public long MaxTotalBytes => _maxTotalBytes;
     public TimeSpan HeartbeatInterval => _heartbeatInterval;
 
@@ -226,9 +227,11 @@ internal sealed class QwpSegmentManager : IDisposable
             }
         }
 
+        var sideFileBytes = ReadSideFileBytes();
+        Volatile.Write(ref _lastSideFileBytes, sideFileBytes);
+
         if (_ring.NeedsHotSpare())
         {
-            var sideFileBytes = ReadSideFileBytes();
             if (FitsWithinCap(committed, sideFileBytes)
                 || (sideFileBytes > 0 && committed < MinimumWorkingSetBytes()))
             {

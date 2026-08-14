@@ -920,9 +920,35 @@ internal sealed class QwpCursorSendEngine : IDisposable
                     // SenderOptions.max_frame_rejections for the behavior + RAM-mode data-loss note.
                     // A pure connect failure (nothing sent on this connection) is an outage, not
                     // poison — it must never accrue a strike (Invariant B), so it uses normal backoff.
-                    if (ex is RetriableNackException)
+                    if (ex is RetriableNackException nack)
                     {
-                        if (!await PacedPoisonDelayAsync(Volatile.Read(ref _poisonStrikes), ct).ConfigureAwait(false))
+                        // Strike-exempt rejections carry no poison strike, so pace them on
+                        // consecutive no-progress recycles instead: first recycle immediate
+                        // (failover latency), then doubling capped backoff.
+                        var exempt = nack.SenderError.Category
+                            is SenderErrorCategory.NotWritable or SenderErrorCategory.DictionaryGap
+                            || nack.FromFsn < 0;
+                        int pacingStrikes;
+                        lock (_stateLock)
+                        {
+                            if (!exempt)
+                            {
+                                pacingStrikes = _poisonStrikes;
+                            }
+                            else
+                            {
+                                var progress = Math.Max(_ackedFsn, _highestOkFsn + 1);
+                                if (progress > _progressAtLastExemptRecycle)
+                                {
+                                    _zeroProgressExemptRecycles = 0;
+                                }
+                                _progressAtLastExemptRecycle = progress;
+                                pacingStrikes = _zeroProgressExemptRecycles++;
+                            }
+                        }
+
+                        if (pacingStrikes > 0
+                            && !await PacedPoisonDelayAsync(pacingStrikes, ct).ConfigureAwait(false))
                         {
                             return;
                         }
@@ -1242,9 +1268,11 @@ internal sealed class QwpCursorSendEngine : IDisposable
         }
         long fromFsn, toFsn;
         long highestSentWireSeq;
+        long ackedFsnAtReject;
         lock (_stateLock)
         {
             highestSentWireSeq = _sentFsnHighWatermark - fsnAtZero;
+            ackedFsnAtReject = _ackedFsn;
         }
 
         if (!Volatile.Read(ref _sentOnCurrentConnection))
@@ -1260,6 +1288,14 @@ internal sealed class QwpCursorSendEngine : IDisposable
             var capped = Math.Min(wireSeq, highestSentWireSeq);
             fromFsn = checked(fsnAtZero + capped);
             toFsn = fromFsn;
+            if (fromFsn < ackedFsnAtReject)
+            {
+                // A NACK below the replay cursor names a dictionary catch-up frame, not a data
+                // frame — the sent flag can't tell them apart because the send pump ships data
+                // before the catch-up's NACK round-trip is read. Treat as a pre-data reject.
+                fromFsn = -1L;
+                toFsn = -1L;
+            }
         }
 
         var tableName = response.TableEntries.Count == 1 ? response.TableEntries[0].TableName : null;
@@ -1349,11 +1385,7 @@ internal sealed class QwpCursorSendEngine : IDisposable
         state.OutageStartTickMs ??= Environment.TickCount64;
 
         TimeSpan delay;
-        // A catch-up cap gap is a rolling/heterogeneous-cluster condition: an entry fitted on the
-        // node that originally accepted it but not on this smaller-cap failover node. Foreground
-        // SF must retain the queued data and retry until a compatible node returns, even when the
-        // caller selected the otherwise bounded blocking initial-connect mode.
-        if (IsBlockingInitialConnect() && lastError is not QwpCatchUpCapGapException)
+        if (IsBlockingInitialConnect())
         {
             var elapsed = TimeSpan.FromMilliseconds(Environment.TickCount64 - state.OutageStartTickMs.Value);
             var next = _reconnectPolicy.NextBackoffOrGiveUp(state.Attempt, elapsed);
@@ -1563,6 +1595,10 @@ internal sealed class QwpCursorSendEngine : IDisposable
     // measure genuine acceptance progress. Guarded by _stateLock; monotonic (replayed re-OKs of
     // already-OK'd frames don't advance it, so replay can't launder the strike count).
     private long _highestOkFsn = -1L;
+
+    // Zero-progress pacer for strike-exempt NACK recycles. Guarded by _stateLock.
+    private int _zeroProgressExemptRecycles;
+    private long _progressAtLastExemptRecycle = -1L;
 
     private readonly struct PoisonStrike
     {

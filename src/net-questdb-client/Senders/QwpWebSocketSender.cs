@@ -52,7 +52,6 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender, IPooledSlotSende
     private readonly Dictionary<string, QwpTableBuffer>.AlternateLookup<ReadOnlySpan<char>> _tablesLookup;
 #endif
     private readonly QwpSymbolDictionary _symbolDictionary;
-    private readonly bool _selfSufficientSymbolFrames;
     private readonly List<QwpTableBuffer> _flushBatch = new();
     private readonly QwpEncoder.FrameBuilder _encoderBuffer;
 
@@ -75,7 +74,6 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender, IPooledSlotSende
     private int _runningRowCount;
     private long _pendingBytes;
     private long _currentTableSnapshotBytes;
-    private int _currentBatchMaxSymbolId = -1;
 
     // Transactional (defer-commit) mode: auto-flush frames carry FLAG_DEFER_COMMIT; an explicit
     // commit ships a non-deferred frame. _hasDeferredMessages tracks whether a commit is owed.
@@ -102,9 +100,6 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender, IPooledSlotSende
 
         (_slotLock, _engine, _drainerPool, _errorDispatcher, _connectionEventDispatcher,
             _certValidator, _persistedSymbolDictionary) = BuildEngineStack(options, _symbolDictionary);
-        // Both RAM and file-backed modes now have a reconnect dictionary source: the I/O mirror in
-        // RAM, and the per-slot persisted dictionary for SF/restart/orphan recovery.
-        _selfSufficientSymbolFrames = false;
         _engine.SetTableEntryHandler(UpdateSeqTxnFromAck);
     }
 
@@ -415,10 +410,6 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender, IPooledSlotSende
             // the dictionary's fast path, so the hot path stays free of any extra scan.
             var globalId = _symbolDictionary.Add(value);
             EnsureCurrentTable().AppendSymbol(name, globalId);
-            if (globalId > _currentBatchMaxSymbolId)
-            {
-                _currentBatchMaxSymbolId = globalId;
-            }
         }
         catch
         {
@@ -529,10 +520,6 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender, IPooledSlotSende
         {
             var globalId = _symbolDictionary.Add(value);
             EnsureCurrentTable().AppendSymbol(name, globalId);
-            if (globalId > _currentBatchMaxSymbolId)
-            {
-                _currentBatchMaxSymbolId = globalId;
-            }
         }
         catch
         {
@@ -556,10 +543,6 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender, IPooledSlotSende
             // Add(string): probe/store by reference — no ToString of the value (see QwpSymbolDictionary).
             var globalId = _symbolDictionary.Add(value);
             EnsureCurrentTable().AppendSymbol(name, globalId);
-            if (globalId > _currentBatchMaxSymbolId)
-            {
-                _currentBatchMaxSymbolId = globalId;
-            }
         }
         catch
         {
@@ -1158,8 +1141,6 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender, IPooledSlotSende
 
         return QwpEncoder.EncodeInto(
             _encoderBuffer, _flushBatch, _symbolDictionary,
-            selfSufficient: _selfSufficientSymbolFrames,
-            symbolDeltaCount: _selfSufficientSymbolFrames ? _currentBatchMaxSymbolId + 1 : -1,
             deferCommit: deferCommit);
     }
 
@@ -1170,8 +1151,6 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender, IPooledSlotSende
     {
         return QwpEncoder.EncodeInto(
             _encoderBuffer, Array.Empty<QwpTableBuffer>(), _symbolDictionary,
-            selfSufficient: _selfSufficientSymbolFrames,
-            symbolDeltaCount: _selfSufficientSymbolFrames ? _currentBatchMaxSymbolId + 1 : -1,
             deferCommit: false);
     }
 
@@ -1275,9 +1254,6 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender, IPooledSlotSende
 
     private void ResetPendingState()
     {
-        // Symbol ids must stay stable for the sender's lifetime; reconnect catch-up restores the
-        // same id space on every new connection.
-        _currentBatchMaxSymbolId = -1;
         foreach (var t in _flushBatch)
         {
             t.Clear();
@@ -1318,7 +1294,6 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender, IPooledSlotSende
             t.Clear();
         }
 
-        _currentBatchMaxSymbolId = -1;
         _currentTable = null;
         _runningRowCount = 0;
         _pendingBytes = 0;

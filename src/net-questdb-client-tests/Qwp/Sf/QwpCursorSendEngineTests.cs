@@ -29,6 +29,7 @@ using QuestDB.Enums;
 using QuestDB.Qwp;
 using QuestDB.Qwp.Sf;
 using QuestDB.Utils;
+using static net_questdb_client_tests.Qwp.QwpFrameTestUtils;
 
 namespace net_questdb_client_tests.Qwp.Sf;
 
@@ -1376,6 +1377,67 @@ public class QwpCursorSendEngineTests
     }
 
     [Test]
+    public async Task DeltaDictionary_LateCatchUpNackAfterDataSend_DoesNotPoisonHistoricalFsn()
+    {
+        var dictionary = new QwpSymbolDictionary();
+        dictionary.Add("alpha");
+        var firstFrame = QwpEncoder.Encode(Array.Empty<QwpTableBuffer>(), dictionary);
+        dictionary.Commit();
+        var secondFrame = QwpEncoder.Encode(Array.Empty<QwpTableBuffer>(), dictionary);
+        var thirdFrame = QwpEncoder.Encode(Array.Empty<QwpTableBuffer>(), dictionary);
+
+        var slotDir = Path.Combine(_root, "late-catchup-nack");
+        var slotLock = QwpSlotLock.Acquire(slotDir);
+        var ring = QwpSegmentRing.Open(slotDir, segmentCapacity: 4096);
+        Assert.That(ring.TryAppend(firstFrame), Is.True);
+        Assert.That(ring.TryAppend(secondFrame), Is.True);
+        Assert.That(ring.TryAppend(thirdFrame), Is.True);
+        var persistedDictionary = QwpPersistedSymbolDictionary.OpenOrRecover(slotDir, ring);
+        var ackWatermark = QwpAckWatermark.Open(slotDir);
+        Assert.That(ackWatermark, Is.Not.Null);
+        ackWatermark!.Write(0L);
+
+        var connection = 0;
+        using var engine = new QwpCursorSendEngine(
+            slotLock,
+            ring,
+            () =>
+            {
+                if (Interlocked.Increment(ref connection) > 1)
+                {
+                    return new StubTransport();
+                }
+
+                // The catch-up NACK (wire seq 0, a retriable non-connection-state status) is only
+                // emitted in response to the second data send, so it is always processed after this
+                // connection has shipped data frames.
+                var sends = 0;
+                return new StubTransport
+                {
+                    OnSend = _ => Interlocked.Increment(ref sends) < 3
+                        ? OkResponse(0)
+                        : ErrorResponse(QwpStatusCode.InternalError, 0, "late catch-up rejection"),
+                };
+            },
+            new QwpReconnectPolicy(
+                TimeSpan.FromMilliseconds(1), TimeSpan.FromMilliseconds(4), TimeSpan.FromSeconds(5)),
+            appendDeadline: TimeSpan.FromSeconds(5),
+            initialConnectMode: InitialConnectMode.on,
+            ackWatermark: ackWatermark,
+            maxFrameRejections: 1,
+            poisonMinEscalationWindow: TimeSpan.Zero,
+            deltaDictionaryCatchUp: true,
+            persistedSymbolDictionary: persistedDictionary);
+
+        engine.Start();
+        await engine.FlushAsync(TimeSpan.FromSeconds(5));
+
+        Assert.That(engine.IsTerminallyFailed, Is.False,
+            "a NACK naming a catch-up wire sequence must not strike the historical FSN it maps to");
+        Assert.That(engine.AckedFsn, Is.EqualTo(3L));
+    }
+
+    [Test]
     public void DeltaDictionary_CatchUpCapGap_RetriesPastBlockingInitialConnectBudget()
     {
         var dictionary = new QwpSymbolDictionary();
@@ -1588,24 +1650,6 @@ public class QwpCursorSendEngineTests
         BinaryPrimitives.WriteUInt16LittleEndian(buf.AsSpan(9, 2), (ushort)msgBytes.Length);
         msgBytes.CopyTo(buf.AsSpan(11));
         return buf;
-    }
-
-    private static (int Start, string[] Entries) ReadSymbolDelta(byte[] frame)
-    {
-        var p = QwpConstants.HeaderSize;
-        var start = checked((int)QwpVarint.Read(frame.AsSpan(p), out var read));
-        p += read;
-        var count = checked((int)QwpVarint.Read(frame.AsSpan(p), out read));
-        p += read;
-        var entries = new string[count];
-        for (var i = 0; i < count; i++)
-        {
-            var len = checked((int)QwpVarint.Read(frame.AsSpan(p), out read));
-            p += read;
-            entries[i] = QwpStrictUtf8.Encoding.GetString(frame, p, len);
-            p += len;
-        }
-        return (start, entries);
     }
 
     private static void AssertEventually(Func<bool> condition, string message, int timeoutMs = 1000, int pollMs = 10)

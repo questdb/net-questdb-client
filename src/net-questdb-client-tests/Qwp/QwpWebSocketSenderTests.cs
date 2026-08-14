@@ -33,6 +33,7 @@ using QuestDB.Qwp.Sf;
 using QuestDB.Senders;
 using QuestDB.Utils;
 using dummy_http_server;
+using static net_questdb_client_tests.Qwp.QwpFrameTestUtils;
 
 namespace net_questdb_client_tests.Qwp;
 
@@ -1862,26 +1863,6 @@ public class QwpWebSocketSenderTests
         BinaryPrimitives.WriteInt64LittleEndian(bytes.AsSpan(1, 8), sequence);
         BinaryPrimitives.WriteUInt16LittleEndian(bytes.AsSpan(9, 2), 0);
         return bytes;
-    }
-
-    private static (int Start, string[] Entries) ReadSymbolDelta(byte[] frame)
-    {
-        var p = QwpConstants.HeaderSize;
-        var start = checked((int)QwpVarint.Read(frame.AsSpan(p), out var read));
-        p += read;
-        var count = checked((int)QwpVarint.Read(frame.AsSpan(p), out read));
-        p += read;
-
-        var entries = new string[count];
-        for (var i = 0; i < count; i++)
-        {
-            var len = checked((int)QwpVarint.Read(frame.AsSpan(p), out read));
-            p += read;
-            entries[i] = QwpStrictUtf8.Encoding.GetString(frame, p, len);
-            p += len;
-        }
-
-        return (start, entries);
     }
 
     private static byte[] BuildOkAckWithEntries(long sequence, params (string Name, long SeqTxn)[] entries)

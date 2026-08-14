@@ -36,6 +36,10 @@ namespace QuestDB.Qwp.Sf;
 ///     <c>[entryCount varint][entryBytes varint][[len varint][utf8]...][crc32c u32]</c>; the CRC
 ///     covers both chunk varints and the complete entry region. New entries are written before the
 ///     frame that references them is published to the SF ring.
+///     <para />
+///     Write-ahead ordering without fsync (matching the Java client): page-cache durability covers
+///     a process crash; a host-crash tear is detected — chunk CRCs end the trusted region and an
+///     unreplayable delta gap fails recovery loudly — never mis-parsed.
 /// </remarks>
 internal sealed class QwpPersistedSymbolDictionary : IDisposable
 {
@@ -205,8 +209,16 @@ internal sealed class QwpPersistedSymbolDictionary : IDisposable
 
             File.Move(tempPath, filePath, overwrite: true);
             var stream = OpenFile(filePath, FileMode.Open);
-            stream.Position = stream.Length;
-            return new QwpPersistedSymbolDictionary(filePath, stream, entries.ToList());
+            try
+            {
+                stream.Position = stream.Length;
+                return new QwpPersistedSymbolDictionary(filePath, stream, entries.ToList());
+            }
+            catch
+            {
+                SfCleanup.Dispose(stream);
+                throw;
+            }
         }
         catch
         {

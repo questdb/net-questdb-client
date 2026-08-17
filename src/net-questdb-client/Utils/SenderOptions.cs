@@ -1547,6 +1547,14 @@ public record SenderOptions
                 $"`sender_id` must be a single path segment without separators, drive letters, or `..` (got `{value}`)");
         }
 
+        // A slot whose directory name carries the quarantine marker is skipped by every sibling's
+        // orphan scanner, so a sender_id containing it would strand its own store-and-forward data.
+        if (value.Contains(Qwp.Sf.QwpOrphanScanner.QuarantineSlotInfix, StringComparison.Ordinal))
+        {
+            throw new IngressError(ErrorCode.ConfigError,
+                $"`sender_id` must not contain the reserved `{Qwp.Sf.QwpOrphanScanner.QuarantineSlotInfix}` marker (got `{value}`)");
+        }
+
         _senderId = value;
     }
 

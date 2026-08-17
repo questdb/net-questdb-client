@@ -221,7 +221,13 @@ internal sealed class QwpSymbolDictionary
         while (_values.Count > targetCount)
         {
             var last = _values.Count - 1;
-            _ids.Remove(_values[last]);
+            var value = _values[last];
+            // A duplicate value from AddRecovered leaves the reverse lookup on the highest id; only
+            // drop the mapping when this id still owns it, so an earlier id keeps resolving.
+            if (_ids.TryGetValue(value, out var owner) && owner == last)
+            {
+                _ids.Remove(value);
+            }
             _values.RemoveAt(last);
         }
     }

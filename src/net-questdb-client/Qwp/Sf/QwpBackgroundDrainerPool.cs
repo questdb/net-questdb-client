@@ -326,6 +326,12 @@ internal sealed class QwpBackgroundDrainerPool : IDisposable
             return true;
         }
 
+        // An unreplayable slot is a deterministic verdict no retry can change; quarantine it.
+        if (ex is QwpUnreplayableSlotException)
+        {
+            return false;
+        }
+
         if (ex is IngressError { InnerException: { } cause })
         {
             return !QwpCursorSendEngine.IsTerminalServerError(cause);

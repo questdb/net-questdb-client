@@ -22,6 +22,7 @@
  *
  ******************************************************************************/
 
+using System.Collections.Concurrent;
 using NUnit.Framework;
 using QuestDB;
 using QuestDB.Enums;
@@ -76,6 +77,33 @@ public sealed class QwpPersistedSymbolDictionaryTests
                 0x02, 0x05, 0x01, 0x61, 0x02, 0xC3, 0xA9,
                 0xE8, 0x49, 0x8F, 0x0A
             }));
+    }
+
+    [Test]
+    public void AppendNewSymbols_RetryAfterFailedPublish_DoesNotDuplicateEntries()
+    {
+        var slot = Slot("idempotent");
+        using var ring = QwpSegmentRing.Open(slot, segmentCapacity: 4096);
+        var dictionary = new QwpSymbolDictionary();
+        dictionary.Add("alpha");
+        dictionary.Add("beta");
+
+        using var persisted = QwpPersistedSymbolDictionary.OpenOrRecover(slot, ring);
+        persisted.AppendNewSymbols(dictionary);
+        var lengthAfterFirst = persisted.FileLength;
+
+        // A failed ring publication retries the same flush: the retry must observe the advanced
+        // persisted count and write nothing.
+        persisted.AppendNewSymbols(dictionary);
+
+        Assert.That(persisted.Count, Is.EqualTo(2));
+        Assert.That(persisted.FileLength, Is.EqualTo(lengthAfterFirst));
+
+        dictionary.Add("gamma");
+        persisted.AppendNewSymbols(dictionary);
+
+        Assert.That(persisted.SnapshotEntries(), Is.EqualTo(new[] { "alpha", "beta", "gamma" }));
+        Assert.That(persisted.FileLength, Is.GreaterThan(lengthAfterFirst));
     }
 
     [Test]
@@ -150,10 +178,12 @@ public sealed class QwpPersistedSymbolDictionaryTests
         const string senderId = "sender-recovery-quarantine";
         var slot = SeedUnreplayableSlot(senderId);
 
-        var reported = new List<SenderError>();
+        // The handler also sees background connect failures (the endpoint is unreachable), on the
+        // dispatcher thread — collect thread-safely and assert on the DataLoss report alone.
+        var reported = new ConcurrentQueue<SenderError>();
         var options = new SenderOptions(BuildConfString(senderId))
         {
-            error_handler = reported.Add,
+            error_handler = reported.Enqueue,
         };
 
         using (var sender = Sender.New(options))
@@ -168,11 +198,11 @@ public sealed class QwpPersistedSymbolDictionaryTests
             "the unreplayable slot's bytes must be preserved for inspection and resend");
         Assert.That(Directory.Exists(slot), Is.True);
 
-        Assert.That(reported, Has.Count.EqualTo(1));
-        Assert.That(reported[0].Category, Is.EqualTo(SenderErrorCategory.DataLoss));
-        Assert.That(reported[0].AppliedPolicy, Is.EqualTo(SenderErrorPolicy.Abandoned));
-        Assert.That(reported[0].QuarantinedPath, Is.EqualTo(quarantined));
-        Assert.That(reported[0].ServerMessage, Does.Contain("unreplayable"));
+        var dataLoss = reported.Where(e => e.Category == SenderErrorCategory.DataLoss).ToList();
+        Assert.That(dataLoss, Has.Count.EqualTo(1));
+        Assert.That(dataLoss[0].AppliedPolicy, Is.EqualTo(SenderErrorPolicy.Abandoned));
+        Assert.That(dataLoss[0].QuarantinedPath, Is.EqualTo(quarantined));
+        Assert.That(dataLoss[0].ServerMessage, Does.Contain("unreplayable"));
     }
 
     [Test]

@@ -151,7 +151,9 @@ public sealed class SenderError
     {
         return $"SenderError{{category={Category}, policy={AppliedPolicy}, " +
                $"status=0x{ServerStatusByte & 0xFF:X2}, seq={MessageSequence}, " +
-               $"fsn=[{FromFsn},{ToFsn}], table={TableName ?? "(none)"}, msg={ServerMessage}}}";
+               $"fsn=[{FromFsn},{ToFsn}], table={TableName ?? "(none)"}, " +
+               (QuarantinedPath is null ? string.Empty : $"quarantinedPath={QuarantinedPath}, ") +
+               $"msg={ServerMessage}}}";
     }
 }
 

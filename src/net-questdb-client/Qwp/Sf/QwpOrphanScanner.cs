@@ -46,18 +46,31 @@ internal static class QwpOrphanScanner
 {
     private const string FailedSentinel = ".failed";
     private const string SegmentGlob = "sf-*.sfa";
-    private const int FailedSentinelMaxBytes = 4096;
+    private const int FailedSentinelMaxChars = 4096;
 
     // The name check is the reliable exclusion: MarkFailed is best-effort, and a full or
     // read-only disk fails both the recovery and the sentinel write.
     internal const string QuarantineSlotInfix = ".unreplayable-";
 
+    internal static string TruncateSentinelDetail(string detail)
+    {
+        if (detail.Length <= FailedSentinelMaxChars)
+        {
+            return detail;
+        }
+
+        // Never cut through a surrogate pair — the truncated tail must stay valid UTF-8.
+        var cut = FailedSentinelMaxChars;
+        if (char.IsHighSurrogate(detail[cut - 1]))
+        {
+            cut--;
+        }
+        return detail[..cut] + "\n... [truncated]";
+    }
+
     internal static void MarkFailed(string slotDirectory, string detail)
     {
-        if (detail.Length > FailedSentinelMaxBytes)
-        {
-            detail = detail.Substring(0, FailedSentinelMaxBytes) + "\n... [truncated]";
-        }
+        detail = TruncateSentinelDetail(detail);
 
         try
         {

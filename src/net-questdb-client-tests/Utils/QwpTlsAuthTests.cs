@@ -195,6 +195,42 @@ public class QwpTlsAuthTests
         }
     }
 
+    [Test]
+    public void BuildCertificateValidator_PfxBundleAcceptsCertificateFromEveryRoot()
+    {
+        using var firstCa = NewCertificateAuthority("CN=qwp-first-pfx-ca");
+        using var secondCa = NewCertificateAuthority("CN=qwp-second-pfx-ca");
+        using var firstLeaf = NewLeafCertificate("CN=first-pfx.qwp.test", firstCa);
+        using var secondLeaf = NewLeafCertificate("CN=second-pfx.qwp.test", secondCa);
+
+        var pfxPath = Path.Combine(Path.GetTempPath(), "qwp-ca-bundle-" + Guid.NewGuid().ToString("N") + ".pfx");
+        var bundle = new X509Certificate2Collection { firstCa, secondCa };
+#pragma warning disable SYSLIB0057
+        File.WriteAllBytes(pfxPath, bundle.Export(X509ContentType.Pfx)!);
+#pragma warning restore SYSLIB0057
+        try
+        {
+            using var validator = QwpTlsAuth.BuildCertificateValidator(TlsVerifyType.on, pfxPath, null);
+            Assert.That(validator, Is.Not.Null);
+
+            using var firstChain = new X509Chain();
+            Assert.That(
+                validator!.Callback(this, firstLeaf, firstChain, SslPolicyErrors.RemoteCertificateChainErrors),
+                Is.True,
+                "the first root in the PFX bundle must be trusted");
+
+            using var secondChain = new X509Chain();
+            Assert.That(
+                validator.Callback(this, secondLeaf, secondChain, SslPolicyErrors.RemoteCertificateChainErrors),
+                Is.True,
+                "roots after the first PFX certificate must also be trusted");
+        }
+        finally
+        {
+            try { File.Delete(pfxPath); } catch { }
+        }
+    }
+
     private static string ExportCertificatePem(X509Certificate2 certificate)
     {
         // X509Certificate2.ExportCertificatePem() is newer than the library's net6 target.

@@ -334,15 +334,9 @@ internal sealed class QwpBackgroundDrainerPool : IDisposable
         return false;
     }
 
-    private const int FailedSentinelMaxBytes = 4096;
-
     private static void TryDropFailedSentinel(QwpSlotLock slotLock, Exception ex)
     {
-        var content = ex.ToString();
-        if (content.Length > FailedSentinelMaxBytes)
-        {
-            content = content.Substring(0, FailedSentinelMaxBytes) + "\n... [truncated]";
-        }
+        var content = QwpOrphanScanner.TruncateSentinelDetail(ex.ToString());
         slotLock.TryRunUnderLock(dir =>
         {
             try

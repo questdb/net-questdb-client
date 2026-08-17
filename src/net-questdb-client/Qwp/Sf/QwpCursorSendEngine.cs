@@ -874,9 +874,8 @@ internal sealed class QwpCursorSendEngine : IDisposable
                     if (_symbolDictionaryMirror is { Count: > 0 } mirror)
                     {
                         // A WebSocket upgrade resets the server's connection-scoped dictionary.
-                        // Catch-up is part of establishing a usable connection: if it fails, the
-                        // ordinary reconnect policy retries it and the initial-connect gate remains
-                        // closed.
+                        // Catch-up runs before any data frame; if it fails, the ordinary reconnect
+                        // policy retries it on the next connection.
                         //
                         // Catch-up frames consume wire sequences but map to the already-acked FSNs
                         // immediately below the replay cursor, so their ACKs cannot advance the ring

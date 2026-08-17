@@ -29,7 +29,8 @@ namespace QuestDB.Qwp.Sf;
 
 /// <summary>
 ///     Per-slot, append-only symbol dictionary used to make delta QWP frames recoverable after a
-///     process restart. The format matches the Java client's <c>.symbol-dict</c> side file.
+///     process restart. The <c>.symbol-dict</c> side-file format is shared across QuestDB
+///     clients, so its byte layout is pinned.
 /// </summary>
 /// <remarks>
 ///     File header: <c>SYD1</c> little-endian, version 1, three reserved zero bytes. Each chunk is
@@ -37,7 +38,7 @@ namespace QuestDB.Qwp.Sf;
 ///     covers both chunk varints and the complete entry region. New entries are written before the
 ///     frame that references them is published to the SF ring.
 ///     <para />
-///     Write-ahead ordering without fsync (matching the Java client): page-cache durability covers
+///     Write-ahead ordering without fsync: page-cache durability covers
 ///     a process crash; a host-crash tear is detected — chunk CRCs end the trusted region and an
 ///     unreplayable delta gap fails recovery loudly — never mis-parsed.
 /// </remarks>
@@ -89,6 +90,7 @@ internal sealed class QwpPersistedSymbolDictionary : IDisposable
         ArgumentNullException.ThrowIfNull(slotDirectory);
         ArgumentNullException.ThrowIfNull(ring);
         Directory.CreateDirectory(slotDirectory);
+        SweepAbandonedTempFiles(slotDirectory);
 
         var filePath = Path.Combine(slotDirectory, FileName);
         if (ring.NextFsn <= ring.OldestFsn)
@@ -197,6 +199,23 @@ internal sealed class QwpPersistedSymbolDictionary : IDisposable
     internal static void RemoveOrphan(string slotDirectory)
     {
         SfCleanup.DeleteFile(Path.Combine(slotDirectory, FileName));
+        SweepAbandonedTempFiles(slotDirectory);
+    }
+
+    // A hard crash between CreateClean's temp write and its File.Move strands a
+    // .symbol-dict.tmp-<guid> file that nothing else ever globs.
+    private static void SweepAbandonedTempFiles(string slotDirectory)
+    {
+        try
+        {
+            foreach (var stale in Directory.EnumerateFiles(slotDirectory, FileName + ".tmp-*"))
+            {
+                SfCleanup.DeleteFile(stale);
+            }
+        }
+        catch (Exception)
+        {
+        }
     }
 
     private static QwpPersistedSymbolDictionary CreateClean(

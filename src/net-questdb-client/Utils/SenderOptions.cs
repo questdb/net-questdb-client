@@ -1283,6 +1283,8 @@ public record SenderOptions
     /// <summary>
     ///     Path to a custom CA bundle used to verify the server certificate. Accepts PEM
     ///     (.pem / .crt) or PFX/PKCS#12 (.pfx / .p12); the format is selected by file extension.
+    ///     Only self-signed certificates in the bundle act as trust anchors; any other
+    ///     certificates only assist chain building.
     /// </summary>
     public string? tls_roots
     {

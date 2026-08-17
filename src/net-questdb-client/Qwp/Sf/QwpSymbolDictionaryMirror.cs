@@ -119,20 +119,18 @@ internal sealed class QwpSymbolDictionaryMirror
             p = SkipEntry(frame, p, delta.EntriesEnd);
         }
 
+        // ParseDelta already walked every entry, so the tail provably ends at EntriesEnd and the
+        // SkipEntry calls below cannot throw. Reserving both capacities before the first mutation
+        // keeps the mirror consistent on any failure path.
         var tailStart = p;
-        var newEnds = new List<int>(deltaEnd - firstNewId);
+        var tailLength = delta.EntriesEnd - tailStart;
+        EnsureCapacity(checked(_encodedLength + tailLength));
+        _entryEnds.EnsureCapacity(_entryEnds.Count + (deltaEnd - firstNewId));
+        frame.Slice(tailStart, tailLength).CopyTo(_encodedEntries.AsSpan(_encodedLength));
         for (var id = firstNewId; id < deltaEnd; id++)
         {
             p = SkipEntry(frame, p, delta.EntriesEnd);
-            newEnds.Add(p - tailStart);
-        }
-
-        var tailLength = p - tailStart;
-        EnsureCapacity(checked(_encodedLength + tailLength));
-        frame.Slice(tailStart, tailLength).CopyTo(_encodedEntries.AsSpan(_encodedLength));
-        foreach (var relativeEnd in newEnds)
-        {
-            _entryEnds.Add(_encodedLength + relativeEnd);
+            _entryEnds.Add(_encodedLength + (p - tailStart));
         }
         _encodedLength += tailLength;
     }

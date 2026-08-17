@@ -185,21 +185,7 @@ internal sealed class QwpCursorSendEngine : IDisposable
         _maxFrameRejections = maxFrameRejections < 1 ? 1 : maxFrameRejections;
         _poisonDwell = poisonMinEscalationWindow ?? TimeSpan.FromMilliseconds(5000);
 
-        var baseSeed = ring.OldestFsn;
-        if (ackWatermark is not null)
-        {
-            var wm = ackWatermark.Read();
-            if (wm != QwpAckWatermark.Invalid)
-            {
-                // max() absorbs either ordering of the manager's persist-then-trim tick.
-                var candidate = Math.Max(baseSeed, wm + 1);
-                // candidate > NextFsn means corruption: a clean prior session can't produce one.
-                if (candidate <= ring.NextFsn)
-                {
-                    baseSeed = candidate;
-                }
-            }
-        }
+        var baseSeed = QwpAckWatermark.ResolveReplayFloor(ring, ackWatermark);
 
         _cursorFsn = baseSeed;
         _ackedFsn = baseSeed;

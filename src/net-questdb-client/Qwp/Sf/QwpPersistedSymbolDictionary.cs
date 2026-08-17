@@ -81,11 +81,14 @@ internal sealed class QwpPersistedSymbolDictionary : IDisposable
     /// <summary>
     ///     Opens or reconstructs a slot dictionary and validates every surviving frame against it.
     ///     An empty ring starts a fresh id generation. A legacy self-sufficient ring can rebuild a
-    ///     missing side file from its start-at-zero prefixes; a true delta gap fails closed.
+    ///     missing side file from its start-at-zero prefixes; a true delta gap fails closed unless
+    ///     it is confined to frames below <paramref name="replayFloorFsn" />, which are already
+    ///     acknowledged and never resend.
     /// </summary>
     public static QwpPersistedSymbolDictionary OpenOrRecover(
         string slotDirectory,
-        QwpSegmentRing ring)
+        QwpSegmentRing ring,
+        long replayFloorFsn = long.MinValue)
     {
         ArgumentNullException.ThrowIfNull(slotDirectory);
         ArgumentNullException.ThrowIfNull(ring);
@@ -109,7 +112,7 @@ internal sealed class QwpPersistedSymbolDictionary : IDisposable
 
             try
             {
-                FoldRing(ring, entries);
+                FoldRing(ring, entries, replayFloorFsn);
             }
             catch (InvalidDataException ex)
             {
@@ -346,7 +349,7 @@ internal sealed class QwpPersistedSymbolDictionary : IDisposable
         }
     }
 
-    private static void FoldRing(QwpSegmentRing ring, List<string> entries)
+    private static void FoldRing(QwpSegmentRing ring, List<string> entries, long replayFloorFsn)
     {
         // A frame can never be larger than the segment that contains its envelope. The ring's
         // default protocol ceiling is int.MaxValue, so allocating MaxFrameLength directly would
@@ -360,11 +363,11 @@ internal sealed class QwpPersistedSymbolDictionary : IDisposable
             {
                 throw new InvalidDataException($"cannot recover QWP frame FSN {fsn} while rebuilding symbol dictionary");
             }
-            FoldFrame(frame.AsSpan(0, length), entries, fsn);
+            FoldFrame(frame.AsSpan(0, length), entries, fsn, replayable: fsn >= replayFloorFsn);
         }
     }
 
-    private static void FoldFrame(ReadOnlySpan<byte> frame, List<string> entries, long fsn)
+    private static void FoldFrame(ReadOnlySpan<byte> frame, List<string> entries, long fsn, bool replayable)
     {
         if (frame.Length < QwpConstants.HeaderSize
             || BinaryPrimitives.ReadUInt32LittleEndian(frame.Slice(QwpConstants.OffsetMagic, 4)) != QwpConstants.Magic)
@@ -398,6 +401,10 @@ internal sealed class QwpPersistedSymbolDictionary : IDisposable
         }
         if ((int)start > entries.Count)
         {
+            if (!replayable)
+            {
+                return;
+            }
             throw new InvalidDataException(
                 $"unreplayable symbol dictionary gap at FSN {fsn}: delta starts at {start}, recovered {entries.Count}");
         }

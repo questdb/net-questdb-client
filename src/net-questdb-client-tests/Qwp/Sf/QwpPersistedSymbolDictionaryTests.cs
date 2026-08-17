@@ -171,6 +171,58 @@ public sealed class QwpPersistedSymbolDictionaryTests
             "a failed recovery must not fabricate a dictionary that would make the gap look valid next time");
     }
 
+    [Test]
+    public void DeltaGapConfinedToAckedFrames_ResumesOnIntactPrefix()
+    {
+        var slot = SeedGappedSlot("acked-gap", ackAllFrames: true);
+
+        using var recoveredRing = QwpSegmentRing.Open(slot, segmentCapacity: 4096);
+        using var recoveredWatermark = QwpAckWatermark.Open(slot);
+        var floor = QwpAckWatermark.ResolveReplayFloor(recoveredRing, recoveredWatermark);
+        using var recovered = QwpPersistedSymbolDictionary.OpenOrRecover(slot, recoveredRing, floor);
+
+        Assert.That(recovered.SnapshotEntries(), Is.EqualTo(new[] { "persisted-prefix" }));
+    }
+
+    [Test]
+    public void DeltaGapWithUnwrittenWatermark_StillFailsClosed()
+    {
+        var slot = SeedGappedSlot("unacked-gap", ackAllFrames: false);
+
+        using var recoveredRing = QwpSegmentRing.Open(slot, segmentCapacity: 4096);
+        using var recoveredWatermark = QwpAckWatermark.Open(slot);
+        var floor = QwpAckWatermark.ResolveReplayFloor(recoveredRing, recoveredWatermark);
+
+        Assert.Throws<QwpUnreplayableSlotException>(() =>
+            QwpPersistedSymbolDictionary.OpenOrRecover(slot, recoveredRing, floor));
+    }
+
+    private string SeedGappedSlot(string name, bool ackAllFrames)
+    {
+        var slot = Slot(name);
+        using var ring = QwpSegmentRing.Open(slot, segmentCapacity: 4096);
+        var dictionary = new QwpSymbolDictionary();
+        dictionary.Add("persisted-prefix");
+        using (var persisted = QwpPersistedSymbolDictionary.OpenOrRecover(slot, ring))
+        {
+            persisted.AppendNewSymbols(dictionary);
+        }
+        dictionary.Commit();
+        dictionary.Add("lost-by-tear");
+        dictionary.Commit();
+        dictionary.Add("surviving-suffix");
+        Assert.That(ring.TryAppend(QwpEncoder.Encode(
+            Array.Empty<QwpTableBuffer>(), dictionary)), Is.True);
+
+        if (ackAllFrames)
+        {
+            using var watermark = QwpAckWatermark.Open(slot);
+            watermark!.Write(ring.NextFsn - 1);
+            watermark.Flush();
+        }
+        return slot;
+    }
+
 #if NET7_0_OR_GREATER
     [Test]
     public void SenderStartup_UnreplayableSlotIsQuarantinedAndSenderContinuesOnFreshSlot()

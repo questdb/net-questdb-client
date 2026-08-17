@@ -124,7 +124,8 @@ internal sealed class QwpBackgroundDrainer : IQwpSlotDrainer
                 QwpAckWatermark.RemoveOrphan(slotDirectory);
             }
             watermark = QwpAckWatermark.Open(slotDirectory);
-            persistedSymbolDictionary = QwpPersistedSymbolDictionary.OpenOrRecover(slotDirectory, ring);
+            persistedSymbolDictionary = QwpPersistedSymbolDictionary.OpenOrRecover(
+                slotDirectory, ring, QwpAckWatermark.ResolveReplayFloor(ring, watermark));
 
             // Construct the engine even when the ring is empty so engine.Dispose's full-drain
             // branch still unlinks residual sf-*.sfa files. A slot with empty .sfa survivors

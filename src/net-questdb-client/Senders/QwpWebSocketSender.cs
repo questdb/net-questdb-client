@@ -305,7 +305,8 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender, IPooledSlotSende
             QwpPersistedSymbolDictionary persistedSymbolDictionary;
             try
             {
-                persistedSymbolDictionary = QwpPersistedSymbolDictionary.OpenOrRecover(slotDir, ring);
+                persistedSymbolDictionary = QwpPersistedSymbolDictionary.OpenOrRecover(
+                    slotDir, ring, QwpAckWatermark.ResolveReplayFloor(ring, ackWatermark));
             }
             catch (InvalidDataException ex)
             {

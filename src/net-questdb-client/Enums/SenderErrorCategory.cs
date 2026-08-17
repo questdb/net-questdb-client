@@ -63,4 +63,12 @@ public enum SenderErrorCategory
     ///     Reconnecting and sending dictionary catch-up makes the same data frame valid.
     /// </summary>
     DictionaryGap = 8,
+
+    /// <summary>
+    ///     Buffered store-and-forward data was permanently abandoned: an unreplayable slot was
+    ///     set aside at <see cref="Utils.SenderError.QuarantinedPath" /> for inspection and
+    ///     resend. Client-side verdict, never carried on the wire; only
+    ///     <see cref="Utils.SenderError.DataLoss" /> constructs it. This is the event to page on.
+    /// </summary>
+    DataLoss = 9,
 }

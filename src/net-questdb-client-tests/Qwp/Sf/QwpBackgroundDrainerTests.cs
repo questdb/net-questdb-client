@@ -247,6 +247,49 @@ public class QwpBackgroundDrainerTests
             "a poison frame is deterministic under replay — the drainer honours max_frame_rejections and quarantines the slot");
     }
 
+    [Test]
+    public async Task Drainer_UnreplayableSlot_QuarantinesInsteadOfRetryingForever()
+    {
+        var slotDir = Path.Combine(_root, "unreplayable");
+        Directory.CreateDirectory(slotDir);
+        using (var ring = QwpSegmentRing.Open(slotDir, segmentCapacity: 4096))
+        {
+            var dictionary = new QwpSymbolDictionary();
+            dictionary.Add("missing-prefix");
+            dictionary.Commit();
+            dictionary.Add("surviving-suffix");
+            Assert.That(ring.TryAppend(QwpEncoder.Encode(
+                Array.Empty<QwpTableBuffer>(), dictionary)), Is.True);
+        }
+
+        var connected = false;
+        var policy = new QwpReconnectPolicy(
+            TimeSpan.FromMilliseconds(1), TimeSpan.FromMilliseconds(4), TimeSpan.FromSeconds(30));
+        var drainer = new QwpBackgroundDrainer(
+            transportFactory: () => new StubTransport
+            {
+                OnConnect = _ =>
+                {
+                    connected = true;
+                    return Task.CompletedTask;
+                }
+            },
+            reconnectPolicy: policy,
+            segmentCapacity: 4096,
+            drainTimeout: TimeSpan.FromSeconds(5));
+
+        var slotLock = QwpSlotLock.Acquire(slotDir);
+        using var pool = new QwpBackgroundDrainerPool(2, drainer);
+        pool.Enqueue(slotLock);
+        await pool.WaitForAllAsync();
+
+        Assert.That(File.Exists(Path.Combine(slotDir, ".failed")), Is.True,
+            "an unreplayable dictionary verdict is deterministic — the drainer must quarantine, not retry");
+        Assert.That(connected, Is.False, "the verdict is reached before anything goes on the wire");
+        Assert.That(Directory.GetFiles(slotDir, "sf-*.sfa"), Is.Not.Empty,
+            "the slot's bytes must be preserved for inspection and resend");
+    }
+
     private static void SeedSlot(string slotDir, byte[][] payloads)
     {
         Directory.CreateDirectory(slotDir);

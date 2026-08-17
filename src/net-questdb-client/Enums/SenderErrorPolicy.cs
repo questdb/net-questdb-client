@@ -50,4 +50,11 @@ public enum SenderErrorPolicy
     ///     caller closes and rebuilds it.
     /// </summary>
     Terminal,
+
+    /// <summary>
+    ///     Issued only with <see cref="SenderErrorCategory.DataLoss" />: the affected bytes are
+    ///     preserved on disk at <see cref="Utils.SenderError.QuarantinedPath" /> but will never be
+    ///     retried. Not resolvable by policy configuration.
+    /// </summary>
+    Abandoned,
 }

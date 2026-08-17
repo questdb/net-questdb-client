@@ -145,22 +145,16 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender, IPooledSlotSende
             {
                 var sfRoot = options.sf_dir!;
                 var slotDir = Path.Combine(sfRoot, options.sender_id);
-                slotLock = QwpSlotLock.Acquire(slotDir);
-                ring = QwpSegmentRing.Open(slotDir, segmentCapacity: options.sf_max_segment_bytes);
-                if (ring.NextFsn == 0)
-                {
-                    // Clear any stale watermark from a prior session that left no segments behind.
-                    QwpAckWatermark.RemoveOrphan(slotDir);
-                }
-                ackWatermark = QwpAckWatermark.Open(slotDir);
                 try
                 {
-                    persistedSymbolDictionary = QwpPersistedSymbolDictionary.OpenOrRecover(slotDir, ring);
+                    (slotLock, ring, ackWatermark, persistedSymbolDictionary) = OpenSlotStack(slotDir, options);
                 }
-                catch (InvalidDataException ex)
+                catch (QwpUnreplayableSlotException ex)
                 {
-                    throw new IngressError(ErrorCode.ConfigError,
-                        $"store-and-forward slot `{slotDir}` cannot be recovered: {ex.Message}", ex);
+                    // sender_id is stable, so throwing would re-recover the same slot and fail on
+                    // every restart. Set it aside and continue on a fresh slot instead.
+                    QuarantineUnreplayableSlot(sfRoot, options.sender_id, slotDir, ex, options.error_handler);
+                    (slotLock, ring, ackWatermark, persistedSymbolDictionary) = OpenSlotStack(slotDir, options);
                 }
                 foreach (var symbol in persistedSymbolDictionary.SnapshotEntries())
                 {
@@ -289,6 +283,101 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender, IPooledSlotSende
             SfCleanup.Dispose(certValidator);
             SfCleanup.Dispose(persistedSymbolDictionary);
             throw;
+        }
+    }
+
+    private static (QwpSlotLock slotLock, QwpSegmentRing ring, QwpAckWatermark ackWatermark, QwpPersistedSymbolDictionary persistedSymbolDictionary)
+        OpenSlotStack(string slotDir, SenderOptions options)
+    {
+        QwpSlotLock? slotLock = null;
+        QwpSegmentRing? ring = null;
+        QwpAckWatermark? ackWatermark = null;
+        try
+        {
+            slotLock = QwpSlotLock.Acquire(slotDir);
+            ring = QwpSegmentRing.Open(slotDir, segmentCapacity: options.sf_max_segment_bytes);
+            if (ring.NextFsn == 0)
+            {
+                // Clear any stale watermark from a prior session that left no segments behind.
+                QwpAckWatermark.RemoveOrphan(slotDir);
+            }
+            ackWatermark = QwpAckWatermark.Open(slotDir);
+            QwpPersistedSymbolDictionary persistedSymbolDictionary;
+            try
+            {
+                persistedSymbolDictionary = QwpPersistedSymbolDictionary.OpenOrRecover(slotDir, ring);
+            }
+            catch (InvalidDataException ex)
+            {
+                throw new IngressError(ErrorCode.ConfigError,
+                    $"store-and-forward slot `{slotDir}` cannot be recovered: {ex.Message}", ex);
+            }
+            return (slotLock, ring, ackWatermark, persistedSymbolDictionary);
+        }
+        catch
+        {
+            SfCleanup.Dispose(ackWatermark);
+            SfCleanup.Dispose(ring);
+            SfCleanup.Dispose(slotLock);
+            throw;
+        }
+    }
+
+    // Bounded so unreplayable copies cannot turn a disk-space problem into a second incident.
+    private const int MaxQuarantinedSlots = 64;
+
+    private static void QuarantineUnreplayableSlot(
+        string sfRoot, string senderId, string slotDir, QwpUnreplayableSlotException cause,
+        SenderErrorHandler? errorHandler)
+    {
+        string? quarantinePath = null;
+        for (var i = 0; i < MaxQuarantinedSlots; i++)
+        {
+            var candidate = Path.Combine(sfRoot, senderId + QwpOrphanScanner.QuarantineSlotInfix + i);
+            if (!Directory.Exists(candidate))
+            {
+                quarantinePath = candidate;
+                break;
+            }
+        }
+
+        if (quarantinePath is null)
+        {
+            throw new IngressError(ErrorCode.ConfigError,
+                $"{cause.Message}; the slot could not be set aside: too many quarantined slots " +
+                $"already under `{sfRoot}`. Move or remove them by hand; the affected data must be resent", cause);
+        }
+
+        try
+        {
+            Directory.Move(slotDir, quarantinePath);
+        }
+        catch (Exception moveError)
+        {
+            throw new IngressError(ErrorCode.ConfigError,
+                $"{cause.Message}; the slot could not be set aside (rename to `{quarantinePath}` " +
+                $"failed: {moveError.Message}). Move or remove `{slotDir}` by hand; the affected data must be resent", cause);
+        }
+
+        QwpOrphanScanner.MarkFailed(quarantinePath, "unreplayable: " + cause);
+        var detail = $"{cause.Message} [slot set aside at `{quarantinePath}`; " +
+                     $"sender continues on a fresh slot at `{slotDir}`; the affected data must be resent]";
+        System.Diagnostics.Trace.TraceError(detail);
+        if (errorHandler is null)
+        {
+            return;
+        }
+
+        // Dispatched synchronously: the async dispatcher belongs to the connected sender, which
+        // does not exist yet at build time.
+        try
+        {
+            errorHandler(SenderError.DataLoss(detail, quarantinePath));
+        }
+        catch (Exception handlerFailure)
+        {
+            System.Diagnostics.Trace.TraceError(
+                $"SenderErrorHandler threw while reporting a quarantined slot: {handlerFailure}");
         }
     }
 

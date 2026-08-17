@@ -53,7 +53,8 @@ public sealed class SenderError
         string? tableName,
         DateTime detectedAtUtc,
         Exception? exception = null,
-        bool isInitialConnect = false)
+        bool isInitialConnect = false,
+        string? quarantinedPath = null)
     {
         Category = category;
         AppliedPolicy = appliedPolicy;
@@ -66,6 +67,22 @@ public sealed class SenderError
         DetectedAtUtc = detectedAtUtc;
         Exception = exception;
         IsInitialConnect = isInitialConnect;
+        QuarantinedPath = quarantinedPath;
+    }
+
+    /// <summary>
+    ///     Creates the only <see cref="SenderErrorCategory.DataLoss" /> report: an unreplayable
+    ///     store-and-forward slot was set aside at <paramref name="quarantinedPath" /> and its
+    ///     buffered data must be resent from its source.
+    /// </summary>
+    public static SenderError DataLoss(string detail, string quarantinedPath)
+    {
+        ArgumentNullException.ThrowIfNull(detail);
+        ArgumentNullException.ThrowIfNull(quarantinedPath);
+        return new SenderError(
+            SenderErrorCategory.DataLoss, SenderErrorPolicy.Abandoned, NoStatusByte, detail,
+            NoMessageSequence, NoMessageSequence, NoMessageSequence, tableName: null,
+            DateTime.UtcNow, quarantinedPath: quarantinedPath);
     }
 
     /// <summary>The rejection category.</summary>
@@ -122,6 +139,12 @@ public sealed class SenderError
     ///     Always <c>false</c> for server-side rejections.
     /// </summary>
     public bool IsInitialConnect { get; }
+
+    /// <summary>
+    ///     For <see cref="SenderErrorCategory.DataLoss" />: the on-disk path where the abandoned
+    ///     slot's bytes are preserved for inspection and resend. Null for every other category.
+    /// </summary>
+    public string? QuarantinedPath { get; }
 
     /// <inheritdoc />
     public override string ToString()

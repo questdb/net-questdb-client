@@ -136,7 +136,7 @@ public sealed class QwpPersistedSymbolDictionaryTests
         }
 
         using var recoveredRing = QwpSegmentRing.Open(slot, segmentCapacity: 4096);
-        var error = Assert.Throws<InvalidDataException>(() =>
+        var error = Assert.Throws<QwpUnreplayableSlotException>(() =>
             QwpPersistedSymbolDictionary.OpenOrRecover(slot, recoveredRing));
         Assert.That(error!.Message, Does.Contain("unreplayable symbol dictionary gap"));
         Assert.That(File.Exists(Path.Combine(slot, QwpPersistedSymbolDictionary.FileName)), Is.False,
@@ -145,28 +145,87 @@ public sealed class QwpPersistedSymbolDictionaryTests
 
 #if NET7_0_OR_GREATER
     [Test]
-    public void SenderStartup_UnreplayableDictionarySurfacesIngressError()
+    public void SenderStartup_UnreplayableSlotIsQuarantinedAndSenderContinuesOnFreshSlot()
     {
-        const string senderId = "sender-recovery-error";
-        var slot = Slot(senderId);
-        using (var ring = QwpSegmentRing.Open(slot, segmentCapacity: 4096))
+        const string senderId = "sender-recovery-quarantine";
+        var slot = SeedUnreplayableSlot(senderId);
+
+        var reported = new List<SenderError>();
+        var options = new SenderOptions(BuildConfString(senderId))
         {
-            var dictionary = new QwpSymbolDictionary();
-            dictionary.Add("missing-prefix");
-            dictionary.Commit();
-            dictionary.Add("surviving-suffix");
-            Assert.That(ring.TryAppend(QwpEncoder.Encode(
-                Array.Empty<QwpTableBuffer>(), dictionary)), Is.True);
+            error_handler = reported.Add,
+        };
+
+        using (var sender = Sender.New(options))
+        {
+            sender.Table("t").Symbol("s", "v").AtNow();
         }
 
-        var error = Assert.Throws<IngressError>(() => Sender.New(
-            $"ws::addr=127.0.0.1:1;sf_dir={_root};sender_id={senderId};" +
-            "sf_max_segment_bytes=4096;initial_connect_retry=async;"));
+        var quarantined = Path.Combine(_root, senderId + QwpOrphanScanner.QuarantineSlotInfix + "0");
+        Assert.That(Directory.Exists(quarantined), Is.True);
+        Assert.That(File.Exists(Path.Combine(quarantined, ".failed")), Is.True);
+        Assert.That(Directory.EnumerateFiles(quarantined, "sf-*.sfa").Any(), Is.True,
+            "the unreplayable slot's bytes must be preserved for inspection and resend");
+        Assert.That(Directory.Exists(slot), Is.True);
+
+        Assert.That(reported, Has.Count.EqualTo(1));
+        Assert.That(reported[0].Category, Is.EqualTo(SenderErrorCategory.DataLoss));
+        Assert.That(reported[0].AppliedPolicy, Is.EqualTo(SenderErrorPolicy.Abandoned));
+        Assert.That(reported[0].QuarantinedPath, Is.EqualTo(quarantined));
+        Assert.That(reported[0].ServerMessage, Does.Contain("unreplayable"));
+    }
+
+    [Test]
+    public void SenderStartup_QuarantineNamesDoNotCollideAcrossRepeatedFailures()
+    {
+        const string senderId = "sender-recovery-requarantine";
+        SeedUnreplayableSlot(senderId);
+        Directory.CreateDirectory(Path.Combine(_root, senderId + QwpOrphanScanner.QuarantineSlotInfix + "0"));
+
+        using (Sender.New(BuildConfString(senderId)))
+        {
+        }
+
+        Assert.That(Directory.Exists(
+            Path.Combine(_root, senderId + QwpOrphanScanner.QuarantineSlotInfix + "1")), Is.True);
+    }
+
+    [Test]
+    public void SenderStartup_TooManyQuarantinedSlotsFailsLoudly()
+    {
+        const string senderId = "sender-recovery-cap";
+        var slot = SeedUnreplayableSlot(senderId);
+        for (var i = 0; i < 64; i++)
+        {
+            Directory.CreateDirectory(Path.Combine(_root, senderId + QwpOrphanScanner.QuarantineSlotInfix + i));
+        }
+
+        var error = Assert.Throws<IngressError>(() => Sender.New(BuildConfString(senderId)));
 
         Assert.That(error!.code, Is.EqualTo(ErrorCode.ConfigError));
-        Assert.That(error.InnerException, Is.TypeOf<InvalidDataException>());
-        Assert.That(error.Message, Does.Contain("cannot be recovered"));
-        Assert.That(error.Message, Does.Contain("unreplayable symbol dictionary gap"));
+        Assert.That(error.Message, Does.Contain("too many quarantined slots"));
+        Assert.That(Directory.EnumerateFiles(slot, "sf-*.sfa").Any(), Is.True,
+            "a failed set-aside must never drop the slot's bytes");
+    }
+
+    private string SeedUnreplayableSlot(string senderId)
+    {
+        var slot = Slot(senderId);
+        using var ring = QwpSegmentRing.Open(slot, segmentCapacity: 4096);
+        var dictionary = new QwpSymbolDictionary();
+        dictionary.Add("missing-prefix");
+        dictionary.Commit();
+        dictionary.Add("surviving-suffix");
+        Assert.That(ring.TryAppend(QwpEncoder.Encode(
+            Array.Empty<QwpTableBuffer>(), dictionary)), Is.True);
+        return slot;
+    }
+
+    private string BuildConfString(string senderId)
+    {
+        return $"ws::addr=127.0.0.1:1;sf_dir={_root};sender_id={senderId};" +
+               "sf_max_segment_bytes=4096;initial_connect_retry=async;" +
+               "auto_flush=off;close_flush_timeout_millis=0;";
     }
 #endif
 
@@ -223,7 +282,7 @@ public sealed class QwpPersistedSymbolDictionaryTests
         }
 
         using var recoveredRing = QwpSegmentRing.Open(slot, segmentCapacity: 4096);
-        var error = Assert.Throws<InvalidDataException>(() =>
+        var error = Assert.Throws<QwpUnreplayableSlotException>(() =>
             QwpPersistedSymbolDictionary.OpenOrRecover(slot, recoveredRing));
         Assert.That(error!.Message, Does.Contain("persisted and frame values differ"));
     }

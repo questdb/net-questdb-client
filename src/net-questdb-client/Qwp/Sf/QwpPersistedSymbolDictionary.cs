@@ -105,7 +105,16 @@ internal sealed class QwpPersistedSymbolDictionary : IDisposable
             entries ??= new List<string>();
             var loadedCount = entries.Count;
 
-            FoldRing(ring, entries);
+            try
+            {
+                FoldRing(ring, entries);
+            }
+            catch (InvalidDataException ex)
+            {
+                // Every FoldRing failure is a deterministic data verdict, never operational.
+                throw new QwpUnreplayableSlotException(
+                    $"store-and-forward slot `{slotDirectory}` is unreplayable: {ex.Message}", ex);
+            }
 
             if (!validFile)
             {

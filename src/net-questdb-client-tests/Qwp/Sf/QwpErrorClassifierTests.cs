@@ -40,6 +40,7 @@ public class QwpErrorClassifierTests
     [TestCase(SenderErrorCategory.Unknown, 6)]
     [TestCase(SenderErrorCategory.NotWritable, 7)]
     [TestCase(SenderErrorCategory.DictionaryGap, 8)]
+    [TestCase(SenderErrorCategory.DataLoss, 9)]
     public void NumericValue_PreservesPublishedOrdinals(SenderErrorCategory category, int expected)
     {
         Assert.That((int)category, Is.EqualTo(expected));

@@ -405,16 +405,24 @@ def _cluster_ingest_range(net_sidecar, *, start_index: int, total: int) -> int:
     return last_fsn
 
 
-def _cluster_wait_count(*, port: int, expected: int, timeout_s: float) -> None:
+def _cluster_wait_count(*, port: int, expected: int, timeout_s: float,
+                        table: str = _CLUSTER_TABLE) -> None:
     deadline = time.monotonic() + timeout_s
     last = -1
+    last_error = None
     while time.monotonic() < deadline:
-        last = count_rows(port=port, table=_CLUSTER_TABLE)
-        if last >= expected:
-            return
+        try:
+            last = count_rows(port=port, table=table)
+        except TimeoutError as exc:
+            last_error = exc
+        else:
+            if last >= expected:
+                return
         time.sleep(_CLUSTER_POLL_INTERVAL_S)
     raise AssertionError(
-        f"row count on :{port} reached {last}, expected >= {expected} within {timeout_s}s")
+        f"row count on :{port} for {table} reached {last}, expected >= {expected} "
+        f"within {timeout_s}s"
+        + (f" (last query error: {last_error})" if last_error is not None else ""))
 
 
 def _cluster_await_all_replica_round(net_sidecar, baseline, *, timeout_s: float) -> None:
@@ -624,7 +632,8 @@ def test_symbol_dict_survives_failover(server_factory, net_sidecar,
         f"the reconnect catch-up")
     wait_for_dense_sequence(port=a_ports.pg, table=_SYMBOL_TABLE,
                             expected_count=_SYMBOL_HEAD_ROWS, timeout_s=60.0)
-    _cluster_wait_count(port=b_ports.pg, expected=_SYMBOL_HEAD_ROWS, timeout_s=120.0)
+    _cluster_wait_count(port=b_ports.pg, expected=_SYMBOL_HEAD_ROWS, timeout_s=120.0,
+                        table=_SYMBOL_TABLE)
 
     a.kill_9()
 

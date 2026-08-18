@@ -129,13 +129,17 @@ internal sealed class QwpSenderErrorDispatcher : IDisposable
 
     public static readonly SenderErrorHandler DefaultHandler = static err =>
     {
-        if (err.AppliedPolicy == SenderErrorPolicy.Terminal)
+        switch (err.AppliedPolicy)
         {
-            Trace.TraceError($"QuestDB sender TERMINAL: {err}");
-        }
-        else
-        {
-            Trace.TraceWarning($"QuestDB sender RETRIABLE (replaying): {err}");
+            case SenderErrorPolicy.Terminal:
+                Trace.TraceError($"QuestDB sender TERMINAL: {err}");
+                break;
+            case SenderErrorPolicy.Abandoned:
+                Trace.TraceError($"QuestDB sender DATA LOSS (abandoned): {err}");
+                break;
+            default:
+                Trace.TraceWarning($"QuestDB sender RETRIABLE (replaying): {err}");
+                break;
         }
     };
 }

@@ -185,6 +185,44 @@ public sealed class QwpPersistedSymbolDictionaryTests
     }
 
     [Test]
+    public void StaleValueMismatchConfinedToAckedFrames_ResumesOnIntactPrefix()
+    {
+        // A prior recovery skipped a below-floor gap frame and the producer re-used its ids for
+        // new values (persisted here as "second-gen"). The stale acked frame still sits in the
+        // active segment; its conflicting value must be skipped like the gap branch skips it,
+        // not quarantine the slot the next restart.
+        var slot = Slot("acked-mismatch");
+        using var ring = QwpSegmentRing.Open(slot, segmentCapacity: 4096);
+
+        var dictionary = new QwpSymbolDictionary();
+        dictionary.Add("second-gen");
+        using (var persisted = QwpPersistedSymbolDictionary.OpenOrRecover(slot, ring))
+        {
+            persisted.AppendNewSymbols(dictionary);
+        }
+
+        var staleGeneration = new QwpSymbolDictionary();
+        staleGeneration.Add("first-gen");
+        Assert.That(ring.TryAppend(QwpEncoder.Encode(
+            Array.Empty<QwpTableBuffer>(), staleGeneration)), Is.True);
+
+        dictionary.Commit();
+        dictionary.Add("suffix");
+        Assert.That(ring.TryAppend(QwpEncoder.Encode(
+            Array.Empty<QwpTableBuffer>(), dictionary)), Is.True);
+
+        using var watermark = QwpAckWatermark.Open(slot);
+        watermark!.Write(0L); // the stale frame is acked; the second-gen frame replays
+        watermark.Flush();
+
+        var floor = QwpAckWatermark.ResolveReplayFloor(ring, watermark);
+        using var recovered = QwpPersistedSymbolDictionary.OpenOrRecover(slot, ring, floor);
+
+        Assert.That(recovered.SnapshotEntries(), Is.EqualTo(new[] { "second-gen", "suffix" }),
+            "the stale frame must contribute nothing — neither a quarantine nor its own values");
+    }
+
+    [Test]
     public void DeltaGapWithUnwrittenWatermark_StillFailsClosed()
     {
         var slot = SeedGappedSlot("unacked-gap", ackAllFrames: false);
@@ -241,6 +279,9 @@ public sealed class QwpPersistedSymbolDictionaryTests
         using (var sender = Sender.New(options))
         {
             sender.Table("t").Symbol("s", "v").AtNow();
+            Assert.That(() => ((QuestDB.Senders.IQwpWebSocketSender)sender).TotalErrorNotificationsDelivered,
+                Is.GreaterThanOrEqualTo(1L).After(5000, 25),
+                "the quarantine DataLoss report must flow through the dispatcher and be counted");
         }
 
         var quarantined = Path.Combine(_root, senderId + QwpOrphanScanner.QuarantineSlotInfix + "0");

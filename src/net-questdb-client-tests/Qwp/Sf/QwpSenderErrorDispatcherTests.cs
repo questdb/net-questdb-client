@@ -99,6 +99,44 @@ public class QwpSenderErrorDispatcherTests
         Assert.Catch<ArgumentOutOfRangeException>(() => new QwpSenderErrorDispatcher(_ => { }, capacity: 0));
     }
 
+    [Test]
+    public void DefaultHandler_AbandonedReport_TracesAsDataLoss()
+    {
+        var captured = new CapturingTraceListener();
+        System.Diagnostics.Trace.Listeners.Add(captured);
+        try
+        {
+            QwpSenderErrorDispatcher.DefaultHandler(SenderError.DataLoss(
+                "slot set aside", "/tmp/qdb-sf/svc.unreplayable-0"));
+        }
+        finally
+        {
+            System.Diagnostics.Trace.Listeners.Remove(captured);
+        }
+
+        var line = captured.Lines.FirstOrDefault(l => l.Contains("DATA LOSS (abandoned)"));
+        Assert.That(line, Is.Not.Null,
+            "an Abandoned report must trace at error level as data loss, not as a retriable replay");
+        Assert.That(line, Does.Contain("/tmp/qdb-sf/svc.unreplayable-0"));
+    }
+
+    private sealed class CapturingTraceListener : System.Diagnostics.TraceListener
+    {
+        private readonly System.Collections.Concurrent.ConcurrentQueue<string> _lines = new();
+
+        public IReadOnlyCollection<string> Lines => _lines;
+
+        public override void Write(string? message)
+        {
+            if (message is not null) _lines.Enqueue(message);
+        }
+
+        public override void WriteLine(string? message)
+        {
+            if (message is not null) _lines.Enqueue(message);
+        }
+    }
+
     private static SenderError MakeError(long fsn) => new(
         category: SenderErrorCategory.ProtocolViolation,
         appliedPolicy: SenderErrorPolicy.Terminal,

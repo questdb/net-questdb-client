@@ -117,13 +117,17 @@ internal sealed class QwpSenderErrorDispatcher : IDisposable
     {
         if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
         _inbox.Writer.TryComplete();
-        try { _shutdown.Cancel(); } catch { }
         Task? loop;
         lock (_lifecycleLock)
         {
             loop = _loop;
         }
+        // Prefer a natural drain — WaitToReadAsync returns false once the completed inbox
+        // empties — so a report offered just before teardown (e.g. a construction-time DataLoss)
+        // is delivered, not dropped. Cancellation is only the fallback for a wedged handler.
         try { loop?.Wait(TimeSpan.FromMilliseconds(200)); } catch { }
+        try { _shutdown.Cancel(); } catch { }
+        try { loop?.Wait(TimeSpan.FromMilliseconds(50)); } catch { }
         _shutdown.Dispose();
     }
 

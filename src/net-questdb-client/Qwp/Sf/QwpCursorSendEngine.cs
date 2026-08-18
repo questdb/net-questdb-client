@@ -201,7 +201,10 @@ internal sealed class QwpCursorSendEngine : IDisposable
             maxTotalBytes,
             sideFileBytesProvider: persistedSymbolDictionary is null
                 ? null
-                : () => persistedSymbolDictionary.FileLength);
+                : () => persistedSymbolDictionary.FileLength,
+            sideFileFlush: persistedSymbolDictionary is null
+                ? null
+                : persistedSymbolDictionary.FlushToDisk);
         _segmentManager.SetAckWatermark(ackWatermark);
         _sendBuffer = new byte[ring.SegmentCapacity];
         _ackBuffer = new byte[AckBufferSize];
@@ -812,7 +815,6 @@ internal sealed class QwpCursorSendEngine : IDisposable
                 // its constructor: queued data remains safe while the I/O loop reconnects.
                 _seenFirstConnect = true;
                 Interlocked.Increment(ref _totalReconnectsSucceeded);
-                backoff.Reset();
                 FireFirstConnectSucceeded();
 
                 QuestDB.Senders.SenderConnectionEventKind successKind;
@@ -833,8 +835,10 @@ internal sealed class QwpCursorSendEngine : IDisposable
                 EmitConnectionEvent(successKind, cause: null, endpoint: newEndpoint);
 
                 long fsnAtZero;
+                long progressAtConnect;
                 lock (_stateLock)
                 {
+                    progressAtConnect = Math.Max(_ackedFsn, _highestOkFsn + 1);
                     // Invariant: the manager only trims segments at or below ackedFsn-1, so the
                     // ring's oldest FSN must never sit ahead of the cursor's resume point.
                     // A violation means trim and ack are out of sync — surface it as terminal
@@ -898,6 +902,19 @@ internal sealed class QwpCursorSendEngine : IDisposable
                     EmitConnectionEvent(QuestDB.Senders.SenderConnectionEventKind.Disconnected,
                         cause: ex, endpoint: _liveEndpoint);
                     _liveEndpoint = null;
+
+                    // Only a data frame OK'd on this connection resets the reconnect backoff. An
+                    // accepted upgrade alone must not — an accept-then-close endpoint (a draining
+                    // LB, a crash-looping node) would otherwise recycle at initial-backoff rate
+                    // forever, re-uploading the full dictionary catch-up on every cycle. The
+                    // catch-up's own ACKs map below the replay cursor and never advance this metric.
+                    lock (_stateLock)
+                    {
+                        if (Math.Max(_ackedFsn, _highestOkFsn + 1) > progressAtConnect)
+                        {
+                            backoff.Reset();
+                        }
+                    }
 
                     // Poison-frame pacing/escalation. A retriable NACK already struck (and checked for
                     // escalation) in HandleServerRejection. A non-orderly close *after a send* strikes

@@ -40,7 +40,9 @@ internal sealed class QwpSegmentManager : IDisposable
     private readonly TimeSpan _shutdownWait;
     private readonly TimeSpan _heartbeatInterval;
     private readonly Func<long>? _sideFileBytesProvider;
+    private readonly Action? _sideFileFlush;
     private long _lastSideFileBytes;
+    private long _serviceTicks;
     private readonly SemaphoreSlim _wakeup = new(0, 1);
     private readonly CancellationTokenSource _cts = new();
 
@@ -57,7 +59,8 @@ internal sealed class QwpSegmentManager : IDisposable
         long maxTotalBytes,
         TimeSpan? shutdownWait = null,
         TimeSpan? heartbeatInterval = null,
-        Func<long>? sideFileBytesProvider = null)
+        Func<long>? sideFileBytesProvider = null,
+        Action? sideFileFlush = null)
     {
         try
         {
@@ -71,6 +74,7 @@ internal sealed class QwpSegmentManager : IDisposable
             _shutdownWait = shutdownWait ?? DefaultShutdownWait;
             _heartbeatInterval = heartbeatInterval ?? DefaultHeartbeatInterval;
             _sideFileBytesProvider = sideFileBytesProvider;
+            _sideFileFlush = sideFileFlush;
             _committedBytes = ring.TotalCapacityBytes;
             ring.SetMaxTotalBytes(maxTotalBytes);
         }
@@ -98,6 +102,7 @@ internal sealed class QwpSegmentManager : IDisposable
     }
     internal long TrimCycles { get; private set; }
     internal long SparesInstalled { get; private set; }
+    internal long ServiceTicks => Volatile.Read(ref _serviceTicks);
 
     public void Start()
     {
@@ -243,13 +248,42 @@ internal sealed class QwpSegmentManager : IDisposable
             }
         }
 
-        DrainAndDisposeTrimmable();
+        // Unlink is the only event that can strand a dictionary delta: while the introducing
+        // frame stays on disk, recovery rebuilds its ids from the frame's own delta. Fsync the
+        // side file first, and never trim behind a failed fsync — the ring is fsync'd on this
+        // same tick, so an un-flushed dictionary is the one place a host crash could tear the
+        // slot unreplayable.
+        if (FlushSideFile())
+        {
+            DrainAndDisposeTrimmable();
+        }
         _ring.FlushActive();
         // Persist the watermark only after segment data is flushed so the persisted point
         // can only under-estimate (never claim more durable than is actually on disk).
         PersistAckWatermark();
         try { Volatile.Read(ref _heartbeatCallback)?.Invoke(); }
         catch (Exception ex) { Volatile.Write(ref _lastServiceError, ex); }
+        Interlocked.Increment(ref _serviceTicks);
+    }
+
+    private bool FlushSideFile()
+    {
+        var flush = _sideFileFlush;
+        if (flush is null)
+        {
+            return true;
+        }
+
+        try
+        {
+            flush();
+            return true;
+        }
+        catch (Exception ex)
+        {
+            Volatile.Write(ref _lastServiceError, ex);
+            return false;
+        }
     }
 
     private bool FitsWithinCap(long committedSegmentBytes, long sideFileBytes)

@@ -38,8 +38,10 @@ namespace QuestDB.Qwp.Sf;
 ///     covers both chunk varints and the complete entry region. New entries are written before the
 ///     frame that references them is published to the SF ring.
 ///     <para />
-///     Write-ahead ordering without fsync: page-cache durability covers
-///     a process crash; a host-crash tear is detected — chunk CRCs end the trusted region and an
+///     Appends are page-cache write-ahead (no per-append fsync, keeping the producer path cheap);
+///     the segment manager fsyncs via <see cref="FlushToDisk" /> before unlinking acked segments,
+///     so ids that only the trimmed frames could have rebuilt are always disk-durable first. A
+///     residual host-crash tear is still detected — chunk CRCs end the trusted region and an
 ///     unreplayable delta gap fails recovery loudly — never mis-parsed.
 /// </remarks>
 internal sealed class QwpPersistedSymbolDictionary : IDisposable
@@ -54,6 +56,9 @@ internal sealed class QwpPersistedSymbolDictionary : IDisposable
     private readonly string _filePath;
     private readonly List<string> _entries;
     private FileStream? _stream;
+    // Starts true: content inherited from a previous process (or written by CreateClean) has not
+    // been proven disk-durable by THIS instance, so the first FlushToDisk must fsync once.
+    private bool _isDirtySinceDiskFlush = true;
 
     private QwpPersistedSymbolDictionary(string filePath, FileStream stream, List<string> entries)
     {
@@ -75,6 +80,26 @@ internal sealed class QwpPersistedSymbolDictionary : IDisposable
             {
                 return _stream?.Length ?? 0L;
             }
+        }
+    }
+
+    /// <summary>
+    ///     Makes every appended entry disk-durable. The segment manager calls this before
+    ///     unlinking acked segments: as long as a frame that introduced dictionary ids stays on
+    ///     disk, recovery can rebuild those ids from its own delta, so trim is the one event that
+    ///     must never outrun the side file's durability. No-op when nothing changed since the
+    ///     last flush, so a saturated dictionary costs nothing in steady state.
+    /// </summary>
+    public void FlushToDisk()
+    {
+        lock (_lock)
+        {
+            if (_stream is null || !_isDirtySinceDiskFlush)
+            {
+                return;
+            }
+            _stream.Flush(flushToDisk: true);
+            _isDirtySinceDiskFlush = false;
         }
     }
 
@@ -432,6 +457,14 @@ internal sealed class QwpPersistedSymbolDictionary : IDisposable
             {
                 if (!string.Equals(entries[id], value, StringComparison.Ordinal))
                 {
+                    if (!replayable)
+                    {
+                        // A stale acked frame from an id generation a prior recovery skipped past
+                        // (same verdict as the gap branch above). It never resends, and ids ascend
+                        // within a frame so compares strictly precede appends — nothing from this
+                        // frame has been added yet, making the wholesale skip side-effect-free.
+                        return;
+                    }
                     throw new InvalidDataException(
                         $"symbol dictionary mismatch at FSN {fsn}, id {id}: persisted and frame values differ");
                 }
@@ -487,6 +520,7 @@ internal sealed class QwpPersistedSymbolDictionary : IDisposable
         {
             WriteChunk(stream, entries, from, to);
             stream.Flush(flushToDisk: false);
+            _isDirtySinceDiskFlush = true;
         }
         catch
         {

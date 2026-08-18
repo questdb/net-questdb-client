@@ -526,6 +526,63 @@ public class QwpCursorSendEngineTests
     }
 
     [Test]
+    public void UpgradeAloneWithoutAckProgress_DoesNotResetReconnectBackoff()
+    {
+        var paced = new ConcurrentQueue<TimeSpan>();
+        var policy = new QwpReconnectPolicy(
+            TimeSpan.FromMilliseconds(120), TimeSpan.FromMilliseconds(480), TimeSpan.FromSeconds(30),
+            jitter: b => { paced.Enqueue(b); return TimeSpan.Zero; });
+        using var engine = NewEngine(out _, policy: policy,
+            factory: () => new StubTransport { FailReceiveAfterAcks = 0 });
+        engine.Start();
+
+        AssertEventually(() => paced.Count >= 4, "engine did not cycle through reconnects", 5000);
+        Assert.That(paced.Take(4), Is.EqualTo(new[]
+        {
+            TimeSpan.FromMilliseconds(120),
+            TimeSpan.FromMilliseconds(240),
+            TimeSpan.FromMilliseconds(480),
+            TimeSpan.FromMilliseconds(480),
+        }), "an accepted upgrade with no acked data frame must not reset the reconnect backoff");
+    }
+
+    [Test]
+    public async Task AckedDataFrameOnConnection_ResetsReconnectBackoff()
+    {
+        var paced = new ConcurrentQueue<TimeSpan>();
+        var policy = new QwpReconnectPolicy(
+            TimeSpan.FromMilliseconds(120), TimeSpan.FromMilliseconds(480), TimeSpan.FromSeconds(30),
+            jitter: b => { paced.Enqueue(b); return TimeSpan.Zero; });
+        var connectCount = 0;
+        using var engine = NewEngine(out _, policy: policy, factory: () =>
+        {
+            var idx = Interlocked.Increment(ref connectCount);
+            // The third connection stays alive until it has acked one data frame, then closes.
+            return idx == 3
+                ? new StubTransport { FailReceiveAfterAcks = 1 }
+                : new StubTransport { FailReceiveAfterAcks = 0 };
+        });
+        engine.Start();
+
+        AssertEventually(() => Volatile.Read(ref connectCount) >= 3,
+            "engine did not reach the third connection", 5000);
+        engine.AppendBlocking(new byte[] { 1 });
+        await engine.FlushAsync(TimeSpan.FromSeconds(5));
+
+        AssertEventually(() => paced.Count >= 4,
+            "engine did not keep cycling after the acked connection", 5000);
+        Assert.That(paced.Take(2), Is.EqualTo(new[]
+        {
+            TimeSpan.FromMilliseconds(120),
+            TimeSpan.FromMilliseconds(240),
+        }));
+        // paced[2] is the acked connection's close-strike pacing; the next no-progress recycle
+        // must restart from the initial backoff, not continue the pre-progress escalation.
+        Assert.That(paced.ElementAt(3), Is.EqualTo(TimeSpan.FromMilliseconds(120)),
+            "an acked data frame must reset the reconnect backoff");
+    }
+
+    [Test]
     public void Nack_DoesNotAdvanceAckedFsn()
     {
         var connectCount = 0;

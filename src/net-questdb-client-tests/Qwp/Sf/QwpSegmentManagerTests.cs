@@ -141,9 +141,12 @@ public class QwpSegmentManagerTests
         Assert.That(ring.TryAppend(new byte[24]), Is.True);
 
         var installed = mgr.SparesInstalled;
+        var ticks = mgr.ServiceTicks;
         Assert.That(ring.TryAppend(new byte[24]), Is.False,
             "no third segment should be available once segment + side-file bytes reach the cap");
-        await Task.Delay(100);
+        // The failed append wakes the manager; wait for a service pass that provably started
+        // after it before asserting nothing was provisioned.
+        await WaitFor(() => mgr.ServiceTicks >= ticks + 2, TimeSpan.FromSeconds(5));
         Assert.That(mgr.SparesInstalled, Is.EqualTo(installed));
         Assert.That(mgr.SideFileBytes, Is.EqualTo(sideFileBytes));
     }
@@ -191,6 +194,42 @@ public class QwpSegmentManagerTests
         await WaitFor(
             () => ring.SealedSegmentCount == 0 && mgr.CommittedBytes <= 2 * ring.SegmentCapacity,
             TimeSpan.FromSeconds(2));
+    }
+
+    [Test]
+    public async Task Trim_IsGatedOnSideFileFlush()
+    {
+        var flushFailing = 1;
+        using var ring = QwpSegmentRing.Open(_root, segmentCapacity: QwpMmapSegment.HeaderSize + 64);
+        using var mgr = new QwpSegmentManager(
+            ring,
+            maxTotalBytes: 1024,
+            sideFileFlush: () =>
+            {
+                if (Volatile.Read(ref flushFailing) == 1)
+                {
+                    throw new IOException("simulated fsync failure");
+                }
+            });
+        mgr.Start();
+
+        for (var i = 0; i < 6; i++)
+        {
+            await WaitFor(() => ring.TryAppend(new byte[24]), TimeSpan.FromSeconds(2));
+        }
+        Assert.That(ring.SealedSegmentCount, Is.GreaterThanOrEqualTo(2));
+
+        ring.Acknowledge(99L);
+        var ticks = mgr.ServiceTicks;
+        await WaitFor(() => mgr.ServiceTicks >= ticks + 2, TimeSpan.FromSeconds(5));
+        // Unlinking a frame whose dictionary entries are not disk-durable is what turns a host
+        // crash into an unreplayable slot, so a failing flush must hold every acked segment.
+        Assert.That(ring.SealedSegmentCount, Is.GreaterThanOrEqualTo(2),
+            "acked segments must not be unlinked while the side-file flush fails");
+        Assert.That(mgr.LastServiceError, Is.InstanceOf<IOException>());
+
+        Volatile.Write(ref flushFailing, 0);
+        await WaitFor(() => ring.SealedSegmentCount == 0, TimeSpan.FromSeconds(2));
     }
 
     [Test]

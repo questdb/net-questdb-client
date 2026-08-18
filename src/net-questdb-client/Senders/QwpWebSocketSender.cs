@@ -150,6 +150,8 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender, IPooledSlotSende
 
         try
         {
+            dispatcher = new QwpSenderErrorDispatcher(options.error_handler, options.error_inbox_capacity);
+
             if (sfMode)
             {
                 var sfRoot = options.sf_dir!;
@@ -162,7 +164,7 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender, IPooledSlotSende
                 {
                     // sender_id is stable, so throwing would re-recover the same slot and fail on
                     // every restart. Set it aside and continue on a fresh slot instead.
-                    QuarantineUnreplayableSlot(sfRoot, options.sender_id, slotDir, ex, options.error_handler);
+                    QuarantineUnreplayableSlot(sfRoot, options.sender_id, slotDir, ex, dispatcher);
                     (slotLock, ring, ackWatermark, persistedSymbolDictionary) = OpenSlotStack(slotDir, options);
                 }
                 foreach (var symbol in persistedSymbolDictionary.SnapshotEntries())
@@ -187,8 +189,6 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender, IPooledSlotSende
                 options.reconnect_max_backoff_millis,
                 options.reconnect_max_duration_millis,
                 jitter: QwpReconnectPolicy.EqualJitter);
-
-            dispatcher = new QwpSenderErrorDispatcher(options.error_handler, options.error_inbox_capacity);
 
             if (options.ConnectionListener is not null)
             {
@@ -338,7 +338,7 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender, IPooledSlotSende
 
     private static void QuarantineUnreplayableSlot(
         string sfRoot, string senderId, string slotDir, QwpUnreplayableSlotException cause,
-        SenderErrorHandler? errorHandler)
+        QwpSenderErrorDispatcher dispatcher)
     {
         string? quarantinePath = null;
         for (var i = 0; i < MaxQuarantinedSlots; i++)
@@ -372,23 +372,7 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender, IPooledSlotSende
         QwpOrphanScanner.MarkFailed(quarantinePath, "unreplayable: " + cause);
         var detail = $"{cause.Message} [slot set aside at `{quarantinePath}`; " +
                      $"sender continues on a fresh slot at `{slotDir}`; the affected data must be resent]";
-        System.Diagnostics.Trace.TraceError(detail);
-        if (errorHandler is null)
-        {
-            return;
-        }
-
-        // Dispatched synchronously: the async dispatcher belongs to the connected sender, which
-        // does not exist yet at build time.
-        try
-        {
-            errorHandler(SenderError.DataLoss(detail, quarantinePath));
-        }
-        catch (Exception handlerFailure)
-        {
-            System.Diagnostics.Trace.TraceError(
-                $"SenderErrorHandler threw while reporting a quarantined slot: {handlerFailure}");
-        }
+        dispatcher.Offer(SenderError.DataLoss(detail, quarantinePath));
     }
 
     /// <inheritdoc />

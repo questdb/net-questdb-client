@@ -72,6 +72,8 @@ internal sealed class QwpCursorSendEngine : IDisposable
     private long _cursorFsn;
     private long _ackedFsn;
     private long _sentFsnHighWatermark;
+    // First data FSN of the current connection (= replay cursor at connect); guarded by _stateLock.
+    private long _connFirstDataFsn;
     private long _totalAcks;
     private long _totalFramesSent;
     private long _totalServerErrors;
@@ -845,6 +847,9 @@ internal sealed class QwpCursorSendEngine : IDisposable
                     _cursorFsn = _ackedFsn;
                     fsnAtZero = _cursorFsn;
                     _sentFsnHighWatermark = _cursorFsn - 1;
+                    // Any watermark bump past this marks a data frame handed to the transport on
+                    // this connection; catch-up frames are sent outside the pump and never bump it.
+                    _connFirstDataFsn = _cursorFsn;
                     // Pending durable state is per-connection (wireSeq is reset on every upgrade);
                     // the new server replays cumulative watermarks from scratch.
                     _pendingDurable.Clear();
@@ -1254,17 +1259,23 @@ internal sealed class QwpCursorSendEngine : IDisposable
         long fromFsn, toFsn;
         long highestSentWireSeq;
         long ackedFsnAtReject;
+        bool preDataReject;
         lock (_stateLock)
         {
             highestSentWireSeq = _sentFsnHighWatermark - fsnAtZero;
             ackedFsnAtReject = _ackedFsn;
+            // The watermark bumps under this lock before the wire write, so — unlike the post-send
+            // _sentOnCurrentConnection flag — it can never misread a just-NACKed data frame as
+            // pre-data while the send-side await is still completing.
+            preDataReject = _sentFsnHighWatermark < _connFirstDataFsn;
         }
 
-        if (!Volatile.Read(ref _sentOnCurrentConnection))
+        if (preDataReject)
         {
             // Pre-data reject: the server may have rejected a dictionary catch-up frame, whose wire
             // sequence maps below the replay cursor but can still be a non-negative historical FSN.
-            // No real data frame went out on this connection, so it cannot implicate the ring head.
+            // No data frame has been handed to the transport on this connection, so it cannot
+            // implicate the ring head.
             fromFsn = -1L;
             toFsn = -1L;
         }
@@ -1276,7 +1287,7 @@ internal sealed class QwpCursorSendEngine : IDisposable
             if (fromFsn < ackedFsnAtReject)
             {
                 // A NACK below the replay cursor names a dictionary catch-up frame, not a data
-                // frame — the sent flag can't tell them apart because the send pump ships data
+                // frame — the watermark can't tell them apart because the send pump ships data
                 // before the catch-up's NACK round-trip is read. Treat as a pre-data reject.
                 fromFsn = -1L;
                 toFsn = -1L;

@@ -647,6 +647,31 @@ public class QwpCursorSendEngineTests
     }
 
     [Test]
+    public void PoisonFrame_NackProcessedWhileSendStillInFlight_StillStrikes()
+    {
+        // The exit gate holds every SendBinaryAsync open until its connection tears down, so the
+        // receive pump always reads the NACK before the send-side await completes — the ordering
+        // a fast (in-process / loopback) server produces. The strike must key off the pre-send
+        // watermark, not any post-send state, or this rejection would be misread as pre-data and
+        // the poison detector would never fire.
+        using var engine = NewEngine(out _,
+            maxFrameRejections: 1,
+            poisonMinEscalationWindow: TimeSpan.Zero,
+            policy: new QwpReconnectPolicy(
+                TimeSpan.FromMilliseconds(1), TimeSpan.FromMilliseconds(4), TimeSpan.FromSeconds(30)),
+            factory: () => new StubTransport
+            {
+                OnSend = _ => ErrorResponse(QwpStatusCode.WriteError, 0, "poison"),
+                OnSendExitGate = ct => Task.Delay(TimeSpan.FromSeconds(10), ct),
+            });
+        engine.Start();
+        engine.AppendBlocking(new byte[] { 1 });
+
+        AssertEventually(() => engine.IsTerminallyFailed,
+            "a data-frame NACK read before its send completes must still strike", 5000);
+    }
+
+    [Test]
     public async Task PoisonFrame_BelowThreshold_KeepsRetrying()
     {
         var connectCount = 0;
@@ -1738,6 +1763,9 @@ public class QwpCursorSendEngineTests
         public Func<byte[], byte[]>? OnSend;
         public Func<byte[], Task<byte[]>>? OnSendAsync;
         public Func<CancellationToken, Task>? OnSendGate;
+        // Runs after the response is handed to the receive side but before SendBinaryAsync
+        // returns, so a test can force the NACK to be processed while the send is still in flight.
+        public Func<CancellationToken, Task>? OnSendExitGate;
         // Models an accept-then-close middlebox: once a frame has been shipped, the receive side
         // faults with this exception (the frame is never acked), driving the poison detector.
         public Exception? FailReceiveWith;
@@ -1790,6 +1818,11 @@ public class QwpCursorSendEngineTests
             }
 
             await _acks.Writer.WriteAsync(ack, cancellationToken).ConfigureAwait(false);
+
+            if (OnSendExitGate is not null)
+            {
+                await OnSendExitGate(cancellationToken).ConfigureAwait(false);
+            }
         }
 
         public async Task<int> ReceiveFrameAsync(Memory<byte> destination, CancellationToken cancellationToken)

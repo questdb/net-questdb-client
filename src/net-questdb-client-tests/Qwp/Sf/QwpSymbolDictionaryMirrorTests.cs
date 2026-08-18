@@ -92,6 +92,24 @@ public sealed class QwpSymbolDictionaryMirrorTests
     }
 
     [Test]
+    public void ValidateContinuity_RejectsDeltaStartingAboveMirroredCount()
+    {
+        var mirror = new QwpSymbolDictionaryMirror();
+        mirror.Accumulate(BuildDeltaFrame(0, "alpha"));
+
+        var gap = BuildDeltaFrame(2, "gamma");
+        var error = Assert.Throws<InvalidDataException>(() => mirror.ValidateContinuity(gap));
+        Assert.That(error!.Message, Does.Contain("gap"));
+        Assert.That(error.Message, Does.Contain("mirror contains 1"));
+
+        Assert.Throws<InvalidDataException>(() => mirror.Accumulate(gap));
+        Assert.That(mirror.Count, Is.EqualTo(1), "a rejected gap delta must not mutate the mirror");
+
+        // The boundary delta (start == Count) is a legal contiguous extension, not a gap.
+        Assert.DoesNotThrow(() => mirror.ValidateContinuity(BuildDeltaFrame(1, "beta")));
+    }
+
+    [Test]
     public void ValidateContinuity_RejectsDictionaryRangePastProtocolCapBeforeSend()
     {
         var frame = BuildOversizedDeltaFrame();

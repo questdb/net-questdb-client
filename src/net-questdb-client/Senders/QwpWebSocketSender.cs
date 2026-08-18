@@ -78,6 +78,10 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender, IPooledSlotSende
     // Lets an abandoned row's ids be reclaimed before they are published or persisted — otherwise
     // every cancelled row's new values would permanently burn the protocol dictionary cap.
     private int _rowFirstNewSymbolId = -1;
+    // Handed to every QwpTableBuffer so any row cancel — including the buffer's internal cancel on
+    // a Column/At append failure, which never passes through this sender's catch blocks — reclaims
+    // the dead row's symbol ids immediately, before a later committed row can strand them.
+    private readonly Action _onRowCancelled;
 
     // Transactional (defer-commit) mode: auto-flush frames carry FLAG_DEFER_COMMIT; an explicit
     // commit ships a non-deferred frame. _hasDeferredMessages tracks whether a commit is owed.
@@ -101,6 +105,7 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender, IPooledSlotSende
         _tablesLookup = _tables.GetAlternateLookup<ReadOnlySpan<char>>();
 #endif
         _encoderBuffer = new QwpEncoder.FrameBuilder(EncoderInitialCapacity);
+        _onRowCancelled = ReclaimAbortedRowSymbols;
 
         (_slotLock, _engine, _drainerPool, _errorDispatcher, _connectionEventDispatcher,
             _certValidator, _persistedSymbolDictionary) = BuildEngineStack(options, _symbolDictionary);
@@ -475,14 +480,14 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender, IPooledSlotSende
         if (!_tablesLookup.TryGetValue(name, out t))
         {
             var key = name.ToString();
-            t = new QwpTableBuffer(key, Options.max_name_len);
+            t = new QwpTableBuffer(key, Options.max_name_len, _onRowCancelled);
             _tables[key] = t;
         }
 #else
         var key = name.ToString();
         if (!_tables.TryGetValue(key, out t))
         {
-            t = new QwpTableBuffer(key, Options.max_name_len);
+            t = new QwpTableBuffer(key, Options.max_name_len, _onRowCancelled);
             _tables[key] = t;
         }
 #endif
@@ -1312,6 +1317,7 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender, IPooledSlotSende
     public async Task<long> FlushAndGetSequenceAsync(CancellationToken ct = default)
     {
         ThrowIfTerminal();
+        EnsureNoRowInProgress();
         // An explicit, sequence-returning flush is a commit point (non-deferred).
         var len = EncodeBatch(deferCommit: false);
         if (len == 0)
@@ -1677,9 +1683,13 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender, IPooledSlotSende
         {
             return;
         }
-        if (_symbolDictionary.Count > _rowFirstNewSymbolId)
+        // Floor at the published/persisted prefix: a flush that ran between the marker being set
+        // and this reclaim has made those ids immutable, so only the tail above them may drop.
+        var floor = Math.Max(_symbolDictionary.CommittedCount, _persistedSymbolDictionary?.Count ?? 0);
+        var target = Math.Max(_rowFirstNewSymbolId, floor);
+        if (_symbolDictionary.Count > target)
         {
-            _symbolDictionary.RollbackTo(_rowFirstNewSymbolId);
+            _symbolDictionary.RollbackTo(target);
         }
         _rowFirstNewSymbolId = -1;
     }

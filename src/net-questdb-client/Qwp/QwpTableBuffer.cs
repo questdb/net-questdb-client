@@ -59,6 +59,7 @@ internal sealed class QwpTableBuffer
 #endif
     private readonly List<QwpColumn> _columns = new();
     private readonly int _maxNameLengthBytes;
+    private readonly Action? _onRowCancelled;
 
     private bool[] _touchedInCurrentRow = new bool[8];
 
@@ -77,8 +78,16 @@ internal sealed class QwpTableBuffer
     /// </summary>
     /// <param name="tableName">UTF-8 byte length must be ≤ <see cref="QwpConstants.MaxNameLengthBytes" />.</param>
     /// <param name="maxNameLengthBytes">Override for the name-length limit; defaults to the spec value.</param>
-    public QwpTableBuffer(string tableName, int maxNameLengthBytes = QwpConstants.MaxNameLengthBytes)
+    /// <param name="onRowCancelled">
+    ///     Invoked whenever <see cref="CancelCurrentRow" /> runs, including the internal cancel on
+    ///     any append failure. Lets the owning sender reclaim per-row state (freshly allocated
+    ///     symbol dictionary ids) the moment the row dies, on paths that never pass through the
+    ///     sender's own catch blocks.
+    /// </param>
+    public QwpTableBuffer(string tableName, int maxNameLengthBytes = QwpConstants.MaxNameLengthBytes,
+                          Action? onRowCancelled = null)
     {
+        _onRowCancelled = onRowCancelled;
         if (string.IsNullOrEmpty(tableName))
         {
             throw new IngressError(ErrorCode.InvalidName, "table name must not be empty");
@@ -1059,6 +1068,7 @@ internal sealed class QwpTableBuffer
 
         HasPendingRow = false;
         _appendCursor = 0;
+        _onRowCancelled?.Invoke();
     }
 
     /// <summary>

@@ -394,6 +394,26 @@ public class QwpWebSocketSenderTests
     }
 
     [Test]
+    public async Task ColumnFailureMidRow_ThenCommittedRow_ReclaimsTheAbortedRowsSymbolIds()
+    {
+        await using var server = StartServerWithOkAcks();
+        using var sender = NewSender(server, "auto_flush=off;");
+
+        sender.Table("t").Symbol("sym", "kept").At(DateTime.UtcNow);
+        var mid = sender.Table("t").Symbol("sym", "doomed");
+        // The bad column name aborts the row inside the table buffer — a path that never runs
+        // through Symbol()'s catch. Committing another row afterwards must neither publish the
+        // dead row's id nor stack "next" on top of it.
+        Assert.Catch<IngressError>(() => mid.Column("\ud800", 1L));
+        sender.Table("t").Symbol("sym", "next").At(DateTime.UtcNow);
+        sender.Send();
+
+        await WaitFor(() => server.ReceivedFrames.Count >= 1);
+        Assert.That(ReadSymbolDelta(server.ReceivedFrames.First()),
+            Is.EqualTo((0, new[] { "kept", "next" })));
+    }
+
+    [Test]
     public async Task SenderNew_Routes_ws_Scheme_To_QwpWebSocketSender()
     {
         await using var server = StartServerWithOkAcks();
@@ -1226,6 +1246,70 @@ public class QwpWebSocketSenderTests
     }
 
     [Test]
+    public async Task EndToEnd_Sf_AbortedRowSymbolsStayOutOfThePersistedDictionary()
+    {
+        var sfRoot = Path.Combine(Path.GetTempPath(), "qwp-sf-abort-dict-" + Guid.NewGuid().ToString("N"));
+        const string senderId = "svc-abort";
+        var symbolDictionaryPath = Path.Combine(sfRoot, senderId, QwpPersistedSymbolDictionary.FileName);
+        var port = 0;
+
+        try
+        {
+            var firstServer = new DummyQwpServer(new DummyQwpServerOptions
+            {
+                FrameHandler = _ => null,
+            });
+            await firstServer.StartAsync();
+            port = firstServer.Uri.Port;
+            try
+            {
+                using (var firstSender = NewSender(firstServer,
+                           $"auto_flush=off;close_flush_timeout_millis=0;sf_dir={sfRoot};" +
+                           $"sender_id={senderId};sf_max_segment_bytes=4096;"))
+                {
+                    firstSender.Table("t").Symbol("sym", "kept").At(DateTime.UtcNow);
+                    firstSender.Send();
+                    var mid = firstSender.Table("t").Symbol("sym", "doomed");
+                    Assert.Catch<IngressError>(() => mid.Column("\ud800", 1L));
+                    firstSender.Table("t").Symbol("sym", "after").At(DateTime.UtcNow);
+                    firstSender.Send();
+                    await WaitFor(() => firstServer.ReceivedFrames.Count >= 2);
+                }
+            }
+            finally
+            {
+                await firstServer.DisposeAsync();
+            }
+
+            Assert.That(File.Exists(symbolDictionaryPath), Is.True);
+
+            long nextSequence = 0;
+            await using var restartedServer = new DummyQwpServer(new DummyQwpServerOptions
+            {
+                Port = port,
+                FrameHandler = _ => BuildOkAck(Interlocked.Increment(ref nextSequence) - 1),
+            });
+            await restartedServer.StartAsync();
+
+            using (var restartedSender = NewSender(restartedServer,
+                       $"auto_flush=off;sf_dir={sfRoot};sender_id={senderId};sf_max_segment_bytes=4096;"))
+            {
+                ((IQwpWebSocketSender)restartedSender).Ping();
+                await WaitFor(() => restartedServer.ReceivedFrames.Count >= 3);
+
+                // The catch-up frame replays the persisted dictionary verbatim: the aborted row's
+                // "doomed" must not have reached the side file, and "after" must sit at id 1.
+                Assert.That(ReadSymbolDelta(restartedServer.ReceivedFrames.First()),
+                    Is.EqualTo((0, new[] { "kept", "after" })));
+            }
+        }
+        finally
+        {
+            TryDeleteDirectory(sfRoot);
+        }
+    }
+
+    [Test]
     public async Task EndToEnd_Sf_DisposeReleasesSlotLockSoSecondSenderCanReclaim()
     {
         await using var server = StartServerWithOkAcks();
@@ -1439,6 +1523,24 @@ public class QwpWebSocketSenderTests
         sender.Table("t").Column("v", 2L).At(DateTime.UtcNow);
         var fsn2 = await ws.FlushAndGetSequenceAsync();
         Assert.That(fsn2, Is.EqualTo(1L));
+    }
+
+    [Test]
+    public async Task FlushAndGetSequenceAsync_RowInProgress_Throws()
+    {
+        await using var server = StartServerWithOkAcks();
+        using var sender = NewSender(server, "auto_flush=off;");
+        var ws = (IQwpWebSocketSender)sender;
+
+        // A mid-row flush would commit and persist the pending row's symbol ids while
+        // ResetPendingState silently cancels the row, stranding them; every flush entry point
+        // must reject an uncommitted row instead.
+        sender.Table("t").Symbol("sym", "pending");
+        var error = Assert.ThrowsAsync<IngressError>(() => ws.FlushAndGetSequenceAsync());
+        Assert.That(error!.code, Is.EqualTo(ErrorCode.InvalidApiCall));
+
+        sender.CancelRow();
+        Assert.That(await ws.FlushAndGetSequenceAsync(), Is.EqualTo(-1L));
     }
 
     [Test]

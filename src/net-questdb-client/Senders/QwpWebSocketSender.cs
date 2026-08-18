@@ -74,6 +74,10 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender, IPooledSlotSende
     private int _runningRowCount;
     private long _pendingBytes;
     private long _currentTableSnapshotBytes;
+    // First dictionary id allocated by the in-progress row; -1 when the row has allocated none.
+    // Lets an abandoned row's ids be reclaimed before they are published or persisted — otherwise
+    // every cancelled row's new values would permanently burn the protocol dictionary cap.
+    private int _rowFirstNewSymbolId = -1;
 
     // Transactional (defer-commit) mode: auto-flush frames carry FLAG_DEFER_COMMIT; an explicit
     // commit ships a non-deferred frame. _hasDeferredMessages tracks whether a commit is owed.
@@ -499,18 +503,19 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender, IPooledSlotSende
             // the encoder on every self-sufficient flush and wedge the sender). Repeated values take
             // the dictionary's fast path, so the hot path stays free of any extra scan.
             var globalId = _symbolDictionary.Add(value);
+            if (_rowFirstNewSymbolId < 0 && globalId == preCount)
+            {
+                _rowFirstNewSymbolId = globalId;
+            }
             EnsureCurrentTable().AppendSymbol(name, globalId);
         }
         catch
         {
-            // Drop any dict entry Add committed and abandon the in-progress row, so a rejected
-            // value/name never leaves the buffer half-written. CancelCurrentRow is idempotent, so it
-            // is safe even when AppendSymbol already cancelled on a bad name.
-            if (_symbolDictionary.Count > preCount)
-            {
-                _symbolDictionary.RollbackTo(preCount);
-            }
+            // Any failure abandons the whole in-progress row, so every id it allocated — not just
+            // this call's — is reclaimed. CancelCurrentRow is idempotent, so it is safe even when
+            // AppendSymbol already cancelled on a bad name.
             _currentTable?.CancelCurrentRow();
+            ReclaimAbortedRowSymbols();
             throw;
         }
         return this;
@@ -609,15 +614,16 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender, IPooledSlotSende
         try
         {
             var globalId = _symbolDictionary.Add(value);
+            if (_rowFirstNewSymbolId < 0 && globalId == preCount)
+            {
+                _rowFirstNewSymbolId = globalId;
+            }
             EnsureCurrentTable().AppendSymbol(name, globalId);
         }
         catch
         {
-            if (_symbolDictionary.Count > preCount)
-            {
-                _symbolDictionary.RollbackTo(preCount);
-            }
             _currentTable?.CancelCurrentRow();
+            ReclaimAbortedRowSymbols();
             throw;
         }
         return this;
@@ -632,15 +638,16 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender, IPooledSlotSende
         {
             // Add(string): probe/store by reference — no ToString of the value (see QwpSymbolDictionary).
             var globalId = _symbolDictionary.Add(value);
+            if (_rowFirstNewSymbolId < 0 && globalId == preCount)
+            {
+                _rowFirstNewSymbolId = globalId;
+            }
             EnsureCurrentTable().AppendSymbol(name, globalId);
         }
         catch
         {
-            if (_symbolDictionary.Count > preCount)
-            {
-                _symbolDictionary.RollbackTo(preCount);
-            }
             _currentTable?.CancelCurrentRow();
+            ReclaimAbortedRowSymbols();
             throw;
         }
         return this;
@@ -1215,6 +1222,10 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender, IPooledSlotSende
 
     private int EncodeBatch(bool deferCommit)
     {
+        // Flush runs with no row in progress, so ids left by an internally cancelled row (e.g. an
+        // append failure the caller swallowed) are still the unreferenced tail — drop them before
+        // the delta and the persisted side file pick them up.
+        ReclaimAbortedRowSymbols();
         _flushBatch.Clear();
         foreach (var t in _tables.Values)
         {
@@ -1239,6 +1250,7 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender, IPooledSlotSende
     // Java client's sendCommitMessage (beginMessage with tableCount=0).
     private int EncodeCommitFrame()
     {
+        ReclaimAbortedRowSymbols();
         return QwpEncoder.EncodeInto(
             _encoderBuffer, Array.Empty<QwpTableBuffer>(), _symbolDictionary,
             deferCommit: false);
@@ -1373,6 +1385,7 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender, IPooledSlotSende
     {
         ThrowIfTerminal();
         _currentTable?.CancelCurrentRow();
+        ReclaimAbortedRowSymbols();
     }
 
     /// <inheritdoc />
@@ -1614,6 +1627,7 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender, IPooledSlotSende
             return buffered;
         }
         t.CancelCurrentRow();
+        ReclaimAbortedRowSymbols();
         throw new IngressError(ErrorCode.InvalidApiCall, cap > 0
             ? $"row too large for server batch cap [rowBytes={rowBytes}, serverMaxBatchSize={cap}]"
             : $"row too large for protocol batch limit [rowBytes={rowBytes}, "
@@ -1629,6 +1643,7 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender, IPooledSlotSende
         _runningRowCount++;
         _pendingBytes += bufferedNow - _currentTableSnapshotBytes;
         _currentTableSnapshotBytes = bufferedNow;
+        _rowFirstNewSymbolId = -1;
     }
 
     private void GuardBatchSize(int messageSize)
@@ -1650,6 +1665,23 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender, IPooledSlotSende
     {
         var persistenceFloor = _persistedSymbolDictionary?.Count ?? 0;
         _symbolDictionary.RollbackTo(Math.Max(_symbolDictionary.CommittedCount, persistenceFloor));
+        _rowFirstNewSymbolId = -1;
+    }
+
+    // A row that died without committing (CancelRow, or an append failure that cancelled it) leaves
+    // its new dictionary ids as the unreferenced tail; drop them before they can be published or
+    // persisted. A live in-progress row still owns its ids, so the pending-row guard skips it.
+    private void ReclaimAbortedRowSymbols()
+    {
+        if (_rowFirstNewSymbolId < 0 || _currentTable?.HasPendingRow == true)
+        {
+            return;
+        }
+        if (_symbolDictionary.Count > _rowFirstNewSymbolId)
+        {
+            _symbolDictionary.RollbackTo(_rowFirstNewSymbolId);
+        }
+        _rowFirstNewSymbolId = -1;
     }
 
     private long DateTimeToMicros(DateTime value)

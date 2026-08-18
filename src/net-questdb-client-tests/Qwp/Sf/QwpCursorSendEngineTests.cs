@@ -23,6 +23,7 @@
  ******************************************************************************/
 
 using System.Buffers.Binary;
+using System.Collections.Concurrent;
 using System.Threading.Channels;
 using NUnit.Framework;
 using QuestDB.Enums;
@@ -455,6 +456,73 @@ public class QwpCursorSendEngineTests
         Assert.That(engine.IsTerminallyFailed, Is.False,
             "a node/connection-state rejection must not consume the poison-frame budget");
         Assert.That(engine.AckedFsn, Is.EqualTo(1L));
+    }
+
+    // The jitter hook records each paced backoff and zeroes the actual sleep, so both tests below
+    // pin the pacing sequence deterministically without any wall-clock sensitivity.
+    [Test]
+    public async Task ExemptNack_ConsecutiveNoProgressRecycles_PaceWithDoublingBackoff()
+    {
+        var paced = new ConcurrentQueue<TimeSpan>();
+        var policy = new QwpReconnectPolicy(
+            TimeSpan.FromMilliseconds(120), TimeSpan.FromMilliseconds(480), TimeSpan.FromSeconds(2),
+            jitter: b => { paced.Enqueue(b); return TimeSpan.Zero; });
+        var connectCount = 0;
+        using var engine = NewEngine(out _,
+            policy: policy,
+            factory: () => Interlocked.Increment(ref connectCount) <= 4
+                ? new StubTransport { OnSend = _ => ErrorResponse(QwpStatusCode.NotWritable, 0, "read-only") }
+                : new StubTransport());
+        engine.Start();
+        engine.AppendBlocking(new byte[] { 44 });
+
+        await engine.FlushAsync(TimeSpan.FromSeconds(5));
+
+        Assert.That(engine.IsTerminallyFailed, Is.False);
+        Assert.That(engine.AckedFsn, Is.EqualTo(1L));
+        Assert.That(paced, Is.EqualTo(new[]
+        {
+            TimeSpan.FromMilliseconds(120),
+            TimeSpan.FromMilliseconds(240),
+            TimeSpan.FromMilliseconds(480),
+        }), "first recycle is immediate; consecutive no-progress recycles double up to the cap");
+    }
+
+    [Test]
+    public async Task ExemptNack_ProgressBetweenRecycles_ResetsPacingToImmediate()
+    {
+        var paced = new ConcurrentQueue<TimeSpan>();
+        var policy = new QwpReconnectPolicy(
+            TimeSpan.FromMilliseconds(120), TimeSpan.FromMilliseconds(480), TimeSpan.FromSeconds(2),
+            jitter: b => { paced.Enqueue(b); return TimeSpan.Zero; });
+        var connectCount = 0;
+        using var engine = NewEngine(out _, policy: policy, factory: () =>
+        {
+            var idx = Interlocked.Increment(ref connectCount);
+            return idx switch
+            {
+                1 => new StubTransport { OnSend = _ => ErrorResponse(QwpStatusCode.NotWritable, 0, "read-only") },
+                2 => new StubTransport
+                {
+                    OnSend = payload => payload[0] == 1
+                        ? OkResponse(0)
+                        : ErrorResponse(QwpStatusCode.NotWritable, 1, "read-only again"),
+                },
+                _ => new StubTransport(),
+            };
+        });
+        engine.Start();
+        engine.AppendBlocking(new byte[] { 1 });
+        await engine.FlushAsync(TimeSpan.FromSeconds(5));
+
+        engine.AppendBlocking(new byte[] { 2 });
+        await engine.FlushAsync(TimeSpan.FromSeconds(5));
+
+        Assert.That(engine.IsTerminallyFailed, Is.False);
+        Assert.That(engine.AckedFsn, Is.EqualTo(2L));
+        Assert.That(connectCount, Is.EqualTo(3));
+        Assert.That(paced, Is.Empty,
+            "ack progress since the last exempt recycle must reset the pacer to an immediate retry");
     }
 
     [Test]

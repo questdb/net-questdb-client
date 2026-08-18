@@ -182,6 +182,28 @@ public class QwpSymbolDictionaryTests
     }
 
     [Test]
+    public void AddRecovered_DuplicateAcrossRollback_NeverLeavesDanglingReverseMapping()
+    {
+        var d = new QwpSymbolDictionary();
+        Assert.That(d.AddRecovered("x"), Is.EqualTo(0), "recovery must not de-duplicate");
+        Assert.That(d.AddRecovered("x"), Is.EqualTo(1));
+        Assert.That(d.AddRecovered("y"), Is.EqualTo(2));
+
+        d.RollbackTo(2);
+        var idAboveDuplicate = d.Add("x");
+        Assert.That(idAboveDuplicate, Is.InRange(0, 1), "a live duplicate id must resolve, never the dropped one");
+        Assert.That(d.GetSymbol(idAboveDuplicate), Is.EqualTo("x"));
+
+        d.RollbackTo(1);
+        Assert.That(d.Count, Is.EqualTo(1));
+        Assert.That(d.GetSymbol(0), Is.EqualTo("x"), "the surviving duplicate keeps its value");
+        var idAfterRollback = d.Add("x");
+        Assert.That(idAfterRollback, Is.LessThan(d.Count),
+            "rolling back across a recovered duplicate must not leave the reverse lookup on a dead id");
+        Assert.That(d.GetSymbol(idAfterRollback), Is.EqualTo("x"));
+    }
+
+    [Test]
     public void Reset_ClearsEverything()
     {
         var d = new QwpSymbolDictionary();

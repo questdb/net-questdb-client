@@ -357,6 +357,43 @@ public class QwpWebSocketSenderTests
     }
 
     [Test]
+    public async Task CancelRow_ReclaimsRowSymbolIds_DeltaNeverCarriesTheCancelledValue()
+    {
+        await using var server = StartServerWithOkAcks();
+        using var sender = NewSender(server, "auto_flush=off;");
+
+        sender.Table("t").Symbol("sym", "kept").At(DateTime.UtcNow);
+        sender.Table("t").Symbol("sym", "cancelled");
+        sender.CancelRow();
+        sender.Table("t").Symbol("sym", "after").At(DateTime.UtcNow);
+        sender.Send();
+
+        await WaitFor(() => server.ReceivedFrames.Count >= 1);
+        // "cancelled" must neither be published nor burn its id: "after" reuses id 1.
+        Assert.That(ReadSymbolDelta(server.ReceivedFrames.First()),
+            Is.EqualTo((0, new[] { "kept", "after" })));
+    }
+
+    [Test]
+    public async Task SymbolFailureMidRow_ReclaimsTheWholeRowsSymbolIds()
+    {
+        await using var server = StartServerWithOkAcks();
+        using var sender = NewSender(server, "auto_flush=off;");
+
+        sender.Table("t").Symbol("sym", "seed").At(DateTime.UtcNow);
+        var mid = sender.Table("t").Symbol("sym", "doomed");
+        // A lone surrogate is rejected by the dictionary; the failure aborts the whole row, so the
+        // row's earlier "doomed" id must be reclaimed with it.
+        Assert.Catch<IngressError>(() => mid.Symbol("sym2", "\ud800"));
+        sender.Table("t").Symbol("sym", "next").At(DateTime.UtcNow);
+        sender.Send();
+
+        await WaitFor(() => server.ReceivedFrames.Count >= 1);
+        Assert.That(ReadSymbolDelta(server.ReceivedFrames.First()),
+            Is.EqualTo((0, new[] { "seed", "next" })));
+    }
+
+    [Test]
     public async Task SenderNew_Routes_ws_Scheme_To_QwpWebSocketSender()
     {
         await using var server = StartServerWithOkAcks();

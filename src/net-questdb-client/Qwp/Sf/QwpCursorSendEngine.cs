@@ -836,6 +836,7 @@ internal sealed class QwpCursorSendEngine : IDisposable
 
                 long fsnAtZero;
                 long progressAtConnect;
+                var connectedAtTicks = Environment.TickCount64;
                 lock (_stateLock)
                 {
                     progressAtConnect = Math.Max(_ackedFsn, _highestOkFsn + 1);
@@ -903,17 +904,24 @@ internal sealed class QwpCursorSendEngine : IDisposable
                         cause: ex, endpoint: _liveEndpoint);
                     _liveEndpoint = null;
 
-                    // Only a data frame OK'd on this connection resets the reconnect backoff. An
-                    // accepted upgrade alone must not — an accept-then-close endpoint (a draining
-                    // LB, a crash-looping node) would otherwise recycle at initial-backoff rate
-                    // forever, re-uploading the full dictionary catch-up on every cycle. The
-                    // catch-up's own ACKs map below the replay cursor and never advance this metric.
+                    // An accepted upgrade alone must not reset the reconnect backoff: an
+                    // accept-then-close endpoint (a draining LB, a crash-looping node) would
+                    // otherwise recycle at initial-backoff rate forever, re-uploading the full
+                    // dictionary catch-up on every cycle. Data progress proves the endpoint good
+                    // (the catch-up's own ACKs map below the replay cursor and never advance that
+                    // metric); so does simply outliving the backoff ceiling, which keeps an idle
+                    // producer behind an idle-timeout proxy reconnecting promptly.
+                    bool madeProgress;
                     lock (_stateLock)
                     {
-                        if (Math.Max(_ackedFsn, _highestOkFsn + 1) > progressAtConnect)
-                        {
-                            backoff.Reset();
-                        }
+                        madeProgress = Math.Max(_ackedFsn, _highestOkFsn + 1) > progressAtConnect;
+                    }
+
+                    if (madeProgress
+                        || Environment.TickCount64 - connectedAtTicks
+                            >= (long)_reconnectPolicy.MaxBackoff.TotalMilliseconds)
+                    {
+                        backoff.Reset();
                     }
 
                     // Poison-frame pacing/escalation. A retriable NACK already struck (and checked for

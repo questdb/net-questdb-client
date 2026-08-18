@@ -99,8 +99,10 @@ internal static class QwpConstants
 
     /// <summary>
     ///     Maximum number of distinct symbol values in an ingress sender's connection-global
-    ///     dictionary. The server rejects a delta whose start id plus entry count exceeds this
-    ///     limit, so the sender must refuse the next new value before buffering its row.
+    ///     dictionary. A conservative producer cap that stays at or below the server's own
+    ///     ceiling, which rejects a delta whose start id plus entry count exceeds it; the sender
+    ///     refuses the next new value before buffering its row so everything already buffered
+    ///     references ids the server accepts.
     /// </summary>
     public const int MaxSymbolDictionarySize = 1_000_000;
 

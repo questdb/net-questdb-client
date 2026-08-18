@@ -252,10 +252,12 @@ internal sealed class QwpSegmentManager : IDisposable
         // frame stays on disk, recovery rebuilds its ids from the frame's own delta. Fsync the
         // side file first, and never trim behind a failed fsync — the ring is fsync'd on this
         // same tick, so an un-flushed dictionary is the one place a host crash could tear the
-        // slot unreplayable.
+        // slot unreplayable. The ceiling is sampled BEFORE the fsync: a frame acked while the
+        // fsync ran introduced entries that fsync did not cover, so it is not trimmable yet.
+        var trimCeiling = _ring.AckedFsn;
         if (FlushSideFile())
         {
-            DrainAndDisposeTrimmable();
+            DrainAndDisposeTrimmable(trimCeiling);
         }
         _ring.FlushActive();
         // Persist the watermark only after segment data is flushed so the persisted point
@@ -375,9 +377,9 @@ internal sealed class QwpSegmentManager : IDisposable
         }
     }
 
-    private void DrainAndDisposeTrimmable()
+    private void DrainAndDisposeTrimmable(long ackedCeiling = long.MaxValue)
     {
-        var trim = _ring.DrainTrimmable();
+        var trim = _ring.DrainTrimmable(ackedCeiling);
         if (trim is null)
         {
             return;

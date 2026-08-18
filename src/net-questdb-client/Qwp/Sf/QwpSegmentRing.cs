@@ -416,9 +416,9 @@ internal sealed class QwpSegmentRing : IDisposable
     ///     Caller (manager) takes ownership of returned segments and is responsible for Dispose +
     ///     file unlink. Returns null when nothing is eligible (no list allocation on no-op).
     /// </summary>
-    public List<IQwpSegment>? DrainTrimmable()
+    public List<IQwpSegment>? DrainTrimmable(long ackedCeiling = long.MaxValue)
     {
-        var acked = Volatile.Read(ref _ackedFsn);
+        var acked = Math.Min(Volatile.Read(ref _ackedFsn), ackedCeiling);
         List<IQwpSegment>? drained = null;
         lock (_lock)
         {

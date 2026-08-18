@@ -1477,7 +1477,7 @@ public class QwpCursorSendEngineTests
     }
 
     [Test]
-    public void DeltaDictionary_CatchUpNackAfterProgress_DoesNotPoisonHistoricalFsn()
+    public void DeltaDictionary_CatchUpNackBeforeAnyDataSend_DoesNotPoisonHistoricalFsn()
     {
         var dictionary = new QwpSymbolDictionary();
         dictionary.Add("alpha");

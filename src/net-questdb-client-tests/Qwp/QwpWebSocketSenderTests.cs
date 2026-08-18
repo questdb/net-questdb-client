@@ -88,6 +88,8 @@ public class QwpWebSocketSenderTests
         sender.Table("a").At(DateTime.UtcNow);
         Assert.DoesNotThrow(() => sender.Send());
         await WaitFor(() => server.ReceivedFrames.Count >= 1);
+        Assert.That(server.ReceivedFrames.Count, Is.GreaterThanOrEqualTo(1),
+            "the row surviving the rejected table switch never reached the server");
     }
 
     [Test]

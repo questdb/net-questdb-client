@@ -75,7 +75,7 @@ public class QwpSymbolDictionaryTests
     }
 
     [Test]
-    public void MaxSymbolDictionarySize_MatchesServerProtocolLimit()
+    public void MaxSymbolDictionarySize_IsPinnedAtOrBelowServerProtocolLimit()
     {
         Assert.That(QwpConstants.MaxSymbolDictionarySize, Is.EqualTo(1_000_000));
     }

@@ -317,7 +317,7 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender, IPooledSlotSende
                 persistedSymbolDictionary = QwpPersistedSymbolDictionary.OpenOrRecover(
                     slotDir, ring, QwpAckWatermark.ResolveReplayFloor(ring, ackWatermark));
             }
-            catch (InvalidDataException ex)
+            catch (Exception ex) when (ex is InvalidDataException or IOException)
             {
                 throw new IngressError(ErrorCode.ConfigError,
                     $"store-and-forward slot `{slotDir}` cannot be recovered: {ex.Message}", ex);
@@ -1648,7 +1648,21 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender, IPooledSlotSende
 
     private void PersistSymbolDictionaryBeforePublish()
     {
-        _persistedSymbolDictionary?.AppendNewSymbols(_symbolDictionary);
+        if (_persistedSymbolDictionary is null)
+        {
+            return;
+        }
+
+        try
+        {
+            _persistedSymbolDictionary.AppendNewSymbols(_symbolDictionary);
+        }
+        catch (Exception ex) when (ex is not IngressError)
+        {
+            throw new IngressError(ErrorCode.ServerFlushError,
+                $"could not persist the store-and-forward symbol dictionary under `{Options.sf_dir}`; " +
+                "the buffered rows are retained and the flush can be retried", ex);
+        }
     }
 
     private void RollbackUnpublishedSymbols()

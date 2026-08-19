@@ -1,0 +1,33 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+    <PropertyGroup>
+        <RootNamespace>net_questdb_client_zstd_broken_tests</RootNamespace>
+        <ImplicitUsings>enable</ImplicitUsings>
+        <Nullable>enable</Nullable>
+        <IsPackable>false</IsPackable>
+        <LangVersion>latest</LangVersion>
+        <TargetFrameworks>net7.0;net8.0;net9.0;net10.0</TargetFrameworks>
+        <!-- Load-bearing: QwpZstdCodec resolves the plugin via Assembly.Load("net-questdb-client-zstd").
+             Naming this test assembly's own output that way, and shipping a fake
+             QuestDB.Zstd.ZstdDecompressor inside it (see FakeZstdDecompressor.cs), makes the probing
+             assembly loader find THIS assembly and simulates "plugin present, type resolves, but
+             construction fails" without a second project to keep in sync. -->
+        <AssemblyName>net-questdb-client-zstd</AssemblyName>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.1.0"/>
+        <PackageReference Include="NUnit" Version="3.13.3"/>
+        <PackageReference Include="NUnit3TestAdapter" Version="4.2.1"/>
+        <PackageReference Include="NUnit.Analyzers" Version="3.3.0"/>
+    </ItemGroup>
+
+    <ItemGroup>
+        <!-- Deliberately NOT referencing the real net-questdb-client-zstd project or ZstdSharp.Port:
+             this project's own output IS the "plugin" assembly (see AssemblyName above), standing in
+             for a partially-deployed real plugin whose own dependency (ZstdSharp.Port) is missing. -->
+        <ProjectReference Include="..\dummy-http-server\dummy-http-server.csproj"/>
+        <ProjectReference Include="..\net-questdb-client\net-questdb-client.csproj"/>
+    </ItemGroup>
+
+</Project>

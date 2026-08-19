@@ -68,6 +68,10 @@ internal static class QwpZstdCodec
         "Loads the optional " + PluginAssemblyName + " plugin assembly by reflection; not trimming-safe.")]
     [RequiresDynamicCode(
         "Loads the optional " + PluginAssemblyName + " plugin assembly by reflection; not Native AOT-safe.")]
+    // String-form DynamicDependency needs no compile-time reference to the plugin assembly, but
+    // still tells the trimmer a referenced-but-unused-looking net-questdb-client-zstd is actually
+    // reached via reflection, so PublishTrimmed/AOT keeps it instead of stripping it wholesale.
+    [DynamicDependency(DynamicallyAccessedMemberTypes.PublicConstructors, PluginTypeName, PluginAssemblyName)]
     private static (Func<IZstdDecompressor>? Factory, Exception? LoadError) TryResolveFactory()
     {
         Assembly assembly;

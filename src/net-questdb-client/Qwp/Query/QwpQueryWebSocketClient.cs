@@ -575,6 +575,11 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient, QuestDB.Pooling
         {
             throw new ObjectDisposedException(nameof(QwpQueryWebSocketClient));
         }
+        // options.compression is a public, mutable, un-cloned reference (QueryOptions doc invites
+        // mutating it after QueryClient.New) — re-check here so a switch to zstd made after the
+        // initial connect fails fast on this reconnect instead of surfacing later as a decode-time
+        // ConfigError, or being masked as a generic per-address lastError inside WalkTrackerAsync.
+        EnsureZstdAvailableIfRequired();
         Interlocked.Exchange(ref _transport, null)?.Dispose();
         _hostTracker.BeginRound(forgetClassifications: false);
 
@@ -888,7 +893,7 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient, QuestDB.Pooling
         {
             CompressionType.raw => null,
             // EnsureZstdAvailableIfRequired has already verified the plugin is loadable whenever
-            // this is reached with compression=zstd — see ConnectInitialAsync.
+            // this is reached with compression=zstd — see ConnectInitialAsync and ReconnectAsync.
             CompressionType.zstd => $"zstd;level={options.compression_level},raw",
             // Silently degrades to raw-only when the optional codec isn't referenced — "auto"
             // means "best available", not "hard-require zstd".

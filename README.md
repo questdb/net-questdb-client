@@ -28,6 +28,7 @@
 Use NuGet to add a dependency on this library: `dotnet add package net-questdb-client`
 
 See: [https://www.nuget.org/packages/net-questdb-client/](https://www.nuget.org/packages/net-questdb-client/)
+(Optional) to use `compression=zstd`/`auto` on the egress (query) client, add a NuGet reference to [https://www.nuget.org/packages/net-questdb-client-zstd/](https://www.nuget.org/packages/net-questdb-client-zstd/)
 
 ## Usage
 
@@ -378,6 +379,15 @@ Behavior details:
 
 No. This client is for writing data only. For querying, see
 the [Query & SQL overview](https://questdb.io/docs/reference/sql/overview/)
+
+### I get `ConfigError: compression=zstd requires the optional net-questdb-client-zstd package`
+
+The QWP egress (query) client's `compression=zstd`/`auto` modes decode zstd-compressed
+`RESULT_BATCH` payloads. .NET has no built-in zstd support, so that codec ships as a separate,
+optional package rather than a hard dependency of `net-questdb-client` itself — add a reference to
+[https://www.nuget.org/packages/net-questdb-client-zstd/](https://www.nuget.org/packages/net-questdb-client-zstd/),
+or use `compression=raw` (the default) if you don't need it. `compression=auto` degrades to `raw`
+automatically when the package is absent, rather than throwing.
 
 ### Where do I report issues with the client?
 

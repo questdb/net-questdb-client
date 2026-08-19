@@ -57,7 +57,7 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient, QuestDB.Pooling
     private byte[] _queryRequestBuf = Array.Empty<byte>();
     private readonly byte[] _cancelFrameBuf = new byte[1 + 8];
     private readonly byte[] _creditFrameBuf = new byte[1 + 8 + QwpVarint.MaxBytes];
-    private ZstdSharp.Decompressor? _decompressor;
+    private IZstdDecompressor? _decompressor;
     private long _nextRequestId;
     private long _currentRequestId = -1;
     private long _pendingCreditBytes;
@@ -887,15 +887,37 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient, QuestDB.Pooling
         return options.compression switch
         {
             CompressionType.raw => null,
+            // EnsureZstdAvailableIfRequired has already verified the plugin is loadable whenever
+            // this is reached with compression=zstd — see ConnectInitialAsync.
             CompressionType.zstd => $"zstd;level={options.compression_level},raw",
+            // Silently degrades to raw-only when the optional codec isn't referenced — "auto"
+            // means "best available", not "hard-require zstd".
+            CompressionType.auto when !QwpZstdCodec.IsAvailable => null,
             CompressionType.auto => $"zstd;level={options.compression_level},raw",
             _ => throw new InvalidOperationException(
                 $"unknown CompressionType {options.compression}"),
         };
     }
 
+    // Compression is a static property of _options, identical for every addr= candidate, so this
+    // is checked once, up front, rather than inside the per-address WalkTrackerAsync/BuildTransport
+    // loop — a missing plugin would otherwise be recorded as a per-address `lastError` and retried
+    // against every remaining endpoint before finally surfacing as a generic wrapped SocketError,
+    // instead of the specific "add the zstd package" message, right when it can never succeed.
+    private void EnsureZstdAvailableIfRequired()
+    {
+        if (_options.compression == CompressionType.zstd && !QwpZstdCodec.IsAvailable)
+        {
+            throw new IngressError(ErrorCode.ConfigError,
+                "`compression=zstd` requires the optional `net-questdb-client-zstd` package; " +
+                "add a package/project reference to it, or use `compression=auto`/`raw`.");
+        }
+    }
+
     private async Task ConnectInitialAsync(CancellationToken ct)
     {
+        EnsureZstdAvailableIfRequired();
+
         var (info, lastError, anyRoleMismatch) = await WalkTrackerAsync(ct).ConfigureAwait(false);
         if (_transport is not null)
         {
@@ -1125,7 +1147,9 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient, QuestDB.Pooling
         {
             throw new IngressError(ErrorCode.ProtocolViolation, "zstd RESULT_BATCH has empty compressed body");
         }
-        var declaredSize = ZstdSharp.Decompressor.GetDecompressedSize(compressed);
+
+        var decompressor = _decompressor ??= QwpZstdCodec.Create();
+        var declaredSize = decompressor.GetDecompressedSize(compressed);
         const ulong ContentSizeError = unchecked((ulong)-2L);
         const ulong ContentSizeUnknown = unchecked((ulong)-1L);
         if (declaredSize == ContentSizeError)
@@ -1157,7 +1181,6 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient, QuestDB.Pooling
         }
         span.Slice(0, preludeLen).CopyTo(_decompressBuffer);
 
-        var decompressor = _decompressor ??= new ZstdSharp.Decompressor();
         int written;
         try
         {

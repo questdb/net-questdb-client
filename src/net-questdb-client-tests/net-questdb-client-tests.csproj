@@ -26,6 +26,14 @@
 
     </ItemGroup>
 
+    <ItemGroup Condition="'$(TargetFramework)' != 'net6.0'">
+        <!-- Exercises the real Assembly.Load("net-questdb-client-zstd") plugin path (QwpZstdCodec),
+             not a bypass of it; also gives QwpEgressFrameBuilder's zstd fixture-building direct
+             access to ZstdSharp.Compressor. -->
+        <ProjectReference Include="..\net-questdb-client-zstd\net-questdb-client-zstd.csproj"/>
+        <PackageReference Include="ZstdSharp.Port" Version="0.8.4"/>
+    </ItemGroup>
+
     <ItemGroup>
         <None Include="..\questdb-client-test\ilp-client-interop-test.json">
             <Link>ilp-client-interop-test.json</Link>

@@ -83,10 +83,23 @@ internal static class QwpZstdCodec
         var type = assembly.GetType(PluginTypeName);
         if (type is null) return (null, null);
 
-        Func<IZstdDecompressor> factory = () => (IZstdDecompressor)(Activator.CreateInstance(type)
+        IZstdDecompressor CreateInstance() => (IZstdDecompressor)(Activator.CreateInstance(type)
             ?? throw new IngressError(ErrorCode.ConfigError,
                 $"`{PluginTypeName}` in `{PluginAssemblyName}` could not be instantiated"));
-        return (factory, null);
+
+        try
+        {
+            // Prove the plugin is actually usable, not just that the type resolves — catches a
+            // partially deployed plugin (assembly present, its own dependency missing) here,
+            // once, instead of surfacing a raw exception later off the hot decode path.
+            CreateInstance().Dispose();
+        }
+        catch (Exception ex)
+        {
+            return (null, ex);
+        }
+
+        return (CreateInstance, null);
     }
 }
 

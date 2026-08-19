@@ -46,6 +46,8 @@ public class QwpResponseTests
         Assert.That((byte)QwpStatusCode.WriteError,     Is.EqualTo((byte)0x09));
         Assert.That((byte)QwpStatusCode.Cancelled,      Is.EqualTo((byte)0x0A));
         Assert.That((byte)QwpStatusCode.LimitExceeded,  Is.EqualTo((byte)0x0B));
+        Assert.That((byte)QwpStatusCode.NotWritable,    Is.EqualTo((byte)0x0C));
+        Assert.That((byte)QwpStatusCode.DictionaryGap,  Is.EqualTo((byte)0x0D));
     }
 
     [Test]

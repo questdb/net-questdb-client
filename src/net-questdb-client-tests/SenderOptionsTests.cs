@@ -469,6 +469,14 @@ public class SenderOptionsTests
     }
 
     [Test]
+    public void SenderId_ReservedQuarantineMarker_Rejected()
+    {
+        Assert.That(
+            () => new SenderOptions("ws::addr=localhost:9000;sf_dir=/tmp/qdb;sender_id=svc.unreplayable-1;"),
+            Throws.TypeOf<IngressError>().With.Message.Contains("sender_id"));
+    }
+
+    [Test]
     public void SenderId_NormalSegment_Accepted()
     {
         Assert.DoesNotThrow(

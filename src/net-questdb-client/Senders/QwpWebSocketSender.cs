@@ -61,6 +61,7 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender, IPooledSlotSende
     private readonly QwpSenderErrorDispatcher? _errorDispatcher;
     private readonly QwpConnectionEventDispatcher? _connectionEventDispatcher;
     private readonly QwpTlsAuth.CertificateValidator? _certValidator;
+    private readonly QwpPersistedSymbolDictionary? _persistedSymbolDictionary;
 
     private readonly Dictionary<string, long> _committedSeqTxn = new(StringComparer.Ordinal);
     private readonly Dictionary<string, long> _durableSeqTxn = new(StringComparer.Ordinal);
@@ -73,7 +74,14 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender, IPooledSlotSende
     private int _runningRowCount;
     private long _pendingBytes;
     private long _currentTableSnapshotBytes;
-    private int _currentBatchMaxSymbolId = -1;
+    // First dictionary id allocated by the in-progress row; -1 when the row has allocated none.
+    // Lets an abandoned row's ids be reclaimed before they are published or persisted — otherwise
+    // every cancelled row's new values would permanently burn the protocol dictionary cap.
+    private int _rowFirstNewSymbolId = -1;
+    // Handed to every QwpTableBuffer so any row cancel — including the buffer's internal cancel on
+    // a Column/At append failure, which never passes through this sender's catch blocks — reclaims
+    // the dead row's symbol ids immediately, before a later committed row can strand them.
+    private readonly Action _onRowCancelled;
 
     // Transactional (defer-commit) mode: auto-flush frames carry FLAG_DEFER_COMMIT; an explicit
     // commit ships a non-deferred frame. _hasDeferredMessages tracks whether a commit is owed.
@@ -97,8 +105,10 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender, IPooledSlotSende
         _tablesLookup = _tables.GetAlternateLookup<ReadOnlySpan<char>>();
 #endif
         _encoderBuffer = new QwpEncoder.FrameBuilder(EncoderInitialCapacity);
+        _onRowCancelled = ReclaimAbortedRowSymbols;
 
-        (_slotLock, _engine, _drainerPool, _errorDispatcher, _connectionEventDispatcher, _certValidator) = BuildEngineStack(options);
+        (_slotLock, _engine, _drainerPool, _errorDispatcher, _connectionEventDispatcher,
+            _certValidator, _persistedSymbolDictionary) = BuildEngineStack(options, _symbolDictionary);
         _engine.SetTableEntryHandler(UpdateSeqTxnFromAck);
     }
 
@@ -124,8 +134,8 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender, IPooledSlotSende
     /// </summary>
     public bool IsFullyDrained => _engine.IsFullyDrained;
 
-    private static (QwpSlotLock? slotLock, QwpCursorSendEngine engine, QwpBackgroundDrainerPool? pool, QwpSenderErrorDispatcher? dispatcher, QwpConnectionEventDispatcher? eventDispatcher, QwpTlsAuth.CertificateValidator? certValidator)
-        BuildEngineStack(SenderOptions options)
+    private static (QwpSlotLock? slotLock, QwpCursorSendEngine engine, QwpBackgroundDrainerPool? pool, QwpSenderErrorDispatcher? dispatcher, QwpConnectionEventDispatcher? eventDispatcher, QwpTlsAuth.CertificateValidator? certValidator, QwpPersistedSymbolDictionary? persistedSymbolDictionary)
+        BuildEngineStack(SenderOptions options, QwpSymbolDictionary symbolDictionary)
     {
         var sfMode = !string.IsNullOrEmpty(options.sf_dir);
         QwpSlotLock? slotLock = null;
@@ -136,21 +146,32 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender, IPooledSlotSende
         QwpSenderErrorDispatcher? dispatcher = null;
         QwpConnectionEventDispatcher? eventDispatcher = null;
         QwpTlsAuth.CertificateValidator? certValidator = null;
+        QwpPersistedSymbolDictionary? persistedSymbolDictionary = null;
 
         try
         {
+            dispatcher = new QwpSenderErrorDispatcher(options.error_handler, options.error_inbox_capacity);
+
             if (sfMode)
             {
                 var sfRoot = options.sf_dir!;
                 var slotDir = Path.Combine(sfRoot, options.sender_id);
-                slotLock = QwpSlotLock.Acquire(slotDir);
-                ring = QwpSegmentRing.Open(slotDir, segmentCapacity: options.sf_max_segment_bytes);
-                if (ring.NextFsn == 0)
+                try
                 {
-                    // Clear any stale watermark from a prior session that left no segments behind.
-                    QwpAckWatermark.RemoveOrphan(slotDir);
+                    (slotLock, ring, ackWatermark, persistedSymbolDictionary) = OpenSlotStack(slotDir, options);
                 }
-                ackWatermark = QwpAckWatermark.Open(slotDir);
+                catch (QwpUnreplayableSlotException ex)
+                {
+                    // sender_id is stable, so throwing would re-recover the same slot and fail on
+                    // every restart. Set it aside and continue on a fresh slot instead.
+                    QuarantineUnreplayableSlot(sfRoot, options.sender_id, slotDir, ex, dispatcher);
+                    (slotLock, ring, ackWatermark, persistedSymbolDictionary) = OpenSlotStack(slotDir, options);
+                }
+                foreach (var symbol in persistedSymbolDictionary.SnapshotEntries())
+                {
+                    symbolDictionary.AddRecovered(symbol);
+                }
+                symbolDictionary.Commit();
             }
             else
             {
@@ -168,8 +189,6 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender, IPooledSlotSende
                 options.reconnect_max_backoff_millis,
                 options.reconnect_max_duration_millis,
                 jitter: QwpReconnectPolicy.EqualJitter);
-
-            dispatcher = new QwpSenderErrorDispatcher(options.error_handler, options.error_inbox_capacity);
 
             if (options.ConnectionListener is not null)
             {
@@ -194,7 +213,9 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender, IPooledSlotSende
                 ackWatermark: ackWatermark,
                 connectionEventSink: capturedSink is null ? null : (Action<SenderConnectionEvent>)(evt => capturedSink.Offer(evt)),
                 maxFrameRejections: options.max_frame_rejections,
-                poisonMinEscalationWindow: options.poison_min_escalation_window_millis);
+                poisonMinEscalationWindow: options.poison_min_escalation_window_millis,
+                deltaDictionaryCatchUp: true,
+                persistedSymbolDictionary: persistedSymbolDictionary);
 
             engine.Start();
 
@@ -257,7 +278,7 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender, IPooledSlotSende
                 }
             }
 
-            return (slotLock, engine, pool, dispatcher, eventDispatcher, certValidator);
+            return (slotLock, engine, pool, dispatcher, eventDispatcher, certValidator, persistedSymbolDictionary);
         }
         catch (Exception)
         {
@@ -269,8 +290,89 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender, IPooledSlotSende
             SfCleanup.Dispose(ackWatermark);
             SfCleanup.Dispose(slotLock);
             SfCleanup.Dispose(certValidator);
+            SfCleanup.Dispose(persistedSymbolDictionary);
             throw;
         }
+    }
+
+    private static (QwpSlotLock slotLock, QwpSegmentRing ring, QwpAckWatermark ackWatermark, QwpPersistedSymbolDictionary persistedSymbolDictionary)
+        OpenSlotStack(string slotDir, SenderOptions options)
+    {
+        QwpSlotLock? slotLock = null;
+        QwpSegmentRing? ring = null;
+        QwpAckWatermark? ackWatermark = null;
+        try
+        {
+            slotLock = QwpSlotLock.Acquire(slotDir);
+            ring = QwpSegmentRing.Open(slotDir, segmentCapacity: options.sf_max_segment_bytes);
+            if (ring.NextFsn == 0)
+            {
+                // Clear any stale watermark from a prior session that left no segments behind.
+                QwpAckWatermark.RemoveOrphan(slotDir);
+            }
+            ackWatermark = QwpAckWatermark.Open(slotDir);
+            QwpPersistedSymbolDictionary persistedSymbolDictionary;
+            try
+            {
+                persistedSymbolDictionary = QwpPersistedSymbolDictionary.OpenOrRecover(
+                    slotDir, ring, QwpAckWatermark.ResolveReplayFloor(ring, ackWatermark));
+            }
+            catch (Exception ex) when (ex is InvalidDataException or IOException)
+            {
+                throw new IngressError(ErrorCode.ConfigError,
+                    $"store-and-forward slot `{slotDir}` cannot be recovered: {ex.Message}", ex);
+            }
+            return (slotLock, ring, ackWatermark, persistedSymbolDictionary);
+        }
+        catch
+        {
+            SfCleanup.Dispose(ackWatermark);
+            SfCleanup.Dispose(ring);
+            SfCleanup.Dispose(slotLock);
+            throw;
+        }
+    }
+
+    // Bounded so unreplayable copies cannot turn a disk-space problem into a second incident.
+    private const int MaxQuarantinedSlots = 64;
+
+    private static void QuarantineUnreplayableSlot(
+        string sfRoot, string senderId, string slotDir, QwpUnreplayableSlotException cause,
+        QwpSenderErrorDispatcher dispatcher)
+    {
+        string? quarantinePath = null;
+        for (var i = 0; i < MaxQuarantinedSlots; i++)
+        {
+            var candidate = Path.Combine(sfRoot, senderId + QwpOrphanScanner.QuarantineSlotInfix + i);
+            if (!Directory.Exists(candidate))
+            {
+                quarantinePath = candidate;
+                break;
+            }
+        }
+
+        if (quarantinePath is null)
+        {
+            throw new IngressError(ErrorCode.ConfigError,
+                $"{cause.Message}; the slot could not be set aside: too many quarantined slots " +
+                $"already under `{sfRoot}`. Move or remove them by hand; the affected data must be resent", cause);
+        }
+
+        try
+        {
+            Directory.Move(slotDir, quarantinePath);
+        }
+        catch (Exception moveError)
+        {
+            throw new IngressError(ErrorCode.ConfigError,
+                $"{cause.Message}; the slot could not be set aside (rename to `{quarantinePath}` " +
+                $"failed: {moveError.Message}). Move or remove `{slotDir}` by hand; the affected data must be resent", cause);
+        }
+
+        QwpOrphanScanner.MarkFailed(quarantinePath, "unreplayable: " + cause);
+        var detail = $"{cause.Message} [slot set aside at `{quarantinePath}`; " +
+                     $"sender continues on a fresh slot at `{slotDir}`; the affected data must be resent]";
+        dispatcher.Offer(SenderError.DataLoss(detail, quarantinePath));
     }
 
     /// <inheritdoc />
@@ -344,25 +446,36 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender, IPooledSlotSende
         // StringComparer.Ordinal, so SequenceEqual is exactly equivalent; a miss (first use or a
         // table switch) falls to the dictionary and, if absent, creates the buffer.
         var t = _currentTable;
-        if (t is null || !name.SequenceEqual(t.TableName))
+        if (t is not null && name.SequenceEqual(t.TableName))
         {
-#if NET9_0_OR_GREATER
-            if (!_tablesLookup.TryGetValue(name, out t))
-            {
-                var key = name.ToString();
-                t = new QwpTableBuffer(key, Options.max_name_len);
-                _tables[key] = t;
-            }
-#else
-            var key = name.ToString();
-            if (!_tables.TryGetValue(key, out t))
-            {
-                t = new QwpTableBuffer(key, Options.max_name_len);
-                _tables[key] = t;
-            }
-#endif
-            _currentTable = t;
+            // Do not re-anchor the byte snapshot when callers repeat Table() in the middle of a row:
+            // the buffer already contains that row's uncommitted bytes, while the snapshot must stay
+            // at the last committed boundary for row-size and auto-flush accounting.
+            return this;
         }
+
+        if (t?.HasPendingRow == true)
+        {
+            throw new IngressError(ErrorCode.InvalidApiCall,
+                $"cannot switch tables while row is in progress [currentTable={t.TableName}]");
+        }
+
+#if NET9_0_OR_GREATER
+        if (!_tablesLookup.TryGetValue(name, out t))
+        {
+            var key = name.ToString();
+            t = new QwpTableBuffer(key, Options.max_name_len, _onRowCancelled);
+            _tables[key] = t;
+        }
+#else
+        var key = name.ToString();
+        if (!_tables.TryGetValue(key, out t))
+        {
+            t = new QwpTableBuffer(key, Options.max_name_len, _onRowCancelled);
+            _tables[key] = t;
+        }
+#endif
+        _currentTable = t;
 
         _currentTableSnapshotBytes = t.GetBufferedBytes();
         return this;
@@ -379,22 +492,19 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender, IPooledSlotSende
             // the encoder on every self-sufficient flush and wedge the sender). Repeated values take
             // the dictionary's fast path, so the hot path stays free of any extra scan.
             var globalId = _symbolDictionary.Add(value);
-            EnsureCurrentTable().AppendSymbol(name, globalId);
-            if (globalId > _currentBatchMaxSymbolId)
+            if (_rowFirstNewSymbolId < 0 && globalId == preCount)
             {
-                _currentBatchMaxSymbolId = globalId;
+                _rowFirstNewSymbolId = globalId;
             }
+            EnsureCurrentTable().AppendSymbol(name, globalId);
         }
         catch
         {
-            // Drop any dict entry Add committed and abandon the in-progress row, so a rejected
-            // value/name never leaves the buffer half-written. CancelCurrentRow is idempotent, so it
-            // is safe even when AppendSymbol already cancelled on a bad name.
-            if (_symbolDictionary.Count > preCount)
-            {
-                _symbolDictionary.RollbackTo(preCount);
-            }
+            // Any failure abandons the whole in-progress row, so every id it allocated — not just
+            // this call's — is reclaimed. CancelCurrentRow is idempotent, so it is safe even when
+            // AppendSymbol already cancelled on a bad name.
             _currentTable?.CancelCurrentRow();
+            ReclaimAbortedRowSymbols();
             throw;
         }
         return this;
@@ -493,19 +603,16 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender, IPooledSlotSende
         try
         {
             var globalId = _symbolDictionary.Add(value);
-            EnsureCurrentTable().AppendSymbol(name, globalId);
-            if (globalId > _currentBatchMaxSymbolId)
+            if (_rowFirstNewSymbolId < 0 && globalId == preCount)
             {
-                _currentBatchMaxSymbolId = globalId;
+                _rowFirstNewSymbolId = globalId;
             }
+            EnsureCurrentTable().AppendSymbol(name, globalId);
         }
         catch
         {
-            if (_symbolDictionary.Count > preCount)
-            {
-                _symbolDictionary.RollbackTo(preCount);
-            }
             _currentTable?.CancelCurrentRow();
+            ReclaimAbortedRowSymbols();
             throw;
         }
         return this;
@@ -520,19 +627,16 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender, IPooledSlotSende
         {
             // Add(string): probe/store by reference — no ToString of the value (see QwpSymbolDictionary).
             var globalId = _symbolDictionary.Add(value);
-            EnsureCurrentTable().AppendSymbol(name, globalId);
-            if (globalId > _currentBatchMaxSymbolId)
+            if (_rowFirstNewSymbolId < 0 && globalId == preCount)
             {
-                _currentBatchMaxSymbolId = globalId;
+                _rowFirstNewSymbolId = globalId;
             }
+            EnsureCurrentTable().AppendSymbol(name, globalId);
         }
         catch
         {
-            if (_symbolDictionary.Count > preCount)
-            {
-                _symbolDictionary.RollbackTo(preCount);
-            }
             _currentTable?.CancelCurrentRow();
+            ReclaimAbortedRowSymbols();
             throw;
         }
         return this;
@@ -1107,6 +1211,10 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender, IPooledSlotSende
 
     private int EncodeBatch(bool deferCommit)
     {
+        // Flush runs with no row in progress, so ids left by an internally cancelled row (e.g. an
+        // append failure the caller swallowed) are still the unreferenced tail — drop them before
+        // the delta and the persisted side file pick them up.
+        ReclaimAbortedRowSymbols();
         _flushBatch.Clear();
         foreach (var t in _tables.Values)
         {
@@ -1123,8 +1231,6 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender, IPooledSlotSende
 
         return QwpEncoder.EncodeInto(
             _encoderBuffer, _flushBatch, _symbolDictionary,
-            selfSufficient: true,
-            symbolDeltaCount: _currentBatchMaxSymbolId + 1,
             deferCommit: deferCommit);
     }
 
@@ -1133,10 +1239,9 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender, IPooledSlotSende
     // Java client's sendCommitMessage (beginMessage with tableCount=0).
     private int EncodeCommitFrame()
     {
+        ReclaimAbortedRowSymbols();
         return QwpEncoder.EncodeInto(
             _encoderBuffer, Array.Empty<QwpTableBuffer>(), _symbolDictionary,
-            selfSufficient: true,
-            symbolDeltaCount: _currentBatchMaxSymbolId + 1,
             deferCommit: false);
     }
 
@@ -1146,6 +1251,7 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender, IPooledSlotSende
         if (len > 0)
         {
             GuardBatchSize(len);
+            PersistSymbolDictionaryBeforePublish();
             _engine.AppendBlocking(_encoderBuffer.AsSpan(0, len), ct);
             OnFlushSucceeded();
             _hasDeferredMessages = deferCommit;
@@ -1156,6 +1262,8 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender, IPooledSlotSende
         if (!deferCommit && _hasDeferredMessages)
         {
             var commitLen = EncodeCommitFrame();
+            GuardBatchSize(commitLen);
+            PersistSymbolDictionaryBeforePublish();
             _engine.AppendBlocking(_encoderBuffer.AsSpan(0, commitLen), ct);
             OnFlushSucceeded();
             _hasDeferredMessages = false;
@@ -1168,6 +1276,7 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender, IPooledSlotSende
         if (len > 0)
         {
             GuardBatchSize(len);
+            PersistSymbolDictionaryBeforePublish();
             await _engine.AppendAsync(_encoderBuffer.WrittenMemory, ct).ConfigureAwait(false);
             OnFlushSucceeded();
             _hasDeferredMessages = deferCommit;
@@ -1176,7 +1285,9 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender, IPooledSlotSende
 
         if (!deferCommit && _hasDeferredMessages)
         {
-            EncodeCommitFrame();
+            var commitLen = EncodeCommitFrame();
+            GuardBatchSize(commitLen);
+            PersistSymbolDictionaryBeforePublish();
             await _engine.AppendAsync(_encoderBuffer.WrittenMemory, ct).ConfigureAwait(false);
             OnFlushSucceeded();
             _hasDeferredMessages = false;
@@ -1190,12 +1301,15 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender, IPooledSlotSende
     public async Task<long> FlushAndGetSequenceAsync(CancellationToken ct = default)
     {
         ThrowIfTerminal();
+        EnsureNoRowInProgress();
         // An explicit, sequence-returning flush is a commit point (non-deferred).
         var len = EncodeBatch(deferCommit: false);
         if (len == 0)
         {
             if (!_hasDeferredMessages) return _engine.NextFsn - 1;
-            EncodeCommitFrame();
+            var commitLen = EncodeCommitFrame();
+            GuardBatchSize(commitLen);
+            PersistSymbolDictionaryBeforePublish();
             await _engine.AppendAsync(_encoderBuffer.WrittenMemory, ct).ConfigureAwait(false);
             var committedFsn = _engine.NextFsn - 1;
             OnFlushSucceeded();
@@ -1203,6 +1317,7 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender, IPooledSlotSende
             return committedFsn;
         }
         GuardBatchSize(len);
+        PersistSymbolDictionaryBeforePublish();
         await _engine.AppendAsync(_encoderBuffer.WrittenMemory, ct).ConfigureAwait(false);
         var publishedFsn = _engine.NextFsn - 1;
         OnFlushSucceeded();
@@ -1220,6 +1335,10 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender, IPooledSlotSende
 
     private void OnFlushSucceeded()
     {
+        // Publication into the ordered cursor ring, rather than the later server ACK, is the
+        // producer's delta boundary. Reconnect catch-up restores this published prefix before any
+        // frame that depends on it is replayed.
+        _symbolDictionary.Commit();
         ResetPendingState();
         LastFlush = DateTime.UtcNow;
         _lastFlushTickCount = Environment.TickCount64;
@@ -1227,9 +1346,6 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender, IPooledSlotSende
 
     private void ResetPendingState()
     {
-        // Symbol ids must stay stable for the connection's lifetime; resetting the
-        // dictionary per flush makes the server serve stale symbol-cache hits.
-        _currentBatchMaxSymbolId = -1;
         foreach (var t in _flushBatch)
         {
             t.Clear();
@@ -1239,6 +1355,8 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender, IPooledSlotSende
         _runningRowCount = 0;
         _pendingBytes = 0;
         _currentTableSnapshotBytes = 0;
+        // No buffered row can still reference entries allocated after the last published frame.
+        RollbackUnpublishedSymbols();
         _currentTable = null;
     }
 
@@ -1257,6 +1375,7 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender, IPooledSlotSende
     {
         ThrowIfTerminal();
         _currentTable?.CancelCurrentRow();
+        ReclaimAbortedRowSymbols();
     }
 
     /// <inheritdoc />
@@ -1268,11 +1387,11 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender, IPooledSlotSende
             t.Clear();
         }
 
-        _currentBatchMaxSymbolId = -1;
         _currentTable = null;
         _runningRowCount = 0;
         _pendingBytes = 0;
         _currentTableSnapshotBytes = 0;
+        RollbackUnpublishedSymbols();
     }
 
     /// <inheritdoc />
@@ -1498,6 +1617,7 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender, IPooledSlotSende
             return buffered;
         }
         t.CancelCurrentRow();
+        ReclaimAbortedRowSymbols();
         throw new IngressError(ErrorCode.InvalidApiCall, cap > 0
             ? $"row too large for server batch cap [rowBytes={rowBytes}, serverMaxBatchSize={cap}]"
             : $"row too large for protocol batch limit [rowBytes={rowBytes}, "
@@ -1513,6 +1633,7 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender, IPooledSlotSende
         _runningRowCount++;
         _pendingBytes += bufferedNow - _currentTableSnapshotBytes;
         _currentTableSnapshotBytes = bufferedNow;
+        _rowFirstNewSymbolId = -1;
     }
 
     private void GuardBatchSize(int messageSize)
@@ -1523,6 +1644,52 @@ internal sealed class QwpWebSocketSender : IQwpWebSocketSender, IPooledSlotSende
         ResetPendingState();
         throw new IngressError(ErrorCode.InvalidApiCall,
             $"batch too large for server batch cap [messageSize={messageSize}, serverMaxBatchSize={cap}, droppedRows={droppedRows}]");
+    }
+
+    private void PersistSymbolDictionaryBeforePublish()
+    {
+        if (_persistedSymbolDictionary is null)
+        {
+            return;
+        }
+
+        try
+        {
+            _persistedSymbolDictionary.AppendNewSymbols(_symbolDictionary);
+        }
+        catch (Exception ex) when (ex is not IngressError)
+        {
+            throw new IngressError(ErrorCode.ServerFlushError,
+                $"could not persist the store-and-forward symbol dictionary under `{Options.sf_dir}`; " +
+                "the buffered rows are retained and the flush can be retried", ex);
+        }
+    }
+
+    private void RollbackUnpublishedSymbols()
+    {
+        var persistenceFloor = _persistedSymbolDictionary?.Count ?? 0;
+        _symbolDictionary.RollbackTo(Math.Max(_symbolDictionary.CommittedCount, persistenceFloor));
+        _rowFirstNewSymbolId = -1;
+    }
+
+    // A row that died without committing (CancelRow, or an append failure that cancelled it) leaves
+    // its new dictionary ids as the unreferenced tail; drop them before they can be published or
+    // persisted. A live in-progress row still owns its ids, so the pending-row guard skips it.
+    private void ReclaimAbortedRowSymbols()
+    {
+        if (_rowFirstNewSymbolId < 0 || _currentTable?.HasPendingRow == true)
+        {
+            return;
+        }
+        // Floor at the published/persisted prefix: a flush that ran between the marker being set
+        // and this reclaim has made those ids immutable, so only the tail above them may drop.
+        var floor = Math.Max(_symbolDictionary.CommittedCount, _persistedSymbolDictionary?.Count ?? 0);
+        var target = Math.Max(_rowFirstNewSymbolId, floor);
+        if (_symbolDictionary.Count > target)
+        {
+            _symbolDictionary.RollbackTo(target);
+        }
+        _rowFirstNewSymbolId = -1;
     }
 
     private long DateTimeToMicros(DateTime value)

@@ -1283,6 +1283,8 @@ public record SenderOptions
     /// <summary>
     ///     Path to a custom CA bundle used to verify the server certificate. Accepts PEM
     ///     (.pem / .crt) or PFX/PKCS#12 (.pfx / .p12); the format is selected by file extension.
+    ///     Only self-signed certificates in the bundle act as trust anchors; any other
+    ///     certificates only assist chain building.
     /// </summary>
     public string? tls_roots
     {
@@ -1545,6 +1547,14 @@ public record SenderOptions
                 $"`sender_id` must be a single path segment without separators, drive letters, or `..` (got `{value}`)");
         }
 
+        // A slot whose directory name carries the quarantine marker is skipped by every sibling's
+        // orphan scanner, so a sender_id containing it would strand its own store-and-forward data.
+        if (value.Contains(Qwp.Sf.QwpOrphanScanner.QuarantineSlotInfix, StringComparison.Ordinal))
+        {
+            throw new IngressError(ErrorCode.ConfigError,
+                $"`sender_id` must not contain the reserved `{Qwp.Sf.QwpOrphanScanner.QuarantineSlotInfix}` marker (got `{value}`)");
+        }
+
         _senderId = value;
     }
 
@@ -1556,8 +1566,10 @@ public record SenderOptions
     }
 
     /// <summary>
-    ///     Hard cap on total bytes across all live segments in the slot. Defaults to 128 MiB without
-    ///     <see cref="sf_dir" /> set, 10 GiB with it. When the cap is hit the producer hits backpressure.
+    ///     Hard cap on total bytes across all live segments and the persisted symbol dictionary in
+    ///     the slot. Defaults to 128 MiB without <see cref="sf_dir" /> set, 10 GiB with it. When the
+    ///     cap is hit the producer hits backpressure. File mode may exceed the cap by the minimum
+    ///     active-segment-plus-spare working set when a large dictionary leaves no reclaimable room.
     /// </summary>
     public long sf_max_total_bytes
     {

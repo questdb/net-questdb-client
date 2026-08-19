@@ -64,12 +64,16 @@ internal sealed class QwpCursorSendEngine : IDisposable
     // Grows on demand for oversized-but-valid ACKs; reused across receive-pump iterations.
     private byte[] _ackBuffer;
     private readonly bool _durableAckMode;
+    private readonly QwpSymbolDictionaryMirror? _symbolDictionaryMirror;
+    private readonly QwpPersistedSymbolDictionary? _persistedSymbolDictionary;
     private readonly Queue<PendingDurable> _pendingDurable = new();
     private readonly Dictionary<string, long> _durableTableWatermarks = new(StringComparer.Ordinal);
 
     private long _cursorFsn;
     private long _ackedFsn;
     private long _sentFsnHighWatermark;
+    // First data FSN of the current connection (= replay cursor at connect); guarded by _stateLock.
+    private long _connFirstDataFsn;
     private long _totalAcks;
     private long _totalFramesSent;
     private long _totalServerErrors;
@@ -127,6 +131,14 @@ internal sealed class QwpCursorSendEngine : IDisposable
     ///     avoiding row-level re-replay inside the lowest surviving sealed segment. The engine
     ///     takes ownership and disposes the watermark on shutdown.
     /// </param>
+    /// <param name="connectionEventSink">Optional non-blocking connection lifecycle event sink.</param>
+    /// <param name="maxFrameRejections">Consecutive head-frame rejection threshold before poison escalation.</param>
+    /// <param name="poisonMinEscalationWindow">Minimum dwell before poison escalation may become terminal.</param>
+    /// <param name="deltaDictionaryCatchUp">Whether to mirror sent symbol deltas and restore them after reconnect.</param>
+    /// <param name="persistedSymbolDictionary">
+    ///     Optional per-slot recovery dictionary. The engine seeds catch-up from it, counts its bytes
+    ///     against the SF cap, and owns its disposal.
+    /// </param>
     public QwpCursorSendEngine(
         QwpSlotLock? slotLock,
         QwpSegmentRing ring,
@@ -142,7 +154,9 @@ internal sealed class QwpCursorSendEngine : IDisposable
         QwpAckWatermark? ackWatermark = null,
         Action<QuestDB.Senders.SenderConnectionEvent>? connectionEventSink = null,
         int maxFrameRejections = 4,
-        TimeSpan? poisonMinEscalationWindow = null)
+        TimeSpan? poisonMinEscalationWindow = null,
+        bool deltaDictionaryCatchUp = false,
+        QwpPersistedSymbolDictionary? persistedSymbolDictionary = null)
     {
         ArgumentNullException.ThrowIfNull(ring);
         ArgumentNullException.ThrowIfNull(transportFactory);
@@ -162,26 +176,18 @@ internal sealed class QwpCursorSendEngine : IDisposable
         _errorDispatcher = errorDispatcher;
         _policyResolver = policyResolver;
         _durableAckMode = durableAckMode;
+        _symbolDictionaryMirror = deltaDictionaryCatchUp ? new QwpSymbolDictionaryMirror() : null;
+        _persistedSymbolDictionary = persistedSymbolDictionary;
+        if (_symbolDictionaryMirror is not null && persistedSymbolDictionary is not null)
+        {
+            _symbolDictionaryMirror.Seed(persistedSymbolDictionary.SnapshotEntries());
+        }
         _ackWatermark = ackWatermark;
         _connectionEventSink = connectionEventSink;
         _maxFrameRejections = maxFrameRejections < 1 ? 1 : maxFrameRejections;
         _poisonDwell = poisonMinEscalationWindow ?? TimeSpan.FromMilliseconds(5000);
 
-        var baseSeed = ring.OldestFsn;
-        if (ackWatermark is not null)
-        {
-            var wm = ackWatermark.Read();
-            if (wm != QwpAckWatermark.Invalid)
-            {
-                // max() absorbs either ordering of the manager's persist-then-trim tick.
-                var candidate = Math.Max(baseSeed, wm + 1);
-                // candidate > NextFsn means corruption: a clean prior session can't produce one.
-                if (candidate <= ring.NextFsn)
-                {
-                    baseSeed = candidate;
-                }
-            }
-        }
+        var baseSeed = QwpAckWatermark.ResolveReplayFloor(ring, ackWatermark);
 
         _cursorFsn = baseSeed;
         _ackedFsn = baseSeed;
@@ -190,7 +196,15 @@ internal sealed class QwpCursorSendEngine : IDisposable
             ring.Acknowledge(baseSeed - 1);
         }
 
-        _segmentManager = new QwpSegmentManager(ring, maxTotalBytes);
+        _segmentManager = new QwpSegmentManager(
+            ring,
+            maxTotalBytes,
+            sideFileBytesProvider: persistedSymbolDictionary is null
+                ? null
+                : () => persistedSymbolDictionary.FileLength,
+            sideFileFlush: persistedSymbolDictionary is null
+                ? null
+                : persistedSymbolDictionary.FlushToDisk);
         _segmentManager.SetAckWatermark(ackWatermark);
         _sendBuffer = new byte[ring.SegmentCapacity];
         _ackBuffer = new byte[AckBufferSize];
@@ -630,11 +644,13 @@ internal sealed class QwpCursorSendEngine : IDisposable
         SfCleanup.Dispose(_segmentManager);
         SfCleanup.Dispose(_ring);
         SfCleanup.Dispose(_ackWatermark);
+        SfCleanup.Dispose(_persistedSymbolDictionary);
 
         if (fullyDrained && slotDir is not null)
         {
             UnlinkSegmentFiles(slotDir);
             QwpAckWatermark.RemoveOrphan(slotDir);
+            QwpPersistedSymbolDictionary.RemoveOrphan(slotDir);
         }
 
         SfCleanup.Dispose(_slotLock);
@@ -790,11 +806,15 @@ internal sealed class QwpCursorSendEngine : IDisposable
                 var wasFirst = !_seenFirstConnect;
                 var newEndpoint = transport.Endpoint;
                 var prevEndpoint = _liveEndpoint;
-                _seenFirstConnect = true;
                 _liveEndpoint = newEndpoint;
                 Volatile.Write(ref _negotiatedMaxBatchSize, transport.NegotiatedMaxBatchSize);
+
+                // The public initial-connect contract is satisfied once a host accepts the
+                // WebSocket upgrade. Dictionary catch-up still runs before any data frame below,
+                // but a transient catch-up failure must not strand a store-and-forward producer in
+                // its constructor: queued data remains safe while the I/O loop reconnects.
+                _seenFirstConnect = true;
                 Interlocked.Increment(ref _totalReconnectsSucceeded);
-                backoff.Reset();
                 FireFirstConnectSucceeded();
 
                 QuestDB.Senders.SenderConnectionEventKind successKind;
@@ -815,8 +835,11 @@ internal sealed class QwpCursorSendEngine : IDisposable
                 EmitConnectionEvent(successKind, cause: null, endpoint: newEndpoint);
 
                 long fsnAtZero;
+                long progressAtConnect;
+                var connectedAtTicks = Environment.TickCount64;
                 lock (_stateLock)
                 {
+                    progressAtConnect = Math.Max(_ackedFsn, _highestOkFsn + 1);
                     // Invariant: the manager only trims segments at or below ackedFsn-1, so the
                     // ring's oldest FSN must never sit ahead of the cursor's resume point.
                     // A violation means trim and ack are out of sync — surface it as terminal
@@ -829,6 +852,9 @@ internal sealed class QwpCursorSendEngine : IDisposable
                     _cursorFsn = _ackedFsn;
                     fsnAtZero = _cursorFsn;
                     _sentFsnHighWatermark = _cursorFsn - 1;
+                    // Any watermark bump past this marks a data frame handed to the transport on
+                    // this connection; catch-up frames are sent outside the pump and never bump it.
+                    _connFirstDataFsn = _cursorFsn;
                     // Pending durable state is per-connection (wireSeq is reset on every upgrade);
                     // the new server replays cumulative watermarks from scratch.
                     _pendingDurable.Clear();
@@ -841,6 +867,20 @@ internal sealed class QwpCursorSendEngine : IDisposable
 
                 try
                 {
+                    if (_symbolDictionaryMirror is { Count: > 0 } mirror)
+                    {
+                        // A WebSocket upgrade resets the server's connection-scoped dictionary.
+                        // Catch-up runs before any data frame; if it fails, the ordinary reconnect
+                        // policy retries it on the next connection.
+                        //
+                        // Catch-up frames consume wire sequences but map to the already-acked FSNs
+                        // immediately below the replay cursor, so their ACKs cannot advance the ring
+                        // watermark past a real frame.
+                        var catchUpFrames = await mirror.SendCatchUpAsync(transport, ct).ConfigureAwait(false);
+                        fsnAtZero -= catchUpFrames;
+                        Interlocked.Add(ref _totalFramesSent, catchUpFrames);
+                    }
+
                     await RunConnectionAsync(transport, fsnAtZero, ct).ConfigureAwait(false);
                     return;
                 }
@@ -864,6 +904,26 @@ internal sealed class QwpCursorSendEngine : IDisposable
                         cause: ex, endpoint: _liveEndpoint);
                     _liveEndpoint = null;
 
+                    // An accepted upgrade alone must not reset the reconnect backoff: an
+                    // accept-then-close endpoint (a draining LB, a crash-looping node) would
+                    // otherwise recycle at initial-backoff rate forever, re-uploading the full
+                    // dictionary catch-up on every cycle. Data progress proves the endpoint good
+                    // (the catch-up's own ACKs map below the replay cursor and never advance that
+                    // metric); so does simply outliving the backoff ceiling, which keeps an idle
+                    // producer behind an idle-timeout proxy reconnecting promptly.
+                    bool madeProgress;
+                    lock (_stateLock)
+                    {
+                        madeProgress = Math.Max(_ackedFsn, _highestOkFsn + 1) > progressAtConnect;
+                    }
+
+                    if (madeProgress
+                        || Environment.TickCount64 - connectedAtTicks
+                            >= (long)_reconnectPolicy.MaxBackoff.TotalMilliseconds)
+                    {
+                        backoff.Reset();
+                    }
+
                     // Poison-frame pacing/escalation. A retriable NACK already struck (and checked for
                     // escalation) in HandleServerRejection. A non-orderly close *after a send* strikes
                     // here — deliberately, not only a server NACK: a frame that crashes the server
@@ -875,9 +935,35 @@ internal sealed class QwpCursorSendEngine : IDisposable
                     // SenderOptions.max_frame_rejections for the behavior + RAM-mode data-loss note.
                     // A pure connect failure (nothing sent on this connection) is an outage, not
                     // poison — it must never accrue a strike (Invariant B), so it uses normal backoff.
-                    if (ex is RetriableNackException)
+                    if (ex is RetriableNackException nack)
                     {
-                        if (!await PacedPoisonDelayAsync(Volatile.Read(ref _poisonStrikes), ct).ConfigureAwait(false))
+                        // Strike-exempt rejections carry no poison strike, so pace them on
+                        // consecutive no-progress recycles instead: first recycle immediate
+                        // (failover latency), then doubling capped backoff.
+                        var exempt = nack.SenderError.Category
+                            is SenderErrorCategory.NotWritable or SenderErrorCategory.DictionaryGap
+                            || nack.FromFsn < 0;
+                        int pacingStrikes;
+                        lock (_stateLock)
+                        {
+                            if (!exempt)
+                            {
+                                pacingStrikes = _poisonStrikes;
+                            }
+                            else
+                            {
+                                var progress = Math.Max(_ackedFsn, _highestOkFsn + 1);
+                                if (progress > _progressAtLastExemptRecycle)
+                                {
+                                    _zeroProgressExemptRecycles = 0;
+                                }
+                                _progressAtLastExemptRecycle = progress;
+                                pacingStrikes = _zeroProgressExemptRecycles++;
+                            }
+                        }
+
+                        if (pacingStrikes > 0
+                            && !await PacedPoisonDelayAsync(pacingStrikes, ct).ConfigureAwait(false))
                         {
                             return;
                         }
@@ -1025,7 +1111,9 @@ internal sealed class QwpCursorSendEngine : IDisposable
                 await wait.WaitAsync(ct).ConfigureAwait(false);
             }
 
+            _symbolDictionaryMirror?.ValidateContinuity(sendBuffer.AsSpan(0, frameLen));
             await transport.SendBinaryAsync(sendBuffer.AsMemory(0, frameLen), ct).ConfigureAwait(false);
+            _symbolDictionaryMirror?.Accumulate(sendBuffer.AsSpan(0, frameLen));
             Interlocked.Increment(ref _totalFramesSent);
             Volatile.Write(ref _sentOnCurrentConnection, true);
         }
@@ -1195,15 +1283,24 @@ internal sealed class QwpCursorSendEngine : IDisposable
         }
         long fromFsn, toFsn;
         long highestSentWireSeq;
+        long ackedFsnAtReject;
+        bool preDataReject;
         lock (_stateLock)
         {
             highestSentWireSeq = _sentFsnHighWatermark - fsnAtZero;
+            ackedFsnAtReject = _ackedFsn;
+            // The watermark bumps under this lock before the wire write, so — unlike the post-send
+            // _sentOnCurrentConnection flag — it can never misread a just-NACKed data frame as
+            // pre-data while the send-side await is still completing.
+            preDataReject = _sentFsnHighWatermark < _connFirstDataFsn;
         }
 
-        if (highestSentWireSeq < 0)
+        if (preDataReject)
         {
-            // Pre-send reject (server hit us before any frame went out on this connection):
-            // the wire seq doesn't map to a real FSN, so skip the watermark advance.
+            // Pre-data reject: the server may have rejected a dictionary catch-up frame, whose wire
+            // sequence maps below the replay cursor but can still be a non-negative historical FSN.
+            // No data frame has been handed to the transport on this connection, so it cannot
+            // implicate the ring head.
             fromFsn = -1L;
             toFsn = -1L;
         }
@@ -1212,6 +1309,14 @@ internal sealed class QwpCursorSendEngine : IDisposable
             var capped = Math.Min(wireSeq, highestSentWireSeq);
             fromFsn = checked(fsnAtZero + capped);
             toFsn = fromFsn;
+            if (fromFsn < ackedFsnAtReject)
+            {
+                // A NACK below the replay cursor names a dictionary catch-up frame, not a data
+                // frame — the watermark can't tell them apart because the send pump ships data
+                // before the catch-up's NACK round-trip is read. Treat as a pre-data reject.
+                fromFsn = -1L;
+                toFsn = -1L;
+            }
         }
 
         var tableName = response.TableEntries.Count == 1 ? response.TableEntries[0].TableName : null;
@@ -1243,7 +1348,13 @@ internal sealed class QwpCursorSendEngine : IDisposable
         // verdict — so it must NOT accrue a poison strike, mirroring the close path's
         // _sentOnCurrentConnection guard. Striking it would let a server that proactively NACKs on
         // connect escalate a never-sent frame to a terminal poison error (Invariant B).
-        if (fromFsn >= 0)
+        // NOT_WRITABLE judges the selected node, and DICTIONARY_GAP judges connection-scoped
+        // registration state. Neither says that replaying the same frame on a fresh/other node is
+        // deterministic, so neither may burn the poison-frame budget even when the NACK names a
+        // data frame that was sent on this connection.
+        var connectionStateRejection = category is SenderErrorCategory.NotWritable
+            or SenderErrorCategory.DictionaryGap;
+        if (fromFsn >= 0 && !connectionStateRejection)
         {
             var strike = RegisterHeadOfLineStrike(fromFsn);
             if (strike.Escalation is not null)
@@ -1505,6 +1616,10 @@ internal sealed class QwpCursorSendEngine : IDisposable
     // measure genuine acceptance progress. Guarded by _stateLock; monotonic (replayed re-OKs of
     // already-OK'd frames don't advance it, so replay can't launder the strike count).
     private long _highestOkFsn = -1L;
+
+    // Zero-progress pacer for strike-exempt NACK recycles. Guarded by _stateLock.
+    private int _zeroProgressExemptRecycles;
+    private long _progressAtLastExemptRecycle = -1L;
 
     private readonly struct PoisonStrike
     {

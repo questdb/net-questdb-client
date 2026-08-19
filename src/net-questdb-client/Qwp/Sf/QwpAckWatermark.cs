@@ -107,6 +107,31 @@ internal sealed class QwpAckWatermark : IDisposable
         }
     }
 
+    /// <summary>
+    ///     First FSN the send loop will replay: every frame below it is server-acknowledged and
+    ///     only ever trimmed, never resent.
+    /// </summary>
+    public static long ResolveReplayFloor(QwpSegmentRing ring, QwpAckWatermark? watermark)
+    {
+        ArgumentNullException.ThrowIfNull(ring);
+        var floor = ring.OldestFsn;
+        if (watermark is null)
+        {
+            return floor;
+        }
+
+        var fsn = watermark.Read();
+        if (fsn == Invalid)
+        {
+            return floor;
+        }
+
+        // max() absorbs either ordering of the manager's persist-then-trim tick.
+        var candidate = Math.Max(floor, fsn + 1);
+        // candidate > NextFsn means corruption: a clean prior session can't produce one.
+        return candidate <= ring.NextFsn ? candidate : floor;
+    }
+
     /// <summary>Best-effort unlink of a stale watermark file.</summary>
     public static void RemoveOrphan(string slotDirectory)
     {

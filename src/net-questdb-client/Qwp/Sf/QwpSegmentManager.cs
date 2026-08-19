@@ -39,6 +39,10 @@ internal sealed class QwpSegmentManager : IDisposable
     private readonly long _maxTotalBytes;
     private readonly TimeSpan _shutdownWait;
     private readonly TimeSpan _heartbeatInterval;
+    private readonly Func<long>? _sideFileBytesProvider;
+    private readonly Action? _sideFileFlush;
+    private long _lastSideFileBytes;
+    private long _serviceTicks;
     private readonly SemaphoreSlim _wakeup = new(0, 1);
     private readonly CancellationTokenSource _cts = new();
 
@@ -54,7 +58,9 @@ internal sealed class QwpSegmentManager : IDisposable
         QwpSegmentRing ring,
         long maxTotalBytes,
         TimeSpan? shutdownWait = null,
-        TimeSpan? heartbeatInterval = null)
+        TimeSpan? heartbeatInterval = null,
+        Func<long>? sideFileBytesProvider = null,
+        Action? sideFileFlush = null)
     {
         try
         {
@@ -67,6 +73,8 @@ internal sealed class QwpSegmentManager : IDisposable
             _maxTotalBytes = maxTotalBytes;
             _shutdownWait = shutdownWait ?? DefaultShutdownWait;
             _heartbeatInterval = heartbeatInterval ?? DefaultHeartbeatInterval;
+            _sideFileBytesProvider = sideFileBytesProvider;
+            _sideFileFlush = sideFileFlush;
             _committedBytes = ring.TotalCapacityBytes;
             ring.SetMaxTotalBytes(maxTotalBytes);
         }
@@ -79,6 +87,7 @@ internal sealed class QwpSegmentManager : IDisposable
     }
 
     public long CommittedBytes => Volatile.Read(ref _committedBytes);
+    public long SideFileBytes => Volatile.Read(ref _lastSideFileBytes);
     public long MaxTotalBytes => _maxTotalBytes;
     public TimeSpan HeartbeatInterval => _heartbeatInterval;
 
@@ -93,6 +102,7 @@ internal sealed class QwpSegmentManager : IDisposable
     }
     internal long TrimCycles { get; private set; }
     internal long SparesInstalled { get; private set; }
+    internal long ServiceTicks => Volatile.Read(ref _serviceTicks);
 
     public void Start()
     {
@@ -222,21 +232,99 @@ internal sealed class QwpSegmentManager : IDisposable
             }
         }
 
+        var sideFileBytes = ReadSideFileBytes();
+        Volatile.Write(ref _lastSideFileBytes, sideFileBytes);
+
         if (_ring.NeedsHotSpare())
         {
-            if (committed + _ring.SegmentCapacity <= _maxTotalBytes)
+            if (FitsWithinCap(committed, sideFileBytes)
+                || (sideFileBytes > 0 && committed < MinimumWorkingSetBytes()))
             {
+                // A monotonically growing side file can consume the configured cap permanently.
+                // Always preserve the ring's minimum working set (one active segment plus one hot
+                // spare), otherwise the producer deadlocks at a cap that ACK-driven trimming cannot
+                // free. Above that floor, side-file and segment bytes share the cap normally.
                 ProvisionHotSpare();
             }
         }
 
-        DrainAndDisposeTrimmable();
+        // Unlink is the only event that can strand a dictionary delta: while the introducing
+        // frame stays on disk, recovery rebuilds its ids from the frame's own delta. Fsync the
+        // side file first, and never trim behind a failed fsync — the ring is fsync'd on this
+        // same tick, so an un-flushed dictionary is the one place a host crash could tear the
+        // slot unreplayable. The ceiling is sampled BEFORE the fsync: a frame acked while the
+        // fsync ran introduced entries that fsync did not cover, so it is not trimmable yet.
+        var trimCeiling = _ring.AckedFsn;
+        if (FlushSideFile())
+        {
+            DrainAndDisposeTrimmable(trimCeiling);
+        }
         _ring.FlushActive();
         // Persist the watermark only after segment data is flushed so the persisted point
         // can only under-estimate (never claim more durable than is actually on disk).
         PersistAckWatermark();
         try { Volatile.Read(ref _heartbeatCallback)?.Invoke(); }
         catch (Exception ex) { Volatile.Write(ref _lastServiceError, ex); }
+        Interlocked.Increment(ref _serviceTicks);
+    }
+
+    private bool FlushSideFile()
+    {
+        var flush = _sideFileFlush;
+        if (flush is null)
+        {
+            return true;
+        }
+
+        try
+        {
+            flush();
+            return true;
+        }
+        catch (Exception ex)
+        {
+            Volatile.Write(ref _lastServiceError, ex);
+            return false;
+        }
+    }
+
+    private bool FitsWithinCap(long committedSegmentBytes, long sideFileBytes)
+    {
+        if (sideFileBytes > _maxTotalBytes)
+        {
+            return false;
+        }
+
+        var remaining = _maxTotalBytes - sideFileBytes;
+        return committedSegmentBytes <= remaining
+               && _ring.SegmentCapacity <= remaining - committedSegmentBytes;
+    }
+
+    private long MinimumWorkingSetBytes()
+    {
+        var segmentBytes = _ring.SegmentCapacity;
+        return segmentBytes > long.MaxValue / 2 ? long.MaxValue : segmentBytes * 2;
+    }
+
+    private long ReadSideFileBytes()
+    {
+        var provider = _sideFileBytesProvider;
+        if (provider is null)
+        {
+            return 0L;
+        }
+
+        try
+        {
+            return Math.Max(0L, provider());
+        }
+        catch (Exception ex)
+        {
+            // A failed gauge must not be treated as zero disk usage. Refuse ordinary provisioning
+            // until it recovers, while the working-set floor still prevents a one-segment wedge.
+            Volatile.Write(ref _lastServiceError, ex);
+            return long.MaxValue;
+        }
     }
 
     private void PersistAckWatermark()
@@ -289,9 +377,9 @@ internal sealed class QwpSegmentManager : IDisposable
         }
     }
 
-    private void DrainAndDisposeTrimmable()
+    private void DrainAndDisposeTrimmable(long ackedCeiling = long.MaxValue)
     {
-        var trim = _ring.DrainTrimmable();
+        var trim = _ring.DrainTrimmable(ackedCeiling);
         if (trim is null)
         {
             return;

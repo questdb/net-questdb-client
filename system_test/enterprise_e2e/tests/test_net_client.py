@@ -405,16 +405,24 @@ def _cluster_ingest_range(net_sidecar, *, start_index: int, total: int) -> int:
     return last_fsn
 
 
-def _cluster_wait_count(*, port: int, expected: int, timeout_s: float) -> None:
+def _cluster_wait_count(*, port: int, expected: int, timeout_s: float,
+                        table: str = _CLUSTER_TABLE) -> None:
     deadline = time.monotonic() + timeout_s
     last = -1
+    last_error = None
     while time.monotonic() < deadline:
-        last = count_rows(port=port, table=_CLUSTER_TABLE)
-        if last >= expected:
-            return
+        try:
+            last = count_rows(port=port, table=table)
+        except TimeoutError as exc:
+            last_error = exc
+        else:
+            if last >= expected:
+                return
         time.sleep(_CLUSTER_POLL_INTERVAL_S)
     raise AssertionError(
-        f"row count on :{port} reached {last}, expected >= {expected} within {timeout_s}s")
+        f"row count on :{port} for {table} reached {last}, expected >= {expected} "
+        f"within {timeout_s}s"
+        + (f" (last query error: {last_error})" if last_error is not None else ""))
 
 
 def _cluster_await_all_replica_round(net_sidecar, baseline, *, timeout_s: float) -> None:
@@ -567,6 +575,90 @@ def test_durable_ack_sender_survives_replica_only_window(
     total = _CLUSTER_INITIAL_ROWS + _CLUSTER_WINDOW_ROWS + _CLUSTER_POST_ROWS
     wait_for_dense_sequence(port=b_ports.pg, table=_CLUSTER_TABLE,
                             expected_count=total, timeout_s=120.0)
+
+
+# Small enough that every id is registered and acked on A before the failover:
+# frames buffered after the kill then carry empty symbol-dict deltas and bare
+# ids, which resolve on B only through the reconnect catch-up.
+_SYMBOL_CARDINALITY = 8
+_SYMBOL_TABLE = "net_symbol_dict_failover"
+_SYMBOL_HEAD_ROWS = 30
+_SYMBOL_WINDOW_ROWS = 40
+_SYMBOL_POST_ROWS = 20
+
+
+def _assert_symbol_values_intact(*, port: int, table: str, cardinality: int) -> None:
+    """A mis-registered catch-up resolves bare ids to the WRONG strings while
+    every count-based oracle stays green; this asserts the values themselves."""
+    import psycopg
+    with psycopg.connect(
+            f"host=127.0.0.1 port={port} user=admin password=quest dbname=qdb",
+            autocommit=True) as conn:
+        rows = conn.execute(f"SELECT v, tag FROM '{table}'").fetchall()
+    wrong = [(v, tag) for v, tag in rows if tag != f"test_{v % cardinality}"]
+    assert not wrong, (
+        f"{len(wrong)} row(s) carry a symbol value that no longer means what it "
+        f"meant before the failover — the reconnect dictionary catch-up "
+        f"mis-registered ids on the new node. First mismatches: {wrong[:5]}")
+
+
+@pytest.mark.net_client
+def test_symbol_dict_survives_failover(server_factory, net_sidecar,
+                                       scenario_dir: Path) -> None:
+    """Port of the Java tandem scenario (enterprise
+    SqlFailoverQwpClientLosslessTest): rows buffered through the outage must
+    land on promoted B with their symbol values intact, resolvable only via
+    the reconnect dictionary catch-up."""
+    sf_dir = scenario_dir / "sf"
+    sf_dir.mkdir(parents=True, exist_ok=True)
+
+    a = server_factory("a", role="primary")
+    b = server_factory("b", role="replica")
+    a_ports = a.start(min_http=True)
+    b_ports = b.start(min_http=True)
+    assert b_ports.min_http is not None, "node b: min_http port not reported (needed to promote B)"
+
+    net_sidecar.connect(_cluster_connect_string(a_ports.http, b_ports.http, sf_dir))
+
+    # The head frame carries the run's only non-empty symbol delta; it must be
+    # acked before the kill or the replay re-registers the dictionary itself.
+    net_sidecar.send(_SYMBOL_TABLE, count=_SYMBOL_HEAD_ROWS, start_index=0,
+                     tag_cardinality=_SYMBOL_CARDINALITY)
+    head_fsn = net_sidecar.flush()
+    assert net_sidecar.await_acked(head_fsn, _CLUSTER_DURABLE_ACK_AWAIT_TIMEOUT_MS), (
+        f"the dictionary-registering head frame was not durably acked "
+        f"[publishedFsn={head_fsn}]; without the ack barrier the post-failover "
+        f"replay would re-register the dictionary itself and stop exercising "
+        f"the reconnect catch-up")
+    wait_for_dense_sequence(port=a_ports.pg, table=_SYMBOL_TABLE,
+                            expected_count=_SYMBOL_HEAD_ROWS, timeout_s=60.0)
+    _cluster_wait_count(port=b_ports.pg, expected=_SYMBOL_HEAD_ROWS, timeout_s=120.0,
+                        table=_SYMBOL_TABLE)
+
+    a.kill_9()
+
+    net_sidecar.send(_SYMBOL_TABLE, count=_SYMBOL_WINDOW_ROWS,
+                     start_index=_SYMBOL_HEAD_ROWS,
+                     tag_cardinality=_SYMBOL_CARDINALITY)
+    net_sidecar.flush()
+
+    lc.submit_switch(b_ports.min_http, "primary", wait=True,
+                     wait_timeout_s=_CLUSTER_AWAIT_ROLE_TIMEOUT_S)
+
+    net_sidecar.send(_SYMBOL_TABLE, count=_SYMBOL_POST_ROWS,
+                     start_index=_SYMBOL_HEAD_ROWS + _SYMBOL_WINDOW_ROWS,
+                     tag_cardinality=_SYMBOL_CARDINALITY)
+    final_fsn = net_sidecar.flush()
+    assert net_sidecar.await_acked(final_fsn, _CLUSTER_DURABLE_ACK_AWAIT_TIMEOUT_MS), (
+        f"rows referencing pre-failover symbol ids were not durably acked by B "
+        f"[publishedFsn={final_fsn}]; a broken dictionary catch-up leaves the "
+        f"replayed empty-delta frames unresolvable on the new node")
+
+    total = _SYMBOL_HEAD_ROWS + _SYMBOL_WINDOW_ROWS + _SYMBOL_POST_ROWS
+    wait_for_dense_sequence(port=b_ports.pg, table=_SYMBOL_TABLE,
+                            expected_count=total, timeout_s=120.0)
+    _assert_symbol_values_intact(port=b_ports.pg, table=_SYMBOL_TABLE,
+                                 cardinality=_SYMBOL_CARDINALITY)
 
 
 # Still deferred (need Enterprise fixture capabilities not present today):

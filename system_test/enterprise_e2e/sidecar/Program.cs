@@ -68,12 +68,16 @@ while ((line = Console.In.ReadLine()) != null)
                 var startIndex = parts.Length > 3
                     ? int.Parse(parts[3], CultureInfo.InvariantCulture)
                     : 0;
+                var tagCardinality = parts.Length > 4
+                    ? int.Parse(parts[4], CultureInfo.InvariantCulture)
+                    : 0;
 
                 for (var i = 0; i < count; i++)
                 {
                     var idx = startIndex + i;
+                    var tag = tagCardinality > 0 ? idx % tagCardinality : idx;
                     sender!.Table(table)
-                        .Symbol("tag", $"test_{idx}")
+                        .Symbol("tag", $"test_{tag}")
                         .Column("v", (long)idx)
                         .At(DateTime.UtcNow);
                 }

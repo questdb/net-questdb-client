@@ -120,6 +120,59 @@ public class QwpSegmentManagerTests
     }
 
     [Test]
+    public async Task DiskCap_CountsPersistedSymbolDictionaryAboveWorkingSetFloor()
+    {
+        const long sideFileBytes = QwpMmapSegment.HeaderSize + 64;
+        var capacity = QwpMmapSegment.HeaderSize + 64L;
+        using var ring = QwpSegmentRing.Open(_root, segmentCapacity: capacity);
+        using var mgr = new QwpSegmentManager(
+            ring,
+            maxTotalBytes: 3 * capacity,
+            sideFileBytesProvider: () => sideFileBytes);
+        mgr.Start();
+
+        // One side-file-sized unit leaves room for exactly two ring segments. The first becomes
+        // active and the second is its hot spare; a third would exceed the shared cap.
+        await WaitFor(() => mgr.SparesInstalled >= 1, TimeSpan.FromSeconds(2));
+        Assert.That(ring.TryAppend(new byte[24]), Is.True);
+        Assert.That(ring.TryAppend(new byte[24]), Is.True);
+        await WaitFor(() => mgr.SparesInstalled >= 2, TimeSpan.FromSeconds(2));
+        Assert.That(ring.TryAppend(new byte[24]), Is.True);
+        Assert.That(ring.TryAppend(new byte[24]), Is.True);
+
+        var installed = mgr.SparesInstalled;
+        var ticks = mgr.ServiceTicks;
+        Assert.That(ring.TryAppend(new byte[24]), Is.False,
+            "no third segment should be available once segment + side-file bytes reach the cap");
+        // The failed append wakes the manager; wait for a service pass that provably started
+        // after it before asserting nothing was provisioned.
+        await WaitFor(() => mgr.ServiceTicks >= ticks + 2, TimeSpan.FromSeconds(5));
+        Assert.That(mgr.SparesInstalled, Is.EqualTo(installed));
+        Assert.That(mgr.SideFileBytes, Is.EqualTo(sideFileBytes));
+    }
+
+    [Test]
+    public async Task DiskCap_PreservesActivePlusSpareWhenSideFileConsumesCap()
+    {
+        var capacity = QwpMmapSegment.HeaderSize + 64L;
+        using var ring = QwpSegmentRing.Open(_root, segmentCapacity: capacity);
+        using var mgr = new QwpSegmentManager(
+            ring,
+            maxTotalBytes: 2 * capacity,
+            sideFileBytesProvider: () => capacity);
+        mgr.Start();
+
+        await WaitFor(() => mgr.SparesInstalled >= 1, TimeSpan.FromSeconds(2));
+        Assert.That(ring.TryAppend(new byte[24]), Is.True);
+        Assert.That(ring.TryAppend(new byte[24]), Is.True);
+
+        // The side file makes active + next spare exceed the nominal cap, but refusing that spare
+        // would wedge the ring forever because ACK trimming cannot shrink the dictionary.
+        await WaitFor(() => mgr.SparesInstalled >= 2, TimeSpan.FromSeconds(2));
+        Assert.That(ring.TryAppend(new byte[24]), Is.True);
+    }
+
+    [Test]
     public async Task Trim_RemovesAckedSegments_AndDecrementsCommittedBytes()
     {
         using var ring = QwpSegmentRing.Open(_root, segmentCapacity: QwpMmapSegment.HeaderSize + 64);
@@ -141,6 +194,42 @@ public class QwpSegmentManagerTests
         await WaitFor(
             () => ring.SealedSegmentCount == 0 && mgr.CommittedBytes <= 2 * ring.SegmentCapacity,
             TimeSpan.FromSeconds(2));
+    }
+
+    [Test]
+    public async Task Trim_IsGatedOnSideFileFlush()
+    {
+        var flushFailing = 1;
+        using var ring = QwpSegmentRing.Open(_root, segmentCapacity: QwpMmapSegment.HeaderSize + 64);
+        using var mgr = new QwpSegmentManager(
+            ring,
+            maxTotalBytes: 1024,
+            sideFileFlush: () =>
+            {
+                if (Volatile.Read(ref flushFailing) == 1)
+                {
+                    throw new IOException("simulated fsync failure");
+                }
+            });
+        mgr.Start();
+
+        for (var i = 0; i < 6; i++)
+        {
+            await WaitFor(() => ring.TryAppend(new byte[24]), TimeSpan.FromSeconds(2));
+        }
+        Assert.That(ring.SealedSegmentCount, Is.GreaterThanOrEqualTo(2));
+
+        ring.Acknowledge(99L);
+        var ticks = mgr.ServiceTicks;
+        await WaitFor(() => mgr.ServiceTicks >= ticks + 2, TimeSpan.FromSeconds(5));
+        // Unlinking a frame whose dictionary entries are not disk-durable is what turns a host
+        // crash into an unreplayable slot, so a failing flush must hold every acked segment.
+        Assert.That(ring.SealedSegmentCount, Is.GreaterThanOrEqualTo(2),
+            "acked segments must not be unlinked while the side-file flush fails");
+        Assert.That(mgr.LastServiceError, Is.InstanceOf<IOException>());
+
+        Volatile.Write(ref flushFailing, 0);
+        await WaitFor(() => ring.SealedSegmentCount == 0, TimeSpan.FromSeconds(2));
     }
 
     [Test]

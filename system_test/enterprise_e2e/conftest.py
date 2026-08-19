@@ -139,8 +139,9 @@ class NetSidecar:
         self._send(f"CONNECT {connect_string}")
         self._expect_ok()
 
-    def send(self, table: str, count: int, start_index: int = 0) -> None:
-        self._send(f"SEND {table} {count} {start_index}")
+    def send(self, table: str, count: int, start_index: int = 0,
+             tag_cardinality: int = 0) -> None:
+        self._send(f"SEND {table} {count} {start_index} {tag_cardinality}")
         self._expect_ok()
 
     def flush(self) -> int:

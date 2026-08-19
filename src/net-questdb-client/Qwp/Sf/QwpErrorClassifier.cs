@@ -37,6 +37,8 @@ internal static class QwpErrorClassifier
             QwpStatusCode.InternalError => SenderErrorCategory.InternalError,
             QwpStatusCode.SecurityError => SenderErrorCategory.SecurityError,
             QwpStatusCode.WriteError => SenderErrorCategory.WriteError,
+            QwpStatusCode.NotWritable => SenderErrorCategory.NotWritable,
+            QwpStatusCode.DictionaryGap => SenderErrorCategory.DictionaryGap,
             _ => SenderErrorCategory.Unknown,
         };
 
@@ -48,6 +50,8 @@ internal static class QwpErrorClassifier
         {
             SenderErrorCategory.WriteError => SenderErrorPolicy.Retriable,
             SenderErrorCategory.InternalError => SenderErrorPolicy.Retriable,
+            SenderErrorCategory.NotWritable => SenderErrorPolicy.Retriable,
+            SenderErrorCategory.DictionaryGap => SenderErrorPolicy.Retriable,
             SenderErrorCategory.Unknown => SenderErrorPolicy.Retriable,
             _ => SenderErrorPolicy.Terminal,
         };

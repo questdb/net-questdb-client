@@ -28,6 +28,8 @@ using System.Text;
 using dummy_http_server;
 using NUnit.Framework;
 using QuestDB;
+using QuestDB.Enums;
+using QuestDB.Senders;
 using QuestDB.Utils;
 
 namespace net_questdb_client_tests;
@@ -38,6 +40,52 @@ public class HttpTests
     private const string Host = "localhost";
     private const int HttpPort = 29473;
     private const int HttpsPort = 29474;
+
+    [Test]
+    public void ConstructorFailureAfterClientCreation_DisposesClient()
+    {
+        var options = new SenderOptions
+        {
+            protocol         = ProtocolType.http,
+            protocol_version = (ProtocolVersion)int.MaxValue,
+        };
+        DisposalTrackingHandler? trackingHandler = null;
+
+        Assert.Throws<NotImplementedException>(() =>
+            _ = new HttpSender(options, _ =>
+            {
+                trackingHandler = new DisposalTrackingHandler();
+                return new HttpClient(trackingHandler, disposeHandler: true);
+            }));
+
+        Assert.That(trackingHandler, Is.Not.Null);
+        Assert.That(trackingHandler!.Disposed, Is.True,
+            "a constructor that fails after creating its HttpClient must release that client");
+    }
+
+    [Test]
+    public void BasicAuth_EncodesNonAsciiCredentialsAsUtf8()
+    {
+        var options = new SenderOptions
+        {
+            protocol         = ProtocolType.http,
+            protocol_version = ProtocolVersion.V1,
+            username         = "用户",
+            password         = "пароль",
+        };
+        HttpClient? client = null;
+
+        using var sender = new HttpSender(options, handler =>
+        {
+            client = new HttpClient(handler, disposeHandler: false);
+            return client;
+        });
+
+        Assert.That(client, Is.Not.Null);
+        Assert.That(client!.DefaultRequestHeaders.Authorization?.Scheme, Is.EqualTo("Basic"));
+        Assert.That(client.DefaultRequestHeaders.Authorization?.Parameter,
+            Is.EqualTo(Convert.ToBase64String(Encoding.UTF8.GetBytes("用户:пароль"))));
+    }
 
     [Test]
     public async Task BasicArrayDouble()
@@ -2001,5 +2049,24 @@ public class HttpTests
         Assert.That(server.PrintBuffer(), Does.Contain("metrics"));
 
         await server.StopAsync();
+    }
+
+    private sealed class DisposalTrackingHandler : HttpMessageHandler
+    {
+        public bool Disposed { get; private set; }
+
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+            => throw new NotSupportedException();
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing)
+            {
+                Disposed = true;
+            }
+            base.Dispose(disposing);
+        }
     }
 }

@@ -124,7 +124,12 @@ public class FacadeCallbackTests
             var orphanSlot = Path.Combine(root, "crashed-sibling");
             using (var ring = QwpSegmentRing.Open(orphanSlot, segmentCapacity: 4096))
             {
-                Assert.That(ring.TryAppend(new byte[] { 1 }), Is.True);
+                // Recovery validates orphan contents as QWP so the dictionary sidefile can be
+                // reconstructed safely; seed a legal zero-table commit frame, not opaque bytes.
+                var frame = QwpEncoder.Encode(
+                    Array.Empty<QwpTableBuffer>(),
+                    new QwpSymbolDictionary());
+                Assert.That(ring.TryAppend(frame), Is.True);
             }
 
             await using var server = await StartAckingServerAsync();

@@ -26,6 +26,7 @@ using System.Buffers.Binary;
 using System.Threading.Channels;
 using NUnit.Framework;
 using QuestDB.Enums;
+using QuestDB.Qwp;
 using QuestDB.Qwp.Sf;
 using QuestDB.Utils;
 
@@ -56,7 +57,7 @@ public class QwpBackgroundDrainerTests
     public async Task DrainAsync_SeededSlot_FullyDrainsAndCleansUp()
     {
         var slotDir = Path.Combine(_root, "orphan");
-        SeedSlot(slotDir, payloads: new byte[][] { new byte[] { 1 }, new byte[] { 2 }, new byte[] { 3 } });
+        SeedSlot(slotDir, frameCount: 3);
 
         var policy = new QwpReconnectPolicy(
             TimeSpan.FromMilliseconds(10), TimeSpan.FromMilliseconds(40), TimeSpan.FromSeconds(2));
@@ -118,13 +119,13 @@ public class QwpBackgroundDrainerTests
         var slotA = Path.Combine(_root, "crashed-a");
         var slotB = Path.Combine(_root, "crashed-b");
         var slotC = Path.Combine(_root, "crashed-c");
-        SeedSlot(slotA, payloads: new byte[][] { new byte[] { 10 } });
-        SeedSlot(slotB, payloads: new byte[][] { new byte[] { 20 }, new byte[] { 21 } });
-        SeedSlot(slotC, payloads: new byte[][] { new byte[] { 30 } });
+        SeedSlot(slotA, frameCount: 1);
+        SeedSlot(slotB, frameCount: 2);
+        SeedSlot(slotC, frameCount: 1);
 
         // .failed sentinel marks a slot the scanner must skip.
         var slotFailed = Path.Combine(_root, "crashed-failed");
-        SeedSlot(slotFailed, payloads: new byte[][] { new byte[] { 99 } });
+        SeedSlot(slotFailed, frameCount: 1);
         await File.WriteAllTextAsync(Path.Combine(slotFailed, ".failed"), "prior crash");
 
         var policy = new QwpReconnectPolicy(
@@ -154,7 +155,7 @@ public class QwpBackgroundDrainerTests
     public async Task DrainAsync_TransientWireFailure_ReconnectsAndCompletes()
     {
         var slotDir = Path.Combine(_root, "flaky");
-        SeedSlot(slotDir, payloads: new byte[][] { new byte[] { 1 }, new byte[] { 2 }, new byte[] { 3 } });
+        SeedSlot(slotDir, frameCount: 3);
 
         var stubsBuilt = 0;
         var policy = new QwpReconnectPolicy(
@@ -192,7 +193,7 @@ public class QwpBackgroundDrainerTests
     public async Task Drainer_DownServer_NoQuarantine_SlotReadoptable()
     {
         var slotDir = Path.Combine(_root, "down-server");
-        SeedSlot(slotDir, payloads: new byte[][] { new byte[] { 1 }, new byte[] { 2 } });
+        SeedSlot(slotDir, frameCount: 2);
 
         var policy = new QwpReconnectPolicy(
             TimeSpan.FromMilliseconds(5), TimeSpan.FromMilliseconds(20), TimeSpan.FromMilliseconds(150));
@@ -222,7 +223,7 @@ public class QwpBackgroundDrainerTests
     public async Task Drainer_PoisonFrame_HonorsMaxFrameRejections_Quarantines()
     {
         var slotDir = Path.Combine(_root, "poison");
-        SeedSlot(slotDir, payloads: new byte[][] { new byte[] { 7 } });
+        SeedSlot(slotDir, frameCount: 1);
 
         var policy = new QwpReconnectPolicy(
             TimeSpan.FromMilliseconds(1), TimeSpan.FromMilliseconds(4), TimeSpan.FromSeconds(30));
@@ -246,13 +247,109 @@ public class QwpBackgroundDrainerTests
             "a poison frame is deterministic under replay — the drainer honours max_frame_rejections and quarantines the slot");
     }
 
-    private static void SeedSlot(string slotDir, byte[][] payloads)
+    [Test]
+    public async Task Drainer_UnreplayableSlot_QuarantinesInsteadOfRetryingForever()
+    {
+        var slotDir = Path.Combine(_root, "unreplayable");
+        Directory.CreateDirectory(slotDir);
+        using (var ring = QwpSegmentRing.Open(slotDir, segmentCapacity: 4096))
+        {
+            var dictionary = new QwpSymbolDictionary();
+            dictionary.Add("missing-prefix");
+            dictionary.Commit();
+            dictionary.Add("surviving-suffix");
+            Assert.That(ring.TryAppend(QwpEncoder.Encode(
+                Array.Empty<QwpTableBuffer>(), dictionary)), Is.True);
+        }
+
+        var connected = false;
+        var policy = new QwpReconnectPolicy(
+            TimeSpan.FromMilliseconds(1), TimeSpan.FromMilliseconds(4), TimeSpan.FromSeconds(30));
+        var drainer = new QwpBackgroundDrainer(
+            transportFactory: () => new StubTransport
+            {
+                OnConnect = _ =>
+                {
+                    connected = true;
+                    return Task.CompletedTask;
+                }
+            },
+            reconnectPolicy: policy,
+            segmentCapacity: 4096,
+            drainTimeout: TimeSpan.FromSeconds(5));
+
+        var slotLock = QwpSlotLock.Acquire(slotDir);
+        using var pool = new QwpBackgroundDrainerPool(2, drainer);
+        pool.Enqueue(slotLock);
+        await pool.WaitForAllAsync();
+
+        Assert.That(File.Exists(Path.Combine(slotDir, ".failed")), Is.True,
+            "an unreplayable dictionary verdict is deterministic — the drainer must quarantine, not retry");
+        Assert.That(connected, Is.False, "the verdict is reached before anything goes on the wire");
+        Assert.That(Directory.GetFiles(slotDir, "sf-*.sfa"), Is.Not.Empty,
+            "the slot's bytes must be preserved for inspection and resend");
+    }
+
+    [Test]
+    public async Task DrainAsync_PersistedDictionary_CatchesUpBeforeReplayingDeltaFrames()
+    {
+        var slotDir = Path.Combine(_root, "delta-orphan");
+        Directory.CreateDirectory(slotDir);
+        using (var ring = QwpSegmentRing.Open(slotDir, segmentCapacity: 4096))
+        {
+            var dictionary = new QwpSymbolDictionary();
+            dictionary.Add("alpha");
+            using var persisted = QwpPersistedSymbolDictionary.OpenOrRecover(slotDir, ring);
+            persisted.AppendNewSymbols(dictionary);
+            dictionary.Commit();
+            // An empty-delta frame whose symbol ids resolve only through the reconnect catch-up.
+            Assert.That(ring.TryAppend(QwpEncoder.Encode(
+                Array.Empty<QwpTableBuffer>(), dictionary)), Is.True);
+        }
+
+        var transports = new System.Collections.Concurrent.ConcurrentQueue<StubTransport>();
+        var policy = new QwpReconnectPolicy(
+            TimeSpan.FromMilliseconds(10), TimeSpan.FromMilliseconds(40), TimeSpan.FromSeconds(2));
+        var drainer = new QwpBackgroundDrainer(
+            transportFactory: () =>
+            {
+                var t = new StubTransport();
+                transports.Enqueue(t);
+                return t;
+            },
+            reconnectPolicy: policy,
+            segmentCapacity: 4096,
+            drainTimeout: TimeSpan.FromSeconds(5));
+
+        await drainer.DrainAsync(slotDir, CancellationToken.None);
+
+        Assert.That(transports.TryPeek(out var transport), Is.True);
+        var sent = transport!.SentSnapshot;
+        Assert.That(sent, Has.Length.EqualTo(2));
+        Assert.That(BinaryPrimitives.ReadUInt16LittleEndian(
+                sent[0].AsSpan(QwpConstants.OffsetTableCount, 2)), Is.Zero,
+            "the dictionary catch-up must precede the replayed delta frame");
+        Assert.That(sent[0][QwpConstants.OffsetFlags] & QwpConstants.FlagDeferCommit,
+            Is.EqualTo(QwpConstants.FlagDeferCommit));
+        Assert.That(QwpFrameTestUtils.ReadSymbolDelta(sent[0]), Is.EqualTo((0, new[] { "alpha" })));
+        Assert.That(QwpFrameTestUtils.ReadSymbolDelta(sent[1]), Is.EqualTo((1, Array.Empty<string>())));
+        Assert.That(Directory.GetFiles(slotDir, "sf-*.sfa"), Is.Empty);
+        Assert.That(File.Exists(Path.Combine(slotDir, QwpPersistedSymbolDictionary.FileName)), Is.False,
+            "a fully drained slot no longer needs the recovery side file");
+    }
+
+    // Recovery validates the ring as QWP rather than treating its contents as opaque bytes, so
+    // slots are seeded with legal zero-table commit frames.
+    private static void SeedSlot(string slotDir, int frameCount)
     {
         Directory.CreateDirectory(slotDir);
         using var ring = QwpSegmentRing.Open(slotDir, segmentCapacity: 4096);
-        foreach (var p in payloads)
+        for (var i = 0; i < frameCount; i++)
         {
-            Assert.That(ring.TryAppend(p), Is.True);
+            var frame = QwpEncoder.Encode(
+                Array.Empty<QwpTableBuffer>(),
+                new QwpSymbolDictionary());
+            Assert.That(ring.TryAppend(frame), Is.True);
         }
     }
 
@@ -282,17 +379,27 @@ public class QwpBackgroundDrainerTests
         public Func<CancellationToken, Task>? OnConnect;
         public (string Host, int Port)? Endpoint { get; set; } = ("stub", 0);
         private readonly Channel<byte[]> _acks = Channel.CreateUnbounded<byte[]>();
+        private readonly object _sentLock = new();
+        private readonly List<byte[]> _sent = new();
         private int _autoSeq;
+
+        public byte[][] SentSnapshot
+        {
+            get { lock (_sentLock) return _sent.ToArray(); }
+        }
 
         public Task ConnectAsync(CancellationToken cancellationToken)
             => OnConnect is null ? Task.CompletedTask : OnConnect(cancellationToken);
 
         public async Task SendBinaryAsync(ReadOnlyMemory<byte> data, CancellationToken cancellationToken)
         {
+            var copy = data.ToArray();
+            lock (_sentLock) { _sent.Add(copy); }
+
             byte[] ack;
             if (OnSend is not null)
             {
-                ack = OnSend(data.ToArray());
+                ack = OnSend(copy);
             }
             else
             {

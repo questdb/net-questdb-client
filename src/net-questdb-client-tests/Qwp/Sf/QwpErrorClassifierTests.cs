@@ -31,11 +31,28 @@ namespace net_questdb_client_tests.Qwp.Sf;
 [TestFixture]
 public class QwpErrorClassifierTests
 {
+    [TestCase(SenderErrorCategory.SchemaMismatch, 0)]
+    [TestCase(SenderErrorCategory.ParseError, 1)]
+    [TestCase(SenderErrorCategory.InternalError, 2)]
+    [TestCase(SenderErrorCategory.SecurityError, 3)]
+    [TestCase(SenderErrorCategory.WriteError, 4)]
+    [TestCase(SenderErrorCategory.ProtocolViolation, 5)]
+    [TestCase(SenderErrorCategory.Unknown, 6)]
+    [TestCase(SenderErrorCategory.NotWritable, 7)]
+    [TestCase(SenderErrorCategory.DictionaryGap, 8)]
+    [TestCase(SenderErrorCategory.DataLoss, 9)]
+    public void NumericValue_PreservesPublishedOrdinals(SenderErrorCategory category, int expected)
+    {
+        Assert.That((int)category, Is.EqualTo(expected));
+    }
+
     [TestCase(QwpStatusCode.SchemaMismatch, SenderErrorCategory.SchemaMismatch)]
     [TestCase(QwpStatusCode.ParseError, SenderErrorCategory.ParseError)]
     [TestCase(QwpStatusCode.InternalError, SenderErrorCategory.InternalError)]
     [TestCase(QwpStatusCode.SecurityError, SenderErrorCategory.SecurityError)]
     [TestCase(QwpStatusCode.WriteError, SenderErrorCategory.WriteError)]
+    [TestCase(QwpStatusCode.NotWritable, SenderErrorCategory.NotWritable)]
+    [TestCase(QwpStatusCode.DictionaryGap, SenderErrorCategory.DictionaryGap)]
     [TestCase((QwpStatusCode)0xFF, SenderErrorCategory.Unknown)]
     public void Classify_ReturnsExpectedCategory(QwpStatusCode status, SenderErrorCategory expected)
     {
@@ -46,6 +63,8 @@ public class QwpErrorClassifierTests
     // deterministic-under-replay categories latch terminal.
     [TestCase(SenderErrorCategory.WriteError, SenderErrorPolicy.Retriable)]
     [TestCase(SenderErrorCategory.InternalError, SenderErrorPolicy.Retriable)]
+    [TestCase(SenderErrorCategory.NotWritable, SenderErrorPolicy.Retriable)]
+    [TestCase(SenderErrorCategory.DictionaryGap, SenderErrorPolicy.Retriable)]
     [TestCase(SenderErrorCategory.Unknown, SenderErrorPolicy.Retriable)]
     [TestCase(SenderErrorCategory.SchemaMismatch, SenderErrorPolicy.Terminal)]
     [TestCase(SenderErrorCategory.ParseError, SenderErrorPolicy.Terminal)]

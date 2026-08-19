@@ -23,7 +23,9 @@
  ******************************************************************************/
 
 using NUnit.Framework;
+using QuestDB.Enums;
 using QuestDB.Qwp;
+using QuestDB.Utils;
 
 namespace net_questdb_client_tests.Qwp;
 
@@ -48,6 +50,34 @@ public class QwpSymbolDictionaryTests
         d.Add("eu");
         Assert.That(d.Add("us"), Is.EqualTo(0));
         Assert.That(d.Count, Is.EqualTo(2));
+    }
+
+    [Test]
+    public void Add_RefusesNewValuePastProtocolCapWithoutMutatingDictionary()
+    {
+        var d = new QwpSymbolDictionary(QwpConstants.MaxSymbolDictionarySize);
+        for (var i = 0; i < QwpConstants.MaxSymbolDictionarySize; i++)
+        {
+            d.Add("s" + i);
+        }
+        Assert.That(d.Count, Is.EqualTo(QwpConstants.MaxSymbolDictionarySize));
+
+        var ex = Assert.Throws<IngressError>(() => d.Add("one-too-many"));
+        Assert.That(ex!.code, Is.EqualTo(ErrorCode.InvalidApiCall));
+        Assert.That(ex.Message, Does.Contain(QwpConstants.MaxSymbolDictionarySize.ToString()));
+        Assert.That(ex.Message, Does.Contain("close this sender"));
+
+        Assert.That(d.Count, Is.EqualTo(QwpConstants.MaxSymbolDictionarySize));
+        Assert.That(d.Add("s42"), Is.EqualTo(42), "existing values remain usable at the cap");
+        Assert.Throws<IngressError>(() => d.Add("one-too-many".AsSpan()));
+        Assert.That(d.Count, Is.EqualTo(QwpConstants.MaxSymbolDictionarySize),
+            "a refused value must not mutate the dictionary");
+    }
+
+    [Test]
+    public void MaxSymbolDictionarySize_IsPinnedAtOrBelowServerProtocolLimit()
+    {
+        Assert.That(QwpConstants.MaxSymbolDictionarySize, Is.EqualTo(1_000_000));
     }
 
     [Test]
@@ -149,6 +179,28 @@ public class QwpSymbolDictionaryTests
         d.Commit();
 
         Assert.Throws<ArgumentOutOfRangeException>(() => d.RollbackTo(0));
+    }
+
+    [Test]
+    public void AddRecovered_DuplicateAcrossRollback_NeverLeavesDanglingReverseMapping()
+    {
+        var d = new QwpSymbolDictionary();
+        Assert.That(d.AddRecovered("x"), Is.EqualTo(0), "recovery must not de-duplicate");
+        Assert.That(d.AddRecovered("x"), Is.EqualTo(1));
+        Assert.That(d.AddRecovered("y"), Is.EqualTo(2));
+
+        d.RollbackTo(2);
+        var idAboveDuplicate = d.Add("x");
+        Assert.That(idAboveDuplicate, Is.InRange(0, 1), "a live duplicate id must resolve, never the dropped one");
+        Assert.That(d.GetSymbol(idAboveDuplicate), Is.EqualTo("x"));
+
+        d.RollbackTo(1);
+        Assert.That(d.Count, Is.EqualTo(1));
+        Assert.That(d.GetSymbol(0), Is.EqualTo("x"), "the surviving duplicate keeps its value");
+        var idAfterRollback = d.Add("x");
+        Assert.That(idAfterRollback, Is.LessThan(d.Count),
+            "rolling back across a recovered duplicate must not leave the reverse lookup on a dead id");
+        Assert.That(d.GetSymbol(idAfterRollback), Is.EqualTo("x"));
     }
 
     [Test]

@@ -29,9 +29,11 @@ using NUnit.Framework;
 using QuestDB;
 using QuestDB.Enums;
 using QuestDB.Qwp;
+using QuestDB.Qwp.Sf;
 using QuestDB.Senders;
 using QuestDB.Utils;
 using dummy_http_server;
+using static net_questdb_client_tests.Qwp.QwpFrameTestUtils;
 
 namespace net_questdb_client_tests.Qwp;
 
@@ -57,6 +59,37 @@ public class QwpWebSocketSenderTests
 
         sender.Table("t").Column("x", 1L);
         Assert.ThrowsAsync<IngressError>(async () => await sender.SendAsync());
+    }
+
+    [Test]
+    public async Task RepeatingCurrentTableMidRow_PreservesPendingByteAccounting()
+    {
+        await using var server = StartServerWithOkAcks();
+        using var sender = NewSender(server, "auto_flush=off;");
+        const string value = "pending";
+
+        sender.Table("t").Column("s", value);
+        sender.Table("t").At(DateTime.UtcNow);
+
+        // First VARCHAR row: UTF-8 payload + two uint offsets + the 8-byte designated timestamp.
+        Assert.That(sender.Length, Is.EqualTo(value.Length + 2 * sizeof(uint) + sizeof(long)));
+    }
+
+    [Test]
+    public async Task SwitchingTablesMidRow_IsRejectedAndCurrentRowRemainsUsable()
+    {
+        await using var server = StartServerWithOkAcks();
+        using var sender = NewSender(server, "auto_flush=off;");
+
+        sender.Table("a").Column("x", 1L);
+        var ex = Assert.Throws<IngressError>(() => sender.Table("b"));
+        Assert.That(ex!.Message, Does.Contain("cannot switch tables while row is in progress"));
+
+        sender.Table("a").At(DateTime.UtcNow);
+        Assert.DoesNotThrow(() => sender.Send());
+        await WaitFor(() => server.ReceivedFrames.Count >= 1);
+        Assert.That(server.ReceivedFrames.Count, Is.GreaterThanOrEqualTo(1),
+            "the row surviving the rejected table switch never reached the server");
     }
 
     [Test]
@@ -207,7 +240,7 @@ public class QwpWebSocketSenderTests
     }
 
     [Test]
-    public async Task EndToEnd_SecondFlush_StaysSelfSufficient()
+    public async Task EndToEnd_SchemasStayInlineAcrossFlushes()
     {
         await using var server = StartServerWithOkAcks();
         using var sender = NewSender(server, "auto_flush=off;");
@@ -224,6 +257,34 @@ public class QwpWebSocketSenderTests
         // Byte 17 is col_count (= 2: user column "v" + designated TS).
         Assert.That(frames[0][17], Is.EqualTo((byte)2));
         Assert.That(frames[1][17], Is.EqualTo((byte)2));
+    }
+
+    [Test]
+    public async Task EndToEnd_SymbolDictionary_SendsOnlyNewEntriesAfterFirstFlush()
+    {
+        await using var server = StartServerWithOkAcks();
+        using var sender = NewSender(server, "auto_flush=off;");
+
+        sender.Table("t").Symbol("sym", "alpha").At(DateTime.UtcNow);
+        sender.Send();
+
+        // Reusing id 0 requires no dictionary bytes in the second frame.
+        sender.Table("t").Symbol("sym", "alpha").At(DateTime.UtcNow);
+        sender.Send();
+
+        // The next new value is emitted as the contiguous suffix starting at id 1.
+        sender.Table("t").Symbol("sym", "beta").At(DateTime.UtcNow);
+        sender.Send();
+
+        await WaitFor(() => server.ReceivedFrames.Count >= 3);
+        var frames = server.ReceivedFrames.Take(3).ToArray();
+
+        Assert.That(ReadSymbolDelta(frames[0]),
+            Is.EqualTo((0, new[] { "alpha" })));
+        Assert.That(ReadSymbolDelta(frames[1]),
+            Is.EqualTo((1, Array.Empty<string>())));
+        Assert.That(ReadSymbolDelta(frames[2]),
+            Is.EqualTo((1, new[] { "beta" })));
     }
 
     [Test]
@@ -278,7 +339,7 @@ public class QwpWebSocketSenderTests
     }
 
     [Test]
-    public async Task EndToEnd_SymbolDictAccumulatesAcrossFlushes()
+    public async Task EndToEnd_SymbolIdsAccumulateButFramesCarryOnlyDelta()
     {
         await using var server = StartServerWithOkAcks();
         using var sender = NewSender(server, "auto_flush=off;");
@@ -291,16 +352,67 @@ public class QwpWebSocketSenderTests
         await WaitFor(() => server.ReceivedFrames.Count >= 2);
         var frames = server.ReceivedFrames.Take(2).ToList();
 
-        // Frames stay self-sufficient (delta_start=0), but symbol ids accumulate: the
-        // second frame re-emits the full prefix ["us", "eu"] so a client symbol id
-        // always denotes the same value across flushes.
-        Assert.That(frames[0][12], Is.EqualTo(0));
-        Assert.That(frames[0][13], Is.EqualTo(1));
+        // Ids remain sender-lifetime global, while the second frame carries only id 1 ("eu").
+        // Reconnect catch-up restores id 0 before any dependent frame is replayed.
+        Assert.That(ReadSymbolDelta(frames[0]), Is.EqualTo((0, new[] { "us" })));
+        Assert.That(ReadSymbolDelta(frames[1]), Is.EqualTo((1, new[] { "eu" })));
+    }
 
-        Assert.That(frames[1][12], Is.EqualTo(0));
-        Assert.That(frames[1][13], Is.EqualTo(2));
-        Assert.That(System.Text.Encoding.UTF8.GetString(frames[1], 15, 2), Is.EqualTo("us"));
-        Assert.That(System.Text.Encoding.UTF8.GetString(frames[1], 18, 2), Is.EqualTo("eu"));
+    [Test]
+    public async Task CancelRow_ReclaimsRowSymbolIds_DeltaNeverCarriesTheCancelledValue()
+    {
+        await using var server = StartServerWithOkAcks();
+        using var sender = NewSender(server, "auto_flush=off;");
+
+        sender.Table("t").Symbol("sym", "kept").At(DateTime.UtcNow);
+        sender.Table("t").Symbol("sym", "cancelled");
+        sender.CancelRow();
+        sender.Table("t").Symbol("sym", "after").At(DateTime.UtcNow);
+        sender.Send();
+
+        await WaitFor(() => server.ReceivedFrames.Count >= 1);
+        // "cancelled" must neither be published nor burn its id: "after" reuses id 1.
+        Assert.That(ReadSymbolDelta(server.ReceivedFrames.First()),
+            Is.EqualTo((0, new[] { "kept", "after" })));
+    }
+
+    [Test]
+    public async Task SymbolFailureMidRow_ReclaimsTheWholeRowsSymbolIds()
+    {
+        await using var server = StartServerWithOkAcks();
+        using var sender = NewSender(server, "auto_flush=off;");
+
+        sender.Table("t").Symbol("sym", "seed").At(DateTime.UtcNow);
+        var mid = sender.Table("t").Symbol("sym", "doomed");
+        // A lone surrogate is rejected by the dictionary; the failure aborts the whole row, so the
+        // row's earlier "doomed" id must be reclaimed with it.
+        Assert.Catch<IngressError>(() => mid.Symbol("sym2", "\ud800"));
+        sender.Table("t").Symbol("sym", "next").At(DateTime.UtcNow);
+        sender.Send();
+
+        await WaitFor(() => server.ReceivedFrames.Count >= 1);
+        Assert.That(ReadSymbolDelta(server.ReceivedFrames.First()),
+            Is.EqualTo((0, new[] { "seed", "next" })));
+    }
+
+    [Test]
+    public async Task ColumnFailureMidRow_ThenCommittedRow_ReclaimsTheAbortedRowsSymbolIds()
+    {
+        await using var server = StartServerWithOkAcks();
+        using var sender = NewSender(server, "auto_flush=off;");
+
+        sender.Table("t").Symbol("sym", "kept").At(DateTime.UtcNow);
+        var mid = sender.Table("t").Symbol("sym", "doomed");
+        // The bad column name aborts the row inside the table buffer — a path that never runs
+        // through Symbol()'s catch. Committing another row afterwards must neither publish the
+        // dead row's id nor stack "next" on top of it.
+        Assert.Catch<IngressError>(() => mid.Column("\ud800", 1L));
+        sender.Table("t").Symbol("sym", "next").At(DateTime.UtcNow);
+        sender.Send();
+
+        await WaitFor(() => server.ReceivedFrames.Count >= 1);
+        Assert.That(ReadSymbolDelta(server.ReceivedFrames.First()),
+            Is.EqualTo((0, new[] { "kept", "next" })));
     }
 
     [Test]
@@ -982,7 +1094,7 @@ public class QwpWebSocketSenderTests
     }
 
     [Test]
-    public async Task EndToEnd_Sf_EveryFrame_IsSelfSufficient_AcrossMultipleFlushes()
+    public async Task EndToEnd_Sf_UsesPersistedSymbolDeltasAcrossMultipleFlushes()
     {
         await using var server = StartServerWithOkAcks();
         var sfRoot = Path.Combine(Path.GetTempPath(), "qwp-sf-multi-" + Guid.NewGuid().ToString("N"));
@@ -1005,11 +1117,14 @@ public class QwpWebSocketSenderTests
             }
 
             Assert.That(server.ReceivedFrames.Count, Is.EqualTo(3));
-            foreach (var frame in server.ReceivedFrames)
-            {
-                Assert.That(frame[12], Is.EqualTo(0x00), "delta_start = 0 in self-sufficient mode");
-                Assert.That(frame[13], Is.EqualTo(0x01), "delta_count = 1 (single symbol re-emitted each flush)");
-            }
+            var frames = server.ReceivedFrames.ToArray();
+            Assert.That(ReadSymbolDelta(frames[0]),
+                Is.EqualTo((0, new[] { "ETH-USD" })));
+            Assert.That(ReadSymbolDelta(frames[1]),
+                Is.EqualTo((1, Array.Empty<string>())),
+                "the persisted side file makes a full prefix in every SF frame unnecessary");
+            Assert.That(ReadSymbolDelta(frames[2]),
+                Is.EqualTo((1, Array.Empty<string>())));
         }
         finally
         {
@@ -1018,7 +1133,7 @@ public class QwpWebSocketSenderTests
     }
 
     [Test]
-    public async Task EndToEnd_Sf_SingleRow_FrameReachesServerAndIsSelfSufficient()
+    public async Task EndToEnd_Sf_SingleRow_FrameReachesServerWithPersistedDelta()
     {
         await using var server = StartServerWithOkAcks();
         var sfRoot = Path.Combine(Path.GetTempPath(), "qwp-sf-smoke-" + Guid.NewGuid().ToString("N"));
@@ -1040,10 +1155,155 @@ public class QwpWebSocketSenderTests
             Assert.That(server.ReceivedFrames.Count, Is.EqualTo(1));
             var frame = server.ReceivedFrames.First();
 
-            // SF frames are self-sufficient: delta dict starts at id 0 with the full known set,
-            // even after the engine commits. (The inline schema travels with every frame anyway.)
-            Assert.That(frame[12], Is.EqualTo(0x00), "delta_start = 0 in self-sufficient mode");
-            Assert.That(frame[13], Is.EqualTo(0x01), "delta_count = 1 (single symbol 'ETH-USD')");
+            // The first SF frame introduces id 0; subsequent frames use deltas and recovery gets
+            // the complete prefix from the per-slot .symbol-dict side file.
+            Assert.That(ReadSymbolDelta(frame),
+                Is.EqualTo((0, new[] { "ETH-USD" })));
+        }
+        finally
+        {
+            TryDeleteDirectory(sfRoot);
+        }
+    }
+
+    [Test]
+    public async Task EndToEnd_Sf_Restart_CatchesUpDictionaryBeforeReplayingUnackedFrame()
+    {
+        var sfRoot = Path.Combine(Path.GetTempPath(), "qwp-sf-restart-dict-" + Guid.NewGuid().ToString("N"));
+        const string senderId = "svc-restart";
+        var symbolDictionaryPath = Path.Combine(sfRoot, senderId, QwpPersistedSymbolDictionary.FileName);
+        var port = 0;
+
+        try
+        {
+            var firstServer = new DummyQwpServer(new DummyQwpServerOptions
+            {
+                // Persist and transmit the data frame, but leave it unacked so the next sender
+                // instance must recover and replay it from the same SF slot.
+                FrameHandler = _ => null,
+            });
+            await firstServer.StartAsync();
+            port = firstServer.Uri.Port;
+            try
+            {
+                using (var firstSender = NewSender(firstServer,
+                           $"auto_flush=off;close_flush_timeout_millis=0;sf_dir={sfRoot};" +
+                           $"sender_id={senderId};sf_max_segment_bytes=4096;"))
+                {
+                    firstSender.Table("trades")
+                        .Symbol("ticker", "ETH-USD")
+                        .Column("price", 2615.54)
+                        .At(new DateTime(2026, 4, 28, 12, 0, 0, DateTimeKind.Utc));
+                    firstSender.Send();
+                    await WaitFor(() => firstServer.ReceivedFrames.Count >= 1);
+                    Assert.That(firstServer.ReceivedFrames.Count, Is.EqualTo(1));
+                }
+            }
+            finally
+            {
+                await firstServer.DisposeAsync();
+            }
+
+            Assert.That(File.Exists(symbolDictionaryPath), Is.True,
+                "the write-ahead dictionary must survive while its data frame is unacked");
+
+            long nextSequence = 0;
+            await using var restartedServer = new DummyQwpServer(new DummyQwpServerOptions
+            {
+                Port = port,
+                FrameHandler = _ => BuildOkAck(Interlocked.Increment(ref nextSequence) - 1),
+            });
+            await restartedServer.StartAsync();
+
+            using (var restartedSender = NewSender(restartedServer,
+                       $"auto_flush=off;sf_dir={sfRoot};sender_id={senderId};sf_max_segment_bytes=4096;"))
+            {
+                ((IQwpWebSocketSender)restartedSender).Ping();
+                await WaitFor(() => restartedServer.ReceivedFrames.Count >= 2);
+
+                var frames = restartedServer.ReceivedFrames.ToArray();
+                Assert.That(frames, Has.Length.EqualTo(2));
+                Assert.That(BinaryPrimitives.ReadUInt16LittleEndian(
+                        frames[0].AsSpan(QwpConstants.OffsetTableCount, 2)),
+                    Is.EqualTo(0), "the connection-scoped dictionary catch-up must be sent first");
+                Assert.That(frames[0][QwpConstants.OffsetFlags] & QwpConstants.FlagDeferCommit,
+                    Is.EqualTo(QwpConstants.FlagDeferCommit));
+                Assert.That(ReadSymbolDelta(frames[0]),
+                    Is.EqualTo((0, new[] { "ETH-USD" })));
+
+                Assert.That(BinaryPrimitives.ReadUInt16LittleEndian(
+                        frames[1].AsSpan(QwpConstants.OffsetTableCount, 2)),
+                    Is.EqualTo(1), "the unacked data frame must be replayed after catch-up");
+                Assert.That(ReadSymbolDelta(frames[1]),
+                    Is.EqualTo((0, new[] { "ETH-USD" })));
+            }
+
+            Assert.That(File.Exists(symbolDictionaryPath), Is.False,
+                "a fully acked and closed slot no longer needs the recovery side file");
+        }
+        finally
+        {
+            TryDeleteDirectory(sfRoot);
+        }
+    }
+
+    [Test]
+    public async Task EndToEnd_Sf_AbortedRowSymbolsStayOutOfThePersistedDictionary()
+    {
+        var sfRoot = Path.Combine(Path.GetTempPath(), "qwp-sf-abort-dict-" + Guid.NewGuid().ToString("N"));
+        const string senderId = "svc-abort";
+        var symbolDictionaryPath = Path.Combine(sfRoot, senderId, QwpPersistedSymbolDictionary.FileName);
+        var port = 0;
+
+        try
+        {
+            var firstServer = new DummyQwpServer(new DummyQwpServerOptions
+            {
+                FrameHandler = _ => null,
+            });
+            await firstServer.StartAsync();
+            port = firstServer.Uri.Port;
+            try
+            {
+                using (var firstSender = NewSender(firstServer,
+                           $"auto_flush=off;close_flush_timeout_millis=0;sf_dir={sfRoot};" +
+                           $"sender_id={senderId};sf_max_segment_bytes=4096;"))
+                {
+                    firstSender.Table("t").Symbol("sym", "kept").At(DateTime.UtcNow);
+                    firstSender.Send();
+                    var mid = firstSender.Table("t").Symbol("sym", "doomed");
+                    Assert.Catch<IngressError>(() => mid.Column("\ud800", 1L));
+                    firstSender.Table("t").Symbol("sym", "after").At(DateTime.UtcNow);
+                    firstSender.Send();
+                    await WaitFor(() => firstServer.ReceivedFrames.Count >= 2);
+                }
+            }
+            finally
+            {
+                await firstServer.DisposeAsync();
+            }
+
+            Assert.That(File.Exists(symbolDictionaryPath), Is.True);
+
+            long nextSequence = 0;
+            await using var restartedServer = new DummyQwpServer(new DummyQwpServerOptions
+            {
+                Port = port,
+                FrameHandler = _ => BuildOkAck(Interlocked.Increment(ref nextSequence) - 1),
+            });
+            await restartedServer.StartAsync();
+
+            using (var restartedSender = NewSender(restartedServer,
+                       $"auto_flush=off;sf_dir={sfRoot};sender_id={senderId};sf_max_segment_bytes=4096;"))
+            {
+                ((IQwpWebSocketSender)restartedSender).Ping();
+                await WaitFor(() => restartedServer.ReceivedFrames.Count >= 3);
+
+                // The catch-up frame replays the persisted dictionary verbatim: the aborted row's
+                // "doomed" must not have reached the side file, and "after" must sit at id 1.
+                Assert.That(ReadSymbolDelta(restartedServer.ReceivedFrames.First()),
+                    Is.EqualTo((0, new[] { "kept", "after" })));
+            }
         }
         finally
         {
@@ -1122,6 +1382,8 @@ public class QwpWebSocketSenderTests
 
             Assert.That(SegmentBytesOnDisk(sentRoot), Is.GreaterThan(0),
                 "a flushed row is persisted to the SF segment ring");
+            Assert.That(File.Exists(Path.Combine(sentRoot, "svc-a", QwpPersistedSymbolDictionary.FileName)),
+                Is.True, "an unacked delta frame must retain its write-ahead symbol dictionary");
         }
         finally
         {
@@ -1263,6 +1525,24 @@ public class QwpWebSocketSenderTests
         sender.Table("t").Column("v", 2L).At(DateTime.UtcNow);
         var fsn2 = await ws.FlushAndGetSequenceAsync();
         Assert.That(fsn2, Is.EqualTo(1L));
+    }
+
+    [Test]
+    public async Task FlushAndGetSequenceAsync_RowInProgress_Throws()
+    {
+        await using var server = StartServerWithOkAcks();
+        using var sender = NewSender(server, "auto_flush=off;");
+        var ws = (IQwpWebSocketSender)sender;
+
+        // A mid-row flush would commit and persist the pending row's symbol ids while
+        // ResetPendingState silently cancels the row, stranding them; every flush entry point
+        // must reject an uncommitted row instead.
+        sender.Table("t").Symbol("sym", "pending");
+        var error = Assert.ThrowsAsync<IngressError>(() => ws.FlushAndGetSequenceAsync());
+        Assert.That(error!.code, Is.EqualTo(ErrorCode.InvalidApiCall));
+
+        sender.CancelRow();
+        Assert.That(await ws.FlushAndGetSequenceAsync(), Is.EqualTo(-1L));
     }
 
     [Test]

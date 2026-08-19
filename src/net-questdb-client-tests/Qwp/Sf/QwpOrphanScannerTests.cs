@@ -77,6 +77,27 @@ public class QwpOrphanScannerTests
     }
 
     [Test]
+    public void ClaimOrphans_SkipsQuarantinedSlotEvenWithoutFailedSentinel()
+    {
+        var slot = Path.Combine(_root, "crashed" + QwpOrphanScanner.QuarantineSlotInfix + "0");
+        SetupSlotWithSegment(slot);
+
+        var claimed = QwpOrphanScanner.ClaimOrphans(_root, "self");
+        Assert.That(claimed, Is.Empty);
+    }
+
+    [Test]
+    public void MarkFailed_WritesSentinelTheNextScanHonours()
+    {
+        var slot = Path.Combine(_root, "crashed");
+        SetupSlotWithSegment(slot);
+        QwpOrphanScanner.MarkFailed(slot, "unreplayable: test detail");
+
+        Assert.That(File.ReadAllText(Path.Combine(slot, ".failed")), Does.Contain("test detail"));
+        Assert.That(QwpOrphanScanner.ClaimOrphans(_root, "self"), Is.Empty);
+    }
+
+    [Test]
     public void ClaimOrphans_SkipsAlreadyLockedSlot()
     {
         var slot = Path.Combine(_root, "live");

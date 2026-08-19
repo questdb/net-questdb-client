@@ -33,6 +33,7 @@ namespace QuestDB.Qwp.Sf;
 ///     <list type="bullet">
 ///         <item>skips our own slot (matched by <c>sender_id</c>);</item>
 ///         <item>skips slots carrying a <c>.failed</c> sentinel — a previous drain has surrendered;</item>
+///         <item>skips quarantined slots (name contains <c>.unreplayable-</c>) — human-in-the-loop;</item>
 ///         <item>tries the slot lock with <see cref="QwpSlotLock.TryAcquire" /> — if another live
 ///             sender or drainer holds it, we leave it alone;</item>
 ///         <item>discards empty slots (no <c>sf-*.sfa</c> segment files) — nothing to drain.</item>
@@ -45,6 +46,40 @@ internal static class QwpOrphanScanner
 {
     private const string FailedSentinel = ".failed";
     private const string SegmentGlob = "sf-*.sfa";
+    private const int FailedSentinelMaxChars = 4096;
+
+    // The name check is the reliable exclusion: MarkFailed is best-effort, and a full or
+    // read-only disk fails both the recovery and the sentinel write.
+    internal const string QuarantineSlotInfix = ".unreplayable-";
+
+    internal static string TruncateSentinelDetail(string detail)
+    {
+        if (detail.Length <= FailedSentinelMaxChars)
+        {
+            return detail;
+        }
+
+        // Never cut through a surrogate pair — the truncated tail must stay valid UTF-8.
+        var cut = FailedSentinelMaxChars;
+        if (char.IsHighSurrogate(detail[cut - 1]))
+        {
+            cut--;
+        }
+        return detail[..cut] + "\n... [truncated]";
+    }
+
+    internal static void MarkFailed(string slotDirectory, string detail)
+    {
+        detail = TruncateSentinelDetail(detail);
+
+        try
+        {
+            File.WriteAllText(Path.Combine(slotDirectory, FailedSentinel), detail);
+        }
+        catch (Exception)
+        {
+        }
+    }
 
     /// <summary>
     ///     Walks <paramref name="sfRoot" /> and returns locks for every sibling slot eligible for
@@ -131,6 +166,11 @@ internal static class QwpOrphanScanner
     {
         var senderId = new DirectoryInfo(slotDir).Name;
         if (string.Equals(senderId, ourSenderId, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        if (senderId.Contains(QuarantineSlotInfix, StringComparison.Ordinal))
         {
             return;
         }

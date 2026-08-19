@@ -23,12 +23,14 @@
  ******************************************************************************/
 
 using System.Buffers.Binary;
+using System.Collections.Concurrent;
 using System.Threading.Channels;
 using NUnit.Framework;
 using QuestDB.Enums;
 using QuestDB.Qwp;
 using QuestDB.Qwp.Sf;
 using QuestDB.Utils;
+using static net_questdb_client_tests.Qwp.QwpFrameTestUtils;
 
 namespace net_questdb_client_tests.Qwp.Sf;
 
@@ -434,6 +436,152 @@ public class QwpCursorSendEngineTests
             "the rejected frame must reach the wire again on replay");
     }
 
+    [TestCase(QwpStatusCode.NotWritable)]
+    [TestCase(QwpStatusCode.DictionaryGap)]
+    public async Task ConnectionStateNack_DoesNotPoisonDataFrame(QwpStatusCode status)
+    {
+        var connectCount = 0;
+        using var engine = NewEngine(out _,
+            factory: () => Interlocked.Increment(ref connectCount) == 1
+                ? new StubTransport { OnSend = _ => ErrorResponse(status, 0, "retry on a fresh endpoint") }
+                : new StubTransport(),
+            maxFrameRejections: 1,
+            poisonMinEscalationWindow: TimeSpan.Zero);
+        engine.Start();
+        engine.AppendBlocking(new byte[] { 43 });
+
+        await engine.FlushAsync(TimeSpan.FromSeconds(5));
+
+        Assert.That(connectCount, Is.GreaterThanOrEqualTo(2));
+        Assert.That(engine.IsTerminallyFailed, Is.False,
+            "a node/connection-state rejection must not consume the poison-frame budget");
+        Assert.That(engine.AckedFsn, Is.EqualTo(1L));
+    }
+
+    // The jitter hook records each paced backoff and zeroes the actual sleep, so both tests below
+    // pin the pacing sequence deterministically without any wall-clock sensitivity.
+    [Test]
+    public async Task ExemptNack_ConsecutiveNoProgressRecycles_PaceWithDoublingBackoff()
+    {
+        var paced = new ConcurrentQueue<TimeSpan>();
+        var policy = new QwpReconnectPolicy(
+            TimeSpan.FromMilliseconds(120), TimeSpan.FromMilliseconds(480), TimeSpan.FromSeconds(2),
+            jitter: b => { paced.Enqueue(b); return TimeSpan.Zero; });
+        var connectCount = 0;
+        using var engine = NewEngine(out _,
+            policy: policy,
+            factory: () => Interlocked.Increment(ref connectCount) <= 4
+                ? new StubTransport { OnSend = _ => ErrorResponse(QwpStatusCode.NotWritable, 0, "read-only") }
+                : new StubTransport());
+        engine.Start();
+        engine.AppendBlocking(new byte[] { 44 });
+
+        await engine.FlushAsync(TimeSpan.FromSeconds(5));
+
+        Assert.That(engine.IsTerminallyFailed, Is.False);
+        Assert.That(engine.AckedFsn, Is.EqualTo(1L));
+        Assert.That(paced, Is.EqualTo(new[]
+        {
+            TimeSpan.FromMilliseconds(120),
+            TimeSpan.FromMilliseconds(240),
+            TimeSpan.FromMilliseconds(480),
+        }), "first recycle is immediate; consecutive no-progress recycles double up to the cap");
+    }
+
+    [Test]
+    public async Task ExemptNack_ProgressBetweenRecycles_ResetsPacingToImmediate()
+    {
+        var paced = new ConcurrentQueue<TimeSpan>();
+        var policy = new QwpReconnectPolicy(
+            TimeSpan.FromMilliseconds(120), TimeSpan.FromMilliseconds(480), TimeSpan.FromSeconds(2),
+            jitter: b => { paced.Enqueue(b); return TimeSpan.Zero; });
+        var connectCount = 0;
+        using var engine = NewEngine(out _, policy: policy, factory: () =>
+        {
+            var idx = Interlocked.Increment(ref connectCount);
+            return idx switch
+            {
+                1 => new StubTransport { OnSend = _ => ErrorResponse(QwpStatusCode.NotWritable, 0, "read-only") },
+                2 => new StubTransport
+                {
+                    OnSend = payload => payload[0] == 1
+                        ? OkResponse(0)
+                        : ErrorResponse(QwpStatusCode.NotWritable, 1, "read-only again"),
+                },
+                _ => new StubTransport(),
+            };
+        });
+        engine.Start();
+        engine.AppendBlocking(new byte[] { 1 });
+        await engine.FlushAsync(TimeSpan.FromSeconds(5));
+
+        engine.AppendBlocking(new byte[] { 2 });
+        await engine.FlushAsync(TimeSpan.FromSeconds(5));
+
+        Assert.That(engine.IsTerminallyFailed, Is.False);
+        Assert.That(engine.AckedFsn, Is.EqualTo(2L));
+        Assert.That(connectCount, Is.EqualTo(3));
+        Assert.That(paced, Is.Empty,
+            "ack progress since the last exempt recycle must reset the pacer to an immediate retry");
+    }
+
+    [Test]
+    public void UpgradeAloneWithoutAckProgress_DoesNotResetReconnectBackoff()
+    {
+        var paced = new ConcurrentQueue<TimeSpan>();
+        var policy = new QwpReconnectPolicy(
+            TimeSpan.FromMilliseconds(120), TimeSpan.FromMilliseconds(480), TimeSpan.FromSeconds(30),
+            jitter: b => { paced.Enqueue(b); return TimeSpan.Zero; });
+        using var engine = NewEngine(out _, policy: policy,
+            factory: () => new StubTransport { FailReceiveAfterAcks = 0 });
+        engine.Start();
+
+        AssertEventually(() => paced.Count >= 4, "engine did not cycle through reconnects", 5000);
+        Assert.That(paced.Take(4), Is.EqualTo(new[]
+        {
+            TimeSpan.FromMilliseconds(120),
+            TimeSpan.FromMilliseconds(240),
+            TimeSpan.FromMilliseconds(480),
+            TimeSpan.FromMilliseconds(480),
+        }), "an accepted upgrade with no acked data frame must not reset the reconnect backoff");
+    }
+
+    [Test]
+    public async Task AckedDataFrameOnConnection_ResetsReconnectBackoff()
+    {
+        var paced = new ConcurrentQueue<TimeSpan>();
+        var policy = new QwpReconnectPolicy(
+            TimeSpan.FromMilliseconds(120), TimeSpan.FromMilliseconds(480), TimeSpan.FromSeconds(30),
+            jitter: b => { paced.Enqueue(b); return TimeSpan.Zero; });
+        var connectCount = 0;
+        using var engine = NewEngine(out _, policy: policy, factory: () =>
+        {
+            var idx = Interlocked.Increment(ref connectCount);
+            // The third connection stays alive until it has acked one data frame, then closes.
+            return idx == 3
+                ? new StubTransport { FailReceiveAfterAcks = 1 }
+                : new StubTransport { FailReceiveAfterAcks = 0 };
+        });
+        engine.Start();
+
+        AssertEventually(() => Volatile.Read(ref connectCount) >= 3,
+            "engine did not reach the third connection", 5000);
+        engine.AppendBlocking(new byte[] { 1 });
+        await engine.FlushAsync(TimeSpan.FromSeconds(5));
+
+        AssertEventually(() => paced.Count >= 4,
+            "engine did not keep cycling after the acked connection", 5000);
+        Assert.That(paced.Take(2), Is.EqualTo(new[]
+        {
+            TimeSpan.FromMilliseconds(120),
+            TimeSpan.FromMilliseconds(240),
+        }));
+        // paced[2] is the acked connection's close-strike pacing; the next no-progress recycle
+        // must restart from the initial backoff, not continue the pre-progress escalation.
+        Assert.That(paced.ElementAt(3), Is.EqualTo(TimeSpan.FromMilliseconds(120)),
+            "an acked data frame must reset the reconnect backoff");
+    }
+
     [Test]
     public void Nack_DoesNotAdvanceAckedFsn()
     {
@@ -553,6 +701,31 @@ public class QwpCursorSendEngineTests
         var lse = (LineSenderServerException)engine.TerminalError!;
         Assert.That(lse.Error.Category, Is.EqualTo(SenderErrorCategory.ProtocolViolation),
             "escalation must be a ProtocolViolation, not a data drop");
+    }
+
+    [Test]
+    public void PoisonFrame_NackProcessedWhileSendStillInFlight_StillStrikes()
+    {
+        // The exit gate holds every SendBinaryAsync open until its connection tears down, so the
+        // receive pump always reads the NACK before the send-side await completes — the ordering
+        // a fast (in-process / loopback) server produces. The strike must key off the pre-send
+        // watermark, not any post-send state, or this rejection would be misread as pre-data and
+        // the poison detector would never fire.
+        using var engine = NewEngine(out _,
+            maxFrameRejections: 1,
+            poisonMinEscalationWindow: TimeSpan.Zero,
+            policy: new QwpReconnectPolicy(
+                TimeSpan.FromMilliseconds(1), TimeSpan.FromMilliseconds(4), TimeSpan.FromSeconds(30)),
+            factory: () => new StubTransport
+            {
+                OnSend = _ => ErrorResponse(QwpStatusCode.WriteError, 0, "poison"),
+                OnSendExitGate = ct => Task.Delay(TimeSpan.FromSeconds(10), ct),
+            });
+        engine.Start();
+        engine.AppendBlocking(new byte[] { 1 });
+
+        AssertEventually(() => engine.IsTerminallyFailed,
+            "a data-frame NACK read before its send completes must still strike", 5000);
     }
 
     [Test]
@@ -1244,6 +1417,215 @@ public class QwpCursorSendEngineTests
     }
 
     [Test]
+    public async Task DeltaDictionary_ReconnectCatchesUpBeforeReplay_AndKeepsAckMappingAligned()
+    {
+        var dictionary = new QwpSymbolDictionary();
+        dictionary.Add("alpha");
+        var firstFrame = QwpEncoder.Encode(Array.Empty<QwpTableBuffer>(), dictionary);
+        dictionary.Commit();
+        dictionary.Add("beta");
+        var secondFrame = QwpEncoder.Encode(Array.Empty<QwpTableBuffer>(), dictionary);
+
+        var transports = new System.Collections.Concurrent.ConcurrentQueue<StubTransport>();
+        var connection = 0;
+        using var engine = NewEngine(out _,
+            factory: () =>
+            {
+                var firstConnection = Volatile.Read(ref connection) == 0;
+                var transport = new StubTransport();
+                if (firstConnection)
+                {
+                    transport.FailReceiveAfterAcks = 1;
+                    transport.FailReceiveWith = new IngressError(ErrorCode.SocketError, "injected reconnect");
+                }
+                transports.Enqueue(transport);
+                Interlocked.Increment(ref connection);
+                return transport;
+            },
+            deltaDictionaryCatchUp: true);
+
+        engine.Start();
+        engine.AppendBlocking(firstFrame);
+        await engine.FlushAsync(TimeSpan.FromSeconds(5));
+
+        AssertEventually(() => Volatile.Read(ref connection) >= 2,
+            "engine did not reconnect after the injected close", timeoutMs: 5000);
+        var secondTransport = transports.ToArray()[1];
+        AssertEventually(() => secondTransport.SentSnapshot.Length >= 1,
+            "fresh connection did not receive dictionary catch-up", timeoutMs: 5000);
+
+        var catchUp = secondTransport.SentSnapshot[0];
+        Assert.That(BinaryPrimitives.ReadUInt16LittleEndian(
+            catchUp.AsSpan(QwpConstants.OffsetTableCount, 2)), Is.Zero,
+            "catch-up must be table-less");
+        Assert.That(catchUp[QwpConstants.OffsetFlags] & QwpConstants.FlagDeferCommit,
+            Is.EqualTo(QwpConstants.FlagDeferCommit),
+            "a table-less catch-up must never commit a deferred transaction");
+        Assert.That(ReadSymbolDelta(catchUp), Is.EqualTo((0, new[] { "alpha" })));
+
+        engine.AppendBlocking(secondFrame);
+        await engine.FlushAsync(TimeSpan.FromSeconds(5));
+
+        AssertEventually(() => secondTransport.SentSnapshot.Any(frame =>
+            {
+                var delta = ReadSymbolDelta(frame);
+                return delta.Start == 1 && delta.Entries.SequenceEqual(new[] { "beta" });
+            }),
+            "delta data frame was not sent after catch-up", timeoutMs: 5000);
+        Assert.That(engine.AckedFsn, Is.EqualTo(2),
+            "catch-up ACK must map below the replay cursor and never consume a real FSN");
+    }
+
+    [Test]
+    public void DeltaDictionary_CatchUpNackBeforeAnyDataSend_DoesNotPoisonHistoricalFsn()
+    {
+        var dictionary = new QwpSymbolDictionary();
+        dictionary.Add("alpha");
+        var frame = QwpEncoder.Encode(Array.Empty<QwpTableBuffer>(), dictionary);
+
+        var slotDir = Path.Combine(_root, "catchup-nack-after-progress");
+        var slotLock = QwpSlotLock.Acquire(slotDir);
+        var ring = QwpSegmentRing.Open(slotDir, segmentCapacity: 4096);
+        Assert.That(ring.TryAppend(frame), Is.True);
+        var persistedDictionary = QwpPersistedSymbolDictionary.OpenOrRecover(slotDir, ring);
+        var ackWatermark = QwpAckWatermark.Open(slotDir);
+        Assert.That(ackWatermark, Is.Not.Null);
+        ackWatermark!.Write(0L); // startup cursor is FSN 1, so catch-up wire seq 0 maps to historical FSN 0
+
+        var connection = 0;
+        using var engine = new QwpCursorSendEngine(
+            slotLock,
+            ring,
+            () =>
+            {
+                var n = Interlocked.Increment(ref connection);
+                if (n == 1)
+                {
+                    return new StubTransport
+                    {
+                        OnSend = _ => ErrorResponse(QwpStatusCode.DictionaryGap, 0, "reject catch-up once"),
+                    };
+                }
+                return new StubTransport();
+            },
+            new QwpReconnectPolicy(
+                TimeSpan.FromMilliseconds(1), TimeSpan.FromMilliseconds(4), TimeSpan.FromSeconds(5)),
+            appendDeadline: TimeSpan.FromSeconds(5),
+            initialConnectMode: InitialConnectMode.on,
+            ackWatermark: ackWatermark,
+            maxFrameRejections: 1,
+            poisonMinEscalationWindow: TimeSpan.Zero,
+            deltaDictionaryCatchUp: true,
+            persistedSymbolDictionary: persistedDictionary);
+
+        engine.Start();
+
+        AssertEventually(() => Volatile.Read(ref connection) >= 2,
+            "a catch-up NACK must recycle without poisoning an already-acked historical FSN", 5000);
+        Assert.That(engine.IsTerminallyFailed, Is.False);
+        Assert.That(engine.AckedFsn, Is.EqualTo(1L));
+    }
+
+    [Test]
+    public async Task DeltaDictionary_LateCatchUpNackAfterDataSend_DoesNotPoisonHistoricalFsn()
+    {
+        var dictionary = new QwpSymbolDictionary();
+        dictionary.Add("alpha");
+        var firstFrame = QwpEncoder.Encode(Array.Empty<QwpTableBuffer>(), dictionary);
+        dictionary.Commit();
+        var secondFrame = QwpEncoder.Encode(Array.Empty<QwpTableBuffer>(), dictionary);
+        var thirdFrame = QwpEncoder.Encode(Array.Empty<QwpTableBuffer>(), dictionary);
+
+        var slotDir = Path.Combine(_root, "late-catchup-nack");
+        var slotLock = QwpSlotLock.Acquire(slotDir);
+        var ring = QwpSegmentRing.Open(slotDir, segmentCapacity: 4096);
+        Assert.That(ring.TryAppend(firstFrame), Is.True);
+        Assert.That(ring.TryAppend(secondFrame), Is.True);
+        Assert.That(ring.TryAppend(thirdFrame), Is.True);
+        var persistedDictionary = QwpPersistedSymbolDictionary.OpenOrRecover(slotDir, ring);
+        var ackWatermark = QwpAckWatermark.Open(slotDir);
+        Assert.That(ackWatermark, Is.Not.Null);
+        ackWatermark!.Write(0L);
+
+        var connection = 0;
+        using var engine = new QwpCursorSendEngine(
+            slotLock,
+            ring,
+            () =>
+            {
+                if (Interlocked.Increment(ref connection) > 1)
+                {
+                    return new StubTransport();
+                }
+
+                // The catch-up NACK (wire seq 0, a retriable non-connection-state status) is only
+                // emitted in response to the second data send, so it is always processed after this
+                // connection has shipped data frames.
+                var sends = 0;
+                return new StubTransport
+                {
+                    OnSend = _ => Interlocked.Increment(ref sends) < 3
+                        ? OkResponse(0)
+                        : ErrorResponse(QwpStatusCode.InternalError, 0, "late catch-up rejection"),
+                };
+            },
+            new QwpReconnectPolicy(
+                TimeSpan.FromMilliseconds(1), TimeSpan.FromMilliseconds(4), TimeSpan.FromSeconds(5)),
+            appendDeadline: TimeSpan.FromSeconds(5),
+            initialConnectMode: InitialConnectMode.on,
+            ackWatermark: ackWatermark,
+            maxFrameRejections: 1,
+            poisonMinEscalationWindow: TimeSpan.Zero,
+            deltaDictionaryCatchUp: true,
+            persistedSymbolDictionary: persistedDictionary);
+
+        engine.Start();
+        await engine.FlushAsync(TimeSpan.FromSeconds(5));
+
+        Assert.That(engine.IsTerminallyFailed, Is.False,
+            "a NACK naming a catch-up wire sequence must not strike the historical FSN it maps to");
+        Assert.That(engine.AckedFsn, Is.EqualTo(3L));
+    }
+
+    [Test]
+    public void DeltaDictionary_CatchUpCapGap_RetriesPastBlockingInitialConnectBudget()
+    {
+        var dictionary = new QwpSymbolDictionary();
+        dictionary.Add(new string('x', 128));
+        var frame = QwpEncoder.Encode(Array.Empty<QwpTableBuffer>(), dictionary);
+
+        var slotDir = Path.Combine(_root, "catchup-cap-gap-retry");
+        var slotLock = QwpSlotLock.Acquire(slotDir);
+        var ring = QwpSegmentRing.Open(slotDir, segmentCapacity: 4096);
+        Assert.That(ring.TryAppend(frame), Is.True);
+        var persistedDictionary = QwpPersistedSymbolDictionary.OpenOrRecover(slotDir, ring);
+        var connection = 0;
+
+        using var engine = new QwpCursorSendEngine(
+            slotLock,
+            ring,
+            () =>
+            {
+                Interlocked.Increment(ref connection);
+                return new StubTransport { NegotiatedMaxBatchSize = 64 };
+            },
+            new QwpReconnectPolicy(
+                TimeSpan.FromMilliseconds(1), TimeSpan.FromMilliseconds(2), TimeSpan.Zero),
+            appendDeadline: TimeSpan.FromSeconds(5),
+            initialConnectMode: InitialConnectMode.on,
+            deltaDictionaryCatchUp: true,
+            persistedSymbolDictionary: persistedDictionary);
+
+        engine.Start();
+
+        AssertEventually(() => Volatile.Read(ref connection) >= 2,
+            "a catch-up cap gap must retry even after the blocking initial-connect budget expires", 5000);
+        Assert.That(engine.IsTerminallyFailed, Is.False);
+        Assert.That(engine.FirstConnectTask.IsCompletedSuccessfully, Is.True,
+            "the accepted WebSocket upgrade must release the constructor while catch-up retries in the background");
+    }
+
+    [Test]
     public async Task MultipleProducers_AllFramesEventuallyDrained()
     {
         const int producerCount = 4;
@@ -1354,7 +1736,8 @@ public class QwpCursorSendEngineTests
         int errorInboxCapacity = 256,
         int maxFrameRejections = 4,
         TimeSpan? poisonMinEscalationWindow = null,
-        bool durableAckMode = false)
+        bool durableAckMode = false,
+        bool deltaDictionaryCatchUp = false)
     {
         slotDir = slotDirectoryOverride ?? Path.Combine(_root, "sender-" + Guid.NewGuid().ToString("N"));
         var slotLock = QwpSlotLock.Acquire(slotDir);
@@ -1376,7 +1759,8 @@ public class QwpCursorSendEngineTests
             policyResolver: policyResolver,
             durableAckMode: durableAckMode,
             maxFrameRejections: maxFrameRejections,
-            poisonMinEscalationWindow: poisonMinEscalationWindow);
+            poisonMinEscalationWindow: poisonMinEscalationWindow,
+            deltaDictionaryCatchUp: deltaDictionaryCatchUp);
     }
 
     private static byte[] OkResponse(long sequence)
@@ -1436,6 +1820,9 @@ public class QwpCursorSendEngineTests
         public Func<byte[], byte[]>? OnSend;
         public Func<byte[], Task<byte[]>>? OnSendAsync;
         public Func<CancellationToken, Task>? OnSendGate;
+        // Runs after the response is handed to the receive side but before SendBinaryAsync
+        // returns, so a test can force the NACK to be processed while the send is still in flight.
+        public Func<CancellationToken, Task>? OnSendExitGate;
         // Models an accept-then-close middlebox: once a frame has been shipped, the receive side
         // faults with this exception (the frame is never acked), driving the poison detector.
         public Exception? FailReceiveWith;
@@ -1445,6 +1832,12 @@ public class QwpCursorSendEngineTests
         public int? FailReceiveAfterAcks;
         public List<byte[]> Sent { get; } = new();
         public (string Host, int Port)? Endpoint { get; set; } = ("stub", 0);
+        public int NegotiatedMaxBatchSize { get; set; }
+
+        public byte[][] SentSnapshot
+        {
+            get { lock (_sentLock) return Sent.ToArray(); }
+        }
 
         private readonly Channel<byte[]> _acks = Channel.CreateUnbounded<byte[]>();
         private readonly object _sentLock = new();
@@ -1482,6 +1875,11 @@ public class QwpCursorSendEngineTests
             }
 
             await _acks.Writer.WriteAsync(ack, cancellationToken).ConfigureAwait(false);
+
+            if (OnSendExitGate is not null)
+            {
+                await OnSendExitGate(cancellationToken).ConfigureAwait(false);
+            }
         }
 
         public async Task<int> ReceiveFrameAsync(Memory<byte> destination, CancellationToken cancellationToken)

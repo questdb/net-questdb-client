@@ -115,6 +115,7 @@ internal sealed class QwpBackgroundDrainer : IQwpSlotDrainer
         var ctx = _contextBuilder();
         var ring = QwpSegmentRing.Open(slotDirectory, segmentCapacity: _segmentCapacity);
         QwpAckWatermark? watermark = null;
+        QwpPersistedSymbolDictionary? persistedSymbolDictionary = null;
         QwpCursorSendEngine? engine = null;
         try
         {
@@ -123,6 +124,8 @@ internal sealed class QwpBackgroundDrainer : IQwpSlotDrainer
                 QwpAckWatermark.RemoveOrphan(slotDirectory);
             }
             watermark = QwpAckWatermark.Open(slotDirectory);
+            persistedSymbolDictionary = QwpPersistedSymbolDictionary.OpenOrRecover(
+                slotDirectory, ring, QwpAckWatermark.ResolveReplayFloor(ring, watermark));
 
             // Construct the engine even when the ring is empty so engine.Dispose's full-drain
             // branch still unlinks residual sf-*.sfa files. A slot with empty .sfa survivors
@@ -138,7 +141,9 @@ internal sealed class QwpBackgroundDrainer : IQwpSlotDrainer
                 durableAckMode: _durableAckMode,
                 ackWatermark: watermark,
                 maxFrameRejections: _maxFrameRejections,
-                poisonMinEscalationWindow: _poisonMinEscalationWindow);
+                poisonMinEscalationWindow: _poisonMinEscalationWindow,
+                deltaDictionaryCatchUp: true,
+                persistedSymbolDictionary: persistedSymbolDictionary);
 
             if (ring.NextFsn > ring.OldestFsn)
             {
@@ -156,6 +161,7 @@ internal sealed class QwpBackgroundDrainer : IQwpSlotDrainer
             {
                 ring.Dispose();
                 if (watermark is not null) watermark.Dispose();
+                if (persistedSymbolDictionary is not null) persistedSymbolDictionary.Dispose();
             }
         }
     }

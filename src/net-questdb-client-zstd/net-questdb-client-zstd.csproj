@@ -1,0 +1,29 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+    <PropertyGroup>
+        <TargetFrameworks>net7.0;net8.0;net9.0;net10.0</TargetFrameworks>
+        <RootNamespace>QuestDB.Zstd</RootNamespace>
+        <ImplicitUsings>enable</ImplicitUsings>
+        <Nullable>enable</Nullable>
+        <LangVersion>latest</LangVersion>
+        <Title>QuestDB client zstd egress codec</Title>
+        <Description>Optional zstd decompression codec for net-questdb-client's QWP egress query path. Reference this package alongside net-questdb-client to enable `compression=zstd`/`auto`.</Description>
+        <Copyright>QuestDB</Copyright>
+        <PackageProjectUrl>https://questdb.io</PackageProjectUrl>
+        <PackageLicenseExpression>Apache-2.0</PackageLicenseExpression>
+        <RepositoryUrl>https://github.com/questdb/net-questdb-client</RepositoryUrl>
+        <PackageTags>QuestDB, QWP, zstd</PackageTags>
+        <Company>QuestDB Limited</Company>
+        <PackageVersion>1.0.0</PackageVersion>
+        <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <ProjectReference Include="..\net-questdb-client\net-questdb-client.csproj" />
+    </ItemGroup>
+
+    <ItemGroup>
+        <PackageReference Include="ZstdSharp.Port" Version="0.8.4" />
+    </ItemGroup>
+
+</Project>

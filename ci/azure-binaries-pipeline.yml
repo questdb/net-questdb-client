@@ -81,6 +81,23 @@ stages:
               outputDir: '$(nugetPackageDirectory)'
               versioningScheme: 'off'
 
+          - task: DotNetCoreCLI@2
+            displayName: 'Build Release (zstd plugin)'
+            inputs:
+              command: 'build'
+              projects: 'src/net-questdb-client-zstd/net-questdb-client-zstd.csproj'
+              arguments: '--configuration $(buildConfiguration)'
+
+          - task: DotNetCoreCLI@2
+            displayName: 'Create NuGet package (zstd plugin)'
+            inputs:
+              command: 'pack'
+              packagesToPack: 'src/net-questdb-client-zstd/net-questdb-client-zstd.csproj'
+              configuration: '$(buildConfiguration)'
+              nobuild: true
+              outputDir: '$(nugetPackageDirectory)'
+              versioningScheme: 'off'
+
           - task: PublishBuildArtifacts@1
             displayName: 'Publish NuGet package as artifact'
             inputs:

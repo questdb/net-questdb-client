@@ -267,6 +267,28 @@ steps:
     arguments: '--configuration $(buildConfiguration) --framework net10.0 --no-build --verbosity normal --logger trx --blame-hang --blame-hang-timeout 600s --blame-hang-dump-type mini --filter "FullyQualifiedName!~QuestDbIntegrationTests&FullyQualifiedName!~QuestDbWebSocketIntegrationTests&FullyQualifiedName!~QuestDbQueryIntegrationTests"'
     publishTestResults: true
 
+# Dedicated project with NO reference to net-questdb-client-zstd/ZstdSharp.Port, proving the
+# plugin-absent degrade/fail-fast behavior against the real Assembly.Load path rather than the
+# main test project, which always carries the plugin via ProjectReference.
+- task: DotNetCoreCLI@2
+  displayName: 'Run zstd-plugin-absent tests on $(osName) (net8.0)'
+  inputs:
+    command: 'test'
+    projects: 'src/net-questdb-client-zstd-absent-tests/net-questdb-client-zstd-absent-tests.csproj'
+    arguments: '--configuration $(buildConfiguration) --framework net8.0 --no-build --verbosity normal --logger trx --blame-hang --blame-hang-timeout 600s --blame-hang-dump-type mini'
+    publishTestResults: true
+
+# Dedicated project whose own build output takes the plugin's assembly name and carries a
+# ZstdDecompressor whose constructor throws, proving TryResolveFactory's create+dispose probe
+# (not just Assembly.Load itself, already covered above) correctly reports the plugin unavailable.
+- task: DotNetCoreCLI@2
+  displayName: 'Run zstd-plugin-broken tests on $(osName) (net8.0)'
+  inputs:
+    command: 'test'
+    projects: 'src/net-questdb-client-zstd-broken-tests/net-questdb-client-zstd-broken-tests.csproj'
+    arguments: '--configuration $(buildConfiguration) --framework net8.0 --no-build --verbosity normal --logger trx --blame-hang --blame-hang-timeout 600s --blame-hang-dump-type mini'
+    publishTestResults: true
+
 # Publish the QuestDB server logs captured by QuestDbManager when the integration leg fails, so an
 # integration failure can be diagnosed without re-running (mkdir guard keeps publish from erroring
 # when a failure happened before any server launched).

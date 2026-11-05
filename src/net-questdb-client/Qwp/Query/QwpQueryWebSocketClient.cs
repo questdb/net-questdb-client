@@ -1420,12 +1420,16 @@ internal sealed class QwpQueryWebSocketClient : IQwpQueryClient, QuestDB.Pooling
         var requestId = BinaryPrimitives.ReadInt64LittleEndian(s.Slice(1, 8));
         byte opType = s[9];
         var rowsAffectedRaw = ReadTerminatorVarint(s.Slice(10), out var consumed, "EXEC_DONE malformed rows_affected varint");
-        if (rowsAffectedRaw > long.MaxValue)
+        // rows_affected is an unsigned varint on the wire. QuestDB uses 0xFFFF_FFFF_FFFF_FFFF
+        // (ulong.MaxValue, i.e. -1 as a signed 64-bit value) as the "no meaningful row count"
+        // sentinel for statements such as TRUNCATE, and sends it after the statement has already
+        // executed. Surface it as -1 instead of rejecting an otherwise well-formed terminator.
+        if (rowsAffectedRaw > long.MaxValue && rowsAffectedRaw != ulong.MaxValue)
         {
             throw new IngressError(ErrorCode.ProtocolViolation,
                 $"EXEC_DONE rows_affected {rowsAffectedRaw} exceeds Int64 range");
         }
-        var rowsAffected = (long)rowsAffectedRaw;
+        var rowsAffected = unchecked((long)rowsAffectedRaw);
         var p = 10 + consumed;
         if (p != s.Length)
         {

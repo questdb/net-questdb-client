@@ -117,6 +117,29 @@ public class QwpQueryClientEndToEndTests
     }
 
     [Test]
+    public async Task ExecDoneFrame_MaxRowsAffectedSentinel_IsReportedAsMinusOne()
+    {
+        // rows_affected is an unsigned varint; QuestDB sends ulong.MaxValue (i.e. -1) for
+        // statements with no meaningful row count such as TRUNCATE. That is a well-formed
+        // terminator and must not be rejected as a protocol violation.
+        var doneFrame = QwpEgressFrameBuilder.BuildExecDone(1L, opType: (byte)QwpOpType.Truncate, rowsAffected: -1L);
+
+        await using var server = new DummyQwpServer(new DummyQwpServerOptions
+        {
+            Path = QwpConstants.ReadPath,
+            NegotiatedVersion = "1",
+            FrameHandlerMulti = _ => new[] { doneFrame },
+        });
+        await server.StartAsync();
+
+        using var client = QueryClient.New(BuildConnString(server));
+        var r = await RunQueryAsync(client, "TRUNCATE TABLE t");
+
+        Assert.That(r.OpType, Is.EqualTo(QwpOpType.Truncate));
+        Assert.That(r.RowsAffected, Is.EqualTo(-1L));
+    }
+
+    [Test]
     public async Task V2ServerInfo_IsConsumedAtConnect_AndExposedViaServerInfo()
     {
         var serverInfo = QwpEgressFrameBuilder.BuildServerInfo(

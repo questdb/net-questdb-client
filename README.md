@@ -280,7 +280,7 @@ The swap happens transparently while a flush retries, and is performed in a roun
 
 Refused connections, DNS failures, `connect_timeout` and `request_timeout` expiry, connection resets while writing the request, and retriable HTTP responses all trigger the swap. Every endpoint gets an attempt even if `retry_timeout` elapses first, and each attempt runs to its own timeout, so a flush can block for longer than `retry_timeout`. Setting `retry_timeout=0` disables retries on flush, and therefore the swap during a flush.
 
-The `/settings` probe that `protocol_version=auto` runs when a `Sender` is created ignores `retry_timeout`. It tries other endpoints too, so creating a `Sender` can block for one attempt's timeout per unresponsive endpoint.
+The `/settings` probe that `protocol_version=auto` runs when a `Sender` is created ignores `retry_timeout`. It tries other endpoints too, so creating a `Sender` can block for one attempt's timeout per unresponsive endpoint. `QuestDBClient` creates its senders the same way, when it connects and when a borrow needs a new sender; on `http`/`https`, neither `acquire_timeout_ms` nor `lazy_connect=on` shortens this.
 
 If no endpoint answers, the `Sender` starts on protocol version 1, which rejects arrays and decimals, and asks one endpoint again before the first row of each batch, blocking for up to one second each time. It stays on version 1 if a flush succeeds and the next probe still gets no answer.
 

@@ -243,7 +243,12 @@ internal class HttpSender : AbstractSender
             return (ProtocolVersion)versions.Where(v => v <= (int)ProtocolVersion.V3).Max();
         }
         catch (Exception ex) when (ex is IngressError or OperationCanceledException
-                                       or AggregateException { InnerException: not JsonException })
+                                       or AggregateException
+                                       {
+                                           InnerException: OperationCanceledException
+                                           or HttpRequestException
+                                           or IOException,
+                                       })
         {
             return null;
         }

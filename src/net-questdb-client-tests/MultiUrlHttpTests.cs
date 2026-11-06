@@ -1032,6 +1032,22 @@ public class MultiUrlHttpTests
     }
 
     [Test]
+    public void ProtocolDetection_UndecodableSettingsBody_StaysOnFirstAddress()
+    {
+        var handler = new ScriptedHandler((_, _) =>
+        {
+            var content = new StringContent("{}");
+            content.Headers.ContentType = MediaTypeHeaderValue.Parse("application/json; charset=bogus");
+            return new HttpResponseMessage(HttpStatusCode.OK) { Content = content, };
+        });
+        using var sender = handler.NewSender("http::addr=h:1;addr=h:2;auto_flush=off;");
+
+        sender.Table("metrics");
+
+        Assert.That(handler.Ports, Is.EqualTo(new[] { 1, }));
+    }
+
+    [Test]
     public void ProtocolDetection_ExplicitVersion_NeverAsks()
     {
         var handler = new ScriptedHandler((_, _) => throw new HttpRequestException("down"));

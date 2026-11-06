@@ -85,7 +85,12 @@ guaranteed to have sent all pending rows by the time you dispose.
 
 Delivery semantics of `Send()`/`SendAsync()`:
 
-- **HTTP** — synchronous; returns once the server has committed the batch.
+- **HTTP** — synchronous; returns once the server has committed the batch. A failed attempt, including one that
+  timed out after the server received it, is re-sent within `retry_timeout`, transaction commits included. Delivery
+  is therefore at-least-once: use deduplication on the target table if duplicates are not acceptable.
+- **TCP** — returns once the rows are written to the socket; the server does not acknowledge them. Throws while a
+  row is in progress, because a partial row would merge with the next one on the stream. Finish it with
+  `At()`/`AtNow()` or drop it with `CancelRow()` first.
 - **Standalone `ws`/`wss`** — **drains**: flushes and blocks until the server acknowledges (bounded by
   `close_flush_timeout_millis`, throwing on timeout), so `Send()` before `Dispose` reliably delivers.
 - **Pooled `ws`/`wss`** (from `IQuestDBClient.BorrowSender`) — hands the frame to the ring and returns
@@ -271,7 +276,15 @@ This is **not** for publishing data concurrently to multiple databases.
 
 Rather, this allows you to configure a backup database where data will be sent to in the event the primary database is unavailable.
 
-The swap happens transparently within a given `retry_timeout`, and is performed in a round-robin fashion (try the next endpoint and write if it is available). Once a new endpoint is selected, it continues to be used for the lifetime of that `Sender`.
+The swap happens transparently while a flush retries, and is performed in a round-robin fashion (try the next endpoint and write if it is available). Once a new endpoint is selected, it continues to be used for the lifetime of that `Sender`.
+
+Refused connections, DNS failures, `connect_timeout` and `request_timeout` expiry, connection resets while writing the request, and retriable HTTP responses all trigger the swap. Every endpoint gets an attempt even if `retry_timeout` elapses first, and each attempt runs to its own timeout, so a flush can block for longer than `retry_timeout`. Setting `retry_timeout=0` disables retries on flush, and therefore the swap during a flush.
+
+The `/settings` probe that `protocol_version=auto` runs when a `Sender` is created ignores `retry_timeout`. It tries other endpoints too, so creating a `Sender` can block for one attempt's timeout per unresponsive endpoint. `QuestDBClient` creates its senders the same way, when it connects and when a borrow needs a new sender; on `http`/`https`, neither `acquire_timeout_ms` nor `lazy_connect=on` shortens this.
+
+If no endpoint answers, the `Sender` starts on protocol version 1, which rejects arrays and decimals, and asks one endpoint again before the first row of each batch, blocking for up to one second each time. It stays on version 1 if a flush succeeds and the next probe still gets no answer.
+
+Every `addr` entry is validated when the configuration is parsed, so a malformed backup endpoint is reported at startup. A port must be a number from 1 to 65535, IPv6 literals must be bracketed, as in `[::1]:9000`, and an entry cannot contain a path, query or fragment.
 
 ## Configuration Parameters
 
@@ -302,7 +315,7 @@ The config string format is:
 | `connect_timeout`        | `15000`                    | Total time, in milliseconds, allowed to establish a connection across all layers — TCP socket connect, TLS handshake, WebSocket upgrade, and (on TCP) the ECDSA auth exchange. The attempt is aborted if exceeded. Applies to every transport.                  |
 | `request_timeout`        | `30000`                    | Base timeout for HTTP requests before any additional time is added.                                                                                                                                                           |
 | `request_min_throughput` | `102400`                   | Expected minimum throughput of requests in bytes per second. Used to add additional time to `request_timeout` to prevent large requests timing out prematurely.                                                               |
-| `retry_timeout`          | `10000`                    | The time period during which retries will be attempted, in milliseconds.                                                                                                                                                      |
+| `retry_timeout`          | `10000`                    | The time period during which retries will be attempted, in milliseconds. With multiple `addr` entries, every endpoint still gets an attempt after it elapses.                                                                 |
 | `max_name_len`           | `127`                      | The maximum allowed bytes, in UTF-8 format, for column and table names.                                                                                                                                                       |
 | `protocol_version`       |                            | Explicitly specifies the version of InfluxDB Line Protocol to use for sender. Valid options are:<br>• protocol_version=1<br>• protocol_version=2<br>• protocol_version=3<br>• protocol_version=auto (default, if unspecified) |
 

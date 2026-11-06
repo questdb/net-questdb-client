@@ -88,6 +88,9 @@ Delivery semantics of `Send()`/`SendAsync()`:
 - **HTTP** — synchronous; returns once the server has committed the batch. A failed attempt, including one that
   timed out after the server received it, is re-sent within `retry_timeout`, transaction commits included. Delivery
   is therefore at-least-once: use deduplication on the target table if duplicates are not acceptable.
+- **TCP** — returns once the rows are written to the socket; the server does not acknowledge them. Throws while a
+  row is in progress, because a partial row would merge with the next one on the stream. Finish it with
+  `At()`/`AtNow()` or drop it with `CancelRow()` first.
 - **Standalone `ws`/`wss`** — **drains**: flushes and blocks until the server acknowledges (bounded by
   `close_flush_timeout_millis`, throwing on timeout), so `Send()` before `Dispose` reliably delivers.
 - **Pooled `ws`/`wss`** (from `IQuestDBClient.BorrowSender`) — hands the frame to the ring and returns

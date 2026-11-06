@@ -114,7 +114,10 @@ public interface ISender : IDisposable, IAsyncDisposable
     ///     confirmed via <see cref="Flush(TimeSpan, CancellationToken)" /> / <c>IQuestDBClient.Flush</c>.
     ///     For an explicit bounded, bool-returning drain on any sender, call <c>Flush</c>.
     /// </remarks>
-    /// <exception cref="IngressError">When the request fails, or a standalone ws drain times out.</exception>
+    /// <exception cref="IngressError">
+    ///     When the request fails, a standalone ws drain times out, or a tcp, tcps, ws or wss sender has a row in
+    ///     progress.
+    /// </exception>
     public Task SendAsync(CancellationToken ct = default);
 
     /// <inheritdoc cref="SendAsync" />

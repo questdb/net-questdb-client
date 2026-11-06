@@ -73,6 +73,8 @@ public class BufferV1 : IBuffer
     /// <inheritdoc />
     public int RowCount { get; set; }
 
+    internal bool HasRowInProgress => _hasTable;
+
     /// <inheritdoc />
     public byte[] Chunk { get; set; }
 

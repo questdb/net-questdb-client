@@ -29,6 +29,7 @@ using System.Linq;
 using System.Net.Security;
 using System.Net.Sockets;
 using System.Security.Cryptography.X509Certificates;
+using QuestDB.Buffers;
 using QuestDB.Enums;
 using QuestDB.Utils;
 using ProtocolType = QuestDB.Enums.ProtocolType;
@@ -258,6 +259,8 @@ internal sealed class TcpSender : AbstractSender
     /// <inheritdoc cref="SendAsync" />
     public override void Send(CancellationToken ct = default)
     {
+        GuardNoRowInProgress();
+
         try
         {
             if (Buffer.Length != 0)
@@ -286,6 +289,8 @@ internal sealed class TcpSender : AbstractSender
     /// <inheritdoc />
     public override async Task SendAsync(CancellationToken ct = default)
     {
+        GuardNoRowInProgress();
+
         try
         {
             if (Buffer.Length != 0)
@@ -306,6 +311,16 @@ internal sealed class TcpSender : AbstractSender
         {
             LastFlush = DateTime.UtcNow;
             Buffer.Clear();
+        }
+    }
+
+    // The stream has no request boundary, so a partial row would merge with the next one.
+    private void GuardNoRowInProgress()
+    {
+        if (((BufferV1)Buffer).HasRowInProgress)
+        {
+            throw new IngressError(ErrorCode.InvalidApiCall,
+                "row in progress — call At()/AtNow() to commit or CancelRow() to abandon before flushing");
         }
     }
 

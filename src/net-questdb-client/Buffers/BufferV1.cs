@@ -118,6 +118,8 @@ public class BufferV1 : IBuffer
     /// <inheritdoc />
     public void At(DateTime timestamp)
     {
+        GuardTableNotSet();
+
         var utc = NormaliseToUtc(timestamp);
         var epoch = utc.Ticks - EpochTicks;
         PutAscii(' ').Put(epoch * 100);
@@ -137,6 +139,8 @@ public class BufferV1 : IBuffer
     /// <inheritdoc />
     public void At(long epochNano)
     {
+        GuardTableNotSet();
+
         PutAscii(' ').Put(epochNano);
         FinishLine();
     }
@@ -144,6 +148,8 @@ public class BufferV1 : IBuffer
     /// <inheritdoc />
     public void AtNanos(long timestampNanos)
     {
+        GuardTableNotSet();
+
         PutAscii(' ').Put(timestampNanos);
         FinishLine();
     }

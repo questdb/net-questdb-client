@@ -813,7 +813,12 @@ public record SenderOptions
 
             try
             {
-                AddressProvider.BuildHttpUri(protocol.ToString(), address);
+                var uri = AddressProvider.BuildHttpUri(protocol.ToString(), address);
+                if (uri.PathAndQuery != "/" || uri.Fragment.Length > 0)
+                {
+                    throw new IngressError(ErrorCode.ConfigError,
+                        $"Invalid `addr` entry `{address}`: a path, query or fragment is not allowed");
+                }
             }
             catch (UriFormatException ex)
             {
@@ -1001,7 +1006,8 @@ public record SenderOptions
         set
         {
             _addr = value;
-            _addresses.Clear();
+            // A record `with` copy shares the list until this runs, so clearing it would retarget the original.
+            _addresses = new();
             if (!string.IsNullOrEmpty(value))
             {
                 foreach (var piece in value.Split(','))

@@ -725,6 +725,10 @@ public class MultiUrlHttpTests
     [TestCase("bad^host:9001")]
     [TestCase("2001:db8::1")]
     [TestCase("[::1")]
+    [TestCase("db2/x:9000")]
+    [TestCase("db2/x")]
+    [TestCase("db2?x:9000")]
+    [TestCase("db2#x:9000")]
     public void InvalidHttpAddress_IsRejectedByConfiguration(string address)
     {
         var ex = Assert.Throws<IngressError>(() => _ = new SenderOptions($"http::addr=good:9000,{address};"));

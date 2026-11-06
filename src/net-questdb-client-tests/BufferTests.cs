@@ -35,6 +35,28 @@ public class BufferTests
         Assert.That(buffer.RowCount, Is.EqualTo(1));
     }
 
+    [TestCase(false)]
+    [TestCase(true)]
+    public void AtNow_AfterDiscardedRow_RequiresSymbolOrColumn(bool isCancelled)
+    {
+        var buffer = new BufferV3(128, 128, 128);
+        buffer.Table("bad").Symbol("a", "b");
+
+        if (isCancelled)
+        {
+            buffer.CancelRow();
+        }
+        else
+        {
+            buffer.Clear();
+        }
+
+        buffer.Table("good");
+
+        Assert.That(() => buffer.AtNow(),
+                    Throws.TypeOf<IngressError>().With.Message.Contains("Did not specify any symbols or columns"));
+    }
+
     [Test]
     public void DecimalNegationSimple()
     {

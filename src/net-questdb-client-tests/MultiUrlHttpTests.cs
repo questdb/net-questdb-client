@@ -447,7 +447,7 @@ public class MultiUrlHttpTests
 
     [TestCase(false)]
     [TestCase(true)]
-    public async Task ConnectTimeout_FailsOverAndStaysOnHealthyAddress(bool sync)
+    public async Task ConnectTimeout_FailsOverAndStaysOnHealthyAddress(bool isSync)
     {
         using var live = new DummyHttpServer(withBasicAuth: false);
         await live.StartAsync(HttpPort1);
@@ -456,10 +456,10 @@ public class MultiUrlHttpTests
             $"http::addr={Host}:{BlackHolePort1};addr={Host}:{HttpPort1};auto_flush=off;protocol_version=1;connect_timeout=200;retry_timeout=5000;");
 
         AddRow(sender, "first");
-        await Flush(sender, sync);
+        await Flush(sender, isSync);
         var attemptsAfterFailover = gate.Attempts(BlackHolePort1);
         AddRow(sender, "second");
-        await Flush(sender, sync);
+        await Flush(sender, isSync);
 
         Assert.That(live.PrintBuffer(), Does.Contain("first").And.Contain("second"));
         Assert.That(attemptsAfterFailover, Is.GreaterThanOrEqualTo(1));
@@ -470,7 +470,7 @@ public class MultiUrlHttpTests
 
     [TestCase(false)]
     [TestCase(true)]
-    public async Task ConnectTimeout_InsideRetryLoop_KeepsRotating(bool sync)
+    public async Task ConnectTimeout_InsideRetryLoop_KeepsRotating(bool isSync)
     {
         using var live = new DummyHttpServer(withBasicAuth: false);
         await live.StartAsync(HttpPort1);
@@ -479,7 +479,7 @@ public class MultiUrlHttpTests
             $"http::addr={Host}:{RefusedPort};addr={Host}:{BlackHolePort1};addr={Host}:{HttpPort1};auto_flush=off;protocol_version=1;connect_timeout=200;retry_timeout=5000;");
 
         AddRow(sender, "row");
-        await Flush(sender, sync);
+        await Flush(sender, isSync);
 
         Assert.That(live.PrintBuffer(), Does.Contain("row"));
         Assert.That(gate.Attempts(BlackHolePort1), Is.GreaterThanOrEqualTo(1));
@@ -489,7 +489,7 @@ public class MultiUrlHttpTests
 
     [TestCase(false)]
     [TestCase(true)]
-    public async Task RetryBudgetElapsed_StillAttemptsEveryAddress(bool sync)
+    public async Task RetryBudgetElapsed_StillAttemptsEveryAddress(bool isSync)
     {
         using var live = new DummyHttpServer(withBasicAuth: false);
         await live.StartAsync(HttpPort1);
@@ -497,7 +497,7 @@ public class MultiUrlHttpTests
             $"http::addr={Host}:{RefusedPort};addr={Host}:{RefusedPort - 1};addr={Host}:{HttpPort1};auto_flush=off;protocol_version=1;retry_timeout=1;");
 
         AddRow(sender, "row");
-        await Flush(sender, sync);
+        await Flush(sender, isSync);
 
         Assert.That(live.PrintBuffer(), Does.Contain("row"));
 
@@ -506,7 +506,7 @@ public class MultiUrlHttpTests
 
     [TestCase(false)]
     [TestCase(true)]
-    public async Task ConnectionResetWhileWritingBody_FailsOver(bool sync)
+    public async Task ConnectionResetWhileWritingBody_FailsOver(bool isSync)
     {
         using var live = new DummyHttpServer(withBasicAuth: false);
         await live.StartAsync(HttpPort1);
@@ -516,7 +516,7 @@ public class MultiUrlHttpTests
 
         // Larger than the connection's write buffer, so the body write reaches the stream.
         sender.Table("row").Column("val", new string('x', 64 * 1024)).At(new DateTime(1970, 01, 01, 0, 0, 1));
-        await Flush(sender, sync);
+        await Flush(sender, isSync);
 
         Assert.That(live.PrintBuffer(), Does.Contain("row"));
         Assert.That(gate.Attempts(ResetPort), Is.GreaterThanOrEqualTo(1));
@@ -526,14 +526,14 @@ public class MultiUrlHttpTests
 
     [TestCase(false)]
     [TestCase(true)]
-    public void AllAddressesTimeOut_ReportsBudgetAndCause(bool sync)
+    public void AllAddressesTimeOut_ReportsBudgetAndCause(bool isSync)
     {
         var gate = new ConnectGate(BlackHolePort1, BlackHolePort2);
         using var sender = gate.NewSender(
             $"http::addr={Host}:{BlackHolePort1};addr={Host}:{BlackHolePort2};auto_flush=off;protocol_version=1;connect_timeout=100;retry_timeout=1;");
 
         AddRow(sender, "row");
-        var ex = Assert.ThrowsAsync<IngressError>(() => Flush(sender, sync));
+        var ex = Assert.ThrowsAsync<IngressError>(() => Flush(sender, isSync));
 
         Assert.That(ex!.code, Is.EqualTo(ErrorCode.ServerFlushError));
         Assert.That(ex.Message, Does.Contain("Cannot connect").And.Contain("connect_timeout=100ms"));
@@ -544,30 +544,30 @@ public class MultiUrlHttpTests
 
     [TestCase(false)]
     [TestCase(true)]
-    public void ConnectTimeout_SingleAddress_RetriesWithinBudget(bool sync)
+    public void ConnectTimeout_SingleAddress_RetriesWithinBudget(bool isSync)
     {
         var gate = new ConnectGate(BlackHolePort1);
         using var sender = gate.NewSender(
             $"http::addr={Host}:{BlackHolePort1};auto_flush=off;protocol_version=1;connect_timeout=100;retry_timeout=150;");
 
         AddRow(sender, "row");
-        Assert.ThrowsAsync<IngressError>(() => Flush(sender, sync));
+        Assert.ThrowsAsync<IngressError>(() => Flush(sender, isSync));
 
         Assert.That(gate.Attempts(BlackHolePort1), Is.GreaterThanOrEqualTo(2));
     }
 
     [TestCase(false)]
     [TestCase(true)]
-    public void RetriesDisabled_TimeoutNeitherRetriesNorRotates(bool sync)
+    public void RetriesDisabled_TimeoutNeitherRetriesNorRotates(bool isSync)
     {
         var gate = new ConnectGate(BlackHolePort1);
         using var sender = gate.NewSender(
             $"http::addr={Host}:{BlackHolePort1};addr={Host}:{HttpPort1};auto_flush=off;protocol_version=1;connect_timeout=100;retry_timeout=0;");
 
         AddRow(sender, "first");
-        Assert.ThrowsAsync<IngressError>(() => Flush(sender, sync));
+        Assert.ThrowsAsync<IngressError>(() => Flush(sender, isSync));
         AddRow(sender, "second");
-        Assert.ThrowsAsync<IngressError>(() => Flush(sender, sync));
+        Assert.ThrowsAsync<IngressError>(() => Flush(sender, isSync));
 
         Assert.That(gate.Attempts(BlackHolePort1), Is.EqualTo(2));
         Assert.That(gate.Attempts(HttpPort1), Is.EqualTo(0));
@@ -575,7 +575,7 @@ public class MultiUrlHttpTests
 
     [TestCase(false)]
     [TestCase(true)]
-    public async Task BackoffLongerThanRequestTimeout_StillAttemptsEveryAddress(bool sync)
+    public async Task BackoffLongerThanRequestTimeout_StillAttemptsEveryAddress(bool isSync)
     {
         using var live = new DummyHttpServer(withBasicAuth: false);
         await live.StartAsync(HttpPort1);
@@ -587,7 +587,7 @@ public class MultiUrlHttpTests
             $"http::{addresses}addr={Host}:{HttpPort1};auto_flush=off;protocol_version=1;request_timeout=200;retry_timeout=15000;");
 
         AddRow(sender, "row");
-        await Flush(sender, sync);
+        await Flush(sender, isSync);
 
         Assert.That(live.PrintBuffer(), Does.Contain("row"));
         Assert.That(refused.Select(gate.Attempts), Is.All.GreaterThanOrEqualTo(1));
@@ -597,7 +597,7 @@ public class MultiUrlHttpTests
 
     [TestCase(false)]
     [TestCase(true)]
-    public async Task RequestTimeout_FailsOver(bool sync)
+    public async Task RequestTimeout_FailsOver(bool isSync)
     {
         using var live = new DummyHttpServer(withBasicAuth: false);
         await live.StartAsync(HttpPort1);
@@ -610,7 +610,7 @@ public class MultiUrlHttpTests
                 $"http::addr=127.0.0.1:{stalledPort};addr={Host}:{HttpPort1};auto_flush=off;protocol_version=1;request_timeout=200;retry_timeout=5000;");
 
             AddRow(sender, "row");
-            await Flush(sender, sync);
+            await Flush(sender, isSync);
 
             Assert.That(live.PrintBuffer(), Does.Contain("row"));
         }
@@ -624,7 +624,7 @@ public class MultiUrlHttpTests
 
     [TestCase(false)]
     [TestCase(true)]
-    public void RequestTimeout_IsNotReportedAsConnectFailure(bool sync)
+    public void RequestTimeout_IsNotReportedAsConnectFailure(bool isSync)
     {
         var stalled = new TcpListener(IPAddress.Loopback, 0);
         stalled.Start();
@@ -635,7 +635,7 @@ public class MultiUrlHttpTests
                 $"http::addr=127.0.0.1:{stalledPort};auto_flush=off;protocol_version=1;request_timeout=100;retry_timeout=1;");
 
             AddRow(sender, "row");
-            var ex = Assert.ThrowsAsync<IngressError>(() => Flush(sender, sync));
+            var ex = Assert.ThrowsAsync<IngressError>(() => Flush(sender, isSync));
 
             Assert.That(ex!.Message, Does.Contain("timeout").And.Not.Contain("Cannot connect"));
             Assert.That(ex.InnerException, Is.InstanceOf<OperationCanceledException>());
@@ -648,7 +648,7 @@ public class MultiUrlHttpTests
 
     [TestCase(false)]
     [TestCase(true)]
-    public async Task CallerCancellation_StopsWithoutRetryingOrRotating(bool sync)
+    public async Task CallerCancellation_StopsWithoutRetryingOrRotating(bool isSync)
     {
         using var cts = new CancellationTokenSource();
         var handler = new ScriptedHandler((call, ct) =>
@@ -665,9 +665,9 @@ public class MultiUrlHttpTests
             "http::addr=h:1;addr=h:2;auto_flush=off;protocol_version=1;retry_timeout=5000;");
 
         AddRow(sender, "cancelled");
-        var ex = Assert.ThrowsAsync<IngressError>(() => Flush(sender, sync, cts.Token));
+        var ex = Assert.ThrowsAsync<IngressError>(() => Flush(sender, isSync, cts.Token));
         AddRow(sender, "delivered");
-        await Flush(sender, sync);
+        await Flush(sender, isSync);
 
         Assert.That(ex!.InnerException, Is.InstanceOf<OperationCanceledException>());
         Assert.That(handler.Ports, Is.EqualTo(new[] { 1, 1, }));
@@ -701,14 +701,14 @@ public class MultiUrlHttpTests
 
     [TestCase(false)]
     [TestCase(true)]
-    public void Send_AfterDispose_Throws(bool sync)
+    public void Send_AfterDispose_Throws(bool isSync)
     {
         var handler = new ScriptedHandler((_, _) => new HttpResponseMessage(HttpStatusCode.NoContent));
         var sender = handler.NewSender("http::addr=h:1;auto_flush=off;protocol_version=1;");
         sender.Dispose();
 
         AddRow(sender, "row");
-        var ex = Assert.ThrowsAsync<IngressError>(() => Flush(sender, sync));
+        var ex = Assert.ThrowsAsync<IngressError>(() => Flush(sender, isSync));
 
         Assert.That(ex!.InnerException, Is.InstanceOf<ObjectDisposedException>());
         Assert.That(handler.Ports, Is.Empty);
@@ -787,9 +787,11 @@ public class MultiUrlHttpTests
         Assert.That(() => sender.Table("metrics").Column("array", new[] { 1.2, 2.6, }), Throws.Nothing);
     }
 
+    [TestCase(HttpStatusCode.InternalServerError)]
     [TestCase(HttpStatusCode.BadGateway)]
     [TestCase(HttpStatusCode.ServiceUnavailable)]
     [TestCase(HttpStatusCode.RequestTimeout)]
+    [TestCase(HttpStatusCode.MisdirectedRequest)]
     [TestCase(HttpStatusCode.TooManyRequests)]
     public void ProtocolDetection_OutageStatusAtStartup_NegotiatesBeforeNextBatch(HttpStatusCode status)
     {
@@ -816,7 +818,7 @@ public class MultiUrlHttpTests
 
     [TestCase(false)]
     [TestCase(true)]
-    public void StalledErrorBody_ReportsStatus(bool sync)
+    public void StalledErrorBody_ReportsStatus(bool isSync)
     {
         var handler = new ScriptedHandler((_, _) =>
         {
@@ -828,14 +830,14 @@ public class MultiUrlHttpTests
             "http::addr=h:1;auto_flush=off;protocol_version=1;request_timeout=100;");
 
         AddRow(sender, "row");
-        var ex = Assert.ThrowsAsync<IngressError>(() => Flush(sender, sync));
+        var ex = Assert.ThrowsAsync<IngressError>(() => Flush(sender, isSync));
 
         Assert.That(ex!.Message, Does.Contain("Bad Request"));
     }
 
     [TestCase(false)]
     [TestCase(true)]
-    public void MalformedErrorBody_IsReportedAsText(bool sync)
+    public void MalformedErrorBody_IsReportedAsText(bool isSync)
     {
         var handler = new ScriptedHandler((_, _) => new HttpResponseMessage(HttpStatusCode.BadRequest)
         {
@@ -844,7 +846,7 @@ public class MultiUrlHttpTests
         using var sender = handler.NewSender("http::addr=h:1;auto_flush=off;protocol_version=1;");
 
         AddRow(sender, "row");
-        var ex = Assert.ThrowsAsync<IngressError>(() => Flush(sender, sync));
+        var ex = Assert.ThrowsAsync<IngressError>(() => Flush(sender, isSync));
 
         Assert.That(ex!.Message, Does.Contain("not json"));
     }
@@ -907,7 +909,7 @@ public class MultiUrlHttpTests
 
     [TestCase(false)]
     [TestCase(true)]
-    public async Task ProtocolDetection_UnansweredAfterFlush_StopsAskingAndStaysOnAddress(bool sync)
+    public async Task ProtocolDetection_UnansweredAfterFlush_StopsAskingAndStaysOnAddress(bool isSync)
     {
         ScriptedHandler handler = null!;
         handler = new ScriptedHandler((_, _) => new HttpResponseMessage(
@@ -915,13 +917,13 @@ public class MultiUrlHttpTests
         using var sender = handler.NewSender("http::addr=h:1;addr=h:2;auto_flush=off;");
 
         AddRow(sender, "first");
-        await Flush(sender, sync);
+        await Flush(sender, isSync);
         var flushedTo = handler.Ports[^1];
         AddRow(sender, "second");
-        await Flush(sender, sync);
+        await Flush(sender, isSync);
         var probes = handler.Paths.Count(path => path == "/settings");
         AddRow(sender, "third");
-        await Flush(sender, sync);
+        await Flush(sender, isSync);
 
         Assert.That(handler.Paths.Count(path => path == "/settings"), Is.EqualTo(probes));
         Assert.That(handler.Ports[^1], Is.EqualTo(flushedTo));
@@ -948,6 +950,49 @@ public class MultiUrlHttpTests
         sender.Table("metrics");
 
         Assert.That(stopwatch.Elapsed, Is.LessThan(TimeSpan.FromSeconds(30)));
+    }
+
+    [Test]
+    public void ProtocolDetection_StalledBodyAtBatchStart_BoundsTheBlock()
+    {
+        var isStalled = false;
+        var handler = new ScriptedHandler((_, _) => isStalled
+            ? new HttpResponseMessage(HttpStatusCode.OK) { Content = new StreamContent(new StalledStream()), }
+            : throw new HttpRequestException("down"));
+        using var sender = handler.NewSender("http::addr=h:1;auto_flush=off;request_timeout=60000;");
+
+        isStalled = true;
+        var stopwatch = Stopwatch.StartNew();
+        sender.Table("metrics");
+
+        Assert.That(stopwatch.Elapsed, Is.LessThan(TimeSpan.FromSeconds(30)));
+    }
+
+    [Test]
+    public void ProtocolDetection_TimedOutAtBatchStart_NegotiatesBeforeNextBatch()
+    {
+        var isStalled = false;
+        var isUp = false;
+        var handler = new ScriptedHandler((_, ct) =>
+        {
+            if (isStalled)
+            {
+                ct.WaitHandle.WaitOne();
+                ct.ThrowIfCancellationRequested();
+            }
+
+            return isUp ? SettingsOk() : throw new HttpRequestException("down");
+        });
+        using var sender = handler.NewSender("http::addr=h:1;auto_flush=off;request_timeout=60000;");
+
+        isStalled = true;
+        sender.Table("metrics");
+        sender.CancelRow();
+
+        isStalled = false;
+        isUp = true;
+
+        Assert.That(() => sender.Table("metrics").Column("array", new[] { 1.2, 2.6, }), Throws.Nothing);
     }
 
     [Test]
@@ -1088,9 +1133,9 @@ public class MultiUrlHttpTests
         sender.Table(table).Column("val", 1).At(new DateTime(1970, 01, 01, 0, 0, 1));
     }
 
-    private static async Task Flush(ISender sender, bool sync, CancellationToken ct = default)
+    private static async Task Flush(ISender sender, bool isSync, CancellationToken ct = default)
     {
-        if (sync)
+        if (isSync)
         {
             sender.Send(ct);
         }
@@ -1135,6 +1180,10 @@ public class MultiUrlHttpTests
 
     private sealed class StalledStream : MemoryStream
     {
+        public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+
+        public override int Read(Span<byte> buffer) => throw new NotSupportedException();
+
         public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken ct = default)
         {
             await Task.Delay(Timeout.Infinite, ct);

@@ -809,11 +809,13 @@ public record SenderOptions
 
         foreach (var address in _addresses)
         {
+            SplitHostPort(address, out _, out _);
+
             try
             {
                 AddressProvider.BuildHttpUri(protocol.ToString(), address);
             }
-            catch (Exception ex) when (ex is UriFormatException or ArgumentOutOfRangeException)
+            catch (UriFormatException ex)
             {
                 throw new IngressError(ErrorCode.ConfigError, $"Invalid `addr` entry `{address}`: {ex.Message}", ex);
             }

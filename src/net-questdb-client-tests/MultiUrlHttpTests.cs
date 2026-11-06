@@ -23,9 +23,12 @@
  ******************************************************************************/
 
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.Net;
+using System.Net.Http.Headers;
 using System.Net.Sockets;
 using System.Reflection;
+using System.Text;
 using dummy_http_server;
 using NUnit.Framework;
 using QuestDB;
@@ -712,6 +715,12 @@ public class MultiUrlHttpTests
     }
 
     [TestCase("db2:90000")]
+    [TestCase("db2:abc")]
+    [TestCase("db2:99999999999")]
+    [TestCase("db2:0")]
+    [TestCase("db2:-5")]
+    [TestCase("db2:")]
+    [TestCase("::1:9000")]
     [TestCase("bad host:9001")]
     [TestCase("bad^host:9001")]
     [TestCase("2001:db8::1")]
@@ -745,7 +754,8 @@ public class MultiUrlHttpTests
         using var sender = gate.NewSender(
             $"http::addr={Host}:{BlackHolePort1};addr={Host}:{HttpPort1};auto_flush=off;connect_timeout=1100;");
 
-        // Falling back to V1 here would reject the array column.
+        // The next batch would ask again, so check the healthy address was reached during startup.
+        Assert.That(gate.Attempts(HttpPort1), Is.GreaterThanOrEqualTo(1));
         Assert.That(() => sender.Table("metrics").Column("array", new[] { 1.2, 2.6, }), Throws.Nothing);
 
         await live.StopAsync();
@@ -759,6 +769,298 @@ public class MultiUrlHttpTests
             $"http::addr={Host}:{BlackHolePort1};auto_flush=off;connect_timeout=1100;");
 
         Assert.That(gate.Attempts(BlackHolePort1), Is.EqualTo(1));
+    }
+
+    [Test]
+    public void ProtocolDetection_NoAnswerAtStartup_NegotiatesBeforeNextBatch()
+    {
+        var isUp = false;
+        var handler = new ScriptedHandler((_, _) => isUp ? SettingsOk() : throw new HttpRequestException("down"));
+        using var sender = handler.NewSender("http::addr=h:1;auto_flush=off;");
+
+        isUp = true;
+
+        Assert.That(() => sender.Table("metrics").Column("array", new[] { 1.2, 2.6, }), Throws.Nothing);
+    }
+
+    [TestCase(HttpStatusCode.BadGateway)]
+    [TestCase(HttpStatusCode.ServiceUnavailable)]
+    [TestCase(HttpStatusCode.RequestTimeout)]
+    [TestCase(HttpStatusCode.TooManyRequests)]
+    public void ProtocolDetection_OutageStatusAtStartup_NegotiatesBeforeNextBatch(HttpStatusCode status)
+    {
+        var isUp = false;
+        var handler = new ScriptedHandler((_, _) => isUp ? SettingsOk() : new HttpResponseMessage(status));
+        using var sender = handler.NewSender("http::addr=h:1;auto_flush=off;");
+
+        isUp = true;
+
+        Assert.That(() => sender.Table("metrics").Column("array", new[] { 1.2, 2.6, }), Throws.Nothing);
+    }
+
+    [Test]
+    public void ProtocolDetection_StillPending_DoesNotWaitForConnectTimeout()
+    {
+        var gate = new ConnectGate(BlackHolePort1);
+        using var sender = gate.NewSender($"http::addr={Host}:{BlackHolePort1};auto_flush=off;connect_timeout=3000;");
+
+        var stopwatch = Stopwatch.StartNew();
+        sender.Table("metrics");
+
+        Assert.That(stopwatch.Elapsed, Is.LessThan(TimeSpan.FromSeconds(3)));
+    }
+
+    [TestCase(false)]
+    [TestCase(true)]
+    public void StalledErrorBody_ReportsStatus(bool sync)
+    {
+        var handler = new ScriptedHandler((_, _) =>
+        {
+            var content = new StreamContent(new StalledStream());
+            content.Headers.ContentType = new MediaTypeHeaderValue("application/json");
+            return new HttpResponseMessage(HttpStatusCode.BadRequest) { Content = content, };
+        });
+        using var sender = handler.NewSender(
+            "http::addr=h:1;auto_flush=off;protocol_version=1;request_timeout=100;");
+
+        AddRow(sender, "row");
+        var ex = Assert.ThrowsAsync<IngressError>(() => Flush(sender, sync));
+
+        Assert.That(ex!.Message, Does.Contain("Bad Request"));
+    }
+
+    [TestCase(false)]
+    [TestCase(true)]
+    public void MalformedErrorBody_IsReportedAsText(bool sync)
+    {
+        var handler = new ScriptedHandler((_, _) => new HttpResponseMessage(HttpStatusCode.BadRequest)
+        {
+            Content = new StringContent("not json", Encoding.UTF8, "application/json"),
+        });
+        using var sender = handler.NewSender("http::addr=h:1;auto_flush=off;protocol_version=1;");
+
+        AddRow(sender, "row");
+        var ex = Assert.ThrowsAsync<IngressError>(() => Flush(sender, sync));
+
+        Assert.That(ex!.Message, Does.Contain("not json"));
+    }
+
+    [Test]
+    public void ProtocolDetection_SlowRetriableResponseAtStartup_NegotiatesBeforeNextBatch()
+    {
+        var handler = new ScriptedHandler((call, _) =>
+        {
+            if (call > 1)
+            {
+                return SettingsOk();
+            }
+
+            // Past the probe's 1s budget, so startup gets no second attempt.
+            Thread.Sleep(1100);
+            return new HttpResponseMessage(HttpStatusCode.ServiceUnavailable);
+        });
+        using var sender = handler.NewSender("http::addr=h:1;auto_flush=off;");
+
+        Assert.That(handler.Ports, Has.Count.EqualTo(1));
+        Assert.That(() => sender.Table("metrics").Column("array", new[] { 1.2, 2.6, }), Throws.Nothing);
+    }
+
+    [Test]
+    public void ProtocolDetection_NoAnswerAtStartup_NegotiatesBeforeTransaction()
+    {
+        var isUp = false;
+        var handler = new ScriptedHandler((_, _) => isUp ? SettingsOk() : throw new HttpRequestException("down"));
+        using var sender = handler.NewSender("http::addr=h:1;auto_flush=off;");
+
+        isUp = true;
+        sender.Transaction("metrics");
+
+        Assert.That(() => sender.Symbol("tag", "value").Column("array", new[] { 1.2, 2.6, }), Throws.Nothing);
+    }
+
+    [Test]
+    public void ProtocolDetection_AnsweredAfterFlush_Negotiates()
+    {
+        var isUp = false;
+        ScriptedHandler handler = null!;
+        handler = new ScriptedHandler((_, _) =>
+        {
+            if (handler.Paths[^1] == "/write")
+            {
+                return new HttpResponseMessage(HttpStatusCode.NoContent);
+            }
+
+            return isUp ? SettingsOk() : new HttpResponseMessage(HttpStatusCode.ServiceUnavailable);
+        });
+        using var sender = handler.NewSender("http::addr=h:1;auto_flush=off;");
+        AddRow(sender, "first");
+        sender.Send();
+
+        isUp = true;
+
+        Assert.That(() => sender.Table("metrics").Column("array", new[] { 1.2, 2.6, }), Throws.Nothing);
+    }
+
+    [TestCase(false)]
+    [TestCase(true)]
+    public async Task ProtocolDetection_UnansweredAfterFlush_StopsAskingAndStaysOnAddress(bool sync)
+    {
+        ScriptedHandler handler = null!;
+        handler = new ScriptedHandler((_, _) => new HttpResponseMessage(
+            handler.Paths[^1] == "/write" ? HttpStatusCode.NoContent : HttpStatusCode.ServiceUnavailable));
+        using var sender = handler.NewSender("http::addr=h:1;addr=h:2;auto_flush=off;");
+
+        AddRow(sender, "first");
+        await Flush(sender, sync);
+        var flushedTo = handler.Ports[^1];
+        AddRow(sender, "second");
+        await Flush(sender, sync);
+        var probes = handler.Paths.Count(path => path == "/settings");
+        AddRow(sender, "third");
+        await Flush(sender, sync);
+
+        Assert.That(handler.Paths.Count(path => path == "/settings"), Is.EqualTo(probes));
+        Assert.That(handler.Ports[^1], Is.EqualTo(flushedTo));
+    }
+
+    [Test]
+    public void ProtocolDetection_StillPending_BoundsTheBlockAtBatchStart()
+    {
+        var isStalled = false;
+        var handler = new ScriptedHandler((_, ct) =>
+        {
+            if (isStalled)
+            {
+                ct.WaitHandle.WaitOne();
+                ct.ThrowIfCancellationRequested();
+            }
+
+            throw new HttpRequestException("down");
+        });
+        using var sender = handler.NewSender("http::addr=h:1;auto_flush=off;request_timeout=60000;");
+
+        isStalled = true;
+        var stopwatch = Stopwatch.StartNew();
+        sender.Table("metrics");
+
+        Assert.That(stopwatch.Elapsed, Is.LessThan(TimeSpan.FromSeconds(30)));
+    }
+
+    [Test]
+    public void ProtocolDetection_StillPending_KeepsRowsAlreadyInTheBatch()
+    {
+        var isUp = false;
+        var handler = new ScriptedHandler((_, _) => isUp ? SettingsOk() : throw new HttpRequestException("down"));
+        using var sender = handler.NewSender("http::addr=h:1;auto_flush=off;");
+        AddRow(sender, "first");
+        var length = sender.Length;
+        var probes = handler.Ports.Count;
+
+        isUp = true;
+        AddRow(sender, "second");
+
+        Assert.That(handler.Ports, Has.Count.EqualTo(probes));
+        Assert.That(sender.Length, Is.GreaterThan(length));
+    }
+
+    [Test]
+    public void ProtocolDetection_StillPending_KeepsOpenTransaction()
+    {
+        var isUp = false;
+        var handler = new ScriptedHandler((_, _) => isUp ? SettingsOk() : throw new HttpRequestException("down"));
+        using var sender = handler.NewSender("http::addr=h:1;auto_flush=off;");
+        sender.Transaction("metrics");
+        var probes = handler.Ports.Count;
+
+        isUp = true;
+        Assert.Throws<IngressError>(() => sender.Table("other"));
+
+        Assert.That(handler.Ports, Has.Count.EqualTo(probes));
+        Assert.That(sender.WithinTransaction, Is.True);
+    }
+
+    [Test]
+    public void ProtocolDetection_StillPending_MovesToNextAddress()
+    {
+        var handler = new ScriptedHandler((_, _) => throw new HttpRequestException("down"));
+        using var sender = handler.NewSender("http::addr=h:1;addr=h:2;auto_flush=off;");
+        handler.Ports.Clear();
+
+        sender.Table("metrics");
+        sender.CancelRow();
+        sender.Table("metrics");
+
+        Assert.That(handler.Ports, Is.EquivalentTo(new[] { 1, 2, }));
+    }
+
+    [Test]
+    public void ProtocolDetection_StalledSettingsBody_StaysPendingInsteadOfHanging()
+    {
+        var handler = new ScriptedHandler((call, _) => call == 1
+            ? new HttpResponseMessage(HttpStatusCode.OK) { Content = new StreamContent(new StalledStream()), }
+            : SettingsOk());
+        using var sender = handler.NewSender("http::addr=h:1;auto_flush=off;request_timeout=100;");
+
+        Assert.That(() => sender.Table("metrics").Column("array", new[] { 1.2, 2.6, }), Throws.Nothing);
+    }
+
+    [TestCase(HttpStatusCode.NotFound)]
+    [TestCase(HttpStatusCode.Unauthorized)]
+    public void ProtocolDetection_DefinitiveStatus_IsNotAskedAgain(HttpStatusCode status)
+    {
+        var handler = new ScriptedHandler((_, _) => new HttpResponseMessage(status));
+        using var sender = handler.NewSender("http::addr=h:1;auto_flush=off;");
+        var probes = handler.Ports.Count;
+
+        Assert.That(() => sender.Table("metrics").Column("array", new[] { 1.2, 2.6, }),
+                    Throws.TypeOf<IngressError>().With.Message.Contains("does not support ARRAY types"));
+        Assert.That(handler.Ports, Has.Count.EqualTo(probes));
+    }
+
+    [Test]
+    public void ProtocolDetection_MalformedSettingsBody_IsNotAskedAgain()
+    {
+        var handler = new ScriptedHandler((_, _) => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent("not json", Encoding.UTF8, "application/json"),
+        });
+        using var sender = handler.NewSender("http::addr=h:1;auto_flush=off;");
+
+        sender.Table("metrics");
+
+        Assert.That(handler.Ports, Has.Count.EqualTo(1));
+    }
+
+    [Test]
+    public void ProtocolDetection_ExplicitVersion_NeverAsks()
+    {
+        var handler = new ScriptedHandler((_, _) => throw new HttpRequestException("down"));
+        using var sender = handler.NewSender("http::addr=h:1;auto_flush=off;protocol_version=1;");
+
+        sender.Table("metrics");
+
+        Assert.That(handler.Ports, Is.Empty);
+    }
+
+    [Test]
+    public void NoResponseError_NamesAddressWithoutPortAsConfigured()
+    {
+        var handler = new ScriptedHandler((_, _) => throw new HttpRequestException("down"));
+        using var sender = handler.NewSender("http::addr=h;auto_flush=off;protocol_version=1;retry_timeout=0;");
+
+        AddRow(sender, "row");
+        var ex = Assert.Throws<IngressError>(() => sender.Send());
+
+        Assert.That(ex!.Message, Does.Contain("`h`"));
+    }
+
+    private static HttpResponseMessage SettingsOk()
+    {
+        return new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent("{\"config\":{\"line.proto.support.versions\":[1,2,3]}}", Encoding.UTF8,
+                                        "application/json"),
+        };
     }
 
     private static void AddRow(ISender sender, string table)
@@ -789,6 +1091,8 @@ public class MultiUrlHttpTests
 
         public List<int> Ports { get; } = new();
 
+        public List<string> Paths { get; } = new();
+
         public ISender NewSender(string configString)
         {
             return new HttpSender(new SenderOptions(configString),
@@ -799,12 +1103,22 @@ public class MultiUrlHttpTests
         {
             ct.ThrowIfCancellationRequested();
             Ports.Add(request.RequestUri!.Port);
+            Paths.Add(request.RequestUri.AbsolutePath);
             return _script(Ports.Count, ct);
         }
 
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
         {
             return Task.FromResult(Send(request, ct));
+        }
+    }
+
+    private sealed class StalledStream : MemoryStream
+    {
+        public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken ct = default)
+        {
+            await Task.Delay(Timeout.Infinite, ct);
+            return 0;
         }
     }
 

@@ -279,7 +279,9 @@ Refused connections, DNS failures, `connect_timeout` and `request_timeout` expir
 
 The `/settings` probe that `protocol_version=auto` runs when a `Sender` is created ignores `retry_timeout`. It tries other endpoints too, so creating a `Sender` can block for one attempt's timeout per unresponsive endpoint.
 
-Every `addr` entry is validated when the configuration is parsed, so a malformed backup endpoint is reported at startup.
+If no endpoint answers, the `Sender` starts on protocol version 1, which rejects arrays and decimals, and asks one endpoint again before the first row of each batch, blocking for up to one second each time. It stays on version 1 if a flush succeeds and the next probe still gets no answer.
+
+Every `addr` entry is validated when the configuration is parsed, so a malformed backup endpoint is reported at startup. A port must be a number from 1 to 65535, and IPv6 literals must be bracketed, as in `[::1]:9000`.
 
 ## Configuration Parameters
 

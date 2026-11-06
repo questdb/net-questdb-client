@@ -67,7 +67,9 @@ internal class HttpSender : AbstractSender
     /// </summary>
     private AddressProvider _addressProvider = null!;
 
+    private bool _hasFlushed;
     private bool _isDisposed;
+    private bool _isProtocolVersionPending;
 
     /// <summary>
     ///     Initializes a new HttpSender configured according to the provided options.
@@ -194,34 +196,85 @@ internal class HttpSender : AbstractSender
         {
             // We need to select the last version that both client and server support.
             // Other clients use 1 second timeout for "/settings", follow same practice here.
-            try
-            {
-                using var response = SendWithRetries(default, _settingRequestFactory, TimeSpan.FromSeconds(1),
-                                                     Stopwatch.StartNew());
-                if (!response.IsSuccessStatusCode)
-                {
-                    protocolVersion = ProtocolVersion.V1;
-                }
-                else
-                {
-                    var json     = response.Content.ReadFromJsonAsync<SettingsResponse>().Result!;
-                    var versions = json.Config?.LineProtoSupportVersions!;
-                    protocolVersion = (ProtocolVersion)versions.Where(v => v <= (int)ProtocolVersion.V3).Max();
-                }
-            }
-            catch
-            {
-                protocolVersion = ProtocolVersion.V1;
-            }
+            var detected = DetectProtocolVersion(TimeSpan.FromSeconds(1));
+            _isProtocolVersionPending = detected is null;
+            protocolVersion           = detected ?? ProtocolVersion.V1;
         }
 
-        Buffer = Buffers.Buffer.Create(
+        Buffer = CreateBuffer(protocolVersion);
+    }
+
+    private IBuffer CreateBuffer(ProtocolVersion protocolVersion)
+    {
+        return Buffers.Buffer.Create(
             Options.init_buf_size,
             Options.max_name_len,
             Options.max_buf_size,
             protocolVersion,
             Options.convert_local_to_utc
         );
+    }
+
+    /// <summary>
+    ///     Asks the server which protocol version to use.
+    /// </summary>
+    /// <param name="retryTimeout">How long to keep retrying; counted from the first attempt.</param>
+    /// <param name="ct">Abandons the request and the read of its response.</param>
+    /// <returns>The version to use, or <c>null</c> if no address gave a definitive answer.</returns>
+    private ProtocolVersion? DetectProtocolVersion(TimeSpan retryTimeout, CancellationToken ct = default)
+    {
+        try
+        {
+            using var response = SendWithRetries(ct, _settingRequestFactory, retryTimeout, Stopwatch.StartNew());
+            if (!response.IsSuccessStatusCode)
+            {
+                // Other 4xx come from something that understood the request, such as a server too old to have
+                // this endpoint. A 5xx may be a proxy in front of a server that is down.
+                var isOutage = (int)response.StatusCode >= 500
+                               || response.StatusCode is HttpStatusCode.RequestTimeout
+                                   or HttpStatusCode.MisdirectedRequest
+                                   or HttpStatusCode.TooManyRequests;
+                return isOutage ? null : ProtocolVersion.V1;
+            }
+
+            using var cts      = GenerateRequestCts(ct);
+            var       json     = response.Content.ReadFromJsonAsync<SettingsResponse>(cancellationToken: cts.Token).Result!;
+            var       versions = json.Config?.LineProtoSupportVersions!;
+            return (ProtocolVersion)versions.Where(v => v <= (int)ProtocolVersion.V3).Max();
+        }
+        catch (Exception ex) when (ex is IngressError or OperationCanceledException
+                                       or AggregateException { InnerException: not JsonException })
+        {
+            return null;
+        }
+        catch
+        {
+            return ProtocolVersion.V1;
+        }
+    }
+
+    // A buffer can't change version once it holds rows or an open transaction, so this runs between batches.
+    private void RetryProtocolDetection()
+    {
+        if (Buffer.Length > 0 || Buffer.WithinTransaction)
+        {
+            return;
+        }
+
+        // Starting a batch must not block for a full connect or request timeout.
+        using var cts      = new CancellationTokenSource(TimeSpan.FromSeconds(1));
+        var       detected = DetectProtocolVersion(TimeSpan.Zero, cts.Token);
+
+        // A server that takes writes but still gives no answer here won't start to, so stop paying for the probe.
+        if (detected is not null || _hasFlushed)
+        {
+            _isProtocolVersionPending = false;
+            Buffer                    = CreateBuffer(detected ?? ProtocolVersion.V1);
+            return;
+        }
+
+        // Rows that V1 rejects never reach a flush, so nothing else would move off a dead address.
+        _addressProvider.RotateToNextAddress();
     }
 
     /// <summary>
@@ -428,8 +481,24 @@ internal class HttpSender : AbstractSender
                                    "Buffer must be clear before you can start a transaction.");
         }
 
+        if (_isProtocolVersionPending)
+        {
+            RetryProtocolDetection();
+        }
+
         Buffer.Transaction(tableName);
         return this;
+    }
+
+    /// <inheritdoc />
+    public override ISender Table(ReadOnlySpan<char> name)
+    {
+        if (_isProtocolVersionPending)
+        {
+            RetryProtocolDetection();
+        }
+
+        return base.Table(name);
     }
 
     /// <inheritdoc cref="CommitAsync" />
@@ -519,6 +588,7 @@ internal class HttpSender : AbstractSender
             {
                 LastFlush = (response.Headers.Date ?? DateTime.UtcNow).UtcDateTime;
                 CleanupUnusedClients();
+                _hasFlushed = true;
                 success = true;
                 return;
             }
@@ -526,7 +596,7 @@ internal class HttpSender : AbstractSender
             // unwrap json error if present
             if (response.Content.Headers.ContentType?.MediaType == "application/json")
             {
-                HandleErrorJson(response);
+                HandleErrorJson(response, ct);
             }
 
             // fallback to basic error
@@ -648,52 +718,59 @@ internal class HttpSender : AbstractSender
     }
 
     /// <summary>
-    ///     Reads and deserializes a JSON error response from the HTTP response, then throws an <see cref="IngressError" />
-    ///     with the error details.
+    ///     Reads an error payload from the HTTP response and throws an <see cref="IngressError" /> with its details.
+    ///     Returns without throwing if the body can't be read, leaving the caller to report the status alone.
     /// </summary>
-    /// <param name="response">The HTTP response containing a JSON error body.</param>
+    /// <param name="response">The HTTP response containing the error body.</param>
+    /// <param name="ct">Cancels the read.</param>
     /// <exception cref="IngressError">
-    ///     Always thrown with <see cref="ErrorCode.ServerFlushError" />; the message combines the
-    ///     response reason phrase with the deserialized JSON error or raw response text.
+    ///     Thrown with <see cref="ErrorCode.ServerFlushError" />; the message contains
+    ///     <c>response.ReasonPhrase</c> followed by the deserialized JSON error or the raw response body.
     /// </exception>
-    private void HandleErrorJson(HttpResponseMessage response)
+    private void HandleErrorJson(HttpResponseMessage response, CancellationToken ct)
     {
-        using var respStream = response.Content.ReadAsStream();
+        // A synchronous stream read can't be cancelled, so the timeout needs the asynchronous read.
+        ThrowIfBodyWasRead(response, ReadErrorBodyAsync(response, ct).GetAwaiter().GetResult());
+    }
+
+    /// <inheritdoc cref="HandleErrorJson" />
+    private async Task HandleErrorJsonAsync(HttpResponseMessage response, CancellationToken ct)
+    {
+        ThrowIfBodyWasRead(response, await ReadErrorBodyAsync(response, ct));
+    }
+
+    // A server can send the headers and then stall, and the status alone still reports the rejection.
+    private async Task<string?> ReadErrorBodyAsync(HttpResponseMessage response, CancellationToken ct)
+    {
+        using var cts = GenerateRequestCts(ct);
         try
         {
-            var jsonErr = JsonSerializer.Deserialize<JsonErrorResponse>(respStream);
-            throw new IngressError(ErrorCode.ServerFlushError, $"{response.ReasonPhrase}. {jsonErr?.ToString() ?? ""}");
+            return await response.Content.ReadAsStringAsync(cts.Token).ConfigureAwait(false);
         }
-        catch (JsonException)
+        catch (Exception ex) when (IsTransportError(ex, ct))
         {
-            using var strReader = new StreamReader(respStream);
-            throw new IngressError(ErrorCode.ServerFlushError, $"{response.ReasonPhrase}. {strReader.ReadToEnd()}");
+            return null;
         }
     }
 
-    /// <summary>
-    ///     Read an error payload from the HTTP response (JSON if possible, otherwise raw text) and throw an IngressError
-    ///     containing the server reason and the parsed error details.
-    /// </summary>
-    /// <param name="response">The HTTP response containing a JSON or plain-text error body.</param>
-    /// <exception cref="IngressError">
-    ///     Always thrown with <see cref="ErrorCode.ServerFlushError" />; the message contains
-    ///     <c>response.ReasonPhrase</c> followed by the deserialized JSON error or the raw response body.
-    /// </exception>
-    private async Task HandleErrorJsonAsync(HttpResponseMessage response)
+    private static void ThrowIfBodyWasRead(HttpResponseMessage response, string? body)
     {
-        await using var respStream = await response.Content.ReadAsStreamAsync();
+        if (body is null)
+        {
+            return;
+        }
+
+        string details;
         try
         {
-            var jsonErr = await JsonSerializer.DeserializeAsync<JsonErrorResponse>(respStream);
-            throw new IngressError(ErrorCode.ServerFlushError, $"{response.ReasonPhrase}. {jsonErr?.ToString() ?? ""}");
+            details = JsonSerializer.Deserialize<JsonErrorResponse>(body)?.ToString() ?? "";
         }
         catch (JsonException)
         {
-            using var strReader = new StreamReader(respStream);
-            var       errorStr  = await strReader.ReadToEndAsync();
-            throw new IngressError(ErrorCode.ServerFlushError, $"{response.ReasonPhrase}. {errorStr}");
+            details = body;
         }
+
+        throw new IngressError(ErrorCode.ServerFlushError, $"{response.ReasonPhrase}. {details}");
     }
 
     /// <inheritdoc />
@@ -786,13 +863,14 @@ internal class HttpSender : AbstractSender
             if (response.IsSuccessStatusCode)
             {
                 CleanupUnusedClients();
+                _hasFlushed = true;
                 return;
             }
 
             // unwrap json error if present
             if (response.Content.Headers.ContentType?.MediaType == "application/json")
             {
-                await HandleErrorJsonAsync(response);
+                await HandleErrorJsonAsync(response, ct);
             }
 
             // fallback to basic error
@@ -832,7 +910,7 @@ internal class HttpSender : AbstractSender
 
     private IngressError NoResponseError(Exception failure)
     {
-        var address = $"`{_addressProvider.CurrentHost}:{_addressProvider.CurrentPort}`";
+        var address = $"`{_addressProvider.CurrentAddress}`";
         var message = failure switch
         {
             OperationCanceledException { InnerException: TimeoutException } =>

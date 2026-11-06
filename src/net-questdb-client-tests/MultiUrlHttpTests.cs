@@ -22,10 +22,15 @@
  *
  ******************************************************************************/
 
+using System.Collections.Concurrent;
+using System.Net;
+using System.Net.Sockets;
 using System.Reflection;
 using dummy_http_server;
 using NUnit.Framework;
 using QuestDB;
+using QuestDB.Enums;
+using QuestDB.Senders;
 using QuestDB.Utils;
 
 namespace net_questdb_client_tests;
@@ -39,6 +44,10 @@ public class MultiUrlHttpTests
     private const int HttpPort1 = 29475;
     private const int HttpPort2 = 29476;
     private const int HttpPort3 = 29477;
+    private const int BlackHolePort1 = 29478;
+    private const int BlackHolePort2 = 29479;
+    private const int ResetPort = 29480;
+    private const int RefusedPort = 29999;
 
     [Test]
     public void ParseMultipleAddresses_FromConfigString()
@@ -430,6 +439,441 @@ public class MultiUrlHttpTests
             }
 
             throw;
+        }
+    }
+
+    [TestCase(false)]
+    [TestCase(true)]
+    public async Task ConnectTimeout_FailsOverAndStaysOnHealthyAddress(bool sync)
+    {
+        using var live = new DummyHttpServer(withBasicAuth: false);
+        await live.StartAsync(HttpPort1);
+        var gate = new ConnectGate(BlackHolePort1);
+        using var sender = gate.NewSender(
+            $"http::addr={Host}:{BlackHolePort1};addr={Host}:{HttpPort1};auto_flush=off;protocol_version=1;connect_timeout=200;retry_timeout=5000;");
+
+        AddRow(sender, "first");
+        await Flush(sender, sync);
+        var attemptsAfterFailover = gate.Attempts(BlackHolePort1);
+        AddRow(sender, "second");
+        await Flush(sender, sync);
+
+        Assert.That(live.PrintBuffer(), Does.Contain("first").And.Contain("second"));
+        Assert.That(attemptsAfterFailover, Is.GreaterThanOrEqualTo(1));
+        Assert.That(gate.Attempts(BlackHolePort1), Is.EqualTo(attemptsAfterFailover));
+
+        await live.StopAsync();
+    }
+
+    [TestCase(false)]
+    [TestCase(true)]
+    public async Task ConnectTimeout_InsideRetryLoop_KeepsRotating(bool sync)
+    {
+        using var live = new DummyHttpServer(withBasicAuth: false);
+        await live.StartAsync(HttpPort1);
+        var gate = new ConnectGate(BlackHolePort1);
+        using var sender = gate.NewSender(
+            $"http::addr={Host}:{RefusedPort};addr={Host}:{BlackHolePort1};addr={Host}:{HttpPort1};auto_flush=off;protocol_version=1;connect_timeout=200;retry_timeout=5000;");
+
+        AddRow(sender, "row");
+        await Flush(sender, sync);
+
+        Assert.That(live.PrintBuffer(), Does.Contain("row"));
+        Assert.That(gate.Attempts(BlackHolePort1), Is.GreaterThanOrEqualTo(1));
+
+        await live.StopAsync();
+    }
+
+    [TestCase(false)]
+    [TestCase(true)]
+    public async Task RetryBudgetElapsed_StillAttemptsEveryAddress(bool sync)
+    {
+        using var live = new DummyHttpServer(withBasicAuth: false);
+        await live.StartAsync(HttpPort1);
+        using var sender = Sender.New(
+            $"http::addr={Host}:{RefusedPort};addr={Host}:{RefusedPort - 1};addr={Host}:{HttpPort1};auto_flush=off;protocol_version=1;retry_timeout=1;");
+
+        AddRow(sender, "row");
+        await Flush(sender, sync);
+
+        Assert.That(live.PrintBuffer(), Does.Contain("row"));
+
+        await live.StopAsync();
+    }
+
+    [TestCase(false)]
+    [TestCase(true)]
+    public async Task ConnectionResetWhileWritingBody_FailsOver(bool sync)
+    {
+        using var live = new DummyHttpServer(withBasicAuth: false);
+        await live.StartAsync(HttpPort1);
+        var gate = new ConnectGate { ResettingPort = ResetPort, };
+        using var sender = gate.NewSender(
+            $"http::addr={Host}:{ResetPort};addr={Host}:{HttpPort1};auto_flush=off;protocol_version=1;retry_timeout=5000;");
+
+        // Larger than the connection's write buffer, so the body write reaches the stream.
+        sender.Table("row").Column("val", new string('x', 64 * 1024)).At(new DateTime(1970, 01, 01, 0, 0, 1));
+        await Flush(sender, sync);
+
+        Assert.That(live.PrintBuffer(), Does.Contain("row"));
+        Assert.That(gate.Attempts(ResetPort), Is.GreaterThanOrEqualTo(1));
+
+        await live.StopAsync();
+    }
+
+    [TestCase(false)]
+    [TestCase(true)]
+    public void AllAddressesTimeOut_ReportsBudgetAndCause(bool sync)
+    {
+        var gate = new ConnectGate(BlackHolePort1, BlackHolePort2);
+        using var sender = gate.NewSender(
+            $"http::addr={Host}:{BlackHolePort1};addr={Host}:{BlackHolePort2};auto_flush=off;protocol_version=1;connect_timeout=100;retry_timeout=1;");
+
+        AddRow(sender, "row");
+        var ex = Assert.ThrowsAsync<IngressError>(() => Flush(sender, sync));
+
+        Assert.That(ex!.code, Is.EqualTo(ErrorCode.ServerFlushError));
+        Assert.That(ex.Message, Does.Contain("Cannot connect").And.Contain("connect_timeout=100ms"));
+        Assert.That(ex.InnerException, Is.InstanceOf<OperationCanceledException>());
+        Assert.That(gate.Attempts(BlackHolePort1), Is.EqualTo(1));
+        Assert.That(gate.Attempts(BlackHolePort2), Is.EqualTo(1));
+    }
+
+    [TestCase(false)]
+    [TestCase(true)]
+    public void ConnectTimeout_SingleAddress_RetriesWithinBudget(bool sync)
+    {
+        var gate = new ConnectGate(BlackHolePort1);
+        using var sender = gate.NewSender(
+            $"http::addr={Host}:{BlackHolePort1};auto_flush=off;protocol_version=1;connect_timeout=100;retry_timeout=150;");
+
+        AddRow(sender, "row");
+        Assert.ThrowsAsync<IngressError>(() => Flush(sender, sync));
+
+        Assert.That(gate.Attempts(BlackHolePort1), Is.GreaterThanOrEqualTo(2));
+    }
+
+    [TestCase(false)]
+    [TestCase(true)]
+    public void RetriesDisabled_TimeoutNeitherRetriesNorRotates(bool sync)
+    {
+        var gate = new ConnectGate(BlackHolePort1);
+        using var sender = gate.NewSender(
+            $"http::addr={Host}:{BlackHolePort1};addr={Host}:{HttpPort1};auto_flush=off;protocol_version=1;connect_timeout=100;retry_timeout=0;");
+
+        AddRow(sender, "first");
+        Assert.ThrowsAsync<IngressError>(() => Flush(sender, sync));
+        AddRow(sender, "second");
+        Assert.ThrowsAsync<IngressError>(() => Flush(sender, sync));
+
+        Assert.That(gate.Attempts(BlackHolePort1), Is.EqualTo(2));
+        Assert.That(gate.Attempts(HttpPort1), Is.EqualTo(0));
+    }
+
+    [TestCase(false)]
+    [TestCase(true)]
+    public async Task BackoffLongerThanRequestTimeout_StillAttemptsEveryAddress(bool sync)
+    {
+        using var live = new DummyHttpServer(withBasicAuth: false);
+        await live.StartAsync(HttpPort1);
+        // The backoff doubles from 10ms, so the sixth rotation waits 320ms, past the 200ms request timeout.
+        var refused = Enumerable.Range(RefusedPort - 6, 6).ToArray();
+        var addresses = string.Concat(refused.Select(port => $"addr={Host}:{port};"));
+        var gate = new ConnectGate();
+        using var sender = gate.NewSender(
+            $"http::{addresses}addr={Host}:{HttpPort1};auto_flush=off;protocol_version=1;request_timeout=200;retry_timeout=15000;");
+
+        AddRow(sender, "row");
+        await Flush(sender, sync);
+
+        Assert.That(live.PrintBuffer(), Does.Contain("row"));
+        Assert.That(refused.Select(gate.Attempts), Is.All.GreaterThanOrEqualTo(1));
+
+        await live.StopAsync();
+    }
+
+    [TestCase(false)]
+    [TestCase(true)]
+    public async Task RequestTimeout_FailsOver(bool sync)
+    {
+        using var live = new DummyHttpServer(withBasicAuth: false);
+        await live.StartAsync(HttpPort1);
+        var stalled = new TcpListener(IPAddress.Loopback, 0);
+        stalled.Start();
+        try
+        {
+            var stalledPort = ((IPEndPoint)stalled.LocalEndpoint).Port;
+            using var sender = Sender.New(
+                $"http::addr=127.0.0.1:{stalledPort};addr={Host}:{HttpPort1};auto_flush=off;protocol_version=1;request_timeout=200;retry_timeout=5000;");
+
+            AddRow(sender, "row");
+            await Flush(sender, sync);
+
+            Assert.That(live.PrintBuffer(), Does.Contain("row"));
+        }
+        finally
+        {
+            stalled.Stop();
+        }
+
+        await live.StopAsync();
+    }
+
+    [TestCase(false)]
+    [TestCase(true)]
+    public void RequestTimeout_IsNotReportedAsConnectFailure(bool sync)
+    {
+        var stalled = new TcpListener(IPAddress.Loopback, 0);
+        stalled.Start();
+        try
+        {
+            var stalledPort = ((IPEndPoint)stalled.LocalEndpoint).Port;
+            using var sender = Sender.New(
+                $"http::addr=127.0.0.1:{stalledPort};auto_flush=off;protocol_version=1;request_timeout=100;retry_timeout=1;");
+
+            AddRow(sender, "row");
+            var ex = Assert.ThrowsAsync<IngressError>(() => Flush(sender, sync));
+
+            Assert.That(ex!.Message, Does.Contain("timeout").And.Not.Contain("Cannot connect"));
+            Assert.That(ex.InnerException, Is.InstanceOf<OperationCanceledException>());
+        }
+        finally
+        {
+            stalled.Stop();
+        }
+    }
+
+    [TestCase(false)]
+    [TestCase(true)]
+    public async Task CallerCancellation_StopsWithoutRetryingOrRotating(bool sync)
+    {
+        using var cts = new CancellationTokenSource();
+        var handler = new ScriptedHandler((call, ct) =>
+        {
+            if (call == 1)
+            {
+                cts.Cancel();
+                ct.ThrowIfCancellationRequested();
+            }
+
+            return new HttpResponseMessage(HttpStatusCode.NoContent);
+        });
+        using var sender = handler.NewSender(
+            "http::addr=h:1;addr=h:2;auto_flush=off;protocol_version=1;retry_timeout=5000;");
+
+        AddRow(sender, "cancelled");
+        var ex = Assert.ThrowsAsync<IngressError>(() => Flush(sender, sync, cts.Token));
+        AddRow(sender, "delivered");
+        await Flush(sender, sync);
+
+        Assert.That(ex!.InnerException, Is.InstanceOf<OperationCanceledException>());
+        Assert.That(handler.Ports, Is.EqualTo(new[] { 1, 1, }));
+    }
+
+    [Test]
+    public async Task CancelDuringBackoff_LeavesSenderUsable()
+    {
+        using var cts = new CancellationTokenSource();
+        var handler = new ScriptedHandler((call, _) =>
+        {
+            if (call == 2)
+            {
+                cts.Cancel();
+            }
+
+            return new HttpResponseMessage(call <= 2 ? HttpStatusCode.ServiceUnavailable : HttpStatusCode.NoContent);
+        });
+        using var sender = handler.NewSender(
+            "http::addr=h:1;addr=h:2;auto_flush=off;protocol_version=1;retry_timeout=60000;");
+
+        AddRow(sender, "cancelled");
+        Assert.ThrowsAsync<IngressError>(() => sender.SendAsync(cts.Token));
+        AddRow(sender, "second");
+        await sender.SendAsync();
+        AddRow(sender, "third");
+        await sender.SendAsync();
+
+        Assert.That(handler.Ports, Is.EqualTo(new[] { 1, 2, 1, 1, }));
+    }
+
+    [TestCase(false)]
+    [TestCase(true)]
+    public void Send_AfterDispose_Throws(bool sync)
+    {
+        var handler = new ScriptedHandler((_, _) => new HttpResponseMessage(HttpStatusCode.NoContent));
+        var sender = handler.NewSender("http::addr=h:1;auto_flush=off;protocol_version=1;");
+        sender.Dispose();
+
+        AddRow(sender, "row");
+        var ex = Assert.ThrowsAsync<IngressError>(() => Flush(sender, sync));
+
+        Assert.That(ex!.InnerException, Is.InstanceOf<ObjectDisposedException>());
+        Assert.That(handler.Ports, Is.Empty);
+    }
+
+    [TestCase("db2:90000")]
+    [TestCase("bad host:9001")]
+    [TestCase("bad^host:9001")]
+    [TestCase("2001:db8::1")]
+    [TestCase("[::1")]
+    public void InvalidHttpAddress_IsRejectedByConfiguration(string address)
+    {
+        var ex = Assert.Throws<IngressError>(() => _ = new SenderOptions($"http::addr=good:9000,{address};"));
+
+        Assert.That(ex!.code, Is.EqualTo(ErrorCode.ConfigError));
+        Assert.That(ex.Message, Does.Contain(address));
+    }
+
+    [TestCase("localhost")]
+    [TestCase("host:9000")]
+    [TestCase("my_host:9000")]
+    [TestCase("192.168.1.1:9000")]
+    [TestCase("[::1]")]
+    [TestCase("[2001:db8::1]:9000")]
+    public void ValidHttpAddress_IsAcceptedByConfiguration(string address)
+    {
+        Assert.That(new SenderOptions($"http::addr=good:9000,{address};").AddressCount, Is.EqualTo(2));
+    }
+
+    [Test]
+    public async Task ProtocolDetection_FailsOverWhenFirstAddressTimesOut()
+    {
+        using var live = new DummyHttpServer(withBasicAuth: false);
+        await live.StartAsync(HttpPort1);
+        var gate = new ConnectGate(BlackHolePort1);
+        // Longer than the probe's 1s budget, so only the untried address keeps the probe going.
+        using var sender = gate.NewSender(
+            $"http::addr={Host}:{BlackHolePort1};addr={Host}:{HttpPort1};auto_flush=off;connect_timeout=1100;");
+
+        // Falling back to V1 here would reject the array column.
+        Assert.That(() => sender.Table("metrics").Column("array", new[] { 1.2, 2.6, }), Throws.Nothing);
+
+        await live.StopAsync();
+    }
+
+    [Test]
+    public void ProtocolDetection_SingleUnresponsiveAddress_AttemptsOnce()
+    {
+        var gate = new ConnectGate(BlackHolePort1);
+        using var sender = gate.NewSender(
+            $"http::addr={Host}:{BlackHolePort1};auto_flush=off;connect_timeout=1100;");
+
+        Assert.That(gate.Attempts(BlackHolePort1), Is.EqualTo(1));
+    }
+
+    private static void AddRow(ISender sender, string table)
+    {
+        sender.Table(table).Column("val", 1).At(new DateTime(1970, 01, 01, 0, 0, 1));
+    }
+
+    private static async Task Flush(ISender sender, bool sync, CancellationToken ct = default)
+    {
+        if (sync)
+        {
+            sender.Send(ct);
+        }
+        else
+        {
+            await sender.SendAsync(ct);
+        }
+    }
+
+    private sealed class ScriptedHandler : HttpMessageHandler
+    {
+        private readonly Func<int, CancellationToken, HttpResponseMessage> _script;
+
+        public ScriptedHandler(Func<int, CancellationToken, HttpResponseMessage> script)
+        {
+            _script = script;
+        }
+
+        public List<int> Ports { get; } = new();
+
+        public ISender NewSender(string configString)
+        {
+            return new HttpSender(new SenderOptions(configString),
+                                  _ => new HttpClient(this, disposeHandler: false));
+        }
+
+        protected override HttpResponseMessage Send(HttpRequestMessage request, CancellationToken ct)
+        {
+            ct.ThrowIfCancellationRequested();
+            Ports.Add(request.RequestUri!.Port);
+            return _script(Ports.Count, ct);
+        }
+
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
+        {
+            return Task.FromResult(Send(request, ct));
+        }
+    }
+
+    private sealed class ResetOnWriteStream : MemoryStream
+    {
+        public override void Write(byte[] buffer, int offset, int count) => throw Reset();
+
+        public override void Write(ReadOnlySpan<byte> buffer) => throw Reset();
+
+        public override Task WriteAsync(byte[] buffer, int offset, int count, CancellationToken ct) => throw Reset();
+
+        public override ValueTask WriteAsync(ReadOnlyMemory<byte> buffer, CancellationToken ct = default) =>
+            throw Reset();
+
+        private static IOException Reset() => new("Connection reset by peer");
+    }
+
+    // Drives the real SocketsHttpHandler.ConnectTimeout path without needing a network that drops SYN packets.
+    private sealed class ConnectGate
+    {
+        private readonly ConcurrentDictionary<int, int> _attempts = new();
+        private readonly int[] _blackHoles;
+
+        public ConnectGate(params int[] blackHoles)
+        {
+            _blackHoles = blackHoles;
+        }
+
+        public int? ResettingPort { get; init; }
+
+        public int Attempts(int port)
+        {
+            return _attempts.TryGetValue(port, out var attempts) ? attempts : 0;
+        }
+
+        public ISender NewSender(string configString)
+        {
+            return new HttpSender(new SenderOptions(configString), handler =>
+            {
+                handler.ConnectCallback = ConnectAsync;
+                return new HttpClient(handler, disposeHandler: false);
+            });
+        }
+
+        private async ValueTask<Stream> ConnectAsync(SocketsHttpConnectionContext context, CancellationToken ct)
+        {
+            var port = context.DnsEndPoint.Port;
+            _attempts.AddOrUpdate(port, 1, static (_, attempts) => attempts + 1);
+            if (_blackHoles.Contains(port))
+            {
+                await Task.Delay(Timeout.Infinite, ct);
+            }
+
+            if (port == ResettingPort)
+            {
+                return new ResetOnWriteStream();
+            }
+
+            var socket = new Socket(SocketType.Stream, System.Net.Sockets.ProtocolType.Tcp) { NoDelay = true, };
+            try
+            {
+                await socket.ConnectAsync(context.DnsEndPoint, ct);
+                return new NetworkStream(socket, ownsSocket: true);
+            }
+            catch
+            {
+                socket.Dispose();
+                throw;
+            }
         }
     }
 }

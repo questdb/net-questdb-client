@@ -614,6 +614,7 @@ public record SenderOptions
         ValidateAuthCombination();
         ValidateTlsCombination();
         ValidateMultiAddressForTcp();
+        ValidateHttpAddresses();
         ValidateStoreAndForwardOptions();
         ValidateGzipForWebSocket();
         ApplyAutoFlushNormalisation();
@@ -796,6 +797,26 @@ public record SenderOptions
         {
             throw new IngressError(ErrorCode.ConfigError,
                 "Multiple `addr=` entries are not supported on tcp/tcps; use http/https or ws/wss for multi-host failover.");
+        }
+    }
+
+    private void ValidateHttpAddresses()
+    {
+        if (!IsHttp())
+        {
+            return;
+        }
+
+        foreach (var address in _addresses)
+        {
+            try
+            {
+                AddressProvider.BuildHttpUri(protocol.ToString(), address);
+            }
+            catch (Exception ex) when (ex is UriFormatException or ArgumentOutOfRangeException)
+            {
+                throw new IngressError(ErrorCode.ConfigError, $"Invalid `addr` entry `{address}`: {ex.Message}", ex);
+            }
         }
     }
 
@@ -1257,6 +1278,8 @@ public record SenderOptions
     /// <remarks>
     ///     The <see cref="retry_timeout" /> setting specifies the length of time retries can be made.
     ///     Retries are sent multiple times during this period, with some small jitter.
+    ///     When multiple addresses are configured and retries are enabled, each one gets an attempt even if this
+    ///     period elapses first.
     /// </remarks>
     /// <seealso cref="HttpSender.SendAsync" />
     /// .

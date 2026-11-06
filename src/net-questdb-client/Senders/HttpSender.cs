@@ -67,10 +67,7 @@ internal class HttpSender : AbstractSender
     /// </summary>
     private AddressProvider _addressProvider = null!;
 
-    /// <summary>
-    ///     Current <see cref="HttpClient" /> reference from the cache.
-    /// </summary>
-    private HttpClient _client = null!;
+    private bool _isDisposed;
 
     /// <summary>
     ///     Initializes a new HttpSender configured according to the provided options.
@@ -189,7 +186,7 @@ internal class HttpSender : AbstractSender
         _addressProvider = new AddressProvider(Options.addresses);
 
         // Create and cache the initial client
-        SwitchClientToCurrentAddress();
+        GetClientForCurrentAddress();
 
         var protocolVersion = Options.protocol_version;
 
@@ -197,11 +194,10 @@ internal class HttpSender : AbstractSender
         {
             // We need to select the last version that both client and server support.
             // Other clients use 1 second timeout for "/settings", follow same practice here.
-            // Save the current address index to restore after probing (SendWithRetries may rotate)
-            var initialAddressIndex = _addressProvider.CurrentIndex;
             try
             {
-                using var response = SendWithRetries(default, _settingRequestFactory, TimeSpan.FromSeconds(1));
+                using var response = SendWithRetries(default, _settingRequestFactory, TimeSpan.FromSeconds(1),
+                                                     Stopwatch.StartNew());
                 if (!response.IsSuccessStatusCode)
                 {
                     protocolVersion = ProtocolVersion.V1;
@@ -235,19 +231,6 @@ internal class HttpSender : AbstractSender
     /// <returns>A configured HttpClient for the given address.</returns>
     private HttpClient CreateClientForAddress(string address)
     {
-        // Determine the port to use
-        var port = AddressProvider.ParsePort(address);
-        if (port <= 0)
-        {
-            // Use protocol default if no port specified
-            port = Options.protocol switch
-            {
-                ProtocolType.http or ProtocolType.https => 9000,
-                ProtocolType.tcp or ProtocolType.tcps   => 9009,
-                _                                       => 9000,
-            };
-        }
-
         var host = AddressProvider.ParseHost(address);
 
         // Get or create a handler for this specific address
@@ -272,8 +255,7 @@ internal class HttpSender : AbstractSender
         {
             client = _httpClientFactory(handler);
 
-            var uri = new UriBuilder(Options.protocol.ToString(), host, port);
-            client.BaseAddress = uri.Uri;
+            client.BaseAddress = AddressProvider.BuildHttpUri(Options.protocol.ToString(), address);
             client.Timeout     = Timeout.InfiniteTimeSpan;
 
             // Apply authentication headers
@@ -307,8 +289,13 @@ internal class HttpSender : AbstractSender
     /// <summary>
     ///     Gets or creates an HttpClient for the current address, caching it to avoid recreation on subsequent rotations.
     /// </summary>
-    private HttpClient SwitchClientToCurrentAddress()
+    private HttpClient GetClientForCurrentAddress()
     {
+        if (_isDisposed)
+        {
+            throw new ObjectDisposedException(nameof(HttpSender));
+        }
+
         var address = _addressProvider.CurrentAddress;
 
         if (!_clientCache.TryGetValue(address, out var client))
@@ -326,7 +313,6 @@ internal class HttpSender : AbstractSender
             }
         }
 
-        _client = client;
         return client;
     }
 
@@ -567,22 +553,25 @@ internal class HttpSender : AbstractSender
 
     /// <summary>
     ///     Sends an HTTP request produced by <paramref name="requestFactory" /> and retries on transient connection or server
-    ///     errors until a successful response is received or <paramref name="retryTimeout" /> elapses.
-    ///     When multiple addresses are configured and a retriable error occurs, rotates to the next address and retries.
+    ///     errors, including connect and request timeouts, until a successful response is received or
+    ///     <paramref name="retryTimeout" /> elapses.
+    ///     When multiple addresses are configured and a retriable error occurs, rotates to the next address and retries;
+    ///     every address gets one attempt even if <paramref name="retryTimeout" /> elapses first.
     /// </summary>
     /// <param name="ct">Cancellation token used to cancel the overall operation and linked to per-request timeouts.</param>
     /// <param name="requestFactory">Factory that produces a fresh <see cref="HttpRequestMessage" /> for each attempt.</param>
     /// <param name="retryTimeout">Maximum duration to keep retrying transient failures; retries are skipped if this is zero.</param>
-    /// <returns>The final <see cref="HttpResponseMessage" /> returned by the server for a successful request.</returns>
+    /// <param name="retryTimer">Measures <paramref name="retryTimeout" />; defaults to a timer started at the first failure.</param>
+    /// <returns>The last response, which may be an HTTP error for the caller to report.</returns>
     /// <exception cref="IngressError">
-    ///     Thrown with <see cref="ErrorCode.ServerFlushError" /> when a connection could not be
-    ///     established within the allowed retries.
+    ///     Thrown with <see cref="ErrorCode.ServerFlushError" /> when the last attempt got no response.
     /// </exception>
     /// <remarks>The caller is responsible for disposing the returned <see cref="HttpResponseMessage" />./// </remarks>
     private HttpResponseMessage SendWithRetries(CancellationToken ct, Func<HttpRequestMessage> requestFactory,
-                                                TimeSpan retryTimeout)
+                                                TimeSpan retryTimeout, Stopwatch? retryTimer = null)
     {
         HttpResponseMessage? response = null;
+        Exception?           failure  = null;
         var                  cts      = GenerateRequestCts(ct);
         var                  request  = requestFactory();
 
@@ -590,30 +579,25 @@ internal class HttpSender : AbstractSender
         {
             try
             {
-                response = _client.Send(request, HttpCompletionOption.ResponseHeadersRead, cts.Token);
+                response = GetClientForCurrentAddress()
+                    .Send(request, HttpCompletionOption.ResponseHeadersRead, cts.Token);
             }
-            catch (HttpRequestException)
+            catch (Exception ex) when (IsTransportError(ex, ct))
             {
-                // Connection error
+                failure = ex;
             }
 
             if (retryTimeout > TimeSpan.Zero)
                 // retry if appropriate - error that's retriable, and retries are enabled
             {
-                if (response == null                  // if it was a cannot correct error
-                    || (!response.IsSuccessStatusCode // or some other http error
-                        && IsRetriableError(response.StatusCode)))
+                if (IsTransientFailure(response))
                 {
-                    var retryTimer = new Stopwatch();
-                    retryTimer.Start();
-                    var retryInterval = TimeSpan.FromMilliseconds(5); // it'll get doubled
+                    retryTimer ??= Stopwatch.StartNew();
+                    var retryInterval      = TimeSpan.FromMilliseconds(5); // it'll get doubled
+                    var unvisitedAddresses = _addressProvider.AddressCount - 1;
 
-                    while (retryTimer.Elapsed < retryTimeout // whilst we can still retry
-                           && (
-                                  response == null ||               // either we can't connect
-                                  (!response.IsSuccessStatusCode && // or we have another http error
-                                   IsRetriableError(response.StatusCode)))
-                          )
+                    while ((retryTimer.Elapsed < retryTimeout || unvisitedAddresses > 0)
+                           && IsTransientFailure(response))
                     {
                         retryInterval = TimeSpan.FromMilliseconds(Math.Min(retryInterval.TotalMilliseconds * 2, 1000));
                         // cleanup last run
@@ -626,33 +610,32 @@ internal class HttpSender : AbstractSender
                         if (_addressProvider.HasMultipleAddresses)
                         {
                             _addressProvider.RotateToNextAddress();
+                            unvisitedAddresses--;
                         }
 
                         request = requestFactory();
-                        cts     = GenerateRequestCts(ct);
 
                         var jitter = TimeSpan.FromMilliseconds(Random.Shared.Next(0, 10) - 10 / 2.0);
                         Thread.Sleep(retryInterval + jitter);
 
+                        cts = GenerateRequestCts(ct);
+
                         try
                         {
-                            // Get the client for the current address (may have rotated)
-                            SwitchClientToCurrentAddress();
-                            response = _client.Send(request, HttpCompletionOption.ResponseHeadersRead, cts.Token);
+                            response = GetClientForCurrentAddress()
+                                .Send(request, HttpCompletionOption.ResponseHeadersRead, cts.Token);
                         }
-                        catch (HttpRequestException)
+                        catch (Exception ex) when (IsTransportError(ex, ct))
                         {
-                            // Connection error
+                            failure = ex;
                         }
                     }
                 }
             }
 
-            // check for cannot connect error
             if (response == null)
             {
-                throw new IngressError(ErrorCode.ServerFlushError,
-                                       $"Cannot connect to `{_addressProvider.CurrentHost}:{_addressProvider.CurrentPort}`");
+                throw NoResponseError(failure!);
             }
 
             return response;
@@ -729,6 +712,7 @@ internal class HttpSender : AbstractSender
         HttpRequestMessage?      request  = null;
         CancellationTokenSource? cts      = null;
         HttpResponseMessage?     response = null;
+        Exception?               failure  = null;
 
         try
         {
@@ -737,30 +721,26 @@ internal class HttpSender : AbstractSender
 
             try
             {
-                response = await _client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cts.Token);
+                response = await GetClientForCurrentAddress()
+                    .SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cts.Token);
             }
-            catch (HttpRequestException)
+            catch (Exception ex) when (IsTransportError(ex, ct))
             {
-                // Connection error
+                failure = ex;
             }
 
             // retry if appropriate - error that's retriable, and retries are enabled
             if (Options.retry_timeout > TimeSpan.Zero)
             {
-                if (response == null                  // if it was a cannot correct error
-                    || (!response.IsSuccessStatusCode // or some other http error
-                        && IsRetriableError(response.StatusCode)))
+                if (IsTransientFailure(response))
                 {
                     var retryTimer = new Stopwatch();
                     retryTimer.Start();
-                    var retryInterval = TimeSpan.FromMilliseconds(5); // it'll get doubled
+                    var retryInterval      = TimeSpan.FromMilliseconds(5); // it'll get doubled
+                    var unvisitedAddresses = _addressProvider.AddressCount - 1;
 
-                    while (retryTimer.Elapsed < Options.retry_timeout // whilst we can still retry
-                           && (
-                                  response == null ||               // either we can't connect
-                                  (!response.IsSuccessStatusCode && // or we have another http error
-                                   IsRetriableError(response.StatusCode)))
-                          )
+                    while ((retryTimer.Elapsed < Options.retry_timeout || unvisitedAddresses > 0)
+                           && IsTransientFailure(response))
                     {
                         retryInterval = TimeSpan.FromMilliseconds(Math.Min(retryInterval.TotalMilliseconds * 2, 1000));
                         // cleanup last run
@@ -774,34 +754,32 @@ internal class HttpSender : AbstractSender
                         if (_addressProvider.HasMultipleAddresses)
                         {
                             _addressProvider.RotateToNextAddress();
+                            unvisitedAddresses--;
                         }
 
                         request = GenerateRequest();
-                        cts     = GenerateRequestCts(ct);
 
                         var jitter = TimeSpan.FromMilliseconds(Random.Shared.Next(0, 10) - 10 / 2.0);
-                        await Task.Delay(retryInterval + jitter, cts.Token);
+                        await Task.Delay(retryInterval + jitter, ct);
+
+                        cts = GenerateRequestCts(ct);
 
                         try
                         {
-                            // Get the client for the current address (may have rotated)
-                            var client = SwitchClientToCurrentAddress();
-                            response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead,
-                                                              cts.Token);
+                            response = await GetClientForCurrentAddress()
+                                .SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cts.Token);
                         }
-                        catch (HttpRequestException)
+                        catch (Exception ex) when (IsTransportError(ex, ct))
                         {
-                            // Connection error
+                            failure = ex;
                         }
                     }
                 }
             }
 
-            // check for cannot connect error
             if (response == null)
             {
-                throw new IngressError(ErrorCode.ServerFlushError,
-                                       $"Cannot connect to `{_addressProvider.CurrentHost}:{_addressProvider.CurrentPort}`");
+                throw NoResponseError(failure!);
             }
 
             // return if ok
@@ -839,6 +817,35 @@ internal class HttpSender : AbstractSender
         }
     }
 
+    // Timeouts surface as OperationCanceledException and body-write resets as the buffer's SocketError.
+    private static bool IsTransportError(Exception ex, CancellationToken ct)
+    {
+        return ex is HttpRequestException or IngressError { code: ErrorCode.SocketError, }
+               || (ex is OperationCanceledException && !ct.IsCancellationRequested);
+    }
+
+    private static bool IsTransientFailure(HttpResponseMessage? response)
+    {
+        return response == null
+               || (!response.IsSuccessStatusCode && IsRetriableError(response.StatusCode));
+    }
+
+    private IngressError NoResponseError(Exception failure)
+    {
+        var address = $"`{_addressProvider.CurrentHost}:{_addressProvider.CurrentPort}`";
+        var message = failure switch
+        {
+            OperationCanceledException { InnerException: TimeoutException } =>
+                $"Cannot connect to {address}: exceeded connect_timeout={Options.EffectiveConnectTimeout.TotalMilliseconds}ms",
+            OperationCanceledException =>
+                $"Request to {address} exceeded its {CalculateRequestTimeout().TotalMilliseconds:F0}ms timeout",
+            IngressError => $"Request to {address} failed: {failure.Message}",
+            _ => $"Cannot connect to {address}: {failure.Message}",
+        };
+
+        return new IngressError(ErrorCode.ServerFlushError, message, failure);
+    }
+
     /// <summary>
     ///     Determines whether the specified HTTP status code represents a transient error that should be retried.
     /// </summary>
@@ -872,6 +879,7 @@ internal class HttpSender : AbstractSender
     /// <inheritdoc />
     public override void Dispose()
     {
+        _isDisposed = true;
         DisposeNetworkResources();
 
         Buffer.Clear();

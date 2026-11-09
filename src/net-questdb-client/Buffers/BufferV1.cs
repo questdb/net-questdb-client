@@ -197,7 +197,7 @@ public class BufferV1 : IBuffer
     /// </summary>
     /// <remarks>
     ///     Restores the active buffer index, adjusts the total Length and current Position to the saved line start,
-    ///     and clears the table-set flag for the cancelled row.
+    ///     and resets the row state so the next row starts from scratch.
     /// </remarks>
     public void CancelRow()
     {

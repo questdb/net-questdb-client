@@ -114,7 +114,10 @@ public interface ISender : IDisposable, IAsyncDisposable
     ///     confirmed via <see cref="Flush(TimeSpan, CancellationToken)" /> / <c>IQuestDBClient.Flush</c>.
     ///     For an explicit bounded, bool-returning drain on any sender, call <c>Flush</c>.
     /// </remarks>
-    /// <exception cref="IngressError">When the request fails, or a standalone ws drain times out.</exception>
+    /// <exception cref="IngressError">
+    ///     When the request fails, a standalone ws drain times out, or a tcp, tcps, ws or wss sender has a row in
+    ///     progress.
+    /// </exception>
     public Task SendAsync(CancellationToken ct = default);
 
     /// <inheritdoc cref="SendAsync" />
@@ -134,7 +137,10 @@ public interface ISender : IDisposable, IAsyncDisposable
     /// <param name="timeout">Upper bound on the wait for acknowledgement.</param>
     /// <param name="ct">Cancels the flush and the wait.</param>
     /// <returns><c>true</c> if everything published was acknowledged on return; <c>false</c> on timeout.</returns>
-    /// <exception cref="IngressError">If the transport has latched a terminal error.</exception>
+    /// <exception cref="IngressError">
+    ///     When the request fails, the transport has latched a terminal error, or a tcp, tcps, ws or wss sender has a
+    ///     row in progress.
+    /// </exception>
     public bool Flush(TimeSpan timeout, CancellationToken ct = default)
     {
         Send(ct);
@@ -160,7 +166,7 @@ public interface ISender : IDisposable, IAsyncDisposable
     /// <summary>
     ///     Set table (measurement) name for the next row.
     ///     Each row may have a different table name within a batch.
-    ///     Cannot be used within a transaction.
+    ///     Within a transaction, only the transaction's table name is accepted.
     /// </summary>
     /// <param name="name">The table name</param>
     /// <returns>Itself</returns>

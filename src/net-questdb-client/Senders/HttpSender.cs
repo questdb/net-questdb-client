@@ -750,7 +750,8 @@ internal class HttpSender : AbstractSender
         using var cts = GenerateRequestCts(ct);
         try
         {
-            return await response.Content.ReadAsStringAsync(cts.Token).ConfigureAwait(false);
+            var body = await response.Content.ReadAsByteArrayAsync(cts.Token).ConfigureAwait(false);
+            return Encoding.UTF8.GetString(body);
         }
         catch (Exception ex) when (IsTransportError(ex, ct))
         {

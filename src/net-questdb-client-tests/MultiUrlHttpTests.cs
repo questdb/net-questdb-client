@@ -851,6 +851,24 @@ public class MultiUrlHttpTests
         Assert.That(ex!.Message, Does.Contain("not json"));
     }
 
+    [TestCase(false)]
+    [TestCase(true)]
+    public void UnknownCharsetErrorBody_IsReportedAsUtf8(bool isSync)
+    {
+        var handler = new ScriptedHandler((_, _) =>
+        {
+            var content = new ByteArrayContent(Encoding.UTF8.GetBytes("{\"message\":\"bad row\"}"));
+            content.Headers.ContentType = MediaTypeHeaderValue.Parse("application/json; charset=utf8");
+            return new HttpResponseMessage(HttpStatusCode.BadRequest) { Content = content, };
+        });
+        using var sender = handler.NewSender("http::addr=h:1;auto_flush=off;protocol_version=1;");
+
+        AddRow(sender, "row");
+        var ex = Assert.ThrowsAsync<IngressError>(() => Flush(sender, isSync));
+
+        Assert.That(ex!.Message, Does.Contain("Bad Request").And.Contain("bad row"));
+    }
+
     [Test]
     public void ProtocolDetection_SlowRetriableResponseAtStartup_NegotiatesBeforeNextBatch()
     {

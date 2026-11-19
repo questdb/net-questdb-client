@@ -73,6 +73,8 @@ public class BufferV1 : IBuffer
     /// <inheritdoc />
     public int RowCount { get; set; }
 
+    internal bool HasRowInProgress => _hasTable;
+
     /// <inheritdoc />
     public byte[] Chunk { get; set; }
 
@@ -116,6 +118,8 @@ public class BufferV1 : IBuffer
     /// <inheritdoc />
     public void At(DateTime timestamp)
     {
+        GuardTableNotSet();
+
         var utc = NormaliseToUtc(timestamp);
         var epoch = utc.Ticks - EpochTicks;
         PutAscii(' ').Put(epoch * 100);
@@ -135,6 +139,8 @@ public class BufferV1 : IBuffer
     /// <inheritdoc />
     public void At(long epochNano)
     {
+        GuardTableNotSet();
+
         PutAscii(' ').Put(epochNano);
         FinishLine();
     }
@@ -142,6 +148,8 @@ public class BufferV1 : IBuffer
     /// <inheritdoc />
     public void AtNanos(long timestampNanos)
     {
+        GuardTableNotSet();
+
         PutAscii(' ').Put(timestampNanos);
         FinishLine();
     }
@@ -171,6 +179,7 @@ public class BufferV1 : IBuffer
         _lineStartLength         = 0;
         _lineStartBufferIndex    = 0;
         _lineStartBufferPosition = 0;
+        ResetRowState();
     }
 
     /// <inheritdoc />
@@ -188,7 +197,7 @@ public class BufferV1 : IBuffer
     /// </summary>
     /// <remarks>
     ///     Restores the active buffer index, adjusts the total Length and current Position to the saved line start,
-    ///     and clears the table-set flag for the cancelled row.
+    ///     and resets the row state so the next row starts from scratch.
     /// </remarks>
     public void CancelRow()
     {
@@ -196,7 +205,7 @@ public class BufferV1 : IBuffer
         Chunk               = _buffers[_currentBufferIndex].Buffer;
         Length              = _lineStartLength;
         Position            = _lineStartBufferPosition;
-        _hasTable           = false;
+        ResetRowState();
     }
 
     /// <inheritdoc />
@@ -265,7 +274,7 @@ public class BufferV1 : IBuffer
     public IBuffer Table(ReadOnlySpan<char> name)
     {
         GuardFsFileNameLimit(name);
-        if (WithinTransaction && name != _currentTableName)
+        if (WithinTransaction && !name.SequenceEqual(_currentTableName))
         {
             throw new IngressError(ErrorCode.InvalidApiCall,
                                    "Transactions can only be for one table.");
@@ -570,10 +579,16 @@ public class BufferV1 : IBuffer
     {
         PutAscii('\n');
         RowCount++;
+        ResetRowState();
+        GuardExceededMaxBufferSize();
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private void ResetRowState()
+    {
         _hasTable  = false;
         _noFields  = true;
         _noSymbols = true;
-        GuardExceededMaxBufferSize();
     }
 
     /// <summary>

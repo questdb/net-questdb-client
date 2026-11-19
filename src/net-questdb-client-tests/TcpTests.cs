@@ -589,6 +589,52 @@ public class TcpTests
         WaitAssert(srv, expected);
     }
 
+    [TestCase(false)]
+    [TestCase(true)]
+    public async Task SendWithRowInProgress_ThrowsAndKeepsRow(bool isSync)
+    {
+        using var srv = CreateTcpListener(_port);
+        srv.AcceptAsync();
+        using var sender = Sender.New($"tcp::addr={_host}:{_port};auto_flush=off;");
+
+        sender.Table("a").Symbol("k", "v");
+        var ex = Assert.ThrowsAsync<IngressError>(async () =>
+        {
+            if (isSync)
+            {
+                sender.Send();
+            }
+            else
+            {
+                await sender.SendAsync();
+            }
+        });
+        Assert.That(ex!.code, Is.EqualTo(ErrorCode.InvalidApiCall));
+
+        await sender.Column("x", 1).AtAsync(1L);
+        await sender.Table("b").Column("y", 2).AtAsync(2L);
+        await sender.SendAsync();
+
+        WaitAssert(srv, "a,k=v x=1i 1\nb y=2i 2\n");
+    }
+
+    [Test]
+    public async Task SendWithRowInProgress_CancelRowLetsNextRowThrough()
+    {
+        using var srv = CreateTcpListener(_port);
+        srv.AcceptAsync();
+        using var sender = Sender.New($"tcp::addr={_host}:{_port};auto_flush=off;");
+
+        sender.Table("a").Symbol("k", "v");
+        Assert.Throws<IngressError>(() => sender.Send());
+        sender.CancelRow();
+
+        await sender.Table("b").Column("y", 2).AtAsync(2L);
+        await sender.SendAsync();
+
+        WaitAssert(srv, "b y=2i 2\n");
+    }
+
     [Test]
     public async Task SendMillionAsyncExplicit()
     {

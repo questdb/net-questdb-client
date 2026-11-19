@@ -7,6 +7,57 @@ namespace net_questdb_client_tests;
 public class BufferTests
 {
     [Test]
+    public void At_WithoutTable_WritesNothing()
+    {
+        var buffer = new BufferV3(128, 128, 128);
+        var overloads = new Action[]
+        {
+            () => buffer.At(new DateTime(1970, 01, 01, 0, 0, 1)),
+            () => buffer.At(1L),
+            () => buffer.AtNanos(1L),
+        };
+
+        foreach (var at in overloads)
+        {
+            Assert.That(() => at(), Throws.TypeOf<IngressError>().With.Message.Contains("Table must be specified"));
+        }
+
+        Assert.That(buffer.Length, Is.Zero);
+    }
+
+    [Test]
+    public void At_WithTableAndNoFields_IsAllowed()
+    {
+        var buffer = new BufferV3(128, 128, 128);
+
+        buffer.Table("t").At(1L);
+
+        Assert.That(buffer.RowCount, Is.EqualTo(1));
+    }
+
+    [TestCase(false)]
+    [TestCase(true)]
+    public void AtNow_AfterDiscardedRow_RequiresSymbolOrColumn(bool isCancelled)
+    {
+        var buffer = new BufferV3(128, 128, 128);
+        buffer.Table("bad").Symbol("a", "b");
+
+        if (isCancelled)
+        {
+            buffer.CancelRow();
+        }
+        else
+        {
+            buffer.Clear();
+        }
+
+        buffer.Table("good");
+
+        Assert.That(() => buffer.AtNow(),
+                    Throws.TypeOf<IngressError>().With.Message.Contains("Did not specify any symbols or columns"));
+    }
+
+    [Test]
     public void DecimalNegationSimple()
     {
         var buffer = new BufferV3(128, 128, 128);

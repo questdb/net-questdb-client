@@ -69,7 +69,7 @@ internal abstract class AbstractSender : ISender
     }
 
     /// <inheritdoc />
-    public ISender Table(ReadOnlySpan<char> name)
+    public virtual ISender Table(ReadOnlySpan<char> name)
     {
         Buffer.Table(name);
         return this;

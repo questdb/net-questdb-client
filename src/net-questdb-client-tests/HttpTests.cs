@@ -1440,6 +1440,45 @@ public class HttpTests
         Assert.That(srv.PrintBuffer(), Is.EqualTo(expected));
     }
 
+    [Test]
+    public async Task CancelLine_NextRowStartsFromScratch()
+    {
+        using var srv = new DummyHttpServer();
+        await srv.StartAsync(HttpPort);
+        using var sender = Sender.New($"http::addr={Host}:{HttpPort};auto_flush=off;protocol_version=1;");
+
+        sender.Table("bad").Symbol("asdf", "sdfad").Column("asdf", 123);
+        sender.CancelRow();
+        sender.Table("good").Column("ddd", 123);
+        await sender.AtAsync(new DateTime(1970, 1, 2));
+
+        sender.Table("bad").Column("asdf", 123);
+        sender.CancelRow();
+        sender.Table("good").Symbol("asdf", "sdfad");
+        await sender.AtAsync(new DateTime(1970, 1, 2));
+        await sender.SendAsync();
+
+        var expected = "good ddd=123i 86400000000000\n" +
+                       "good,asdf=sdfad 86400000000000\n";
+        Assert.That(srv.PrintBuffer(), Is.EqualTo(expected));
+    }
+
+    [Test]
+    public async Task ClearDiscardsRowInProgress()
+    {
+        using var srv = new DummyHttpServer();
+        await srv.StartAsync(HttpPort);
+        using var sender = Sender.New($"http::addr={Host}:{HttpPort};auto_flush=off;protocol_version=1;");
+
+        sender.Table("bad").Column("asdf", 123);
+        sender.Clear();
+        sender.Table("good").Column("ddd", 123);
+        await sender.AtAsync(new DateTime(1970, 1, 2));
+        await sender.SendAsync();
+
+        Assert.That(srv.PrintBuffer(), Is.EqualTo("good ddd=123i 86400000000000\n"));
+    }
+
 
     [Test]
     public async Task CancelLineAfterError()
@@ -1545,6 +1584,15 @@ public class HttpTests
         // check its fine after sending
         sender.Transaction("other table name");
         sender.Rollback();
+    }
+
+    [Test]
+    public void TransactionAcceptsItsOwnTableName()
+    {
+        using var sender = Sender.New($"http::addr={Host}:{HttpPort};auto_flush=off;protocol_version=1;");
+        sender.Transaction("tableName");
+
+        Assert.That(() => sender.Table("tableName"), Throws.Nothing);
     }
 
     [Test]

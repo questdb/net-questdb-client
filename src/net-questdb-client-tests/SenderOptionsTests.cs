@@ -1220,6 +1220,16 @@ public class SenderOptionsTests
     }
 
     [Test]
+    public void RecordWith_NewAddr_LeavesOriginalAddresses()
+    {
+        var original = new SenderOptions("http::addr=h1:9000,h2:9000;");
+        var copy = original with { addr = "h3:9000" };
+
+        Assert.That(original.addresses, Is.EqualTo(new[] { "h1:9000", "h2:9000" }));
+        Assert.That(copy.addresses, Is.EqualTo(new[] { "h3:9000" }));
+    }
+
+    [Test]
     public void RecordWith_FlippingWsToHttp_StillRejectsWsOnlyKeys()
     {
         var ws = new SenderOptions("ws::addr=localhost:9000;request_durable_ack=on;");

@@ -614,6 +614,7 @@ public record SenderOptions
         ValidateAuthCombination();
         ValidateTlsCombination();
         ValidateMultiAddressForTcp();
+        ValidateHttpAddresses();
         ValidateStoreAndForwardOptions();
         ValidateGzipForWebSocket();
         ApplyAutoFlushNormalisation();
@@ -799,6 +800,33 @@ public record SenderOptions
         }
     }
 
+    private void ValidateHttpAddresses()
+    {
+        if (!IsHttp())
+        {
+            return;
+        }
+
+        foreach (var address in _addresses)
+        {
+            SplitHostPort(address, out _, out _);
+
+            try
+            {
+                var uri = AddressProvider.BuildHttpUri(protocol.ToString(), address);
+                if (uri.PathAndQuery != "/" || uri.Fragment.Length > 0)
+                {
+                    throw new IngressError(ErrorCode.ConfigError,
+                        $"Invalid `addr` entry `{address}`: a path, query or fragment is not allowed");
+                }
+            }
+            catch (UriFormatException ex)
+            {
+                throw new IngressError(ErrorCode.ConfigError, $"Invalid `addr` entry `{address}`: {ex.Message}", ex);
+            }
+        }
+    }
+
     private void ValidateStoreAndForwardOptions()
     {
         if (!_sfDurability.Equals("memory", StringComparison.OrdinalIgnoreCase))
@@ -978,7 +1006,8 @@ public record SenderOptions
         set
         {
             _addr = value;
-            _addresses.Clear();
+            // A record `with` copy shares the list until this runs, so clearing it would retarget the original.
+            _addresses = new();
             if (!string.IsNullOrEmpty(value))
             {
                 foreach (var piece in value.Split(','))
@@ -1257,6 +1286,8 @@ public record SenderOptions
     /// <remarks>
     ///     The <see cref="retry_timeout" /> setting specifies the length of time retries can be made.
     ///     Retries are sent multiple times during this period, with some small jitter.
+    ///     When multiple addresses are configured and retries are enabled, each one gets an attempt even if this
+    ///     period elapses first.
     /// </remarks>
     /// <seealso cref="HttpSender.SendAsync" />
     /// .
